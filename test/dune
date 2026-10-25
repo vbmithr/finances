@@ -1,0 +1,11 @@
+(test
+ (name kernel_test)
+ (modules kernel_test)
+ (libraries finances core alcotest rel rel.sqlite3))
+
+(test
+ (name bank_test)
+ (modules bank_test)
+ (deps
+  (glob_files fixtures/*))
+ (libraries finances core alcotest rel rel.sqlite3))

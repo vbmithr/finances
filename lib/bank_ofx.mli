@@ -1,0 +1,47 @@
+open Core
+
+(** OFX 2.x XML bank statements. Amounts are exact and dates retain calendar
+    semantics. OFX 1.x SGML and credit-card/investment message sets are rejected. *)
+type account = private
+  { bank_id : string
+  ; account_id : string
+  ; account_type : string
+  ; currency : string
+  }
+
+(** [user_date] is the unparsed DTUSER field, not a validated value date. The
+    observed BoursoBank export contains invalid dates there. [source_payload]
+    includes account, currency and canonical transaction XML as JSON, omitting
+    DTUSER; the exact original document is retained separately. *)
+type transaction = private
+  { fitid : string
+  ; booked_on : Date.t
+  ; user_date : string option
+  ; amount : Bigdecimal.t
+  ; transaction_type : string
+  ; name : string option
+  ; memo : string option
+  ; source_payload : string
+  }
+
+type balance = private
+  { amount : Bigdecimal.t
+  ; as_of : string
+  }
+
+type statement = private
+  { account : account
+  ; transactions : transaction list
+  ; ledger_balance : balance option
+  ; available_balance : balance option
+  }
+
+type t = private
+  { contents : string
+  ; statements : statement list
+  }
+
+val parse : string -> t Or_error.t
+
+(** Collision-free identity for the bank's account fields, not a ledger account. *)
+val account_identity : account -> string
