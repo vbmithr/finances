@@ -60,7 +60,16 @@ let write_journal ~path contents =
     ~tag:"atomic journal publication (TMPDIR and journal must share a filesystem)"
 ;;
 
-let run ?accounts ?max_file_bytes ~database ~institution ~directory ~journal () =
+let run
+      ?account_id
+      ?accounts
+      ?max_file_bytes
+      ~database
+      ~institution
+      ~directory
+      ~journal
+      ()
+  =
   let open Or_error.Let_syntax in
   let%bind database, directory, journal, accounts =
     Or_error.try_with (fun () ->
@@ -95,8 +104,15 @@ let run ?accounts ?max_file_bytes ~database ~institution ~directory ~journal () 
       Bank_account_mapping.of_json contents
   in
   Store.with_open database (fun db ->
+    let%bind () =
+      match account_id with
+      | None -> Ok ()
+      | Some _ when String.equal institution "revolut" -> Ok ()
+      | Some _ -> Or_error.error_string "--account-id is only supported for Revolut"
+    in
     let%bind inbox =
       Inbox.scan
+        ?account_id
         ?max_file_bytes
         ~exclude:(database :: journal :: Option.to_list accounts)
         db

@@ -16,7 +16,8 @@ type report =
     prevent unrelated files from being processed. Excluded file identities are
     skipped, including hard links. Database failures return Error. *)
 val scan
-  :  ?max_file_bytes:int64
+  :  ?account_id:string
+  -> ?max_file_bytes:int64
   -> ?exclude:string list
   -> Finances.Store.t
   -> institution:string

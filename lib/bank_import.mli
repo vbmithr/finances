@@ -6,6 +6,7 @@ type format =
   | Wise_csv
   | Bunq_mt940
   | Bunq_csv
+  | Revolut_csv
   | Csv
   | Qif
   | Spreadsheet

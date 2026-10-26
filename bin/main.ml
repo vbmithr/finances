@@ -226,7 +226,7 @@ let import_history_cmd =
       $ Arg.(value & opt int 100 & info [ "limit" ] ~doc:"Maximum attempts (1-10000)."))
 ;;
 
-let sync_bank database directory institution journal accounts max_mib =
+let sync_bank database directory institution journal accounts max_mib account_id =
   if max_mib < 1 || max_mib > 1024
   then Or_error.error_string "max-file-mib must be between 1 and 1024"
   else (
@@ -237,6 +237,7 @@ let sync_bank database directory institution journal accounts max_mib =
     in
     let%bind report =
       Finances_bank.Sync.run
+        ?account_id
         ?accounts
         ~max_file_bytes:Int64.(of_int max_mib * 1048576L)
         ~database
@@ -330,7 +331,13 @@ let sync_bank_cmd =
           & opt int 64
           & info
               [ "max-file-mib" ]
-              ~doc:"Per-file read limit in MiB (1-1024, default 64)."))
+              ~doc:"Per-file read limit in MiB (1-1024, default 64).")
+      $ Arg.(
+          value
+          & opt (some string) None
+          & info
+              [ "account-id" ]
+              ~doc:"Stable Revolut account label, required for its account-free CSV."))
 ;;
 
 let csv_enrichments database review =
@@ -515,6 +522,7 @@ let bank_review database all =
              ; "source_account", `String tx.account.account_id
              ; "booked_on", `String (Date.to_string tx.booked_on)
              ; "amount", `String (Bigdecimal.to_string_no_sn tx.amount)
+             ; "fee", `String (Bigdecimal.to_string_no_sn tx.fee)
              ; "currency", `String tx.account.currency
              ; ( "description"
                , `String (String.concat ~sep:" | " (List.filter_opt [ tx.name; tx.memo ]))
@@ -611,6 +619,110 @@ let bunq_status_cmd =
     Term.(const bunq_status $ database)
 ;;
 
+let transfer_leg event_id (event : Source_event.t) (tx : Bank_transaction.t) =
+  `Assoc
+    [ "event_id", `Intlit (Int64.to_string event_id)
+    ; "institution", `String event.venue
+    ; "source_account", `String event.account
+    ; "booked_on", `String (Date.to_string tx.booked_on)
+    ; "currency", `String tx.account.currency
+    ; "bank_amount", `String (Bigdecimal.to_string_no_sn tx.amount)
+    ; "principal", `String (Bigdecimal.to_string_no_sn Bigdecimal.(tx.amount + tx.fee))
+    ; "fee", `String (Bigdecimal.to_string_no_sn tx.fee)
+    ; ( "description"
+      , `String (String.concat ~sep:" | " (List.filter_opt [ tx.name; tx.memo ])) )
+    ]
+;;
+
+let transfer_candidates database all =
+  Store.with_open database (fun db ->
+    let%bind rows = Store.transfer_candidates ~include_reviewed:all db in
+    let json =
+      `List
+        (List.map rows ~f:(fun (r : Store.transfer_candidate) ->
+           `Assoc
+             [ "first", transfer_leg r.first_event_id r.first r.first_transaction
+             ; "second", transfer_leg r.second_event_id r.second r.second_transaction
+             ; "days_apart", `Int r.days_apart
+             ; "unique_both_directions", `Bool r.unique
+             ; ( "state"
+               , Option.value_map r.state ~default:(`String "unreviewed") ~f:(fun s ->
+                   `String (Bank_transfer.state_name s)) )
+             ; "reason", Option.value_map r.reason ~default:`Null ~f:(fun s -> `String s)
+             ]))
+    in
+    print_endline (Yojson.Safe.pretty_to_string json);
+    Ok ())
+;;
+
+let transfer_candidates_cmd =
+  command
+    "transfer-candidates"
+    "Review possible same-currency transfers; amount/date matches do not establish \
+     ownership."
+    Term.(
+      const transfer_candidates
+      $ database
+      $ Arg.(
+          value
+          & flag
+          & info
+              [ "all" ]
+              ~doc:"Include reviewed pairs and movements already assigned to transfers."))
+;;
+
+let review_transfers database path =
+  let%bind contents = read_file path in
+  let%bind decisions = Bank_transfer.of_json contents in
+  Store.with_open database (fun db ->
+    let%bind changed = Store.set_bank_transfers db decisions in
+    printf "transfer_changes=%d\n" changed;
+    Ok ())
+;;
+
+let review_transfers_cmd =
+  command
+    "review-transfers"
+    "Apply explicit JSON confirm/reject decisions; confirmation asserts both accounts \
+     are yours."
+    Term.(
+      const review_transfers
+      $ database
+      $ Arg.(
+          required
+          & pos 1 (some string) None
+          & info [] ~docv:"DECISIONS" ~doc:"JSON transfer review decisions."))
+;;
+
+let transfer_history database =
+  Store.with_open database (fun db ->
+    let%bind rows = Store.bank_transfer_history db in
+    let json =
+      `List
+        (List.map rows ~f:(fun (r : Store.transfer_change) ->
+           `Assoc
+             [ "id", `Intlit (Int64.to_string r.id)
+             ; "first_event_id", `Intlit (Int64.to_string r.first_event_id)
+             ; "second_event_id", `Intlit (Int64.to_string r.second_event_id)
+             ; ( "previous_state"
+               , Option.value_map r.previous_state ~default:`Null ~f:(fun s -> `String s)
+               )
+             ; "state", `String (Bank_transfer.state_name r.state)
+             ; "reason", `String r.reason
+             ; "changed_at", `String r.changed_at
+             ]))
+    in
+    print_endline (Yojson.Safe.pretty_to_string json);
+    Ok ())
+;;
+
+let transfer_history_cmd =
+  command
+    "transfer-history"
+    "Inspect the append-only transfer review history."
+    Term.(const transfer_history $ database)
+;;
+
 let () =
   exit
     (Cmd.eval
@@ -633,5 +745,8 @@ let () =
           ; categorize_bank_cmd
           ; bank_review_cmd
           ; category_history_cmd
+          ; transfer_candidates_cmd
+          ; review_transfers_cmd
+          ; transfer_history_cmd
           ]))
 ;;

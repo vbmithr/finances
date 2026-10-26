@@ -44,7 +44,7 @@ The first milestone is implemented: folder sync, import history, and persisted
 ledger naming are available. CSV enrichment is also implemented, including exact
 matching, persisted review states, and journal metadata. A background watcher,
 source account identity resolution, Excel/QIF parsing, automatic category rules,
-transfer matching, and BoursoBank balance reconciliation are later work. Unsupported files must be reported rather than silently accepted.
+FX/split transfer matching, and BoursoBank balance reconciliation are later work. Unsupported files must be reported rather than silently accepted.
 
 ## Folder ingestion
 
@@ -275,3 +275,21 @@ subsequent imports. A different or partial overlapping day is rejected for revie
 rather than merged by guesswork. Full identical duplicates remain distinct payments.
 Changing an old day requires a future explicit correction workflow. Existing account
 mapping and category decisions apply to Bunq entries as they do to other banks.
+
+## Explicit transfer review and Revolut
+
+Revolut completed Current-account CSV import is available with an explicit
+`--account-id` label. Running balances are checked against amount minus fee, and
+nonzero fees are posted separately. Document/account scope and complete-day
+inventories guard reimports and overlaps without upstream transaction IDs.
+
+`transfer-candidates` exposes both sides of potential same-currency principal
+transfers within seven booking days. `review-transfers` applies explicit confirm or
+reject decisions with reasons, and `transfer-history` preserves their audit.
+Confirmation asserts ownership and uses a shared transfer counter-account, leaving
+fees in expenses and bank quantities unchanged. It does not infer ownership from
+names or matching amounts. Ambiguous candidates need explicit selection; only one
+confirmed counterpart per movement is allowed. Rejection can undo confirmation.
+Existing categories must be reset before confirming, and confirmed transfers must
+be rejected before recategorization. FX, splits and broader date policies remain
+future work. Rebuild the journal after decisions; sync also preserves them.

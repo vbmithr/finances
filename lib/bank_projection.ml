@@ -70,7 +70,7 @@ let entry ?bank_account ?(counter_account = "equity:unclassified") event =
     Accounting.posting
       ~account:counter_account
       ~commodity:account.currency
-      (Bigdecimal.neg transaction.amount)
+      (Bigdecimal.neg Bigdecimal.(transaction.amount + transaction.fee))
   in
   let descriptions =
     List.filter_opt [ transaction.name; transaction.memo ]
@@ -82,5 +82,17 @@ let entry ?bank_account ?(counter_account = "equity:unclassified") event =
     | [] -> "Bank transaction"
     | values -> String.concat ~sep:" | " values
   in
-  Accounting.entry ~date:transaction.booked_on ~description [ incoming; outgoing ]
+  let%bind fees =
+    if Bigdecimal.is_zero transaction.fee
+    then Ok []
+    else (
+      let%map fee =
+        Accounting.posting
+          ~account:"expenses:bank-fees"
+          ~commodity:account.currency
+          transaction.fee
+      in
+      [ fee ])
+  in
+  Accounting.entry ~date:transaction.booked_on ~description ([ incoming; outgoing ] @ fees)
 ;;

@@ -51,7 +51,14 @@ let snapshot ~max_file_bytes path =
         Buffer.contents buffer))
 ;;
 
-let scan ?(max_file_bytes = 67108864L) ?(exclude = []) db ~institution ~directory =
+let scan
+      ?account_id
+      ?(max_file_bytes = 67108864L)
+      ?(exclude = [])
+      db
+      ~institution
+      ~directory
+  =
   let open Or_error.Let_syntax in
   let%bind () =
     Or_error.try_with (fun () ->
@@ -118,7 +125,9 @@ let scan ?(max_file_bytes = 67108864L) ?(exclude = []) db ~institution ~director
           (match snapshot ~max_file_bytes path with
            | Error error -> record_error path error
            | Ok contents ->
-             let%map report = Store.import_bank_file db ~institution ~path ~contents in
+             let%map report =
+               Store.import_bank_file ?account_id db ~institution ~path ~contents
+             in
              files := report :: !files)
         | S_LNK ->
           ignored := { path; reason = "symbolic link" } :: !ignored;

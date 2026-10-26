@@ -33,7 +33,8 @@ val import_ofx : t -> institution:string -> Bank_ofx.t -> bank_import Or_error.t
     rejected bytes are archived, too. Successful evidence and its attempt commit
     together; a source conflict rolls back before a separate rejection is saved. *)
 val import_bank_file
-  :  t
+  :  ?account_id:string
+  -> t
   -> institution:string
   -> path:string
   -> contents:string
@@ -172,3 +173,41 @@ type bunq_reconciliation =
   }
 
 val bunq_reconciliations : t -> bunq_reconciliation list Or_error.t
+
+(** Explicit same-currency transfer decisions; a confirmation asserts ownership
+    of both accounts. Each movement can have at most one confirmed counterpart.
+    Rejection of a confirmed pair restores its prior category. All projection
+    changes and audit rows commit atomically after verifying stored entries. *)
+val set_bank_transfers : t -> Bank_transfer.decision list -> int Or_error.t
+
+val bank_transfer_decisions : t -> Bank_transfer.decision list Or_error.t
+
+type transfer_change =
+  { id : int64
+  ; first_event_id : int64
+  ; second_event_id : int64
+  ; previous_state : string option
+  ; state : Bank_transfer.state
+  ; reason : string
+  ; changed_at : string
+  }
+
+val bank_transfer_history : t -> transfer_change list Or_error.t
+
+type transfer_candidate =
+  { first_event_id : int64
+  ; second_event_id : int64
+  ; first : Source_event.t
+  ; second : Source_event.t
+  ; first_transaction : Bank_transaction.t
+  ; second_transaction : Bank_transaction.t
+  ; days_apart : int
+  ; state : Bank_transfer.state option
+  ; reason : string option
+  ; unique : bool
+  }
+
+val transfer_candidates
+  :  ?include_reviewed:bool
+  -> t
+  -> transfer_candidate list Or_error.t

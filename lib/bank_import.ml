@@ -6,6 +6,7 @@ type format =
   | Wise_csv
   | Bunq_mt940
   | Bunq_csv
+  | Revolut_csv
   | Csv
   | Qif
   | Spreadsheet
@@ -38,6 +39,7 @@ let format_name = function
   | Wise_csv -> "wise_csv"
   | Bunq_mt940 -> "bunq_mt940"
   | Bunq_csv -> "bunq_csv"
+  | Revolut_csv -> "revolut_csv"
   | Csv -> "csv"
   | Qif -> "qif"
   | Spreadsheet -> "spreadsheet"
@@ -58,6 +60,7 @@ let format_of_string = function
   | "wise_csv" -> Ok Wise_csv
   | "bunq_mt940" -> Ok Bunq_mt940
   | "bunq_csv" -> Ok Bunq_csv
+  | "revolut_csv" -> Ok Revolut_csv
   | "csv" -> Ok Csv
   | "qif" -> Ok Qif
   | "spreadsheet" -> Ok Spreadsheet
@@ -88,6 +91,8 @@ let detect_format ~path contents =
   then Wise_csv
   else if Bunq_mt940.recognizes contents
   then Bunq_mt940
+  else if Revolut_csv.recognizes contents
+  then Revolut_csv
   else if Bunq_csv.recognizes contents
   then Bunq_csv
   else if String.is_prefix prefix ~prefix:"!Type:"

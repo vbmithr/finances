@@ -63,7 +63,7 @@ not yet calculate average entry price from fills or model inverse contracts.
 
 `Store` uses Rel's typed statement bindings and SQLite backend. SQL parameters are
 bound rather than interpolated. `Db_schema` defines versioned SQL migrations.
-Schema version 7 contains source events, journal entries, postings, immutable
+Schema version 8 contains source events, journal entries, postings, immutable
 import documents, document/event links, append-only bank import attempts, persisted
 bank account mappings, an append-only mapping change log, immutable CSV rows,
 derived CSV matches, and append-only match change history. Decimal posting
@@ -150,8 +150,9 @@ booking date against the enclosing source event, so journal generation can work
 entirely from the database without reopening source files.
 
 `Bank_projection` implements the initial `bank-unclassified-v1` policy. Each event
-produces two explicit, exact postings: its signed bank movement and the opposite
-amount in `equity:unclassified`. This does not claim a withdrawal is an expense or
+produces exact postings for its signed bank movement and opposite principal in
+`equity:unclassified` by default. Revolut adds a separate explicit fee posting.
+Reviewed categories or confirmed transfers replace only the principal counter-account. This does not claim a withdrawal is an expense or
 a deposit is income. Ledger account names include the institution and the bank's
 complete account identity. Components outside the supported token alphabet, and
 components starting with the reserved `x-` prefix, are reversibly hex encoded.
@@ -170,11 +171,11 @@ precision, adds source event IDs and projection keys, and sanitizes description
 characters that could change journal syntax. No generated timestamp is included,
 so repeated exports of the same stored entries are byte-identical.
 
-Bank journals currently have no inferred opening balances, accepted expense or
-income classifications, or transfer matching. Bank-category tags retain suggestions. They support register and period movement
-queries. Available balance observations cannot safely supply ledger opening
-balances. Corrections and reclassification still need an explicit future workflow;
-generated journals do not become a second editable accounting source of truth.
+Bank journals do not infer opening balances. Bank-category tags remain suggestions;
+explicit reviewed categories and transfer decisions update verified projections.
+Available balance observations do not automatically supply ledger opening balances.
+Corrections to source evidence, splits and FX transfers need a future workflow;
+generated journals remain a rendering of SQLite accounting.
 
 ## Inbox sync and mapping decisions
 
@@ -236,7 +237,7 @@ Finish banking before returning to exchange integrations:
 
 - Resolve source account identity aliases explicitly, including changed masking.
 - Persist reviewed categories and versioned rules.
-- Match owned-account transfers and deferred-debit card settlements.
+- Extend reviewed transfers to FX, splits and deferred-debit card settlements.
 - Establish verified opening balances and reconcile statement balances.
 - Produce reports that distinguish reviewed totals from unresolved evidence.
 
@@ -274,8 +275,9 @@ FX postings. Real samples currently validate EUR movements with zero fees.
 ## Bank adapter layout
 
 Bank-specific adapters live in `lib/banks/boursobank/` (OFX parsing, BoursoBank CSV
-parsing and matching) `lib/banks/wise/` (CAMT parsing and Wise CSV parsing and
-matching), and `lib/banks/bunq/` (MT940 parsing, movement identities and CSV matching).
+parsing and matching), `lib/banks/wise/` (CAMT parsing and Wise CSV parsing and
+matching), `lib/banks/bunq/` (MT940 parsing, movement identities and CSV matching),
+and `lib/banks/revolut/` (primary CSV movement parsing and fee evidence).
 Dune's `include_subdirs unqualified` builds these directories into the
 existing `finances` library, preserving its public module names.
 
@@ -334,3 +336,36 @@ Both sources must supply equal occurrence counts per key within each document;
 mismatches or currency ambiguity remain review items. CSV arrival order does not
 matter: sync recomputes its matches after scanning all files and before projection.
 Shared audited match persistence saves transitions without rewriting evidence.
+
+## Revolut and transfer decisions
+
+Schema 8 preserves import history while adding Revolut document/account context,
+immutable daily movement inventories, current transfer decisions, unique per-event
+confirmed memberships, and append-only transfer changes. Migration from version 7
+is atomic, including the expanded import-format constraint.
+
+`Revolut_csv` supports the observed completed Current-account CSV. Its caller must
+provide an account label because the file cannot identify the account. Canonical
+payloads retain local start/completion clocks, signed principal and nonnegative fee;
+booking is a calendar completion date. Source identities include occurrence numbers
+and exclude running balance observations. Per-currency running balance steps must
+equal principal minus fee, and repeated account/day inventories must agree.
+
+The common transaction view adds an explicit fee (zero for existing adapters).
+Projection records bank net amount, opposite principal and, where present, a
+positive `expenses:bank-fees` posting. Reviewed categories and transfer decisions
+change only the principal counter-account, preserving fees and exact bank quantities.
+
+`Bank_transfer` defines validated decisions and the same-currency, opposite-principal,
+seven-day candidate policy. Candidate generation never mutates accounting or infers
+ownership. Confirm/reject operations verify both existing projections before changes,
+then update pair state, per-event memberships, counter-postings and audit in a single
+transaction. Membership uniqueness prevents double assignment across either side of
+any pair. Confirming a pair asserts ownership; previously reviewed expense/income
+categories require an explicit reset before confirmation. Rejection of a confirmed
+pair restores its unclassified counters. Unrelated rejection leaves other links intact.
+
+Effective counter-account resolution checks confirmed transfer membership before
+manual categories. Projection, account remapping and bank review all use that view.
+Journal generation includes active pair/reason tags. The immutable evidence and
+stable projection identity are preserved; no transfer duplicates a bank movement.

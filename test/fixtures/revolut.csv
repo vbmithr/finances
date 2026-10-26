@@ -1,0 +1,5 @@
+Type,Product,Started Date,Completed Date,Description,Amount,Fee,Currency,State,Balance
+Deposit,Current,2026-01-01 09:00:00,2026-01-01 09:00:01,Initial deposit,150.00,0.00,EUR,COMPLETED,150.00
+Transfer,Current,2026-01-02 10:00:00,2026-01-02 10:00:01,Repeated transfer,10.00,0.00,EUR,COMPLETED,160.00
+Transfer,Current,2026-01-02 10:00:00,2026-01-02 10:00:01,Repeated transfer,10.00,0.00,EUR,COMPLETED,170.00
+Transfer,Current,2026-01-03 11:00:00,2026-01-03 11:00:01,Transfer to another bank,-100.00,0.50,EUR,COMPLETED,69.50

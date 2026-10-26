@@ -11,20 +11,38 @@ type t =
   { account : account
   ; booked_on : Date.t
   ; amount : Bigdecimal.t
+  ; fee : Bigdecimal.t
   ; name : string option
   ; memo : string option
   }
 
 let is_event (event : Source_event.t) =
   List.mem
-    [ "bank-transaction"; "wise-transaction"; "bunq-transaction" ]
+    [ "bank-transaction"; "wise-transaction"; "bunq-transaction"; "revolut-transaction" ]
     event.kind
     ~equal:String.equal
 ;;
 
 let of_event (event : Source_event.t) =
   let open Or_error.Let_syntax in
-  if String.equal event.kind "bunq-transaction"
+  if String.equal event.kind "revolut-transaction"
+  then (
+    let%map tx = Revolut_csv.source_transaction event in
+    let account =
+      { bank_id = "revolut"
+      ; account_id = tx.account_id
+      ; account_type = "current-" ^ tx.currency
+      ; currency = tx.currency
+      }
+    in
+    { account
+    ; booked_on = tx.booked_on
+    ; amount = tx.amount
+    ; fee = tx.fee
+    ; name = Some tx.description
+    ; memo = None
+    })
+  else if String.equal event.kind "bunq-transaction"
   then (
     let%map tx = Bunq_transaction.source_transaction event in
     let account =
@@ -37,6 +55,7 @@ let of_event (event : Source_event.t) =
     { account
     ; booked_on = tx.booked_on
     ; amount = tx.amount
+    ; fee = Bigdecimal.zero
     ; name = Some tx.name
     ; memo = Some tx.description
     })
@@ -53,6 +72,7 @@ let of_event (event : Source_event.t) =
     { account
     ; booked_on = tx.booked_on
     ; amount = tx.amount
+    ; fee = Bigdecimal.zero
     ; name = Some tx.description
     ; memo = None
     })
@@ -68,6 +88,7 @@ let of_event (event : Source_event.t) =
     { account
     ; booked_on = tx.booked_on
     ; amount = tx.amount
+    ; fee = Bigdecimal.zero
     ; name = tx.name
     ; memo = tx.memo
     })

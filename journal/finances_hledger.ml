@@ -16,8 +16,8 @@ let tag_text text =
 
 let transaction
       metadata
-      wise_metadata
-      wise_dates
+      extra_metadata
+      secondary_dates
       (event_id, key, (entry : Accounting.entry))
   =
   let postings =
@@ -31,9 +31,9 @@ let transaction
   let date2 =
     Option.first_some
       (first (fun (row : Bank_csv.row) -> row.value_on))
-      (Hashtbl.find wise_dates event_id)
+      (Hashtbl.find secondary_dates event_id)
   in
-  let wise_extra = Option.value (Hashtbl.find wise_metadata event_id) ~default:[] in
+  let wise_extra = Option.value (Hashtbl.find extra_metadata event_id) ~default:[] in
   let extra =
     List.filter_opt
       [ Option.map
@@ -79,14 +79,15 @@ let export db =
   let%bind wise_transactions = Store.wise_transactions db in
   let%bind category_history = Store.bank_category_history db in
   let%bind bunq_transactions = Store.bunq_transactions db in
-  let%map bunq_observations = Store.bunq_csv_observations db in
-  let wise_dates = Int64.Table.create () in
+  let%bind bunq_observations = Store.bunq_csv_observations db in
+  let%map transfer_decisions = Store.bank_transfer_decisions db in
+  let secondary_dates = Int64.Table.create () in
   List.iter wise_transactions ~f:(fun (id, tx) ->
     Option.iter tx.Wise_camt.value_on ~f:(fun date ->
-      Hashtbl.set wise_dates ~key:id ~data:date));
+      Hashtbl.set secondary_dates ~key:id ~data:date));
   List.iter bunq_transactions ~f:(fun (id, tx) ->
-    Hashtbl.set wise_dates ~key:id ~data:tx.Bunq_transaction.value_on);
-  let wise_metadata = Int64.Table.create () in
+    Hashtbl.set secondary_dates ~key:id ~data:tx.Bunq_transaction.value_on);
+  let extra_metadata = Int64.Table.create () in
   List.iter wise ~f:(fun (observation : Store.wise_csv_observation) ->
     match observation.matching with
     | Some { state = Matched; event_id = Some id; _ } ->
@@ -100,8 +101,8 @@ let export db =
         ]
         |> List.filter_opt
       in
-      if not (Hashtbl.mem wise_metadata id)
-      then Hashtbl.set wise_metadata ~key:id ~data:tags
+      if not (Hashtbl.mem extra_metadata id)
+      then Hashtbl.set extra_metadata ~key:id ~data:tags
     | _ -> ());
   List.iter bunq_observations ~f:(fun (observation : Store.bunq_csv_observation) ->
     match observation.matching with
@@ -113,9 +114,23 @@ let export db =
         then []
         else [ "bunq-counterparty: " ^ tag_text observation.row.counterparty ]
       in
-      if not (Hashtbl.mem wise_metadata id)
-      then Hashtbl.set wise_metadata ~key:id ~data:tags
+      if not (Hashtbl.mem extra_metadata id)
+      then Hashtbl.set extra_metadata ~key:id ~data:tags
     | _ -> ());
+  List.iter transfer_decisions ~f:(fun (decision : Bank_transfer.decision) ->
+    if Poly.equal decision.state Confirmed
+    then
+      List.iter [ decision.first_event_id; decision.second_event_id ] ~f:(fun event_id ->
+        let tags =
+          [ sprintf
+              "transfer-pair: %Ld %Ld"
+              decision.first_event_id
+              decision.second_event_id
+          ; "transfer-review-reason: " ^ tag_text decision.reason
+          ]
+        in
+        Hashtbl.update extra_metadata event_id ~f:(fun previous ->
+          Option.value previous ~default:[] @ tags)));
   let latest_categories = Int64.Table.create () in
   List.iter category_history ~f:(fun (decision : Store.category_change) ->
     Hashtbl.set latest_categories ~key:decision.event_id ~data:decision);
@@ -125,7 +140,7 @@ let export db =
       ; "category-reason: " ^ tag_text decision.reason
       ]
     in
-    Hashtbl.update wise_metadata event_id ~f:(fun existing ->
+    Hashtbl.update extra_metadata event_id ~f:(fun existing ->
       Option.value existing ~default:[] @ tags));
   let metadata = Int64.Table.create () in
   List.iter observations ~f:(fun observation ->
@@ -189,7 +204,8 @@ let export db =
          ])
     @ [ Hledger.Journal.Blank ]
     @ List.concat_map entries ~f:(fun entry ->
-      [ Hledger.Journal.Transaction (transaction metadata wise_metadata wise_dates entry)
+      [ Hledger.Journal.Transaction
+          (transaction metadata extra_metadata secondary_dates entry)
       ; Blank
       ])
   in

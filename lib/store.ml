@@ -33,34 +33,43 @@ let migrate db =
       let* () = db_result (Db.exec_sql db Db_schema.upgrade_v3) in
       let* () = db_result (Db.exec_sql db Db_schema.upgrade_v4) in
       let* () = db_result (Db.exec_sql db Db_schema.upgrade_v5) in
-      db_result (Db.exec_sql db Db_schema.upgrade_v6)
+      let* () = db_result (Db.exec_sql db Db_schema.upgrade_v6) in
+      db_result (Db.exec_sql db Db_schema.upgrade_v7)
     | Some 1 ->
       let* () = db_result (Db.exec_sql db Db_schema.upgrade_v1) in
       let* () = db_result (Db.exec_sql db Db_schema.upgrade_v2) in
       let* () = db_result (Db.exec_sql db Db_schema.upgrade_v3) in
       let* () = db_result (Db.exec_sql db Db_schema.upgrade_v4) in
       let* () = db_result (Db.exec_sql db Db_schema.upgrade_v5) in
-      db_result (Db.exec_sql db Db_schema.upgrade_v6)
+      let* () = db_result (Db.exec_sql db Db_schema.upgrade_v6) in
+      db_result (Db.exec_sql db Db_schema.upgrade_v7)
     | Some 2 ->
       let* () = db_result (Db.exec_sql db Db_schema.upgrade_v2) in
       let* () = db_result (Db.exec_sql db Db_schema.upgrade_v3) in
       let* () = db_result (Db.exec_sql db Db_schema.upgrade_v4) in
       let* () = db_result (Db.exec_sql db Db_schema.upgrade_v5) in
-      db_result (Db.exec_sql db Db_schema.upgrade_v6)
+      let* () = db_result (Db.exec_sql db Db_schema.upgrade_v6) in
+      db_result (Db.exec_sql db Db_schema.upgrade_v7)
     | Some 3 ->
       let* () = db_result (Db.exec_sql db Db_schema.upgrade_v3) in
       let* () = db_result (Db.exec_sql db Db_schema.upgrade_v4) in
       let* () = db_result (Db.exec_sql db Db_schema.upgrade_v5) in
-      db_result (Db.exec_sql db Db_schema.upgrade_v6)
+      let* () = db_result (Db.exec_sql db Db_schema.upgrade_v6) in
+      db_result (Db.exec_sql db Db_schema.upgrade_v7)
     | Some 4 ->
       let* () = db_result (Db.exec_sql db Db_schema.upgrade_v4) in
       let* () = db_result (Db.exec_sql db Db_schema.upgrade_v5) in
-      db_result (Db.exec_sql db Db_schema.upgrade_v6)
+      let* () = db_result (Db.exec_sql db Db_schema.upgrade_v6) in
+      db_result (Db.exec_sql db Db_schema.upgrade_v7)
     | Some 5 ->
       let* () = db_result (Db.exec_sql db Db_schema.upgrade_v5) in
-      db_result (Db.exec_sql db Db_schema.upgrade_v6)
-    | Some 6 -> db_result (Db.exec_sql db Db_schema.upgrade_v6)
-    | Some 7 -> Ok ()
+      let* () = db_result (Db.exec_sql db Db_schema.upgrade_v6) in
+      db_result (Db.exec_sql db Db_schema.upgrade_v7)
+    | Some 6 ->
+      let* () = db_result (Db.exec_sql db Db_schema.upgrade_v6) in
+      db_result (Db.exec_sql db Db_schema.upgrade_v7)
+    | Some 7 -> db_result (Db.exec_sql db Db_schema.upgrade_v7)
+    | Some 8 -> Ok ()
     | _ -> Or_error.error_string "unsupported database schema version")
 ;;
 
@@ -702,7 +711,98 @@ let import_bunq_csv db ~institution ~contents rows =
   Ok document_id
 ;;
 
-let import_bank_file db ~institution ~path ~contents =
+let import_revolut db ~institution ~account_id (document : Revolut_csv.t) =
+  let* document_id = archive_document db ~institution ~contents:document.contents in
+  let context =
+    Rel_sql.Stmt.(
+      func
+        "SELECT account_id FROM revolut_documents WHERE document_id=?"
+        (int64 @-> ret Row.(t1 (text "account_id"))))
+  in
+  let* previous = db_result (Db.first db (context document_id)) in
+  let* () =
+    match previous with
+    | Some old when not (String.equal old account_id) ->
+      Or_error.error_string "Revolut document already belongs to a different account_id"
+    | Some _ -> Ok ()
+    | None ->
+      let insert =
+        Rel_sql.Stmt.(
+          func
+            "INSERT INTO revolut_documents(document_id,account_id) VALUES (?,?)"
+            (int64 @-> text @-> unit))
+      in
+      db_result (Db.exec db (insert document_id account_id))
+  in
+  let days = Hashtbl.Poly.create () in
+  List.iter document.transactions ~f:(fun tx ->
+    Hashtbl.add_multi
+      days
+      ~key:(Revolut_csv.account_identity tx, Date.to_string tx.booked_on)
+      ~data:tx);
+  let find =
+    Rel_sql.Stmt.(
+      func
+        "SELECT signature FROM revolut_day_inventories WHERE source_account=? AND \
+         booked_on=?"
+        (text @-> text @-> ret Row.(t1 (text "signature"))))
+  in
+  let insert_day =
+    Rel_sql.Stmt.(
+      func
+        "INSERT INTO \
+         revolut_day_inventories(source_account,booked_on,signature,document_id) VALUES \
+         (?,?,?,?)"
+        (text @-> text @-> text @-> int64 @-> unit))
+  in
+  let* _ =
+    traverse
+      (fun ((account, day), transactions) ->
+         let payloads =
+           List.map transactions ~f:(fun tx -> tx.Revolut_csv.payload)
+           |> List.sort ~compare:String.compare
+         in
+         let signature =
+           Yojson.Safe.to_string (`List (List.map payloads ~f:(fun s -> `String s)))
+           |> Digestif.SHA256.digest_string
+           |> Digestif.SHA256.to_hex
+         in
+         let* previous = db_result (Db.first db (find account day)) in
+         match previous with
+         | Some old when not (String.equal old signature) ->
+           Or_error.errorf
+             "Revolut day %s differs from imported evidence; partial-day exports or \
+              corrections need review"
+             day
+         | Some _ -> Ok ()
+         | None -> db_result (Db.exec db (insert_day account day signature document_id)))
+      (Hashtbl.to_alist days)
+  in
+  let rec ingest inserted existing = function
+    | [] -> Ok { document_id; statements = 1; inserted; existing }
+    | tx :: rest ->
+      let* event =
+        Source_event.create_dated
+          ~venue:institution
+          ~account:(Revolut_csv.account_identity tx)
+          ~kind:"revolut-transaction"
+          ~source_id:tx.source_id
+          ~occurred_on:tx.booked_on
+          ~payload:tx.payload
+      in
+      let* result = ingest_in_transaction db event in
+      let id, inserted, existing =
+        match result with
+        | Inserted id -> id, inserted + 1, existing
+        | Existing id -> id, inserted, existing + 1
+      in
+      let* () = db_result (Db.exec db (link_document document_id id)) in
+      ingest inserted existing rest
+  in
+  ingest 0 0 document.transactions
+;;
+
+let import_bank_file ?account_id db ~institution ~path ~contents =
   let* institution = Validation.text "institution" institution in
   let* path = Validation.text "path" path in
   let format = Bank_import.detect_format ~path contents in
@@ -751,6 +851,36 @@ let import_bank_file db ~institution ~path ~contents =
        (match result with
         | Ok report -> Ok report
         | Error e -> fail Rejected (Error.to_string_hum e)))
+  | Revolut_csv ->
+    if not (String.equal institution "revolut")
+    then fail Rejected "Revolut exports require --institution revolut"
+    else (
+      match account_id with
+      | None -> fail Rejected "Revolut CSV has no account identifier; supply --account-id"
+      | Some account_id ->
+        let result =
+          transaction db (fun db ->
+            let* document_id = archive_document db ~institution ~contents in
+            let* accepted =
+              db_result (Db.first db (accepted_document document_id document_id))
+            in
+            let* document = Revolut_csv.parse ~account_id contents in
+            let* imported = import_revolut db ~institution ~account_id document in
+            record_attempt
+              db
+              ~institution
+              ~path
+              ~document_id:(Some imported.document_id)
+              ~format
+              ~outcome:
+                (if Option.value accepted ~default:false then Unchanged else Imported)
+              ~inserted:imported.inserted
+              ~existing:imported.existing
+              ~message:None)
+        in
+        (match result with
+         | Ok report -> Ok report
+         | Error e -> fail Rejected (Error.to_string_hum e)))
   | Bunq_mt940 | Bunq_csv ->
     if not (String.equal institution "bunq")
     then fail Rejected "Bunq exports require --institution bunq"
@@ -1048,14 +1178,34 @@ let find_category =
       (int64 @-> ret Row.(t2 (text "account") (text "reason"))))
 ;;
 
+let find_linked_transfer =
+  Rel_sql.Stmt.(
+    func
+      "SELECT m.first_event_id,m.second_event_id,d.reason FROM bank_transfer_memberships \
+       m JOIN bank_transfer_decisions d ON d.first_event_id=m.first_event_id AND \
+       d.second_event_id=m.second_event_id WHERE m.event_id=? AND d.state='confirmed'"
+      (int64
+       @-> ret Row.(t3 (int64 "first_event_id") (int64 "second_event_id") (text "reason"))
+      ))
+;;
+
+let linked_transfer db event_id = db_result (Db.first db (find_linked_transfer event_id))
+
 let category_account db event_id =
   let* category = db_result (Db.first db (find_category event_id)) in
   Ok (Option.map category ~f:fst)
 ;;
 
+let counter_account db event_id =
+  let* transfer = linked_transfer db event_id in
+  match transfer with
+  | Some (first, second, _) -> Ok (Some (Bank_transfer.account first second))
+  | None -> category_account db event_id
+;;
+
 let mapped_bank_entry db event_id (event : Source_event.t) =
   let* bank_account = db_result (Db.first db (find_mapping event.venue event.account)) in
-  let* counter_account = category_account db event_id in
+  let* counter_account = counter_account db event_id in
   Bank_projection.entry ?bank_account ?counter_account event
 ;;
 
@@ -1214,7 +1364,7 @@ let set_bank_account_mappings db mappings =
                    | None -> Ok ()
                    | Some (id, date, description) ->
                      let* stored = read_entry db id date description in
-                     let* counter_account = category_account db event_id in
+                     let* counter_account = counter_account db event_id in
                      let* expected =
                        Bank_projection.entry
                          ~bank_account:previous_name
@@ -1687,7 +1837,12 @@ let set_bank_categories db decisions =
               (List.Assoc.find source d.event_id ~equal:Int64.equal)
               ~error:(Error.of_string "unknown category event_id")
           in
-          if not (Bank_transaction.is_event event)
+          let* transfer = linked_transfer db d.event_id in
+          if Option.is_some transfer
+          then
+            Or_error.error_string
+              "reject the confirmed transfer before changing its category"
+          else if not (Bank_transaction.is_event event)
           then Or_error.error_string "category decision requires a bank event"
           else
             let* previous = db_result (Db.first db (find_category d.event_id)) in
@@ -1791,13 +1946,19 @@ let bank_review db =
     (fun (event_id, event) ->
        let* transaction = Bank_transaction.of_event event in
        let* category = db_result (Db.first db (find_category event_id)) in
+       let* transfer = linked_transfer db event_id in
        Ok
          { event_id
          ; institution = event.venue
          ; transaction
          ; counter_account =
-             Option.value_map category ~default:"equity:unclassified" ~f:fst
-         ; reason = Option.map category ~f:snd
+             (match transfer with
+              | Some (first, second, _) -> Bank_transfer.account first second
+              | None -> Option.value_map category ~default:"equity:unclassified" ~f:fst)
+         ; reason =
+             (match transfer with
+              | Some (_, _, reason) -> Some reason
+              | None -> Option.map category ~f:snd)
          })
     (List.filter source ~f:(fun (_, e) -> Bank_transaction.is_event e))
 ;;
@@ -1956,4 +2117,340 @@ let bunq_reconciliations db =
        in
        Ok { document_id; account_id; currency; entries = List.length ids; difference })
     statements
+;;
+
+let transfer_decision_row =
+  Row.(
+    t4 (int64 "first_event_id") (int64 "second_event_id") (text "state") (text "reason"))
+;;
+
+let find_transfer_decision =
+  Rel_sql.Stmt.(
+    func
+      "SELECT first_event_id,second_event_id,state,reason FROM bank_transfer_decisions \
+       WHERE first_event_id=? AND second_event_id=?"
+      (int64 @-> int64 @-> ret transfer_decision_row))
+;;
+
+let decode_transfer_decision (first_event_id, second_event_id, state, reason) =
+  let* state = Bank_transfer.state_of_string state in
+  Bank_transfer.create ~first_event_id ~second_event_id ~state ~reason
+;;
+
+let bank_transfer_decisions db =
+  let* rows =
+    collect
+      db
+      (statement
+         "SELECT first_event_id,second_event_id,state,reason FROM \
+          bank_transfer_decisions ORDER BY first_event_id,second_event_id"
+         transfer_decision_row)
+  in
+  traverse decode_transfer_decision rows
+;;
+
+let verify_bank_entry db event_id event =
+  let* existing = db_result (Db.first db (find_entry event_id Bank_projection.key)) in
+  match existing with
+  | None -> Ok None
+  | Some (id, date, description) ->
+    let* stored = read_entry db id date description in
+    let* expected = mapped_bank_entry db event_id event in
+    if same_entry stored expected
+    then Ok (Some id)
+    else
+      Or_error.error_string "transfer decision conflicts with an existing bank projection"
+;;
+
+let set_bank_transfers db decisions =
+  let* decisions =
+    traverse
+      (fun (d : Bank_transfer.decision) ->
+         Bank_transfer.create
+           ~first_event_id:d.first_event_id
+           ~second_event_id:d.second_event_id
+           ~state:d.state
+           ~reason:d.reason)
+      decisions
+  in
+  if
+    List.contains_dup
+      (List.map decisions ~f:(fun d -> d.Bank_transfer.first_event_id, d.second_event_id))
+      ~compare:(Tuple2.compare ~cmp1:Int64.compare ~cmp2:Int64.compare)
+  then Or_error.error_string "duplicate transfer pair in batch"
+  else
+    transaction db (fun db ->
+      let* source = events db in
+      let get id =
+        Or_error.of_option
+          (List.Assoc.find source id ~equal:Int64.equal)
+          ~error:(Error.of_string "unknown transfer event_id")
+      in
+      let upsert =
+        Rel_sql.Stmt.(
+          func
+            "INSERT INTO \
+             bank_transfer_decisions(first_event_id,second_event_id,state,reason) VALUES \
+             (?,?,?,?) ON CONFLICT(first_event_id,second_event_id) DO UPDATE SET \
+             state=excluded.state,reason=excluded.reason"
+            (int64 @-> int64 @-> text @-> text @-> unit))
+      in
+      let add =
+        Rel_sql.Stmt.(
+          func
+            "INSERT INTO \
+             bank_transfer_memberships(event_id,first_event_id,second_event_id) VALUES \
+             (?,?,?) ON CONFLICT(event_id) DO NOTHING"
+            (int64 @-> int64 @-> int64 @-> unit))
+      in
+      let remove =
+        Rel_sql.Stmt.(
+          func
+            "DELETE FROM bank_transfer_memberships WHERE first_event_id=? AND \
+             second_event_id=?"
+            (int64 @-> int64 @-> unit))
+      in
+      let update =
+        Rel_sql.Stmt.(
+          func
+            "UPDATE postings SET account=? WHERE entry_id=? AND ordinal=1"
+            (text @-> int64 @-> unit))
+      in
+      let audit =
+        Rel_sql.Stmt.(
+          func
+            "INSERT INTO \
+             bank_transfer_changes(first_event_id,second_event_id,previous_state,state,reason) \
+             VALUES (?,?,?,?,?)"
+            (int64 @-> int64 @-> option text @-> text @-> text @-> unit))
+      in
+      let rec apply changed = function
+        | [] -> Ok changed
+        | (d : Bank_transfer.decision) :: rest ->
+          let first = d.first_event_id
+          and second = d.second_event_id in
+          let* a = get first in
+          let* b = get second in
+          let* ta = Bank_transaction.of_event a in
+          let* tb = Bank_transaction.of_event b in
+          let* previous = db_result (Db.first db (find_transfer_decision first second)) in
+          let state = Bank_transfer.state_name d.state in
+          if
+            Option.exists previous ~f:(fun (_, _, old, reason) ->
+              String.equal old state && String.equal reason d.reason)
+          then apply changed rest
+          else (
+            let confirming = Poly.equal d.state Bank_transfer.Confirmed in
+            let was_confirmed =
+              Option.exists previous ~f:(fun (_, _, state, _) ->
+                String.equal state "confirmed")
+            in
+            let* () =
+              if confirming && not (Bank_transfer.eligible a ta b tb)
+              then
+                Or_error.error_string
+                  "transfer requires opposite principal amounts, same currency, distinct \
+                   accounts and dates within seven days"
+              else Ok ()
+            in
+            let* _ =
+              traverse
+                (fun id ->
+                   let* existing = linked_transfer db id in
+                   let* category = category_account db id in
+                   if
+                     confirming
+                     && Option.exists existing ~f:(fun (x, y, _) ->
+                       not (Int64.equal x first && Int64.equal y second))
+                   then
+                     Or_error.error_string
+                       "a movement already belongs to another confirmed transfer"
+                   else if
+                     confirming
+                     && Option.exists category ~f:(fun name ->
+                       not (String.equal name "equity:unclassified"))
+                   then
+                     Or_error.error_string
+                       "return reviewed categories to equity:unclassified before \
+                        confirming a transfer"
+                   else Ok ())
+                [ first; second ]
+            in
+            let* entries =
+              if confirming || was_confirmed
+              then
+                traverse
+                  (fun (id, event) ->
+                     let* entry = verify_bank_entry db id event in
+                     Ok (id, entry))
+                  [ first, a; second, b ]
+              else Ok []
+            in
+            let* () = db_result (Db.exec db (upsert first second state d.reason)) in
+            let* () =
+              if confirming
+              then
+                let* _ =
+                  traverse
+                    (fun id -> db_result (Db.exec db (add id first second)))
+                    [ first; second ]
+                in
+                Ok ()
+              else db_result (Db.exec db (remove first second))
+            in
+            let* _ =
+              traverse
+                (fun (id, entry) ->
+                   match entry with
+                   | None -> Ok ()
+                   | Some entry_id ->
+                     let* account = counter_account db id in
+                     db_result
+                       (Db.exec
+                          db
+                          (update
+                             (Option.value account ~default:"equity:unclassified")
+                             entry_id)))
+                entries
+            in
+            let* () =
+              db_result
+                (Db.exec
+                   db
+                   (audit
+                      first
+                      second
+                      (Option.map previous ~f:(fun (_, _, state, _) -> state))
+                      state
+                      d.reason))
+            in
+            apply (changed + 1) rest)
+      in
+      apply 0 decisions)
+;;
+
+type transfer_change =
+  { id : int64
+  ; first_event_id : int64
+  ; second_event_id : int64
+  ; previous_state : string option
+  ; state : Bank_transfer.state
+  ; reason : string
+  ; changed_at : string
+  }
+
+let bank_transfer_history db =
+  let row =
+    Row.(
+      unit (fun id first second previous state reason at ->
+        id, first, second, previous, state, reason, at)
+      * int64 "id"
+      * int64 "first_event_id"
+      * int64 "second_event_id"
+      * col "previous_state" Type.(option text)
+      * text "state"
+      * text "reason"
+      * text "changed_at")
+  in
+  let* rows =
+    collect
+      db
+      (statement
+         "SELECT \
+          id,first_event_id,second_event_id,previous_state,state,reason,changed_at FROM \
+          bank_transfer_changes ORDER BY id"
+         row)
+  in
+  traverse
+    (fun (id, first_event_id, second_event_id, previous_state, state, reason, changed_at) ->
+       let* state = Bank_transfer.state_of_string state in
+       Ok
+         { id
+         ; first_event_id
+         ; second_event_id
+         ; previous_state
+         ; state
+         ; reason
+         ; changed_at
+         })
+    rows
+;;
+
+type transfer_candidate =
+  { first_event_id : int64
+  ; second_event_id : int64
+  ; first : Source_event.t
+  ; second : Source_event.t
+  ; first_transaction : Bank_transaction.t
+  ; second_transaction : Bank_transaction.t
+  ; days_apart : int
+  ; state : Bank_transfer.state option
+  ; reason : string option
+  ; unique : bool
+  }
+
+let transfer_candidates ?(include_reviewed = false) db =
+  let* source = events db in
+  let* items =
+    traverse
+      (fun (id, e) ->
+         let* tx = Bank_transaction.of_event e in
+         let* linked = linked_transfer db id in
+         Ok (id, e, tx, Option.is_some linked))
+      (List.filter source ~f:(fun (_, e) -> Bank_transaction.is_event e))
+  in
+  let* decisions = bank_transfer_decisions db in
+  let indexed = Hashtbl.Poly.create () in
+  List.iter decisions ~f:(fun d ->
+    Hashtbl.set indexed ~key:(d.Bank_transfer.first_event_id, d.second_event_id) ~data:d);
+  let rec pairs acc = function
+    | [] -> acc
+    | (id, a, ta, la) :: rest ->
+      let next =
+        List.filter_map rest ~f:(fun (other, b, tb, lb) ->
+          if not (Bank_transfer.eligible a ta b tb)
+          then None
+          else (
+            let id, a, ta, other, b, tb =
+              if Int64.(id < other)
+              then id, a, ta, other, b, tb
+              else other, b, tb, id, a, ta
+            in
+            let decision = Hashtbl.find indexed (id, other) in
+            if (not include_reviewed) && (la || lb || Option.is_some decision)
+            then None
+            else
+              Some
+                { first_event_id = id
+                ; second_event_id = other
+                ; first = a
+                ; second = b
+                ; first_transaction = ta
+                ; second_transaction = tb
+                ; days_apart = Int.abs (Date.diff ta.booked_on tb.booked_on)
+                ; state = Option.map decision ~f:(fun d -> d.state)
+                ; reason = Option.map decision ~f:(fun d -> d.reason)
+                ; unique = false
+                }))
+      in
+      pairs (next @ acc) rest
+  in
+  let candidates = pairs [] items in
+  let claims = Int64.Table.create () in
+  List.iter candidates ~f:(fun c ->
+    Hashtbl.incr claims c.first_event_id;
+    Hashtbl.incr claims c.second_event_id);
+  Ok
+    (List.map candidates ~f:(fun c ->
+       { c with
+         unique =
+           Hashtbl.find_exn claims c.first_event_id = 1
+           && Hashtbl.find_exn claims c.second_event_id = 1
+       })
+     |> List.sort ~compare:(fun a b ->
+       Tuple2.compare
+         ~cmp1:Int64.compare
+         ~cmp2:Int64.compare
+         (a.first_event_id, a.second_event_id)
+         (b.first_event_id, b.second_event_id)))
 ;;

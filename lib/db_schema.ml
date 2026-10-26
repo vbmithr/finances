@@ -435,3 +435,83 @@ PRAGMA user_version=7;
 
 |}
 ;;
+
+let upgrade_v7 =
+  {|
+
+
+CREATE TABLE bank_import_attempts_v8 (
+  id INTEGER PRIMARY KEY,
+  institution TEXT NOT NULL,
+  path TEXT NOT NULL,
+  document_id INTEGER REFERENCES import_documents(id),
+  format TEXT NOT NULL CHECK (format IN ('ofx','csv','qif','spreadsheet','unknown','camt053','wise_csv','bunq_mt940','bunq_csv','revolut_csv')),
+  outcome TEXT NOT NULL CHECK (outcome IN ('imported','unchanged','rejected','unsupported','unreadable')),
+  inserted_count INTEGER NOT NULL CHECK (inserted_count >= 0),
+  existing_count INTEGER NOT NULL CHECK (existing_count >= 0),
+  error TEXT,
+  attempted_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now')),
+  CHECK ((outcome = 'unreadable') = (document_id IS NULL))
+) STRICT;
+CREATE INDEX bank_import_attempts_v8_document ON bank_import_attempts_v8(document_id,id);
+CREATE TRIGGER bank_import_attempts_v8_no_update BEFORE UPDATE ON bank_import_attempts_v8
+BEGIN SELECT RAISE(ABORT, 'import history is append-only'); END;
+CREATE TRIGGER bank_import_attempts_v8_no_delete BEFORE DELETE ON bank_import_attempts_v8
+BEGIN SELECT RAISE(ABORT, 'import history is append-only'); END;
+
+INSERT INTO bank_import_attempts_v8 SELECT * FROM bank_import_attempts;
+DROP TABLE bank_import_attempts;
+ALTER TABLE bank_import_attempts_v8 RENAME TO bank_import_attempts;
+
+
+
+CREATE TABLE revolut_documents (
+  document_id INTEGER PRIMARY KEY REFERENCES import_documents(id),
+  account_id TEXT NOT NULL
+) STRICT;
+CREATE TRIGGER revolut_documents_no_update BEFORE UPDATE ON revolut_documents
+BEGIN SELECT RAISE(ABORT, 'Revolut document context is immutable'); END;
+CREATE TRIGGER revolut_documents_no_delete BEFORE DELETE ON revolut_documents
+BEGIN SELECT RAISE(ABORT, 'Revolut document context is immutable'); END;
+CREATE TABLE revolut_day_inventories (
+  source_account TEXT NOT NULL,
+  booked_on TEXT NOT NULL,
+  signature TEXT NOT NULL,
+  document_id INTEGER NOT NULL REFERENCES import_documents(id),
+  PRIMARY KEY(source_account,booked_on)
+) STRICT;
+CREATE TRIGGER revolut_day_inventories_no_update BEFORE UPDATE ON revolut_day_inventories
+BEGIN SELECT RAISE(ABORT, 'Revolut day inventories are immutable'); END;
+CREATE TRIGGER revolut_day_inventories_no_delete BEFORE DELETE ON revolut_day_inventories
+BEGIN SELECT RAISE(ABORT, 'Revolut day inventories are immutable'); END;
+CREATE TABLE bank_transfer_decisions (
+  first_event_id INTEGER NOT NULL REFERENCES source_events(id),
+  second_event_id INTEGER NOT NULL REFERENCES source_events(id),
+  state TEXT NOT NULL CHECK(state IN ('confirmed','rejected')),
+  reason TEXT NOT NULL,
+  PRIMARY KEY(first_event_id,second_event_id),
+  CHECK(first_event_id < second_event_id)
+) STRICT;
+CREATE TABLE bank_transfer_memberships (
+  event_id INTEGER PRIMARY KEY REFERENCES source_events(id),
+  first_event_id INTEGER NOT NULL,
+  second_event_id INTEGER NOT NULL,
+  FOREIGN KEY(first_event_id,second_event_id) REFERENCES bank_transfer_decisions(first_event_id,second_event_id),
+  CHECK(event_id=first_event_id OR event_id=second_event_id)
+) STRICT;
+CREATE TABLE bank_transfer_changes (
+  id INTEGER PRIMARY KEY,
+  first_event_id INTEGER NOT NULL REFERENCES source_events(id),
+  second_event_id INTEGER NOT NULL REFERENCES source_events(id),
+  previous_state TEXT,
+  state TEXT NOT NULL CHECK(state IN ('confirmed','rejected')),
+  reason TEXT NOT NULL,
+  changed_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now'))
+) STRICT;
+CREATE TRIGGER bank_transfer_changes_no_update BEFORE UPDATE ON bank_transfer_changes
+BEGIN SELECT RAISE(ABORT, 'Transfer history is append-only'); END;
+CREATE TRIGGER bank_transfer_changes_no_delete BEFORE DELETE ON bank_transfer_changes
+BEGIN SELECT RAISE(ABORT, 'Transfer history is append-only'); END;
+PRAGMA user_version=8;
+|}
+;;

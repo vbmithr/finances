@@ -18,17 +18,20 @@ through Rel. SQLite is the source of truth.
 - A small CLI for database initialization and importing source evidence.
 - OFX 2.x XML bank imports covering all statement blocks and accounts, with exact
   amounts, original document archives, and duplicate detection across exports.
-- Bank movement accounting entries against `equity:unclassified`, with atomic,
-  repeatable projection from stored events.
+- Bank movement accounting entries with atomic, repeatable projection and explicit
+  reviewed categories or transfer counter-accounts.
 - Deterministic hledger journal export through the separate OCaml hledger binding.
 - Recursive inbox sync with content detection, per-file import history, and
   atomic journal publication.
 - Persisted bank account names with audited updates to verified generated entries.
 - BoursoBank CSV enrichment with conservative OFX matching and a review report for
   unmatched, ambiguous, or conflicting observations.
+- Wise CAMT, Bunq MT940 and Revolut CSV imports with exact accounting, companion
+  matching where available, and explicit fee handling for Revolut.
+- Audited confirm/reject transfer review with one confirmed counterpart per movement.
 
 The kernel does not yet fetch Paradex data, derive positions from fills, persist
-position observations, calculate funding, categorize transactions, or
+position observations, calculate funding, automatically categorize transactions, or
 infer opening balances. Those operations can be added around the core APIs.
 
 ## Setup
@@ -142,7 +145,7 @@ to a transaction's canonical XML cause a conflict. CSV enrichment is described b
 `Source_event.occurrence` distinguishes `At_ms` from `On_date`. The `events` command
 prints `occurred_at_ms: null` and a populated `occurred_on` for OFX records.
 Wise records retain an instant and project using the local booking date.
-Opening a schema version 1 through 6 database migrates it atomically to version 7,
+Opening a schema version 1 through 7 database migrates it atomically to version 8,
 preserving source IDs, evidence, journal entries, and exact posting quantities.
 The bank test fixture is synthetic; personal exports are not test fixtures.
 
@@ -201,7 +204,7 @@ These reports describe the imported period's movements. They are not current
 balances without verified opening balances, and outflows/inflows include transfers
 and other unclassified movements. No expense or income category is guessed. The
 observed export supplies available balances, which are not used as ledger opening
-balances. Reviewed categorization is available below; transfer matching remains future work.
+balances. Reviewed categorization and explicit transfer reconciliation are available below.
 
 The core `finances` library remains independent of hledger. The
 `finances.hledger` adapter and CLI use the pinned OCaml binding to render the
@@ -213,7 +216,7 @@ See [the bank workflow design](docs/bank-workflow.md) for the complete plan and
 milestones. The first milestone is available:
 
 ~~~sh
-mkdir -p personal/{boursobank,wise,bunq}/inbox personal/config
+mkdir -p personal/{boursobank,wise,bunq,revolut}/inbox personal/config
 # Copy bank exports into personal/boursobank/inbox, then run after copying has completed.
 dune exec finances -- sync-bank personal/finances.sqlite3 personal/boursobank/inbox \
   --institution boursobank --journal personal/bank.journal
@@ -230,9 +233,10 @@ evidence and entries. Input files are never modified or moved.
 
 The summary distinguishes imported documents, unchanged documents, rejected inputs,
 unsupported formats, unreadable files, and ignored paths. The observed BoursoBank
-CSV layout and Wise 23-column CSV are supported as enrichment. Excel, QIF, and other CSV layouts are
-reported as unsupported. CSV never creates a second
-transaction stream.
+CSV layout, Wise 23-column CSV and Bunq seven-column CSV are companion observations.
+Revolut ten-column CSV supplies primary movements. Excel, QIF, and other CSV layouts are
+reported as unsupported. Companion CSV observations never create a second
+transaction stream; Revolut CSV is its own primary movement source.
 
 Successful files commit independently. Sync generates a journal from successfully
 imported data even if some files need review, and returns a nonzero exit for
@@ -315,8 +319,8 @@ whole batch. Each generated journal includes the latest decision ID and reason a
 tags. `categorize-bank` changes SQLite; regenerate the journal to publish it.
 
 This first review step uses explicit decisions. Bank CSV categories remain
-suggestions; automatic category rules, split allocations and owned-account
-transfer matching are future work. Do not classify transfers as income or spending
+suggestions; automatic category rules and split allocations are future work. Explicit
+owned-account transfer review is available below. Do not classify transfers as income or spending
 merely to remove them from the review queue.
 
 ## Bank statement folders
@@ -328,6 +332,7 @@ Use the same bank-prefixed layout for every institution:
 | BoursoBank | `personal/boursobank/inbox/` | OFX movements, optional CSV enrichment |
 | Wise | `personal/wise/inbox/` | CAMT.053 XML movements, optional CSV enrichment |
 | Bunq | `personal/bunq/inbox/` | MT940 movements, optional seven-column CSV companion |
+| Revolut | `personal/revolut/inbox/` | Completed Current-account CSV, explicit account label |
 
 Keep the shared database, journal, configuration, and reports outside these inboxes.
 Pass the institution explicitly when syncing. All `personal/` contents are
@@ -416,6 +421,88 @@ per-document occurrence counts must agree; partial duplicate groups or competing
 currencies remain ambiguous. Raw rows and matching history are retained, and
 uncontested matches add CSV provenance and counterparty tags to the journal.
 Bunq uses the same persisted account mappings and reviewed categories as other banks.
+
+## Revolut CSV import
+
+Place the ten-column Revolut CSV export in `personal/revolut/inbox/`:
+
+```sh
+finances sync-bank personal/finances.sqlite3 personal/revolut/inbox \
+  --institution revolut --account-id main --journal personal/bank.journal
+```
+
+The CSV has no account identifier. Supply a stable label (`main` here) for that
+specific account every time; different accounts need different labels and inboxes.
+A previously imported document cannot be reassigned to another label. Currency is
+part of the account identity. Only completed `Current` transactions are supported;
+pending, reversed, or other products reject the file for review.
+
+The adapter validates exact decimal fields and each consecutive running balance
+per currency against **Amount − Fee**. The first opening balance is not independently
+reported, so this validates the running balance sequence without asserting an
+external opening balance. Source booking dates use completion dates; the CSV's
+local clocks are retained without assigning a timezone.
+
+Each bank posting uses the net movement, the counter-posting uses the opposite
+principal amount, and a nonzero fee creates a separate `expenses:bank-fees` posting.
+These three postings balance exactly. This fee policy applies to Revolut's observed
+CSV form; Wise fees remain metadata pending evidence for their own accounting.
+Identity uses account, currency, clocks, type, description, amount and fee plus an
+occurrence ordinal. Running balances stay document observations. As with Bunq,
+immutable account/day inventories reject changed or partial-day overlapping exports
+rather than guessing identities. Exact reimports and overlapping complete days
+reuse movements, including identical repeated payments.
+
+## Review transfers between your accounts
+
+List candidate pairs with both movements, fees, dates, currencies and descriptions:
+
+```sh
+finances transfer-candidates personal/finances.sqlite3 > personal/reports/transfer-candidates.json
+finances transfer-candidates personal/finances.sqlite3 --all
+```
+
+Candidates require distinct source accounts, equal opposite principal amounts in
+the same currency, and booking dates within seven calendar days. Multiple candidates
+remain visible; uniqueness is only an amount/date observation. Confirm only after
+checking that both accounts belong to you and that the movements describe the same
+transfer. Imported records or a familiar counterparty name alone do not prove that.
+
+Write explicit decisions to a private JSON file, using actual event IDs from the
+candidate report. These IDs are illustrative:
+
+```json
+[
+  {"first_event_id": 1, "second_event_id": 2,
+   "decision": "confirm", "reason": "Checked both owned accounts and reference"}
+]
+```
+
+```sh
+finances review-transfers personal/finances.sqlite3 personal/config/transfers.json
+finances project-bank personal/finances.sqlite3
+finances export-hledger personal/finances.sqlite3 > personal/bank.journal
+finances transfer-history personal/finances.sqlite3
+hledger -f personal/bank.journal --strict check
+hledger -f personal/bank.journal register assets:transfers
+```
+
+Confirmation assigns both principal counter-postings to a shared
+`assets:transfers:pair-ID-ID` account. They cancel once both dates are included,
+while an outstanding leg remains visible between booking dates. Bank amounts,
+explicit Revolut fees and original evidence remain intact. No new movement or
+extra accounting entry is created. Journal tags record the pair and review reason.
+
+Each movement can belong to only one confirmed pair. A substantive expense/income
+category must first be reset to `equity:unclassified`; confirmation never overwrites
+it silently. Confirmed legs cannot be categorized until their transfer is rejected.
+Use `"decision": "reject"` to hide a proposed pair or undo a confirmation. Undo
+restores each leg's unclassified counter-account and retains the full audit history.
+Identical decisions are idempotent, and batches commit atomically after verifying
+existing projections. Account remapping, sync and reimports preserve decisions.
+Default candidate output hides reviewed pairs and movements already confirmed
+elsewhere; `--all` includes them for inspection. FX, splits and delayed transfers
+outside the seven-day window need a future explicit policy.
 
 ## Optional CSV enrichment
 

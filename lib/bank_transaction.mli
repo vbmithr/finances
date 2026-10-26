@@ -11,6 +11,7 @@ type t = private
   { account : account
   ; booked_on : Date.t
   ; amount : Bigdecimal.t
+  ; fee : Bigdecimal.t
   ; name : string option
   ; memo : string option
   }

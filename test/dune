@@ -96,3 +96,18 @@
   alcotest
   rel
   rel.sqlite3))
+
+(test
+ (name transfer_test)
+ (modules transfer_test)
+ (deps
+  (glob_files fixtures/*))
+ (libraries
+  finances
+  finances.hledger
+  core
+  core_unix
+  core_unix.filename_unix
+  alcotest
+  rel
+  rel.sqlite3))
