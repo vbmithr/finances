@@ -57,6 +57,20 @@ opam exec -- dune build
 opam exec -- dune runtest
 ```
 
+Dependencies are installed per opam switch. After changing switches, rerun
+`opam install . --deps-only --with-test` in this directory. This also installs the
+project's pinned Rel and hledger dependencies. If Dune reports a missing library
+such as `csv`, check that installation and execution use the same switch:
+
+```sh
+opam switch show
+opam install --switch=5.5.0 . --deps-only --with-test
+opam exec --switch=5.5.0 -- dune exec finances -- bunq-status personal/finances.sqlite3
+```
+
+Replace `5.5.0` with your chosen switch. To use plain `dune` commands in your shell,
+select that switch and refresh the shell environment with `eval "$(opam env)"`.
+
 Tests require `TMPDIR` and remove their temporary databases. Formatting uses
 ocamlformat 0.29.0 with the Jane Street profile:
 
@@ -128,7 +142,7 @@ to a transaction's canonical XML cause a conflict. CSV enrichment is described b
 `Source_event.occurrence` distinguishes `At_ms` from `On_date`. The `events` command
 prints `occurred_at_ms: null` and a populated `occurred_on` for OFX records.
 Wise records retain an instant and project using the local booking date.
-Opening a schema version 1, 2, 3, or 4 database migrates it atomically to version 5,
+Opening a schema version 1 through 6 database migrates it atomically to version 7,
 preserving source IDs, evidence, journal entries, and exact posting quantities.
 The bank test fixture is synthetic; personal exports are not test fixtures.
 
@@ -187,7 +201,7 @@ These reports describe the imported period's movements. They are not current
 balances without verified opening balances, and outflows/inflows include transfers
 and other unclassified movements. No expense or income category is guessed. The
 observed export supplies available balances, which are not used as ledger opening
-balances. Reviewed categorization and transfer matching are later steps.
+balances. Reviewed categorization is available below; transfer matching remains future work.
 
 The core `finances` library remains independent of hledger. The
 `finances.hledger` adapter and CLI use the pinned OCaml binding to render the
@@ -199,10 +213,10 @@ See [the bank workflow design](docs/bank-workflow.md) for the complete plan and
 milestones. The first milestone is available:
 
 ~~~sh
-mkdir -p personal/inbox personal/config
-# Copy bank exports into personal/inbox, then run after copying has completed.
-dune exec finances -- sync-bank personal/finances.sqlite3 personal/inbox \
-  --journal personal/bank.journal
+mkdir -p personal/{boursobank,wise,bunq}/inbox personal/config
+# Copy bank exports into personal/boursobank/inbox, then run after copying has completed.
+dune exec finances -- sync-bank personal/finances.sqlite3 personal/boursobank/inbox \
+  --institution boursobank --journal personal/bank.journal
 dune exec finances -- import-history personal/finances.sqlite3 --limit 100
 ~~~
 
@@ -235,8 +249,8 @@ dune exec finances -- bank-accounts personal/finances.sqlite3 \
 # Edit ledger_account fields, retaining each account's source identity.
 dune exec finances -- map-bank-accounts personal/finances.sqlite3 \
   personal/config/accounts.json
-dune exec finances -- sync-bank personal/finances.sqlite3 personal/inbox \
-  --accounts personal/config/accounts.json --journal personal/bank.journal
+dune exec finances -- sync-bank personal/finances.sqlite3 personal/boursobank/inbox \
+  --institution boursobank --accounts personal/config/accounts.json --journal personal/bank.journal
 ~~~
 
 Mapping JSON contains exactly institution, bank_id, account_id, account_type,
@@ -256,6 +270,70 @@ projection, or output failures leave the old journal intact. Previously accepted
 source files remain in SQLite for retry. The staging directory is TMPDIR (or the
 journal directory when unset) and must share the journal's filesystem.
 
+## Review and categorize bank movements
+
+List movements that still use `equity:unclassified`:
+
+```sh
+finances bank-review personal/finances.sqlite3 > personal/reports/bank-review.json
+finances bank-review personal/finances.sqlite3 --all
+```
+
+Use the reported `event_id` values to write a JSON decision file, for example
+`personal/config/categories.json`. The ID below is illustrative; select the actual
+movement from the review output:
+
+```json
+[
+  {"event_id": 1, "account": "expenses:groceries", "reason": "Reviewed receipt"}
+]
+```
+
+Apply the entire batch atomically, then regenerate the accounting projection and
+journal:
+
+```sh
+finances categorize-bank personal/finances.sqlite3 personal/config/categories.json
+finances project-bank personal/finances.sqlite3
+finances export-hledger personal/finances.sqlite3 > personal/bank.journal
+finances category-history personal/finances.sqlite3
+hledger -f personal/bank.journal --strict check
+hledger -f personal/bank.journal balance expenses --monthly
+```
+
+Decisions explicitly assign the movement's counter-account to `expenses:...` or
+`income:...`. Set it to `equity:unclassified` with a reason to return a movement to
+review. Refunds can use the same expense account as the original purchase. Amount
+signs are preserved; classification does not infer or reverse them.
+
+SQLite retains the current account and reason plus append-only change history.
+Repeated identical decisions are harmless. Decisions survive sync, reimports and
+account renames, and can precede first projection. Existing generated entries are
+verified before updating only their counter-account; dates, bank postings, amounts
+and source evidence remain intact. An invalid or conflicting decision rejects the
+whole batch. Each generated journal includes the latest decision ID and reason as
+tags. `categorize-bank` changes SQLite; regenerate the journal to publish it.
+
+This first review step uses explicit decisions. Bank CSV categories remain
+suggestions; automatic category rules, split allocations and owned-account
+transfer matching are future work. Do not classify transfers as income or spending
+merely to remove them from the review queue.
+
+## Bank statement folders
+
+Use the same bank-prefixed layout for every institution:
+
+| Bank | Statement folder | Import support |
+| --- | --- | --- |
+| BoursoBank | `personal/boursobank/inbox/` | OFX movements, optional CSV enrichment |
+| Wise | `personal/wise/inbox/` | CAMT.053 XML movements, optional CSV enrichment |
+| Bunq | `personal/bunq/inbox/` | MT940 movements, optional seven-column CSV companion |
+
+Keep the shared database, journal, configuration, and reports outside these inboxes.
+Pass the institution explicitly when syncing. All `personal/` contents are
+ignored by Git. Existing import history retains the paths used at import time;
+moving an inbox does not change source identities or create new movements.
+
 ## Wise and multiple banks
 
 Wise CAMT.053.001.10 XML supplies movements, full booking timestamps, account
@@ -264,7 +342,7 @@ optional enrichment. Keep a separate inbox per institution and sync both into th
 same database and journal:
 
 ```sh
-finances sync-bank personal/finances.sqlite3 personal/inbox \
+finances sync-bank personal/finances.sqlite3 personal/boursobank/inbox \
   --institution boursobank --journal personal/bank.journal
 finances sync-bank personal/finances.sqlite3 personal/wise/inbox \
   --institution wise --journal personal/bank.journal
@@ -301,6 +379,43 @@ Uncontested matches add `wise-merchant`, `wise-payment-reference`,
 metadata: no extra fee posting or currency conversion is inferred. The supplied
 samples cover EUR with zero fees; synthetic tests cover fee metadata and currency
 isolation, but real FX and nonzero-fee exports need further validation.
+
+## Bunq statements
+
+Put Bunq's MT940 export (including exports with no filename extension) and its
+optional seven-column CSV into `personal/bunq/inbox/`:
+
+```sh
+finances sync-bank personal/finances.sqlite3 personal/bunq/inbox \
+  --institution bunq --journal personal/bank.journal
+finances bunq-status personal/finances.sqlite3
+```
+
+The MT940 reader supports the observed Bunq layout: a BUNQ header, account/currency,
+`:28:` statement sequence, final opening/closing balances, paired `:61:`/`:86:`
+entries with `NONREF`, and IBAN/name/remittance metadata. It reads exact comma
+decimals, handles multiline descriptions, preserves booking and interest dates,
+and rejects unsupported fields, date ranges, currencies or unbalanced statements.
+Amounts never pass through floating point. Interest dates become journal secondary
+dates. `bunq-status` independently reconciles persisted statement/event links.
+
+Bunq supplies no movement IDs in these exports. Identity uses normalized account,
+currency, booking/interest dates, signed amount, counterparty, name and description,
+plus an occurrence number for identical movements. Identical repeated movements
+are preserved. An immutable inventory of each imported account/day prevents
+changed evidence, corrected amounts or partial-day overlaps from silently creating
+or collapsing movements. Exact overlapping day inventories are reusable; a changed
+inventory rejects the whole statement for review. Export complete days when
+extending the history. Resolving a changed day is a future correction workflow.
+
+The companion CSV has `Date`, `Interest Date`, `Amount`, `Account`, `Counterparty`,
+`Name`, and `Description` columns. It supports Bunq's comma decimals and grouped
+thousands. It carries no currency, so it never creates events or supplies guessed
+currency: rows wait for matching MT940 evidence. Exact normalized fields and
+per-document occurrence counts must agree; partial duplicate groups or competing
+currencies remain ambiguous. Raw rows and matching history are retained, and
+uncontested matches add CSV provenance and counterparty tags to the journal.
+Bunq uses the same persisted account mappings and reviewed categories as other banks.
 
 ## Optional CSV enrichment
 

@@ -63,7 +63,7 @@ not yet calculate average entry price from fills or model inverse contracts.
 
 `Store` uses Rel's typed statement bindings and SQLite backend. SQL parameters are
 bound rather than interpolated. `Db_schema` defines versioned SQL migrations.
-Schema version 5 contains source events, journal entries, postings, immutable
+Schema version 7 contains source events, journal entries, postings, immutable
 import documents, document/event links, append-only bank import attempts, persisted
 bank account mappings, an append-only mapping change log, immutable CSV rows,
 derived CSV matches, and append-only match change history. Decimal posting
@@ -274,8 +274,9 @@ FX postings. Real samples currently validate EUR movements with zero fees.
 ## Bank adapter layout
 
 Bank-specific adapters live in `lib/banks/boursobank/` (OFX parsing, BoursoBank CSV
-parsing and matching) and `lib/banks/wise/` (CAMT parsing and Wise CSV parsing and
-matching). Dune's `include_subdirs unqualified` builds these directories into the
+parsing and matching) `lib/banks/wise/` (CAMT parsing and Wise CSV parsing and
+matching), and `lib/banks/bunq/` (MT940 parsing, movement identities and CSV matching).
+Dune's `include_subdirs unqualified` builds these directories into the
 existing `finances` library, preserving its public module names.
 
 The adapters share `Bank_match` for matching states and results; Wise does not
@@ -288,3 +289,48 @@ bank still requires wiring its importer and persistence into the workflow.
 
 `dune fmt` applies the repository's ocamlformat configuration (Jane Street profile)
 to all adapter and shared OCaml files, including nested directories.
+
+## Reviewed bank categories
+
+`Bank_category` validates explicit per-event decisions with an expense/income
+counter-account and a nonempty reason; `equity:unclassified` resets a decision.
+Schema 6 adds current `bank_categories` and append-only `bank_category_changes`
+without rewriting original evidence or entries. Migration from schema 5 is atomic.
+
+Applying a batch validates bank event identities, rejects repeated IDs, compares
+any existing entry against its expected projection, and updates only posting
+ordinal 1 before saving the decision and audit row in the same transaction. A
+conflict rolls back the entire batch. Identical account/reason retries add no audit
+row. Bank account mappings compare against the reviewed projection too, preserving
+categories while renaming posting ordinal 0.
+
+Projection reads the persisted category for each event. The existing projection
+key `bank-unclassified-v1` is retained as its stable identity even after explicit
+classification; a review decision updates that entry rather than duplicating the
+movement. Journal rendering includes the latest decision ID and sanitized reason.
+No bank suggestion automatically becomes a decision, and no extra journal entry
+is created for a category change. Review and history CLI commands expose these
+states; rendering must run again after applying decisions.
+
+## Bunq adapter
+
+`Bunq_mt940` parses the observed Bunq MT940 form and verifies exact opening balance
+plus movements equals closing balance. `Bunq_transaction` builds canonical payloads
+and identities including occurrence numbers, so identical repeated payments remain
+separate. Its generic source events use kind `bunq-transaction` and dated booking
+occurrences. `Bank_transaction` supplies the shared projection view.
+
+Schema 7 expands import formats while preserving attempt history, and adds immutable
+Bunq day inventories, statement balances, CSV rows and audited derived matches.
+Import compares the sorted canonical movement inventory for every already observed
+account/day. Any mismatch rolls back the entire source import before its rejection
+is archived. This conservatively rejects partial-day overlaps or corrections; no
+stable upstream IDs exist to resolve those safely. Statement membership uses the
+existing document/event links. The reconciliation API sums those persisted events.
+
+`Bunq_csv` treats the currency-free CSV as companion observations only. Normalized
+account, dates, amount, counterparty, name and description form a matching key.
+Both sources must supply equal occurrence counts per key within each document;
+mismatches or currency ambiguity remain review items. CSV arrival order does not
+matter: sync recomputes its matches after scanning all files and before projection.
+Shared audited match persistence saves transitions without rewriting evidence.

@@ -16,12 +16,31 @@ type t =
   }
 
 let is_event (event : Source_event.t) =
-  List.mem [ "bank-transaction"; "wise-transaction" ] event.kind ~equal:String.equal
+  List.mem
+    [ "bank-transaction"; "wise-transaction"; "bunq-transaction" ]
+    event.kind
+    ~equal:String.equal
 ;;
 
 let of_event (event : Source_event.t) =
   let open Or_error.Let_syntax in
-  if String.equal event.kind "wise-transaction"
+  if String.equal event.kind "bunq-transaction"
+  then (
+    let%map tx = Bunq_transaction.source_transaction event in
+    let account =
+      { bank_id = "bunq"
+      ; account_id = tx.account_id
+      ; account_type = "current-" ^ tx.currency
+      ; currency = tx.currency
+      }
+    in
+    { account
+    ; booked_on = tx.booked_on
+    ; amount = tx.amount
+    ; name = Some tx.name
+    ; memo = Some tx.description
+    })
+  else if String.equal event.kind "wise-transaction"
   then (
     let%map tx = Wise_camt.source_transaction event in
     let account =

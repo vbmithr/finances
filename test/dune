@@ -66,3 +66,33 @@
   alcotest
   rel
   rel.sqlite3))
+
+(test
+ (name category_test)
+ (modules category_test)
+ (deps
+  (glob_files fixtures/*))
+ (libraries
+  finances
+  finances.hledger
+  core
+  core_unix
+  core_unix.filename_unix
+  alcotest
+  rel
+  rel.sqlite3))
+
+(test
+ (name bunq_test)
+ (modules bunq_test)
+ (deps
+  (glob_files fixtures/*))
+ (libraries
+  finances
+  finances.hledger
+  core
+  core_unix
+  core_unix.filename_unix
+  alcotest
+  rel
+  rel.sqlite3))

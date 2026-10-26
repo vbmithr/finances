@@ -51,7 +51,7 @@ let description_component text =
   |> String.concat ~sep:" "
 ;;
 
-let entry ?bank_account event =
+let entry ?bank_account ?(counter_account = "equity:unclassified") event =
   let open Or_error.Let_syntax in
   let%bind transaction = Bank_transaction.of_event event in
   let account = transaction.account in
@@ -68,7 +68,7 @@ let entry ?bank_account event =
   in
   let%bind outgoing =
     Accounting.posting
-      ~account:"equity:unclassified"
+      ~account:counter_account
       ~commodity:account.currency
       (Bigdecimal.neg transaction.amount)
   in

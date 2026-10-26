@@ -318,3 +318,120 @@ BEGIN SELECT RAISE(ABORT, 'Wise matching history is append-only'); END;
 PRAGMA user_version=5;
 |}
 ;;
+
+let upgrade_v5 =
+  {|
+CREATE TABLE bank_categories (
+  event_id INTEGER PRIMARY KEY REFERENCES source_events(id),
+  account TEXT NOT NULL,
+  reason TEXT NOT NULL
+) STRICT;
+CREATE TABLE bank_category_changes (
+  id INTEGER PRIMARY KEY,
+  event_id INTEGER NOT NULL REFERENCES source_events(id),
+  previous_account TEXT,
+  account TEXT NOT NULL,
+  reason TEXT NOT NULL,
+  changed_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now'))
+) STRICT;
+CREATE TRIGGER bank_category_changes_no_update BEFORE UPDATE ON bank_category_changes
+BEGIN SELECT RAISE(ABORT, 'category history is append-only'); END;
+CREATE TRIGGER bank_category_changes_no_delete BEFORE DELETE ON bank_category_changes
+BEGIN SELECT RAISE(ABORT, 'category history is append-only'); END;
+PRAGMA user_version=6;
+|}
+;;
+
+let upgrade_v6 =
+  {|
+
+CREATE TABLE bank_import_attempts_v7 (
+  id INTEGER PRIMARY KEY,
+  institution TEXT NOT NULL,
+  path TEXT NOT NULL,
+  document_id INTEGER REFERENCES import_documents(id),
+  format TEXT NOT NULL CHECK (format IN ('ofx','csv','qif','spreadsheet','unknown','camt053','wise_csv','bunq_mt940','bunq_csv')),
+  outcome TEXT NOT NULL CHECK (outcome IN ('imported','unchanged','rejected','unsupported','unreadable')),
+  inserted_count INTEGER NOT NULL CHECK (inserted_count >= 0),
+  existing_count INTEGER NOT NULL CHECK (existing_count >= 0),
+  error TEXT,
+  attempted_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now')),
+  CHECK ((outcome = 'unreadable') = (document_id IS NULL))
+) STRICT;
+CREATE INDEX bank_import_attempts_v7_document ON bank_import_attempts_v7(document_id,id);
+CREATE TRIGGER bank_import_attempts_v7_no_update BEFORE UPDATE ON bank_import_attempts_v7
+BEGIN SELECT RAISE(ABORT, 'import history is append-only'); END;
+CREATE TRIGGER bank_import_attempts_v7_no_delete BEFORE DELETE ON bank_import_attempts_v7
+BEGIN SELECT RAISE(ABORT, 'import history is append-only'); END;
+
+INSERT INTO bank_import_attempts_v7 SELECT * FROM bank_import_attempts;
+DROP TABLE bank_import_attempts;
+ALTER TABLE bank_import_attempts_v7 RENAME TO bank_import_attempts;
+
+
+CREATE TABLE bunq_day_inventories (
+  source_account TEXT NOT NULL,
+  booked_on TEXT NOT NULL,
+  signature TEXT NOT NULL,
+  document_id INTEGER NOT NULL REFERENCES import_documents(id),
+  PRIMARY KEY(source_account,booked_on)
+) STRICT;
+CREATE TRIGGER bunq_day_inventories_no_update BEFORE UPDATE ON bunq_day_inventories
+BEGIN SELECT RAISE(ABORT, 'Bunq daily inventories are immutable'); END;
+CREATE TRIGGER bunq_day_inventories_no_delete BEFORE DELETE ON bunq_day_inventories
+BEGIN SELECT RAISE(ABORT, 'Bunq daily inventories are immutable'); END;
+CREATE TABLE bunq_statements (
+  document_id INTEGER PRIMARY KEY REFERENCES import_documents(id),
+  account_id TEXT NOT NULL,
+  currency TEXT NOT NULL,
+  opening_on TEXT NOT NULL,
+  closing_on TEXT NOT NULL,
+  opening TEXT NOT NULL,
+  closing TEXT NOT NULL
+) STRICT;
+CREATE TRIGGER bunq_statements_no_update BEFORE UPDATE ON bunq_statements
+BEGIN SELECT RAISE(ABORT, 'Bunq statements are immutable'); END;
+CREATE TRIGGER bunq_statements_no_delete BEFORE DELETE ON bunq_statements
+BEGIN SELECT RAISE(ABORT, 'Bunq statements are immutable'); END;
+CREATE TABLE bunq_csv_rows (
+  id INTEGER PRIMARY KEY,
+  document_id INTEGER NOT NULL REFERENCES import_documents(id),
+  row_number INTEGER NOT NULL CHECK(row_number>0),
+  institution TEXT NOT NULL,
+  fields_json TEXT NOT NULL,
+  UNIQUE(document_id,row_number)
+) STRICT;
+CREATE TRIGGER bunq_csv_rows_no_update BEFORE UPDATE ON bunq_csv_rows
+BEGIN SELECT RAISE(ABORT, 'Bunq CSV observations are immutable'); END;
+CREATE TRIGGER bunq_csv_rows_no_delete BEFORE DELETE ON bunq_csv_rows
+BEGIN SELECT RAISE(ABORT, 'Bunq CSV observations are immutable'); END;
+CREATE TABLE bunq_csv_matches (
+  row_id INTEGER PRIMARY KEY REFERENCES bunq_csv_rows(id),
+  event_id INTEGER REFERENCES source_events(id),
+  state TEXT NOT NULL CHECK(state IN ('matched','unmatched','ambiguous','conflict')),
+  reason TEXT NOT NULL,
+  candidates_json TEXT NOT NULL,
+  policy TEXT NOT NULL,
+  updated_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now')),
+  CHECK ((state IN ('matched','conflict')) = (event_id IS NOT NULL))
+) STRICT;
+CREATE TABLE bunq_csv_match_changes (
+  id INTEGER PRIMARY KEY,
+  row_id INTEGER NOT NULL REFERENCES bunq_csv_rows(id),
+  previous_event_id INTEGER REFERENCES source_events(id),
+  event_id INTEGER REFERENCES source_events(id),
+  previous_state TEXT,
+  state TEXT NOT NULL,
+  reason TEXT NOT NULL,
+  candidates_json TEXT NOT NULL,
+  policy TEXT NOT NULL,
+  changed_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now'))
+) STRICT;
+CREATE TRIGGER bunq_csv_match_changes_no_update BEFORE UPDATE ON bunq_csv_match_changes
+BEGIN SELECT RAISE(ABORT, 'Bunq matching history is append-only'); END;
+CREATE TRIGGER bunq_csv_match_changes_no_delete BEFORE DELETE ON bunq_csv_match_changes
+BEGIN SELECT RAISE(ABORT, 'Bunq matching history is append-only'); END;
+PRAGMA user_version=7;
+
+|}
+;;

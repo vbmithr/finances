@@ -429,7 +429,7 @@ let migration_v3 () =
         0
         (List.length (ok (Store.bank_csv_observations db))));
     raw root (fun db ->
-      Alcotest.(check int) "version five" 5 (scalar db "PRAGMA user_version")))
+      Alcotest.(check int) "version seven" 7 (scalar db "PRAGMA user_version")))
 ;;
 
 let migration_rollback () =

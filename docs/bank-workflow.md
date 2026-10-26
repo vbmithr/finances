@@ -43,16 +43,16 @@ and test databases belong in disk-backed scratch storage.
 The first milestone is implemented: folder sync, import history, and persisted
 ledger naming are available. CSV enrichment is also implemented, including exact
 matching, persisted review states, and journal metadata. A background watcher,
-source account identity resolution, Excel/QIF parsing, categorization, transfer
-matching, and balance reconciliation are later work. Unsupported files must be reported rather than silently accepted.
+source account identity resolution, Excel/QIF parsing, automatic category rules,
+transfer matching, and BoursoBank balance reconciliation are later work. Unsupported files must be reported rather than silently accepted.
 
 ## Folder ingestion
 
 The initial entry point is an explicit command:
 
 ```sh
-finances sync-bank personal/finances.sqlite3 personal/inbox \
-  --journal personal/bank.journal
+finances sync-bank personal/finances.sqlite3 personal/boursobank/inbox \
+  --institution boursobank --journal personal/bank.journal
 ```
 
 One invocation uses one explicit institution identifier, defaulting to
@@ -110,8 +110,8 @@ Each mapping contains `institution`, `bank_id`, `account_id`, `account_type`, an
 
 ```sh
 finances map-bank-accounts personal/finances.sqlite3 personal/config/accounts.json
-finances sync-bank personal/finances.sqlite3 personal/inbox \
-  --accounts personal/config/accounts.json --journal personal/bank.journal
+finances sync-bank personal/finances.sqlite3 personal/boursobank/inbox \
+  --institution boursobank --accounts personal/config/accounts.json --journal personal/bank.journal
 ```
 
 Mappings are validated, persisted in SQLite, and audited. The JSON file is an input
@@ -199,6 +199,14 @@ income categories; unresolved records remain unclassified. Distinguish suggestio
 from accepted decisions. Corrections and reclassification need controlled
 projection updates rather than another posting of the original movement.
 
+Explicit manual categorization is implemented with `bank-review`,
+`categorize-bank`, and `category-history`. A JSON batch carries event IDs, approved
+expense/income accounts, and reasons. SQLite stores current decisions and an
+append-only audit. Reviewed projections survive regeneration, overlapping imports,
+and bank account renames. Corrections update only verified counter-postings;
+`equity:unclassified` returns a movement to review. Automatic rules and split
+allocations remain future work.
+
 An owned-account transfer requires matching two separately observed bank movements.
 Use resolved account ownership, currency, signed amounts, dates, and references to
 propose links. Handle fees, FX, deferred-debit card settlement, split movements, and
@@ -252,3 +260,18 @@ The combined journal includes every institution already stored. Opening balance
 postings, fee postings, and FX accounting are not inferred. Real FX and nonzero-fee
 cases need additional coverage; synthetic tests exercise fee metadata conflicts,
 currency separation, reversals, and multi-bank replay.
+
+## Bunq import
+
+The Bunq adapter accepts the observed MT940 export and its seven-column CSV
+companion from `personal/bunq/inbox/` with `--institution bunq`. MT940 supplies
+movements and reconciled account/currency balances; CSV observations add corroborating
+row provenance, never extra movements. `bunq-status` reports persisted reconciliation
+and CSV matching states.
+
+Because upstream references are `NONREF`, identities include canonical movement
+fields and identical-occurrence ordinals. Account/day inventories must agree on
+subsequent imports. A different or partial overlapping day is rejected for review
+rather than merged by guesswork. Full identical duplicates remain distinct payments.
+Changing an old day requires a future explicit correction workflow. Existing account
+mapping and category decisions apply to Bunq entries as they do to other banks.

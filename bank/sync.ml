@@ -6,6 +6,7 @@ type report =
   ; mapping_changes : int
   ; projection : Store.projection_report
   ; csv : Store.csv_report
+  ; bunq_csv : Finances.Store.csv_report
   ; wise_csv : Store.csv_report
   ; journal : string
   }
@@ -105,8 +106,9 @@ let run ?accounts ?max_file_bytes ~database ~institution ~directory ~journal () 
     let%bind mapping_changes = Store.set_bank_account_mappings db mappings in
     let%bind csv = Store.match_bank_csv db in
     let%bind wise_csv = Store.match_wise_csv db in
+    let%bind bunq_csv = Store.match_bunq_csv db in
     let%bind projection = Store.project_bank db in
     let%bind contents = Finances_hledger.export db in
     let%map () = write_journal ~path:journal contents in
-    { inbox; mapping_changes; projection; csv; wise_csv; journal })
+    { inbox; mapping_changes; projection; csv; wise_csv; bunq_csv; journal })
 ;;

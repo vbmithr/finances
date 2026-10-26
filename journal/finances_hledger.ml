@@ -76,11 +76,16 @@ let export db =
   let%bind entries = Store.entries db in
   let%bind observations = Store.bank_csv_observations db in
   let%bind wise = Store.wise_csv_observations db in
-  let%map wise_transactions = Store.wise_transactions db in
+  let%bind wise_transactions = Store.wise_transactions db in
+  let%bind category_history = Store.bank_category_history db in
+  let%bind bunq_transactions = Store.bunq_transactions db in
+  let%map bunq_observations = Store.bunq_csv_observations db in
   let wise_dates = Int64.Table.create () in
   List.iter wise_transactions ~f:(fun (id, tx) ->
     Option.iter tx.Wise_camt.value_on ~f:(fun date ->
       Hashtbl.set wise_dates ~key:id ~data:date));
+  List.iter bunq_transactions ~f:(fun (id, tx) ->
+    Hashtbl.set wise_dates ~key:id ~data:tx.Bunq_transaction.value_on);
   let wise_metadata = Int64.Table.create () in
   List.iter wise ~f:(fun (observation : Store.wise_csv_observation) ->
     match observation.matching with
@@ -98,6 +103,30 @@ let export db =
       if not (Hashtbl.mem wise_metadata id)
       then Hashtbl.set wise_metadata ~key:id ~data:tags
     | _ -> ());
+  List.iter bunq_observations ~f:(fun (observation : Store.bunq_csv_observation) ->
+    match observation.matching with
+    | Some { state = Matched; event_id = Some id; _ } ->
+      let tags =
+        [ "bunq-csv-row-id: " ^ Int64.to_string observation.row_id ]
+        @
+        if String.is_empty observation.row.counterparty
+        then []
+        else [ "bunq-counterparty: " ^ tag_text observation.row.counterparty ]
+      in
+      if not (Hashtbl.mem wise_metadata id)
+      then Hashtbl.set wise_metadata ~key:id ~data:tags
+    | _ -> ());
+  let latest_categories = Int64.Table.create () in
+  List.iter category_history ~f:(fun (decision : Store.category_change) ->
+    Hashtbl.set latest_categories ~key:decision.event_id ~data:decision);
+  Hashtbl.iteri latest_categories ~f:(fun ~key:event_id ~data:decision ->
+    let tags =
+      [ "category-decision-id: " ^ Int64.to_string decision.id
+      ; "category-reason: " ^ tag_text decision.reason
+      ]
+    in
+    Hashtbl.update wise_metadata event_id ~f:(fun existing ->
+      Option.value existing ~default:[] @ tags));
   let metadata = Int64.Table.create () in
   List.iter observations ~f:(fun observation ->
     match observation.Store.matching with

@@ -5,6 +5,7 @@ type report =
   ; mapping_changes : int
   ; projection : Finances.Store.projection_report
   ; csv : Finances.Store.csv_report
+  ; bunq_csv : Finances.Store.csv_report
   ; wise_csv : Finances.Store.csv_report
   ; journal : string
   }

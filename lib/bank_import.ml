@@ -4,6 +4,8 @@ type format =
   | Ofx
   | Camt053
   | Wise_csv
+  | Bunq_mt940
+  | Bunq_csv
   | Csv
   | Qif
   | Spreadsheet
@@ -34,6 +36,8 @@ let format_name = function
   | Ofx -> "ofx"
   | Camt053 -> "camt053"
   | Wise_csv -> "wise_csv"
+  | Bunq_mt940 -> "bunq_mt940"
+  | Bunq_csv -> "bunq_csv"
   | Csv -> "csv"
   | Qif -> "qif"
   | Spreadsheet -> "spreadsheet"
@@ -52,6 +56,8 @@ let format_of_string = function
   | "ofx" -> Ok Ofx
   | "camt053" -> Ok Camt053
   | "wise_csv" -> Ok Wise_csv
+  | "bunq_mt940" -> Ok Bunq_mt940
+  | "bunq_csv" -> Ok Bunq_csv
   | "csv" -> Ok Csv
   | "qif" -> Ok Qif
   | "spreadsheet" -> Ok Spreadsheet
@@ -80,6 +86,10 @@ let detect_format ~path contents =
     String.is_substring prefix ~substring:"TransferWise ID"
     && String.is_substring prefix ~substring:"Date Time"
   then Wise_csv
+  else if Bunq_mt940.recognizes contents
+  then Bunq_mt940
+  else if Bunq_csv.recognizes contents
+  then Bunq_csv
   else if String.is_prefix prefix ~prefix:"!Type:"
   then Qif
   else if
@@ -95,6 +105,7 @@ let detect_format ~path contents =
     | ".ofx" -> Ofx
     | ".csv" -> Csv
     | ".qif" -> Qif
+    | ".mt940" -> Bunq_mt940
     | ".xls" | ".xlsx" -> Spreadsheet
     | _ -> Unknown)
 ;;

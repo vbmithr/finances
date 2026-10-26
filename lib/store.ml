@@ -31,21 +31,36 @@ let migrate db =
       let* () = db_result (Db.exec_sql db Db_schema.create) in
       let* () = db_result (Db.exec_sql db Db_schema.upgrade_v2) in
       let* () = db_result (Db.exec_sql db Db_schema.upgrade_v3) in
-      db_result (Db.exec_sql db Db_schema.upgrade_v4)
+      let* () = db_result (Db.exec_sql db Db_schema.upgrade_v4) in
+      let* () = db_result (Db.exec_sql db Db_schema.upgrade_v5) in
+      db_result (Db.exec_sql db Db_schema.upgrade_v6)
     | Some 1 ->
       let* () = db_result (Db.exec_sql db Db_schema.upgrade_v1) in
       let* () = db_result (Db.exec_sql db Db_schema.upgrade_v2) in
       let* () = db_result (Db.exec_sql db Db_schema.upgrade_v3) in
-      db_result (Db.exec_sql db Db_schema.upgrade_v4)
+      let* () = db_result (Db.exec_sql db Db_schema.upgrade_v4) in
+      let* () = db_result (Db.exec_sql db Db_schema.upgrade_v5) in
+      db_result (Db.exec_sql db Db_schema.upgrade_v6)
     | Some 2 ->
       let* () = db_result (Db.exec_sql db Db_schema.upgrade_v2) in
       let* () = db_result (Db.exec_sql db Db_schema.upgrade_v3) in
-      db_result (Db.exec_sql db Db_schema.upgrade_v4)
+      let* () = db_result (Db.exec_sql db Db_schema.upgrade_v4) in
+      let* () = db_result (Db.exec_sql db Db_schema.upgrade_v5) in
+      db_result (Db.exec_sql db Db_schema.upgrade_v6)
     | Some 3 ->
       let* () = db_result (Db.exec_sql db Db_schema.upgrade_v3) in
-      db_result (Db.exec_sql db Db_schema.upgrade_v4)
-    | Some 4 -> db_result (Db.exec_sql db Db_schema.upgrade_v4)
-    | Some 5 -> Ok ()
+      let* () = db_result (Db.exec_sql db Db_schema.upgrade_v4) in
+      let* () = db_result (Db.exec_sql db Db_schema.upgrade_v5) in
+      db_result (Db.exec_sql db Db_schema.upgrade_v6)
+    | Some 4 ->
+      let* () = db_result (Db.exec_sql db Db_schema.upgrade_v4) in
+      let* () = db_result (Db.exec_sql db Db_schema.upgrade_v5) in
+      db_result (Db.exec_sql db Db_schema.upgrade_v6)
+    | Some 5 ->
+      let* () = db_result (Db.exec_sql db Db_schema.upgrade_v5) in
+      db_result (Db.exec_sql db Db_schema.upgrade_v6)
+    | Some 6 -> db_result (Db.exec_sql db Db_schema.upgrade_v6)
+    | Some 7 -> Ok ()
     | _ -> Or_error.error_string "unsupported database schema version")
 ;;
 
@@ -571,6 +586,122 @@ let import_wise_csv db ~institution ~contents rows =
   Ok document_id
 ;;
 
+let import_bunq db ~institution ~contents (document : Bunq_mt940.t) =
+  let* document_id = archive_document db ~institution ~contents in
+  let days = String.Table.create () in
+  List.iter document.transactions ~f:(fun tx ->
+    Hashtbl.add_multi days ~key:(Date.to_string tx.Bunq_transaction.booked_on) ~data:tx);
+  let find =
+    Rel_sql.Stmt.(
+      func
+        "SELECT signature FROM bunq_day_inventories WHERE source_account=? AND \
+         booked_on=?"
+        (text @-> text @-> ret Row.(t1 (text "signature"))))
+  in
+  let insert_day =
+    Rel_sql.Stmt.(
+      func
+        "INSERT INTO \
+         bunq_day_inventories(source_account,booked_on,signature,document_id) VALUES \
+         (?,?,?,?)"
+        (text @-> text @-> text @-> int64 @-> unit))
+  in
+  let* _ =
+    traverse
+      (fun (day, transactions) ->
+         let account = Bunq_transaction.account_identity (List.hd_exn transactions) in
+         let payloads =
+           List.map transactions ~f:(fun tx -> tx.Bunq_transaction.payload)
+           |> List.sort ~compare:String.compare
+         in
+         let signature =
+           Yojson.Safe.to_string (`List (List.map payloads ~f:(fun s -> `String s)))
+           |> Digestif.SHA256.digest_string
+           |> Digestif.SHA256.to_hex
+         in
+         let* previous = db_result (Db.first db (find account day)) in
+         match previous with
+         | Some old when not (String.equal old signature) ->
+           Or_error.errorf
+             "Bunq day %s differs from imported evidence; partial-day exports or \
+              corrections need review"
+             day
+         | Some _ -> Ok ()
+         | None -> db_result (Db.exec db (insert_day account day signature document_id)))
+      (Hashtbl.to_alist days)
+  in
+  let rec ingest inserted existing = function
+    | [] -> Ok { document_id; statements = 1; inserted; existing }
+    | tx :: rest ->
+      let* event =
+        Source_event.create_dated
+          ~venue:institution
+          ~account:(Bunq_transaction.account_identity tx)
+          ~kind:"bunq-transaction"
+          ~source_id:tx.source_id
+          ~occurred_on:tx.booked_on
+          ~payload:tx.payload
+      in
+      let* result = ingest_in_transaction db event in
+      let id, inserted, existing =
+        match result with
+        | Inserted id -> id, inserted + 1, existing
+        | Existing id -> id, inserted, existing + 1
+      in
+      let* () = db_result (Db.exec db (link_document document_id id)) in
+      ingest inserted existing rest
+  in
+  let* result = ingest 0 0 document.transactions in
+  let stmt =
+    Rel_sql.Stmt.(
+      func
+        "INSERT INTO \
+         bunq_statements(document_id,account_id,currency,opening_on,closing_on,opening,closing) \
+         VALUES (?,?,?,?,?,?,?) ON CONFLICT(document_id) DO NOTHING"
+        (int64 @-> text @-> text @-> text @-> text @-> text @-> text @-> unit))
+  in
+  let* () =
+    db_result
+      (Db.exec
+         db
+         (stmt
+            document_id
+            document.account_id
+            document.currency
+            (Date.to_string document.opening_on)
+            (Date.to_string document.closing_on)
+            (Bigdecimal.to_string_no_sn document.opening)
+            (Bigdecimal.to_string_no_sn document.closing)))
+  in
+  Ok result
+;;
+
+let import_bunq_csv db ~institution ~contents rows =
+  let* document_id = archive_document db ~institution ~contents in
+  let insert =
+    Rel_sql.Stmt.(
+      func
+        "INSERT INTO bunq_csv_rows(document_id,row_number,institution,fields_json) \
+         VALUES (?,?,?,?) ON CONFLICT(document_id,row_number) DO NOTHING"
+        (int64 @-> int @-> text @-> text @-> unit))
+  in
+  let* _ =
+    traverse
+      (fun (row : Bunq_csv.row) ->
+         db_result
+           (Db.exec
+              db
+              (insert
+                 document_id
+                 row.row_number
+                 institution
+                 (Yojson.Safe.to_string
+                    (`List (List.map row.fields ~f:(fun s -> `String s)))))))
+      rows
+  in
+  Ok document_id
+;;
+
 let import_bank_file db ~institution ~path ~contents =
   let* institution = Validation.text "institution" institution in
   let* path = Validation.text "path" path in
@@ -620,6 +751,48 @@ let import_bank_file db ~institution ~path ~contents =
        (match result with
         | Ok report -> Ok report
         | Error e -> fail Rejected (Error.to_string_hum e)))
+  | Bunq_mt940 | Bunq_csv ->
+    if not (String.equal institution "bunq")
+    then fail Rejected "Bunq exports require --institution bunq"
+    else (
+      let result =
+        transaction db (fun db ->
+          let* document_id = archive_document db ~institution ~contents in
+          let* accepted =
+            db_result (Db.first db (accepted_document document_id document_id))
+          in
+          let* inserted, existing, message =
+            match format with
+            | Bunq_mt940 ->
+              let* document = Bunq_mt940.parse contents in
+              let* imported = import_bunq db ~institution ~contents document in
+              Ok (imported.inserted, imported.existing, None)
+            | _ ->
+              let* rows = Bunq_csv.parse contents in
+              let* _ = import_bunq_csv db ~institution ~contents rows in
+              Ok
+                ( 0
+                , 0
+                , Some
+                    (sprintf
+                       "Bunq CSV observations: %d; no transactions created"
+                       (List.length rows)) )
+          in
+          record_attempt
+            db
+            ~institution
+            ~path
+            ~document_id:(Some document_id)
+            ~format
+            ~outcome:
+              (if Option.value accepted ~default:false then Unchanged else Imported)
+            ~inserted
+            ~existing
+            ~message)
+      in
+      match result with
+      | Ok report -> Ok report
+      | Error e -> fail Rejected (Error.to_string_hum e))
   | Camt053 | Wise_csv ->
     if not (String.equal institution "wise")
     then fail Rejected "Wise exports require --institution wise"
@@ -697,7 +870,9 @@ let import_bank_file db ~institution ~path ~contents =
         | Ok report -> Ok report
         | Error e -> fail Rejected (Error.to_string_hum e)))
   | Csv ->
-    fail Unsupported "CSV layout not supported; expected the BoursoBank 12-column export"
+    fail
+      Unsupported
+      "CSV layout not supported; expected a supported BoursoBank, Wise or Bunq export"
   | Qif | Spreadsheet | Unknown ->
     fail Unsupported ("format not implemented: " ^ Bank_import.format_name format)
 ;;
@@ -866,9 +1041,22 @@ let find_mapping =
       (text @-> text @-> ret Row.(t1 (text "ledger_account"))))
 ;;
 
-let mapped_bank_entry db (event : Source_event.t) =
+let find_category =
+  Rel_sql.Stmt.(
+    func
+      "SELECT account,reason FROM bank_categories WHERE event_id=?"
+      (int64 @-> ret Row.(t2 (text "account") (text "reason"))))
+;;
+
+let category_account db event_id =
+  let* category = db_result (Db.first db (find_category event_id)) in
+  Ok (Option.map category ~f:fst)
+;;
+
+let mapped_bank_entry db event_id (event : Source_event.t) =
   let* bank_account = db_result (Db.first db (find_mapping event.venue event.account)) in
-  Bank_projection.entry ?bank_account event
+  let* counter_account = category_account db event_id in
+  Bank_projection.entry ?bank_account ?counter_account event
 ;;
 
 let record_entry db ~event_id ~key entry =
@@ -914,7 +1102,7 @@ let project_bank db =
         if not (Bank_transaction.is_event event)
         then project inserted existing rest
         else
-          let* entry = mapped_bank_entry db event in
+          let* entry = mapped_bank_entry db event_id event in
           let* result =
             record_entry_in_transaction db ~event_id ~key:Bank_projection.key entry
           in
@@ -1026,8 +1214,12 @@ let set_bank_account_mappings db mappings =
                    | None -> Ok ()
                    | Some (id, date, description) ->
                      let* stored = read_entry db id date description in
+                     let* counter_account = category_account db event_id in
                      let* expected =
-                       Bank_projection.entry ~bank_account:previous_name event
+                       Bank_projection.entry
+                         ~bank_account:previous_name
+                         ?counter_account
+                         event
                      in
                      if not (same_entry stored expected)
                      then
@@ -1469,5 +1661,299 @@ let wise_reconciliations db =
          ; entries = List.length ids
          ; difference
          })
+    statements
+;;
+
+let set_bank_categories db decisions =
+  let* decisions =
+    traverse
+      (fun (d : Bank_category.t) ->
+         Bank_category.create ~event_id:d.event_id ~account:d.account ~reason:d.reason)
+      decisions
+  in
+  if
+    List.contains_dup
+      (List.map decisions ~f:(fun d -> d.Bank_category.event_id))
+      ~compare:Int64.compare
+  then Or_error.error_string "duplicate event_id in category batch"
+  else
+    transaction db (fun db ->
+      let* source = events db in
+      let rec apply changed = function
+        | [] -> Ok changed
+        | (d : Bank_category.t) :: rest ->
+          let* event =
+            Or_error.of_option
+              (List.Assoc.find source d.event_id ~equal:Int64.equal)
+              ~error:(Error.of_string "unknown category event_id")
+          in
+          if not (Bank_transaction.is_event event)
+          then Or_error.error_string "category decision requires a bank event"
+          else
+            let* previous = db_result (Db.first db (find_category d.event_id)) in
+            if
+              Option.equal
+                (Tuple2.equal ~eq1:String.equal ~eq2:String.equal)
+                previous
+                (Some (d.account, d.reason))
+            then apply changed rest
+            else
+              let* existing =
+                db_result (Db.first db (find_entry d.event_id Bank_projection.key))
+              in
+              let* () =
+                match existing with
+                | None -> Ok ()
+                | Some (id, date, description) ->
+                  let* stored = read_entry db id date description in
+                  let* expected = mapped_bank_entry db d.event_id event in
+                  if not (same_entry stored expected)
+                  then
+                    Or_error.error_string
+                      "category change conflicts with existing bank projection"
+                  else (
+                    let update =
+                      Rel_sql.Stmt.(
+                        func
+                          "UPDATE postings SET account=? WHERE entry_id=? AND ordinal=1"
+                          (text @-> int64 @-> unit))
+                    in
+                    db_result (Db.exec db (update d.account id)))
+              in
+              let upsert =
+                Rel_sql.Stmt.(
+                  func
+                    "INSERT INTO bank_categories(event_id,account,reason) VALUES (?,?,?) \
+                     ON CONFLICT(event_id) DO UPDATE SET \
+                     account=excluded.account,reason=excluded.reason"
+                    (int64 @-> text @-> text @-> unit))
+              in
+              let audit =
+                Rel_sql.Stmt.(
+                  func
+                    "INSERT INTO \
+                     bank_category_changes(event_id,previous_account,account,reason) \
+                     VALUES (?,?,?,?)"
+                    (int64 @-> option text @-> text @-> text @-> unit))
+              in
+              let* () = db_result (Db.exec db (upsert d.event_id d.account d.reason)) in
+              let* () =
+                db_result
+                  (Db.exec
+                     db
+                     (audit d.event_id (Option.map previous ~f:fst) d.account d.reason))
+              in
+              apply (changed + 1) rest
+      in
+      apply 0 decisions)
+;;
+
+type category_change =
+  { id : int64
+  ; event_id : int64
+  ; previous_account : string option
+  ; account : string
+  ; reason : string
+  ; changed_at : string
+  }
+
+let bank_category_history db =
+  let row =
+    Row.(
+      unit (fun id event_id previous_account account reason changed_at ->
+        { id; event_id; previous_account; account; reason; changed_at })
+      * int64 "id"
+      * int64 "event_id"
+      * col "previous_account" Type.(option text)
+      * text "account"
+      * text "reason"
+      * text "changed_at")
+  in
+  collect
+    db
+    (statement
+       "SELECT id,event_id,previous_account,account,reason,changed_at FROM \
+        bank_category_changes ORDER BY id"
+       row)
+;;
+
+type bank_review =
+  { event_id : int64
+  ; institution : string
+  ; transaction : Bank_transaction.t
+  ; counter_account : string
+  ; reason : string option
+  }
+
+let bank_review db =
+  let* source = events db in
+  traverse
+    (fun (event_id, event) ->
+       let* transaction = Bank_transaction.of_event event in
+       let* category = db_result (Db.first db (find_category event_id)) in
+       Ok
+         { event_id
+         ; institution = event.venue
+         ; transaction
+         ; counter_account =
+             Option.value_map category ~default:"equity:unclassified" ~f:fst
+         ; reason = Option.map category ~f:snd
+         })
+    (List.filter source ~f:(fun (_, e) -> Bank_transaction.is_event e))
+;;
+
+let bunq_transactions db =
+  let* source = events db in
+  traverse
+    (fun (id, event) ->
+       let* trn = Bunq_transaction.source_transaction event in
+       Ok (id, trn))
+    (List.filter source ~f:(fun (_, e) ->
+       String.equal e.Source_event.kind "bunq-transaction"))
+;;
+
+let read_bunq_inputs db =
+  let* rows =
+    collect
+      db
+      (statement
+         "SELECT id,document_id,institution,row_number,fields_json FROM bunq_csv_rows \
+          ORDER BY document_id,row_number"
+         csv_row)
+  in
+  traverse
+    (fun (row_id, document_id, _, row_number, fields) ->
+       let* fields =
+         Or_error.try_with (fun () ->
+           Yojson.Safe.from_string fields
+           |> Yojson.Safe.Util.to_list
+           |> List.map ~f:Yojson.Safe.Util.to_string)
+       in
+       let* row = Bunq_csv.of_fields ~row_number fields in
+       Ok { Bunq_csv.row_id; document_id; row })
+    rows
+;;
+
+let read_bunq_matches db =
+  let* rows =
+    collect
+      db
+      (statement
+         "SELECT row_id,event_id,state,reason,candidates_json,policy FROM \
+          bunq_csv_matches ORDER BY row_id"
+         csv_match_row)
+  in
+  traverse decode_csv_match rows
+;;
+
+let upsert_bunq_match =
+  Rel_sql.Stmt.(
+    func
+      "INSERT INTO bunq_csv_matches(row_id,event_id,state,reason,candidates_json,policy) \
+       VALUES (?,?,?,?,?,?) ON CONFLICT(row_id) DO UPDATE SET \
+       event_id=excluded.event_id,state=excluded.state,reason=excluded.reason,candidates_json=excluded.candidates_json,policy=excluded.policy,updated_at=strftime('%Y-%m-%dT%H:%M:%fZ','now')"
+      (int64 @-> option int64 @-> text @-> text @-> text @-> text @-> unit))
+;;
+
+let audit_bunq_match =
+  Rel_sql.Stmt.(
+    func
+      "INSERT INTO \
+       bunq_csv_match_changes(row_id,previous_event_id,event_id,previous_state,state,reason,candidates_json,policy) \
+       VALUES (?,?,?,?,?,?,?,?)"
+      (int64
+       @-> option int64
+       @-> option int64
+       @-> option text
+       @-> text
+       @-> text
+       @-> text
+       @-> text
+       @-> unit))
+;;
+
+let match_bunq_csv db =
+  transaction db (fun db ->
+    let* inputs = read_bunq_inputs db in
+    let* candidates = bunq_transactions db in
+    let results = Bunq_csv.match_rows inputs candidates in
+    let* previous_rows = read_bunq_matches db in
+    save_csv_results
+      db
+      ~matching_policy:"bunq-csv-v1"
+      ~upsert:upsert_bunq_match
+      ~audit:audit_bunq_match
+      previous_rows
+      results)
+;;
+
+type bunq_csv_observation =
+  { row_id : int64
+  ; document_id : int64
+  ; row : Bunq_csv.row
+  ; matching : Bank_csv_match.result option
+  }
+
+let bunq_csv_observations db =
+  let* inputs = read_bunq_inputs db in
+  let* matches = read_bunq_matches db in
+  Ok
+    (List.map inputs ~f:(fun (input : Bunq_csv.input) ->
+       { row_id = input.row_id
+       ; document_id = input.document_id
+       ; row = input.row
+       ; matching =
+           List.find_map matches ~f:(fun (m, _) ->
+             if Int64.equal m.row_id input.row_id then Some m else None)
+       }))
+;;
+
+type bunq_reconciliation =
+  { document_id : int64
+  ; account_id : string
+  ; currency : string
+  ; entries : int
+  ; difference : Bigdecimal.t
+  }
+
+let bunq_reconciliations db =
+  let* statements =
+    collect
+      db
+      (statement
+         "SELECT document_id,account_id,currency,opening,closing FROM bunq_statements \
+          ORDER BY document_id"
+         Row.(
+           t5
+             (int64 "document_id")
+             (text "account_id")
+             (text "currency")
+             (text "opening")
+             (text "closing")))
+  in
+  let* source = bunq_transactions db in
+  traverse
+    (fun (document_id, account_id, currency, opening, closing) ->
+       let find =
+         Rel_sql.Stmt.(
+           func
+             "SELECT event_id FROM import_document_events WHERE document_id=?"
+             (int64 @-> ret Row.(t1 (int64 "event_id"))))
+       in
+       let* ids = collect db (find document_id) in
+       let* amounts =
+         traverse
+           (fun id ->
+              match List.Assoc.find source id ~equal:Int64.equal with
+              | None -> Or_error.error_string "missing Bunq statement event"
+              | Some tx -> Ok tx.Bunq_transaction.amount)
+           ids
+       in
+       let* difference =
+         Or_error.try_with (fun () ->
+           Bigdecimal.(
+             of_string opening + List.fold amounts ~init:zero ~f:( + ) - of_string closing))
+       in
+       Ok { document_id; account_id; currency; entries = List.length ids; difference })
     statements
 ;;

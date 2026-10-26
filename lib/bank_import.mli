@@ -4,6 +4,8 @@ type format =
   | Ofx
   | Camt053
   | Wise_csv
+  | Bunq_mt940
+  | Bunq_csv
   | Csv
   | Qif
   | Spreadsheet

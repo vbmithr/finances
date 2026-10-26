@@ -94,7 +94,8 @@ type projection_report =
   ; existing : int
   }
 
-(** Project every stored bank event against equity:unclassified, atomically.
+(** Project every stored bank event against its reviewed counter-account or
+    equity:unclassified by default, atomically.
     Source documents are not needed again. Repeating this operation is harmless;
     a conflict or invalid event rolls back the complete projection batch. *)
 val project_bank : t -> projection_report Or_error.t
@@ -124,3 +125,50 @@ type wise_reconciliation =
   }
 
 val wise_reconciliations : t -> wise_reconciliation list Or_error.t
+
+(** Atomically apply explicit category decisions and audit their reasons. Verify
+    existing generated postings before changing only the counter-account.
+    Replays are idempotent. New decisions also apply before first projection. *)
+val set_bank_categories : t -> Bank_category.t list -> int Or_error.t
+
+type category_change =
+  { id : int64
+  ; event_id : int64
+  ; previous_account : string option
+  ; account : string
+  ; reason : string
+  ; changed_at : string
+  }
+
+val bank_category_history : t -> category_change list Or_error.t
+
+type bank_review =
+  { event_id : int64
+  ; institution : string
+  ; transaction : Bank_transaction.t
+  ; counter_account : string
+  ; reason : string option
+  }
+
+val bank_review : t -> bank_review list Or_error.t
+val bunq_transactions : t -> (int64 * Bunq_transaction.t) list Or_error.t
+val match_bunq_csv : t -> csv_report Or_error.t
+
+type bunq_csv_observation =
+  { row_id : int64
+  ; document_id : int64
+  ; row : Bunq_csv.row
+  ; matching : Bank_csv_match.result option
+  }
+
+val bunq_csv_observations : t -> bunq_csv_observation list Or_error.t
+
+type bunq_reconciliation =
+  { document_id : int64
+  ; account_id : string
+  ; currency : string
+  ; entries : int
+  ; difference : Bigdecimal.t
+  }
+
+val bunq_reconciliations : t -> bunq_reconciliation list Or_error.t

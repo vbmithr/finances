@@ -287,6 +287,14 @@ let sync_bank database directory institution journal accounts max_mib =
       report.wise_csv.ambiguous
       report.wise_csv.conflicts
       report.wise_csv.changed;
+    printf
+      "bunq_csv_matched=%d bunq_csv_unmatched=%d bunq_csv_ambiguous=%d \
+       bunq_csv_conflicts=%d bunq_csv_changes=%d\n"
+      report.bunq_csv.matched
+      report.bunq_csv.unmatched
+      report.bunq_csv.ambiguous
+      report.bunq_csv.conflicts
+      report.bunq_csv.changed;
     if count Rejected + count Unreadable > 0
     then
       Or_error.error_string
@@ -468,6 +476,141 @@ let wise_status_cmd =
     Term.(const wise_status $ database)
 ;;
 
+let categorize_bank database path =
+  let%bind contents = read_file path in
+  let%bind decisions = Bank_category.of_json contents in
+  Store.with_open database (fun db ->
+    let%bind changed = Store.set_bank_categories db decisions in
+    printf "category_changes=%d\n" changed;
+    Ok ())
+;;
+
+let categorize_bank_cmd =
+  command
+    "categorize-bank"
+    "Apply a JSON batch of reviewed bank counter-accounts atomically."
+    Term.(
+      const categorize_bank
+      $ database
+      $ Arg.(
+          required
+          & pos 1 (some string) None
+          & info [] ~docv:"DECISIONS" ~doc:"JSON decisions: event_id, account, reason."))
+;;
+
+let bank_review database all =
+  Store.with_open database (fun db ->
+    let%bind rows = Store.bank_review db in
+    let rows =
+      List.filter rows ~f:(fun r ->
+        all || String.equal r.Store.counter_account "equity:unclassified")
+    in
+    let json =
+      `List
+        (List.map rows ~f:(fun r ->
+           let tx = r.Store.transaction in
+           `Assoc
+             [ "event_id", `Intlit (Int64.to_string r.event_id)
+             ; "institution", `String r.institution
+             ; "source_account", `String tx.account.account_id
+             ; "booked_on", `String (Date.to_string tx.booked_on)
+             ; "amount", `String (Bigdecimal.to_string_no_sn tx.amount)
+             ; "currency", `String tx.account.currency
+             ; ( "description"
+               , `String (String.concat ~sep:" | " (List.filter_opt [ tx.name; tx.memo ]))
+               )
+             ; "account", `String r.counter_account
+             ; "reason", Option.value_map r.reason ~default:`Null ~f:(fun s -> `String s)
+             ]))
+    in
+    print_endline (Yojson.Safe.pretty_to_string json);
+    Ok ())
+;;
+
+let bank_review_cmd =
+  command
+    "bank-review"
+    "List unclassified bank movements as JSON for review."
+    Term.(
+      const bank_review
+      $ database
+      $ Arg.(
+          value & flag & info [ "all" ] ~doc:"Include movements with reviewed categories."))
+;;
+
+let category_history database =
+  Store.with_open database (fun db ->
+    let%bind rows = Store.bank_category_history db in
+    let json =
+      `List
+        (List.map rows ~f:(fun (r : Store.category_change) ->
+           `Assoc
+             [ "id", `Intlit (Int64.to_string r.id)
+             ; "event_id", `Intlit (Int64.to_string r.event_id)
+             ; ( "previous_account"
+               , Option.value_map r.previous_account ~default:`Null ~f:(fun s ->
+                   `String s) )
+             ; "account", `String r.account
+             ; "reason", `String r.reason
+             ; "changed_at", `String r.changed_at
+             ]))
+    in
+    print_endline (Yojson.Safe.pretty_to_string json);
+    Ok ())
+;;
+
+let category_history_cmd =
+  command
+    "category-history"
+    "List the append-only history of reviewed bank categories."
+    Term.(const category_history $ database)
+;;
+
+let bunq_status database =
+  Store.with_open database (fun db ->
+    let%bind statements = Store.bunq_reconciliations db in
+    let%bind rows = Store.bunq_csv_observations db in
+    let json =
+      `Assoc
+        [ ( "statements"
+          , `List
+              (List.map statements ~f:(fun (s : Store.bunq_reconciliation) ->
+                 `Assoc
+                   [ "document_id", `Intlit (Int64.to_string s.document_id)
+                   ; "account_id", `String s.account_id
+                   ; "currency", `String s.currency
+                   ; "entries", `Int s.entries
+                   ; "difference", `String (Bigdecimal.to_string_no_sn s.difference)
+                   ; "reconciled", `Bool (Bigdecimal.is_zero s.difference)
+                   ])) )
+        ; ( "csv_rows"
+          , `List
+              (List.map rows ~f:(fun (r : Store.bunq_csv_observation) ->
+                 `Assoc
+                   [ "row_id", `Intlit (Int64.to_string r.row_id)
+                   ; "document_id", `Intlit (Int64.to_string r.document_id)
+                   ; "row_number", `Int r.row.row_number
+                   ; ( "state"
+                     , `String
+                         (Option.value_map r.matching ~default:"pending" ~f:(fun m ->
+                            Bank_match.state_name m.state)) )
+                   ; ( "reason"
+                     , Option.value_map r.matching ~default:`Null ~f:(fun m ->
+                         `String m.reason) )
+                   ])) )
+        ]
+    in
+    print_endline (Yojson.Safe.pretty_to_string json);
+    Ok ())
+;;
+
+let bunq_status_cmd =
+  command
+    "bunq-status"
+    "Inspect Bunq statement reconciliation and companion CSV matches as JSON."
+    Term.(const bunq_status $ database)
+;;
+
 let () =
   exit
     (Cmd.eval
@@ -486,5 +629,9 @@ let () =
           ; csv_enrichments_cmd
           ; match_csv_cmd
           ; wise_status_cmd
+          ; bunq_status_cmd
+          ; categorize_bank_cmd
+          ; bank_review_cmd
+          ; category_history_cmd
           ]))
 ;;

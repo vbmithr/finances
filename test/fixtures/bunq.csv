@@ -1,0 +1,6 @@
+"Date","Interest Date","Amount","Account","Counterparty","Name","Description"
+"2026-01-02","2026-01-02","-10,00","SYNTHETICBUNQ","","Synthetic shop","Purchase"
+"2026-01-02","2026-01-02","-10,00","SYNTHETICBUNQ","","Synthetic shop","Purchase"
+"2026-01-03","2026-01-03","100,00","SYNTHETICBUNQ","SYNTHETICOTHER","Other bank","Transfer"
+"2026-01-04","2026-01-03","-5,00","SYNTHETICBUNQ","","Synthetic cafe","First line
+Second line"
