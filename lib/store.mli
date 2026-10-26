@@ -1,7 +1,8 @@
 open Core
 
 (** SQLite is authoritative. One connection must not be shared between threads.
-    Opening applies versioned migrations atomically and rejects newer schemas. *)
+    Opening initializes the latest experimental schema atomically and rejects
+    any other existing schema version. Original records can be reimported. *)
 type t
 
 type ingest =

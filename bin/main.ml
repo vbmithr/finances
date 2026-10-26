@@ -70,7 +70,7 @@ let command name doc term =
 let init =
   command
     "init"
-    "Create or migrate a database."
+    "Initialize the latest experimental database schema."
     Term.(const (fun path -> Store.with_open path (fun _ -> Ok ())) $ database)
 ;;
 
@@ -115,17 +115,11 @@ let import_ofx database institution path =
 
 let import_ofx_cmd =
   command
-    "import-ofx"
-    "Import all bank statements from an OFX 2.x XML export."
+    "import"
+    "Import BoursoBank OFX statements."
     Term.(
-      const import_ofx
+      const (fun database path -> import_ofx database "boursobank" path)
       $ database
-      $ Arg.(
-          value
-          & opt string "boursobank"
-          & info
-              [ "institution" ]
-              ~doc:"Stable institution identifier used to scope source identities.")
       $ Arg.(required & pos 1 (some string) None & info [] ~docv:"OFX_FILE"))
 ;;
 
@@ -138,7 +132,7 @@ let project_bank database =
 
 let project_bank_cmd =
   command
-    "project-bank"
+    "project"
     "Create balanced bank movement entries from stored events."
     Term.(const project_bank $ database)
 ;;
@@ -152,7 +146,7 @@ let export_hledger database =
 
 let export_hledger_cmd =
   command
-    "export-hledger"
+    "export"
     "Write a reproducible hledger journal to standard output."
     Term.(const export_hledger $ database)
 ;;
@@ -167,105 +161,29 @@ let account_info_json (info : Store.bank_account_info) =
   ]
 ;;
 
-let list_bank_accounts database details =
+let list_bank_accounts database =
   Store.with_open database (fun db ->
-    if not details
-    then (
-      let%bind accounts = Store.bank_accounts db in
-      print_endline (Bank_account_mapping.to_json accounts);
-      Ok ())
-    else (
-      let%bind accounts = Store.bank_account_info db in
-      let json =
-        `List
-          (List.map accounts ~f:(fun info ->
-             `Assoc
-               (account_info_json info
-                @ [ "iban_source", `String info.Store.iban_source
-                  ; "ledger_account", `String info.mapping.ledger_account
-                  ; "currency", `String info.currency
-                  ; "movements", `Int info.movements
-                  ; "first_on", `String (Date.to_string info.first_on)
-                  ; "last_on", `String (Date.to_string info.last_on)
-                  ; ( "settlement_account"
-                    , Option.value_map
-                        info.settlement_account
-                        ~default:`Null
-                        ~f:Bank_account_config.reference_to_json )
-                  ])))
-      in
-      print_endline (Yojson.Safe.pretty_to_string json);
-      Ok ()))
-;;
-
-let bank_accounts_cmd =
-  command
-    "bank-accounts"
-    "List source accounts and ledger names; --details includes IBAN provenance and \
-     record coverage."
-    Term.(
-      const list_bank_accounts
-      $ database
-      $ Arg.(
-          value
-          & flag
-          & info
-              [ "details" ]
-              ~doc:"Include IBAN, its source, currency and imported record coverage."))
-;;
-
-let bank_identities database =
-  Store.with_open database (fun db ->
-    let%bind rows = Store.bank_account_info db in
-    print_endline
-      (Yojson.Safe.pretty_to_string
-         (`List (List.map rows ~f:(fun r -> `Assoc (account_info_json r)))));
+    let%bind accounts = Store.bank_account_info db in
+    let json =
+      `List
+        (List.map accounts ~f:(fun info ->
+           `Assoc
+             (account_info_json info
+              @ [ "iban_source", `String info.Store.iban_source
+                ; "ledger_account", `String info.mapping.ledger_account
+                ; "currency", `String info.currency
+                ; "movements", `Int info.movements
+                ; "first_on", `String (Date.to_string info.first_on)
+                ; "last_on", `String (Date.to_string info.last_on)
+                ; ( "settlement_account"
+                  , Option.value_map
+                      info.settlement_account
+                      ~default:`Null
+                      ~f:Bank_account_config.reference_to_json )
+                ])))
+    in
+    print_endline (Yojson.Safe.pretty_to_string json);
     Ok ())
-;;
-
-let bank_identities_cmd =
-  command
-    "bank-identities"
-    "Export an editable IBAN identity template; null means missing or not applicable."
-    Term.(const bank_identities $ database)
-;;
-
-let map_bank_identities database path =
-  let%bind contents = read_file path in
-  let%bind identities = Account_identity.of_json contents in
-  Store.with_open database (fun db ->
-    let%bind changed = Store.set_bank_account_identities db identities in
-    printf "identity_changes=%d\n" changed;
-    Ok ())
-;;
-
-let map_bank_identities_cmd =
-  command
-    "map-bank-identities"
-    "Persist and audit IBAN identities from a private JSON file."
-    Term.(
-      const map_bank_identities
-      $ database
-      $ Arg.(required & pos 1 (some string) None & info [] ~docv:"IDENTITIES"))
-;;
-
-let map_bank_accounts database path =
-  let%bind contents = read_file path in
-  let%bind mappings = Bank_account_mapping.of_json contents in
-  Store.with_open database (fun db ->
-    let%bind changed = Store.set_bank_account_mappings db mappings in
-    printf "mapping_changes=%d\n" changed;
-    Ok ())
-;;
-
-let map_bank_accounts_cmd =
-  command
-    "map-bank-accounts"
-    "Store account mappings and rename verified generated bank postings."
-    Term.(
-      const map_bank_accounts
-      $ database
-      $ Arg.(required & pos 1 (some string) None & info [] ~docv:"ACCOUNTS_JSON"))
 ;;
 
 let import_history database limit =
@@ -296,7 +214,7 @@ let import_history database limit =
 
 let import_history_cmd =
   command
-    "import-history"
+    "history"
     "List recent inbox import attempts, newest first, as JSON."
     Term.(
       const import_history
@@ -388,7 +306,7 @@ let sync_bank database directory institution journal accounts max_mib account_id
 
 let sync_bank_cmd =
   command
-    "sync-bank"
+    "sync"
     "Import an inbox, apply mappings, and publish a bank journal."
     Term.(
       const sync_bank
@@ -407,9 +325,7 @@ let sync_bank_cmd =
       $ Arg.(
           value
           & opt (some string) None
-          & info
-              [ "accounts" ]
-              ~doc:"Versioned account configuration or legacy ledger mapping JSON input.")
+          & info [ "accounts" ] ~doc:"Version 1 bank account configuration JSON input.")
       $ Arg.(
           value
           & opt int 64
@@ -484,7 +400,7 @@ let csv_enrichments database review =
 
 let csv_enrichments_cmd =
   command
-    "csv-enrichments"
+    "list"
     "List CSV observations, enrichment links, and unresolved matches as JSON."
     Term.(
       const csv_enrichments
@@ -512,7 +428,7 @@ let match_csv database =
 
 let match_csv_cmd =
   command
-    "match-bank-csv"
+    "match"
     "Recompute and audit CSV enrichment matches against stored OFX evidence."
     Term.(const match_csv $ database)
 ;;
@@ -562,7 +478,7 @@ let wise_status database =
 
 let wise_status_cmd =
   command
-    "wise-status"
+    "status"
     "Inspect Wise statement reconciliation and CSV matching as JSON."
     Term.(const wise_status $ database)
 ;;
@@ -578,7 +494,7 @@ let categorize_bank database path =
 
 let categorize_bank_cmd =
   command
-    "categorize-bank"
+    "apply"
     "Apply a JSON batch of reviewed bank counter-accounts atomically."
     Term.(
       const categorize_bank
@@ -621,7 +537,7 @@ let bank_review database all =
 
 let bank_review_cmd =
   command
-    "bank-review"
+    "review"
     "List unclassified bank movements as JSON for review."
     Term.(
       const bank_review
@@ -653,7 +569,7 @@ let category_history database =
 
 let category_history_cmd =
   command
-    "category-history"
+    "history"
     "List the append-only history of reviewed bank categories."
     Term.(const category_history $ database)
 ;;
@@ -698,7 +614,7 @@ let bunq_status database =
 
 let bunq_status_cmd =
   command
-    "bunq-status"
+    "status"
     "Inspect Bunq statement reconciliation and companion CSV matches as JSON."
     Term.(const bunq_status $ database)
 ;;
@@ -744,7 +660,7 @@ let transfer_candidates database all =
 
 let transfer_candidates_cmd =
   command
-    "transfer-candidates"
+    "candidates"
     "Review possible same-currency transfers; amount/date matches do not establish \
      ownership."
     Term.(
@@ -769,7 +685,7 @@ let review_transfers database path =
 
 let review_transfers_cmd =
   command
-    "review-transfers"
+    "review"
     "Apply explicit JSON confirm/reject decisions; confirmation asserts both accounts \
      are yours."
     Term.(
@@ -805,7 +721,7 @@ let transfer_history database =
 
 let transfer_history_cmd =
   command
-    "transfer-history"
+    "history"
     "Inspect the append-only transfer review history."
     Term.(const transfer_history $ database)
 ;;
@@ -887,7 +803,7 @@ let transfer_preview database =
 
 let transfer_preview_cmd =
   command
-    "transfer-preview"
+    "preview"
     "Rank compatible transfer candidates and preview globally consistent pairs; scores \
      are not probabilities."
     Term.(const transfer_preview $ database)
@@ -951,7 +867,7 @@ let accounts_cmd =
     [ command
         "list"
         "List account details, IBAN provenance, coverage and card settlement links."
-        Term.(const (fun db -> list_bank_accounts db true) $ database)
+        Term.(const list_bank_accounts $ database)
     ; command
         "export"
         "Export version 1 account configuration for editing."
@@ -978,34 +894,52 @@ let accounts_cmd =
     ]
 ;;
 
+let group name doc commands = Cmd.group (Cmd.info name ~doc) commands
+
 let () =
   exit
     (Cmd.eval
        (Cmd.group
-          (Cmd.info "finances" ~doc:"Personal finance accounting and position tracking.")
+          (Cmd.info
+             "finances"
+             ~version:"0.1.0"
+             ~doc:"Personal finance accounting and position tracking.")
           [ accounts_cmd
-          ; init
-          ; ingest_cmd
-          ; events
-          ; import_ofx_cmd
-          ; project_bank_cmd
-          ; export_hledger_cmd
-          ; bank_accounts_cmd
-          ; bank_identities_cmd
-          ; map_bank_identities_cmd
-          ; map_bank_accounts_cmd
-          ; import_history_cmd
-          ; sync_bank_cmd
-          ; csv_enrichments_cmd
-          ; match_csv_cmd
-          ; wise_status_cmd
-          ; bunq_status_cmd
-          ; categorize_bank_cmd
-          ; bank_review_cmd
-          ; category_history_cmd
-          ; transfer_candidates_cmd
-          ; transfer_preview_cmd
-          ; review_transfers_cmd
-          ; transfer_history_cmd
+          ; group
+              "db"
+              "Initialize and inspect local source evidence."
+              [ init; events; ingest_cmd ]
+          ; group
+              "bank"
+              "Import and review banking records."
+              [ sync_bank_cmd
+              ; project_bank_cmd
+              ; bank_review_cmd
+              ; import_history_cmd
+              ; group
+                  "categories"
+                  "Manage reviewed bank categories."
+                  [ categorize_bank_cmd; category_history_cmd ]
+              ; group
+                  "boursobank"
+                  "BoursoBank import and companion observations."
+                  [ import_ofx_cmd
+                  ; group
+                      "csv"
+                      "Inspect and match BoursoBank CSV observations."
+                      [ csv_enrichments_cmd; match_csv_cmd ]
+                  ]
+              ; group "wise" "Inspect Wise statement data." [ wise_status_cmd ]
+              ; group "bunq" "Inspect Bunq statement data." [ bunq_status_cmd ]
+              ]
+          ; group
+              "transfers"
+              "Review transfer candidates and decisions."
+              [ transfer_candidates_cmd
+              ; transfer_preview_cmd
+              ; review_transfers_cmd
+              ; transfer_history_cmd
+              ]
+          ; group "journal" "Render persisted accounting entries." [ export_hledger_cmd ]
           ]))
 ;;

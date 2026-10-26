@@ -70,21 +70,6 @@ let of_json contents =
     let open Yojson.Safe.Util in
     let rows =
       match Yojson.Safe.from_string contents with
-      | `List _ ->
-        Bank_account_mapping.of_json contents
-        |> Or_error.ok_exn
-        |> List.map ~f:(fun a ->
-          { reference =
-              reference
-                ~institution:a.institution
-                ~bank_id:a.bank_id
-                ~account_id:a.account_id
-                ~account_type:a.account_type
-              |> Or_error.ok_exn
-          ; ledger_account = Some a.ledger_account
-          ; iban = Keep
-          ; settlement_account = Keep
-          })
       | `Assoc fields as json ->
         if
           (not

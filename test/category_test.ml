@@ -1,5 +1,4 @@
 open Core
-open Rel
 open Finances
 
 let ok = Or_error.ok_exn
@@ -155,13 +154,6 @@ let sql db query =
   Rel_sqlite3.exec_sql db query |> Rel_sqlite3.string_error |> Result.ok_or_failwith
 ;;
 
-let scalar db query =
-  Rel_sqlite3.first db (Rel_sql.Stmt.v query ~rev_args:[] ~result:Row.(t1 (int "value")))
-  |> Rel_sqlite3.string_error
-  |> Result.ok_or_failwith
-  |> Option.value_exn
-;;
-
 let workspace f =
   let path =
     Filename_unix.temp_file ~in_dir:(Sys.getenv_exn "TMPDIR") "categories" ".sqlite3"
@@ -187,33 +179,6 @@ let conflicts () =
          Ok ())))
 ;;
 
-let migrations () =
-  workspace (fun path ->
-    with_raw path (fun db -> sql db (In_channel.read_all "fixtures/schema-v5.sql"));
-    ok
-      (Store.with_open path (fun db ->
-         import db;
-         ignore (classify db [ decision (id db) "expenses:food" ]);
-         Ok ()));
-    with_raw path (fun db ->
-      check "schema ten" 10 (scalar db "PRAGMA user_version");
-      Alcotest.(check bool)
-        "append-only audit"
-        true
-        (Result.is_error (Rel_sqlite3.exec_sql db "DELETE FROM bank_category_changes"))));
-  workspace (fun path ->
-    with_raw path (fun db ->
-      sql db (In_channel.read_all "fixtures/schema-v5.sql");
-      sql db "CREATE TABLE bank_category_changes(collision TEXT)");
-    error (Store.with_open path (fun _ -> Ok ()));
-    with_raw path (fun db ->
-      check "rollback version" 5 (scalar db "PRAGMA user_version");
-      check
-        "creation rolled back"
-        0
-        (scalar db "SELECT count(*) FROM sqlite_master WHERE name='bank_categories'")))
-;;
-
 let () =
   Alcotest.run
     "Bank categories"
@@ -223,7 +188,6 @@ let () =
           ; "post-projection, multi-bank and mappings", after_projection
           ; "invalid atomic batches", invalid_batch
           ; "projection conflicts", conflicts
-          ; "migration and audit", migrations
           ]
           ~f:(fun (name, f) -> Alcotest.test_case name `Quick f) )
     ]

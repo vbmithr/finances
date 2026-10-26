@@ -6,3 +6,4 @@
 *.sqlite3-wal
 export-operations-*
 /personal/
+/dist/

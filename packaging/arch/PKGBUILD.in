@@ -1,0 +1,28 @@
+# Generated with packaging/arch/build.py from a locally compiled native payload.
+pkgname=finances
+pkgver=@VERSION@
+pkgrel=1
+pkgdesc='Personal finance accounting and bank statement tracking (experimental)'
+arch=('@ARCH@')
+url='https://github.com/vbmithr/finances'
+license=('ISC')
+depends=('glibc' 'gmp' 'sqlite')
+optdepends=('hledger: query and validate exported journals')
+options=('!debug')
+source=("${pkgname}-${pkgver}-${CARCH}.tar.gz")
+sha256sums=('@SHA256@')
+
+package() {
+  cd "$srcdir/$pkgname-$pkgver"
+  install -Dm755 finances "$pkgdir/usr/bin/finances"
+  install -Dm644 LICENSE.md "$pkgdir/usr/share/licenses/$pkgname/LICENSE"
+  install -Dm644 README.md "$pkgdir/usr/share/doc/$pkgname/README.md"
+  install -Dm644 build-info.json "$pkgdir/usr/share/doc/$pkgname/build-info.json"
+  local path
+  for path in docs/*.md; do
+    install -Dm644 "$path" "$pkgdir/usr/share/doc/$pkgname/$path"
+  done
+  for path in man/*.1; do
+    install -Dm644 "$path" "$pkgdir/usr/share/man/man1/${path##*/}"
+  done
+}

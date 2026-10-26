@@ -78,10 +78,6 @@ let raw root f =
   Exn.protect ~finally:(fun () -> ignore (Rel_sqlite3.close db)) ~f:(fun () -> f db)
 ;;
 
-let sql db text =
-  Rel_sqlite3.exec_sql db text |> Rel_sqlite3.string_error |> Result.ok_or_failwith
-;;
-
 let scalar db text =
   Rel_sqlite3.first db (Rel_sql.Stmt.v text ~rev_args:[] ~result:Row.(t1 (int "value")))
   |> Rel_sqlite3.string_error
@@ -410,45 +406,6 @@ let folder_order () =
     Alcotest.(check int) "no new entries" 0 second.projection.inserted)
 ;;
 
-let migration_v3 () =
-  workspace (fun root ->
-    raw root (fun db ->
-      sql db (In_channel.read_all "fixtures/schema-v3.sql");
-      sql
-        db
-        "INSERT INTO \
-         source_events(id,venue,account,kind,source_id,occurred_at_ms,payload) \
-         VALUES(42,'test','main','test','old',1,x'00ff')");
-    with_store root (fun db ->
-      Alcotest.(check int64)
-        "source ID preserved"
-        42L
-        (fst (List.hd_exn (ok (Store.events db))));
-      Alcotest.(check int)
-        "empty CSV rows after migration"
-        0
-        (List.length (ok (Store.bank_csv_observations db))));
-    raw root (fun db ->
-      Alcotest.(check int) "version ten" 10 (scalar db "PRAGMA user_version")))
-;;
-
-let migration_rollback () =
-  workspace (fun root ->
-    raw root (fun db ->
-      sql db (In_channel.read_all "fixtures/schema-v3.sql");
-      sql db "CREATE TABLE bank_csv_matches(collision TEXT)");
-    error (Store.with_open (database root) (fun _ -> Ok ()));
-    raw root (fun db ->
-      Alcotest.(check int)
-        "failed CSV migration leaves version three"
-        3
-        (scalar db "PRAGMA user_version");
-      Alcotest.(check int)
-        "CSV tables creation rolled back"
-        0
-        (scalar db "SELECT count(*) FROM sqlite_master WHERE name='bank_csv_rows'")))
-;;
-
 let () =
   Alcotest.run
     "bank CSV"
@@ -466,8 +423,6 @@ let () =
           ; "description mismatch", description_mismatch
           ; "malformed document rollback", malformed_file_atomic
           ; "folder order independent", folder_order
-          ; "version three migration", migration_v3
-          ; "CSV migration rollback", migration_rollback
           ]
           ~f:(fun (name, f) -> Alcotest.test_case name `Quick f) )
     ]

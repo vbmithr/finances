@@ -224,6 +224,21 @@ let remap name (mapping : Bank_account_mapping.t) =
        ~ledger_account:("assets:bank:" ^ name))
 ;;
 
+let config_json mappings =
+  Bank_account_config.to_json
+    (List.map mappings ~f:(fun (a : Bank_account_mapping.t) ->
+       { Bank_account_config.reference =
+           { institution = a.institution
+           ; bank_id = a.bank_id
+           ; account_id = a.account_id
+           ; account_type = a.account_type
+           }
+       ; ledger_account = Some a.ledger_account
+       ; iban = Keep
+       ; settlement_account = Keep
+       }))
+;;
+
 let mappings_after_projection () =
   workspace (fun root ->
     write (join (inbox root) "bank.ofx") (fixture ());
@@ -233,7 +248,7 @@ let mappings_after_projection () =
       List.mapi initial ~f:(fun i mapping -> remap (sprintf "account-%d" i) mapping)
     in
     let config = join root "accounts.json" in
-    write config (Bank_account_mapping.to_json mappings);
+    write config (config_json mappings);
     let result = ok (sync ~accounts:config root) in
     Alcotest.(check int) "mappings persisted" 2 result.mapping_changes;
     Alcotest.(check int) "renamed entries replay" 0 result.projection.inserted;
@@ -318,7 +333,7 @@ let mapping_conflict_preserves_journal () =
       |> List.mapi ~f:(fun i m -> remap (sprintf "changed-%d" i) m)
     in
     let config = join root "accounts.json" in
-    write config (Bank_account_mapping.to_json mappings);
+    write config (config_json mappings);
     raw (database root) (fun db ->
       sql
         db
@@ -416,41 +431,6 @@ let output_failure () =
        |> List.length))
 ;;
 
-let migration_v2 () =
-  workspace (fun root ->
-    raw (database root) (fun db ->
-      sql db (In_channel.read_all "fixtures/schema-v2.sql");
-      sql
-        db
-        "INSERT INTO \
-         source_events(id,venue,account,kind,source_id,occurred_at_ms,payload) \
-         VALUES(42,'paradex','main','test','legacy',1234,x'00ff')");
-    with_store root (fun db ->
-      let id, event = List.hd_exn (ok (Store.events db)) in
-      Alcotest.(check int64) "legacy ID preserved" 42L id;
-      Alcotest.(check string) "legacy raw bytes preserved" "\000\255" event.payload;
-      Alcotest.(check int)
-        "new history starts empty"
-        0
-        (List.length (ok (Store.bank_import_history db))));
-    raw (database root) (fun db ->
-      Alcotest.(check int) "version 10" 10 (scalar db "PRAGMA user_version")))
-;;
-
-let failed_migration_v2 () =
-  workspace (fun root ->
-    raw (database root) (fun db ->
-      sql db (In_channel.read_all "fixtures/schema-v2.sql");
-      sql db "CREATE TABLE bank_account_mappings(collision TEXT)");
-    error (Store.with_open (database root) (fun _ -> Ok ()));
-    raw (database root) (fun db ->
-      Alcotest.(check int) "version unchanged" 2 (scalar db "PRAGMA user_version");
-      Alcotest.(check int)
-        "new history creation rolled back"
-        0
-        (scalar db "SELECT count(*) FROM sqlite_master WHERE name='bank_import_attempts'")))
-;;
-
 let () =
   Alcotest.run
     "bank inbox"
@@ -466,8 +446,6 @@ let () =
           ; "control path protection", path_protection
           ; "invalid configuration before import", invalid_config_before_import
           ; "publication failure and retry", output_failure
-          ; "version 2 migration", migration_v2
-          ; "version 2 migration rollback", failed_migration_v2
           ]
           ~f:(fun (name, f) -> Alcotest.test_case name `Quick f) )
     ]

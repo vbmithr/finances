@@ -1,5 +1,4 @@
 open Core
-open Rel
 open Finances
 
 let ok = Or_error.ok_exn
@@ -155,73 +154,6 @@ let duplicate_rows () =
     check "ambiguous duplicates" 2 (ok (Store.match_wise_csv db)).ambiguous)
 ;;
 
-let migration () =
-  let path =
-    Filename_unix.temp_file ~in_dir:(Sys.getenv_exn "TMPDIR") "wise-migration" ".sqlite3"
-  in
-  Exn.protect
-    ~finally:(fun () -> Core_unix.unlink path)
-    ~f:(fun () ->
-      let db =
-        Rel_sqlite3.open' ~mode:Read_write_create path
-        |> Rel_sqlite3.string_error
-        |> Result.ok_or_failwith
-      in
-      let sql s =
-        Rel_sqlite3.exec_sql db s |> Rel_sqlite3.string_error |> Result.ok_or_failwith
-      in
-      sql (In_channel.read_all "fixtures/schema-v4.sql");
-      sql
-        "INSERT INTO \
-         bank_import_attempts(institution,path,format,outcome,document_id,inserted_count,existing_count,error) \
-         VALUES('old','missing','unknown','unreadable',NULL,0,0,'missing')";
-      ignore (Rel_sqlite3.close db);
-      ok
-        (Store.with_open path (fun db ->
-           check "history preserved" 1 (List.length (ok (Store.bank_import_history db)));
-           accepted (import db "wise.xml" (xml ()));
-           Ok ())))
-;;
-
-let migration_rollback () =
-  let path =
-    Filename_unix.temp_file ~in_dir:(Sys.getenv_exn "TMPDIR") "wise-rollback" ".sqlite3"
-  in
-  Exn.protect
-    ~finally:(fun () -> Core_unix.unlink path)
-    ~f:(fun () ->
-      let raw f =
-        let db =
-          Rel_sqlite3.open' ~mode:Read_write_create path
-          |> Rel_sqlite3.string_error
-          |> Result.ok_or_failwith
-        in
-        Exn.protect ~finally:(fun () -> ignore (Rel_sqlite3.close db)) ~f:(fun () -> f db)
-      in
-      raw (fun db ->
-        let sql s =
-          Rel_sqlite3.exec_sql db s |> Rel_sqlite3.string_error |> Result.ok_or_failwith
-        in
-        sql (In_channel.read_all "fixtures/schema-v4.sql");
-        sql "CREATE TABLE wise_statements(collision TEXT)");
-      error (Store.with_open path (fun _ -> Ok ()));
-      raw (fun db ->
-        let query sql =
-          Rel_sqlite3.first
-            db
-            (Rel_sql.Stmt.v sql ~rev_args:[] ~result:Row.(t1 (int "value")))
-          |> Rel_sqlite3.string_error
-          |> Result.ok_or_failwith
-          |> Option.value_exn
-        in
-        check "schema version unchanged" 4 (query "PRAGMA user_version");
-        check
-          "history rebuild rolled back"
-          0
-          (query
-             "SELECT count(*) FROM sqlite_master WHERE name='bank_import_attempts_v5'")))
-;;
-
 let () =
   Alcotest.run
     "Wise and multiple banks"
@@ -231,8 +163,6 @@ let () =
           ; "two banks, replay, conflict", multi_bank
           ; "currency and fee conflicts", currencies
           ; "duplicate CSV claims", duplicate_rows
-          ; "schema four migration", migration
-          ; "Wise migration rollback", migration_rollback
           ]
           ~f:(fun (name, f) -> Alcotest.test_case name `Quick f) )
     ]

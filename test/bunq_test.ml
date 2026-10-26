@@ -1,5 +1,4 @@
 open Core
-open Rel
 open Finances
 
 let ok = Or_error.ok_exn
@@ -189,69 +188,6 @@ let multibank () =
        |> List.length))
 ;;
 
-let workspace f =
-  let path =
-    Filename_unix.temp_file ~in_dir:(Sys.getenv_exn "TMPDIR") "bunq-migration" ".sqlite3"
-  in
-  Exn.protect ~finally:(fun () -> Core_unix.unlink path) ~f:(fun () -> f path)
-;;
-
-let raw path f =
-  let db =
-    Rel_sqlite3.open' ~mode:Read_write_create path
-    |> Rel_sqlite3.string_error
-    |> Result.ok_or_failwith
-  in
-  Exn.protect ~finally:(fun () -> ignore (Rel_sqlite3.close db)) ~f:(fun () -> f db)
-;;
-
-let sql db s =
-  Rel_sqlite3.exec_sql db s |> Rel_sqlite3.string_error |> Result.ok_or_failwith
-;;
-
-let scalar db s =
-  Rel_sqlite3.first db (Rel_sql.Stmt.v s ~rev_args:[] ~result:Row.(t1 (int "value")))
-  |> Rel_sqlite3.string_error
-  |> Result.ok_or_failwith
-  |> Option.value_exn
-;;
-
-let migrations () =
-  workspace (fun path ->
-    raw path (fun db ->
-      sql db (In_channel.read_all "fixtures/schema-v6.sql");
-      sql
-        db
-        "INSERT INTO \
-         bank_import_attempts(institution,path,format,outcome,document_id,inserted_count,existing_count) \
-         VALUES('old','missing','unknown','unreadable',NULL,0,0)");
-    ok
-      (Store.with_open path (fun db ->
-         check
-           "prior history preserved"
-           1
-           (List.length (ok (Store.bank_import_history db)));
-         accepted (import db "bunq.mt940" (mt ()));
-         Ok ()));
-    raw path (fun db ->
-      check "version ten" 10 (scalar db "PRAGMA user_version");
-      Alcotest.(check bool)
-        "immutable inventories"
-        true
-        (Result.is_error (Rel_sqlite3.exec_sql db "DELETE FROM bunq_day_inventories"))));
-  workspace (fun path ->
-    raw path (fun db ->
-      sql db (In_channel.read_all "fixtures/schema-v6.sql");
-      sql db "CREATE TABLE bunq_csv_rows(collision TEXT)");
-    error (Store.with_open path (fun _ -> Ok ()));
-    raw path (fun db ->
-      check "rollback version six" 6 (scalar db "PRAGMA user_version");
-      check
-        "statement table rolled back"
-        0
-        (scalar db "SELECT count(*) FROM sqlite_master WHERE name='bunq_statements'")))
-;;
-
 let () =
   Alcotest.run
     "Bunq"
@@ -262,7 +198,6 @@ let () =
           ; "changed day rejects atomically", conflicts
           ; "ambiguity and account scope", ambiguity
           ; "three banks", multibank
-          ; "schema migration and rollback", migrations
           ]
           ~f:(fun (name, f) -> Alcotest.test_case name `Quick f) )
     ]

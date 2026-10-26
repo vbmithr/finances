@@ -23,75 +23,17 @@ let transaction db f =
 let statement sql result = Rel_sql.Stmt.v sql ~rev_args:[] ~result
 let integer = Row.(t1 (int "value"))
 
-let migrate db =
+let initialize db =
   transaction db (fun db ->
     let* version = db_result (Db.first db (statement "PRAGMA user_version" integer)) in
     match version with
-    | Some 0 ->
-      let* () = db_result (Db.exec_sql db Db_schema.create) in
-      let* () = db_result (Db.exec_sql db Db_schema.upgrade_v2) in
-      let* () = db_result (Db.exec_sql db Db_schema.upgrade_v3) in
-      let* () = db_result (Db.exec_sql db Db_schema.upgrade_v4) in
-      let* () = db_result (Db.exec_sql db Db_schema.upgrade_v5) in
-      let* () = db_result (Db.exec_sql db Db_schema.upgrade_v6) in
-      let* () = db_result (Db.exec_sql db Db_schema.upgrade_v7) in
-      let* () = db_result (Db.exec_sql db Db_schema.upgrade_v8) in
-      db_result (Db.exec_sql db Db_schema.upgrade_v9)
-    | Some 1 ->
-      let* () = db_result (Db.exec_sql db Db_schema.upgrade_v1) in
-      let* () = db_result (Db.exec_sql db Db_schema.upgrade_v2) in
-      let* () = db_result (Db.exec_sql db Db_schema.upgrade_v3) in
-      let* () = db_result (Db.exec_sql db Db_schema.upgrade_v4) in
-      let* () = db_result (Db.exec_sql db Db_schema.upgrade_v5) in
-      let* () = db_result (Db.exec_sql db Db_schema.upgrade_v6) in
-      let* () = db_result (Db.exec_sql db Db_schema.upgrade_v7) in
-      let* () = db_result (Db.exec_sql db Db_schema.upgrade_v8) in
-      db_result (Db.exec_sql db Db_schema.upgrade_v9)
-    | Some 2 ->
-      let* () = db_result (Db.exec_sql db Db_schema.upgrade_v2) in
-      let* () = db_result (Db.exec_sql db Db_schema.upgrade_v3) in
-      let* () = db_result (Db.exec_sql db Db_schema.upgrade_v4) in
-      let* () = db_result (Db.exec_sql db Db_schema.upgrade_v5) in
-      let* () = db_result (Db.exec_sql db Db_schema.upgrade_v6) in
-      let* () = db_result (Db.exec_sql db Db_schema.upgrade_v7) in
-      let* () = db_result (Db.exec_sql db Db_schema.upgrade_v8) in
-      db_result (Db.exec_sql db Db_schema.upgrade_v9)
-    | Some 3 ->
-      let* () = db_result (Db.exec_sql db Db_schema.upgrade_v3) in
-      let* () = db_result (Db.exec_sql db Db_schema.upgrade_v4) in
-      let* () = db_result (Db.exec_sql db Db_schema.upgrade_v5) in
-      let* () = db_result (Db.exec_sql db Db_schema.upgrade_v6) in
-      let* () = db_result (Db.exec_sql db Db_schema.upgrade_v7) in
-      let* () = db_result (Db.exec_sql db Db_schema.upgrade_v8) in
-      db_result (Db.exec_sql db Db_schema.upgrade_v9)
-    | Some 4 ->
-      let* () = db_result (Db.exec_sql db Db_schema.upgrade_v4) in
-      let* () = db_result (Db.exec_sql db Db_schema.upgrade_v5) in
-      let* () = db_result (Db.exec_sql db Db_schema.upgrade_v6) in
-      let* () = db_result (Db.exec_sql db Db_schema.upgrade_v7) in
-      let* () = db_result (Db.exec_sql db Db_schema.upgrade_v8) in
-      db_result (Db.exec_sql db Db_schema.upgrade_v9)
-    | Some 5 ->
-      let* () = db_result (Db.exec_sql db Db_schema.upgrade_v5) in
-      let* () = db_result (Db.exec_sql db Db_schema.upgrade_v6) in
-      let* () = db_result (Db.exec_sql db Db_schema.upgrade_v7) in
-      let* () = db_result (Db.exec_sql db Db_schema.upgrade_v8) in
-      db_result (Db.exec_sql db Db_schema.upgrade_v9)
-    | Some 6 ->
-      let* () = db_result (Db.exec_sql db Db_schema.upgrade_v6) in
-      let* () = db_result (Db.exec_sql db Db_schema.upgrade_v7) in
-      let* () = db_result (Db.exec_sql db Db_schema.upgrade_v8) in
-      db_result (Db.exec_sql db Db_schema.upgrade_v9)
-    | Some 7 ->
-      let* () = db_result (Db.exec_sql db Db_schema.upgrade_v7) in
-      let* () = db_result (Db.exec_sql db Db_schema.upgrade_v8) in
-      db_result (Db.exec_sql db Db_schema.upgrade_v9)
-    | Some 8 ->
-      let* () = db_result (Db.exec_sql db Db_schema.upgrade_v8) in
-      db_result (Db.exec_sql db Db_schema.upgrade_v9)
-    | Some 9 -> db_result (Db.exec_sql db Db_schema.upgrade_v9)
-    | Some 10 -> Ok ()
-    | _ -> Or_error.error_string "unsupported database schema version")
+    | Some 0 -> db_result (Db.exec_sql db Db_schema.create)
+    | Some version when version = Db_schema.version -> Ok ()
+    | _ ->
+      Or_error.errorf
+        "unsupported database schema; this experimental build accepts only schema %d. \
+         Reimport the original records into a new database"
+        Db_schema.version)
 ;;
 
 let with_open path f =
@@ -99,7 +41,7 @@ let with_open path f =
   let result =
     try
       let* () = db_result (Db.busy_timeout_ms db 5000) in
-      let* () = migrate db in
+      let* () = initialize db in
       f db
     with
     | exn ->

@@ -51,7 +51,7 @@ FX/split transfer matching, and BoursoBank balance reconciliation are later work
 The initial entry point is an explicit command:
 
 ```sh
-finances sync-bank personal/finances.sqlite3 personal/boursobank/inbox \
+finances bank sync personal/finances.sqlite3 personal/boursobank/inbox \
   --institution boursobank --journal personal/bank.journal
 ```
 
@@ -101,7 +101,7 @@ Discover bank accounts from imported evidence and expose their complete source
 identity and current ledger name:
 
 ```sh
-finances bank-accounts personal/finances.sqlite3 > personal/config/accounts.json
+finances accounts export personal/finances.sqlite3 > personal/config/bank-accounts.json
 ```
 
 Each mapping contains `institution`, `bank_id`, `account_id`, `account_type`, and
@@ -109,9 +109,9 @@ Each mapping contains `institution`, `bank_id`, `account_id`, `account_type`, an
 `assets:bank:...` name, then apply the file explicitly or during sync:
 
 ```sh
-finances map-bank-accounts personal/finances.sqlite3 personal/config/accounts.json
-finances sync-bank personal/finances.sqlite3 personal/boursobank/inbox \
-  --institution boursobank --accounts personal/config/accounts.json --journal personal/bank.journal
+finances accounts apply personal/finances.sqlite3 personal/config/bank-accounts.json
+finances bank sync personal/finances.sqlite3 personal/boursobank/inbox \
+  --institution boursobank --accounts personal/config/bank-accounts.json --journal personal/bank.journal
 ```
 
 Mappings are validated, persisted in SQLite, and audited. The JSON file is an input
@@ -188,7 +188,7 @@ record can invalidate a formerly unique automatic link without rewriting evidenc
 Uncontested CSV value dates and bank suggestions are available in journal secondary
 dates and tags. They do not change booking dates, amounts, account classifications,
 or clearing status. The journal includes coverage counts, and inspection is exposed
-through csv-enrichments with an optional --review flag. Manual approval of links
+through bank boursobank csv list with an optional --review flag. Manual approval of links
 and conflicting metadata remains a later review-workflow feature.
 
 ## Decisions, transfers, and corrections
@@ -199,8 +199,8 @@ income categories; unresolved records remain unclassified. Distinguish suggestio
 from accepted decisions. Corrections and reclassification need controlled
 projection updates rather than another posting of the original movement.
 
-Explicit manual categorization is implemented with `bank-review`,
-`categorize-bank`, and `category-history`. A JSON batch carries event IDs, approved
+Explicit manual categorization is implemented with `bank review`,
+`bank categories apply`, and `bank categories history`. A JSON batch carries event IDs, approved
 expense/income accounts, and reasons. SQLite stores current decisions and an
 append-only audit. Reviewed projections survive regeneration, overlapping imports,
 and bank account renames. Corrections update only verified counter-postings;
@@ -229,7 +229,7 @@ unmatched transfers, and reconciliation discrepancies alongside reviewed totals.
 Use synthetic fixtures for automated tests. Cover nested folders, renamed and
 duplicate files, overlapping periods, same-amount legitimate transactions,
 malformed files between valid ones, unsupported companions, append-only history,
-account aliases, mapping changes after projection, rollback, schema migration,
+account aliases, mapping changes after projection, rollback, atomic schema initialization,
 output-path protection, and atomic journal publication. Verify journal syntax and
 amounts with the installed hledger CLI when running the end-to-end workflow.
 
@@ -255,7 +255,7 @@ with conservative ambiguity and conflict handling. Reimport and overlap reuse ev
 
 Use separate inboxes with explicit `--institution wise` and
 `--institution boursobank`, sharing the same database and journal output.
-`wise-status DATABASE` reports statement differences and CSV matching decisions.
+`bank wise status DATABASE` reports statement differences and CSV matching decisions.
 The combined journal includes every institution already stored. Opening balance
 postings, fee postings, and FX accounting are not inferred. Real FX and nonzero-fee
 cases need additional coverage; synthetic tests exercise fee metadata conflicts,
@@ -266,7 +266,7 @@ currency separation, reversals, and multi-bank replay.
 The Bunq adapter accepts the observed MT940 export and its seven-column CSV
 companion from `personal/bunq/inbox/` with `--institution bunq`. MT940 supplies
 movements and reconciled account/currency balances; CSV observations add corroborating
-row provenance, never extra movements. `bunq-status` reports persisted reconciliation
+row provenance, never extra movements. `bank bunq status` reports persisted reconciliation
 and CSV matching states.
 
 Because upstream references are `NONREF`, identities include canonical movement
@@ -283,9 +283,9 @@ Revolut completed Current-account CSV import is available with an explicit
 nonzero fees are posted separately. Document/account scope and complete-day
 inventories guard reimports and overlaps without upstream transaction IDs.
 
-`transfer-candidates` exposes both sides of potential same-currency principal
-transfers within seven booking days. `review-transfers` applies explicit confirm or
-reject decisions with reasons, and `transfer-history` preserves their audit.
+`transfers candidates` exposes both sides of potential same-currency principal
+transfers within seven booking days. `transfers review` applies explicit confirm or
+reject decisions with reasons, and `transfers history` preserves their audit.
 Confirmation asserts ownership and uses a shared transfer counter-account, leaving
 fees in expenses and bank quantities unchanged. It does not infer ownership from
 names or matching amounts. Ambiguous candidates need explicit selection; only one
@@ -300,12 +300,11 @@ Use one private version 1 account configuration exported by `accounts export`,
 with `accounts list`, `accounts apply --dry-run`, `accounts apply` and
 `accounts history`. It manages ledger names, registered IBANs and card settlement
 relationships atomically. SQLite is authoritative; the config is an editable input,
-not a watched database. Sync accepts the same file through `--accounts`. Legacy
-mapping and identity commands remain compatible. Explicit null in the versioned
+not a watched database. Sync accepts the same file through `--accounts`. Only grouped commands and the versioned account configuration are supported. Explicit null in the versioned
 format clears curated metadata; omitted properties preserve it.
 
 IBAN contradictions exclude pairs even when amount and booking date agree.
-`transfer-preview` adds documented evidence points and globally consistent
+`transfers preview` adds documented evidence points and globally consistent
 one-to-one assignment diagnostics, strongly favoring same-day bookings. It reports
 high/medium/ambiguous support rather than invented probability percentages. Missing
 records remain a limitation. Equal best assignments stay ambiguous, and oversized

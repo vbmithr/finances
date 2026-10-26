@@ -1,5 +1,4 @@
 open Core
-open Rel
 open Finances
 
 let ok = Or_error.ok_exn
@@ -168,104 +167,6 @@ let clear_and_patch () =
     Alcotest.(check bool) "cleared IBAN absent" true (Option.is_none info.iban))
 ;;
 
-let legacy () =
-  memory (fun db ->
-    let mappings = ok (Store.bank_accounts db) in
-    let rows = ok (Bank_account_config.of_json (Bank_account_mapping.to_json mappings)) in
-    check "legacy mapping accepted" 2 (List.length rows);
-    List.iter rows ~f:(fun row ->
-      Alcotest.(check bool)
-        "legacy keeps IBAN"
-        true
-        (Poly.equal row.Bank_account_config.iban Keep));
-    ignore (ok (Store.apply_bank_accounts db (changes db)));
-    ignore (ok (Store.apply_bank_accounts db rows));
-    let info =
-      List.find_exn
-        (ok (Store.bank_account_info db))
-        ~f:(fun i -> String.equal i.Store.mapping.account_type "CHECKING")
-    in
-    Alcotest.(check bool) "legacy retains identity" true (Option.is_some info.iban))
-;;
-
-let workspace f =
-  let path =
-    Filename_unix.temp_file ~in_dir:(Sys.getenv_exn "TMPDIR") "account-config" ".sqlite3"
-  in
-  Exn.protect ~finally:(fun () -> Core_unix.unlink path) ~f:(fun () -> f path)
-;;
-
-let raw path f =
-  let db =
-    Rel_sqlite3.open' ~mode:Read_write_create path
-    |> Rel_sqlite3.string_error
-    |> Result.ok_or_failwith
-  in
-  Exn.protect ~finally:(fun () -> ignore (Rel_sqlite3.close db)) ~f:(fun () -> f db)
-;;
-
-let sql db s =
-  Rel_sqlite3.exec_sql db s |> Rel_sqlite3.string_error |> Result.ok_or_failwith
-;;
-
-let scalar db s =
-  Rel_sqlite3.first db (Rel_sql.Stmt.v s ~rev_args:[] ~result:Row.(t1 (int "value")))
-  |> Rel_sqlite3.string_error
-  |> Result.ok_or_failwith
-  |> Option.value_exn
-;;
-
-let migrations () =
-  workspace (fun path ->
-    raw path (fun db ->
-      sql db (In_channel.read_all "fixtures/schema-v9.sql");
-      sql
-        db
-        "INSERT INTO \
-         bank_account_identity_changes(institution,source_account,previous_iban,iban) \
-         VALUES('test','source',NULL,'FR1420041010050500013M02606')");
-    ok
-      (Store.with_open path (fun db ->
-         seed db;
-         ignore (ok (Store.apply_bank_accounts db (changes db)));
-         Ok ()));
-    ok
-      (Store.with_open path (fun db ->
-         let credit = card (config db) in
-         Alcotest.(check bool)
-           "relationship survives reopen"
-           true
-           (match credit.settlement_account with
-            | Set _ -> true
-            | _ -> false);
-         Ok ()));
-    raw path (fun db ->
-      check "schema ten" 10 (scalar db "PRAGMA user_version");
-      check
-        "prior audit preserved"
-        2
-        (scalar db "SELECT count(*) FROM bank_account_identity_changes");
-      Alcotest.(check bool)
-        "audit immutable"
-        true
-        (Result.is_error
-           (Rel_sqlite3.exec_sql db "DELETE FROM bank_account_identity_changes"))));
-  workspace (fun path ->
-    raw path (fun db ->
-      sql db (In_channel.read_all "fixtures/schema-v9.sql");
-      sql db "CREATE TABLE bank_account_settlements(collision TEXT)");
-    error (Store.with_open path (fun _ -> Ok ()));
-    raw path (fun db ->
-      check "rollback version nine" 9 (scalar db "PRAGMA user_version");
-      check
-        "audit rebuild rolled back"
-        0
-        (scalar
-           db
-           "SELECT count(*) FROM sqlite_master WHERE \
-            name='bank_account_identity_changes_v10'")))
-;;
-
 let () =
   Alcotest.run
     "Unified bank accounts"
@@ -275,8 +176,6 @@ let () =
           ; "dry run and apply", dry_run
           ; "atomic multi-field rollback", rollback
           ; "clear and patch semantics", clear_and_patch
-          ; "legacy mappings", legacy
-          ; "persistence and migration", migrations
           ]
           ~f:(fun (name, f) -> Alcotest.test_case name `Quick f) )
     ]

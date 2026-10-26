@@ -62,25 +62,19 @@ not yet calculate average entry price from fills or model inverse contracts.
 ## Persistence and replay
 
 `Store` uses Rel's typed statement bindings and SQLite backend. SQL parameters are
-bound rather than interpolated. `Db_schema` defines versioned SQL migrations.
+bound rather than interpolated. `Db_schema` defines one current experimental schema baseline.
 Schema version 10 contains source events, journal entries, postings, immutable
 import documents, document/event links, append-only bank import attempts, persisted
 bank account mappings, an append-only mapping change log, immutable CSV rows,
 derived CSV matches, and append-only match change history. Decimal posting
 quantities use text; no financial amount uses SQLite REAL.
 
-Schema initialization runs inside an immediate transaction. The schema version is
-tracked through `PRAGMA user_version`; a newer or unsupported version is rejected.
-Migration from version 1 rebuilds the event table and its referencing journal and
-posting tables inside one transaction, preserving primary keys, retrieval times,
-source payload bytes, and posting quantities. Foreign keys stay enabled. A failure
-rolls back both schema changes and the version increment. Version 2 to 3 adds
-history and mapping tables without rewriting existing evidence or entries. Fresh
-and older databases apply the migration chain in one transaction. Version 3 to 4
-adds CSV observations and match/audit tables without changing prior source evidence,
-accounting entries, mappings, or import history. Version 4 to 5 adds Wise statement
-balances and membership links, Wise CSV observations and match history, and expands
-the import-attempt format constraint while preserving its rows.
+Schema initialization runs inside an immediate transaction. `PRAGMA user_version`
+must be 0 (a fresh database) or 10 (the supported baseline). Other experiments are
+rejected without alteration. There is no historical migration chain. Initializer
+failures roll back all partial DDL. Original records and account configuration can
+be reimported when resetting a database. Transaction decisions require renewed
+review because internal event IDs can change after reimport.
 Foreign keys are enabled on every connection and a five-second busy timeout is
 configured. The initial concurrency model uses a single writer and SQLite's
 default rollback journal. Connections must not be shared between threads.
@@ -267,7 +261,7 @@ tables keep BoursoBank's account/date/description matching policy independent.
 Both adapters share matching-state persistence and append-only decision history.
 The folder workflow recomputes both match sets before generic bank projection.
 
-`wise-status` recomputes statement reconciliation from stored event memberships
+`bank wise status` recomputes statement reconciliation from stored event memberships
 using Bigdecimal and exposes every Wise CSV row's match state. The journal adds
 uncontested merchant, payment reference and reported-fee metadata, without fee or
 FX postings. Real samples currently validate EUR movements with zero fees.
@@ -283,7 +277,7 @@ existing `finances` library, preserving its public module names.
 
 The adapters share `Bank_match` for matching states and results; Wise does not
 depend on the BoursoBank matcher. `Bank_csv_match` re-exports these types for
-compatibility. Source events, database persistence and migrations, account mappings,
+compatibility. Source events, database persistence, account mappings,
 the common bank transaction view, and accounting projection stay in `lib/`.
 Folder scanning and sync orchestration remain in `bank/`, and journal rendering
 remains in `journal/`. This is source organization within one library; adding a
@@ -296,8 +290,8 @@ to all adapter and shared OCaml files, including nested directories.
 
 `Bank_category` validates explicit per-event decisions with an expense/income
 counter-account and a nonempty reason; `equity:unclassified` resets a decision.
-Schema 6 adds current `bank_categories` and append-only `bank_category_changes`
-without rewriting original evidence or entries. Migration from schema 5 is atomic.
+The baseline includes current `bank_categories` and append-only
+`bank_category_changes` without rewriting original evidence or entries.
 
 Applying a batch validates bank event identities, rejects repeated IDs, compares
 any existing entry against its expected projection, and updates only posting
@@ -322,7 +316,7 @@ and identities including occurrence numbers, so identical repeated payments rema
 separate. Its generic source events use kind `bunq-transaction` and dated booking
 occurrences. `Bank_transaction` supplies the shared projection view.
 
-Schema 7 expands import formats while preserving attempt history, and adds immutable
+The baseline includes immutable
 Bunq day inventories, statement balances, CSV rows and audited derived matches.
 Import compares the sorted canonical movement inventory for every already observed
 account/day. Any mismatch rolls back the entire source import before its rejection
@@ -339,10 +333,9 @@ Shared audited match persistence saves transitions without rewriting evidence.
 
 ## Revolut and transfer decisions
 
-Schema 8 preserves import history while adding Revolut document/account context,
+The baseline includes Revolut document/account context,
 immutable daily movement inventories, current transfer decisions, unique per-event
-confirmed memberships, and append-only transfer changes. Migration from version 7
-is atomic, including the expanded import-format constraint.
+confirmed memberships, and append-only transfer changes.
 
 `Revolut_csv` supports the observed completed Current-account CSV. Its caller must
 provide an account label because the file cannot identify the account. Canonical
@@ -372,14 +365,14 @@ stable projection identity are preserved; no transfer duplicates a bank movement
 
 ## Account identity and configuration
 
-Schema 9 adds per-source-account IBAN aliases and append-only change history.
+Per-source-account IBAN aliases have append-only change history.
 Source identifiers remain unchanged: a Revolut label or domestic account number
 can have a registered IBAN without reidentifying movements. Source identifiers
 that are themselves valid IBANs provide imported evidence. Card accounts have no
 IBAN; their relationship to a bank account is modeled separately.
 
-Schema 10 makes identity history support explicit clearing and adds card settlement
-metadata and its audit history. `Bank_account_config` defines a version 1 format
+Identity history supports explicit clearing; card settlement metadata has its own
+audit history. `Bank_account_config` defines a version 1 format
 with source references, optional ledger names, IBAN updates and settlement links.
 Omitted properties retain state; explicit null clears optional curated metadata.
 Imported IBANs cannot be changed. Settlement links connect a card source account
@@ -390,8 +383,8 @@ configuration validates source references, composes ledger/identity/relationship
 mutations inside one transaction, and checks existing projections and confirmed
 transfers. A dry run uses a savepoint and rolls back every update and audit row,
 while returning concrete planned changes. Sync accepts the same versioned file
-through `--accounts`, alongside legacy mapping arrays. SQLite remains authoritative;
-configuration is an optional explicit input. Legacy identity commands are retained.
+through `--accounts`. SQLite remains authoritative; configuration is an optional
+explicit input. Only versioned configuration and grouped CLI commands are supported.
 
 ## Explainable transfer ranking
 
@@ -407,6 +400,15 @@ contradictions are hard exclusions. Numeric scores are not calibrated probabilit
 The graph solver computes exact maximum-weight matchings with unmatched vertices
 allowed, independently per connected component. Edge inclusion/exclusion solves
 identify forced edges, equal alternatives and score margins without arbitrary tie
-breaking. Components above 18 vertices remain unevaluated. `transfer-preview`
+breaking. Components above 18 vertices remain unevaluated. `transfers preview`
 returns evidence, confidence bands, assignment diagnostics, excluded pairs and
 review-required proposals; it never mutates transfer decisions or journal entries.
+
+## Local Arch package
+
+The Arch build helper compiles/tests the checkout in a temporary disk-backed build
+directory and generates a native binary payload. Its explicit public-file allowlist
+excludes the workspace's personal records. The PKGBUILD installs the native CLI,
+license, documentation and man pages with only glibc, GMP and SQLite runtime
+requirements. A concrete PKGBUILD and SHA-256 checksums accompany the local artifact.
+No system installation or opam switch mutation occurs during packaging.

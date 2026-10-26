@@ -139,3 +139,17 @@
   alcotest
   rel
   rel.sqlite3))
+
+(test
+ (name schema_test)
+ (modules schema_test)
+ (deps
+  (glob_files fixtures/*))
+ (libraries
+  finances
+  core
+  core_unix
+  core_unix.filename_unix
+  alcotest
+  rel
+  rel.sqlite3))

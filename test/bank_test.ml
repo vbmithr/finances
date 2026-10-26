@@ -37,10 +37,6 @@ let with_raw path f =
   Exn.protect ~finally:(fun () -> ignore (Rel_sqlite3.close db)) ~f:(fun () -> f db)
 ;;
 
-let sql db text =
-  Rel_sqlite3.exec_sql db text |> Rel_sqlite3.string_error |> Result.ok_or_failwith
-;;
-
 let scalar db query =
   let stmt = Rel_sql.Stmt.v query ~rev_args:[] ~result:Row.(t1 (int "value")) in
   Rel_sqlite3.first db stmt
@@ -221,72 +217,6 @@ let institution_scoping () =
     check_counts path 2 6 6)
 ;;
 
-let migration_v1 () =
-  with_database (fun path ->
-    with_raw path (fun db ->
-      sql db (In_channel.read_all "fixtures/schema-v1.sql");
-      sql
-        db
-        {|
-INSERT INTO source_events(id,venue,account,kind,source_id,occurred_at_ms,payload)
-VALUES(42,'paradex','main','transfer','legacy',1234,x'726177007061796c6f6164');
-INSERT INTO journal_entries(id,event_id,projection_key,date,description)
-VALUES(9,42,'legacy:v1','2026-01-01','Legacy entry');
-INSERT INTO postings(entry_id,ordinal,account,commodity,quantity)
-VALUES(9,0,'assets:cash','EUR','0.1234567890123456789'),
-      (9,1,'equity:opening','EUR','-0.1234567890123456789');
-|});
-    with_store path (fun db ->
-      let id, e = List.hd_exn (ok (Store.events db)) in
-      Alcotest.(check int64) "legacy ID unchanged" 42L id;
-      Alcotest.(check string) "legacy bytes unchanged" "raw\000payload" e.payload;
-      (match e.occurred with
-       | At_ms ms -> Alcotest.(check int64) "legacy timestamp" 1234L ms
-       | On_date _ -> failwith "lost legacy timestamp");
-      let _, _, entry = List.hd_exn (ok (Store.entries db)) in
-      Alcotest.(check bool)
-        "legacy exact decimal"
-        true
-        (Bigdecimal.equal
-           (List.hd_exn entry.postings).quantity
-           (Bigdecimal.of_string "0.1234567890123456789")));
-    with_raw path (fun db ->
-      Alcotest.(check int) "version advanced" 10 (scalar db "PRAGMA user_version");
-      let check =
-        Rel_sql.Stmt.v
-          "PRAGMA foreign_key_check"
-          ~rev_args:[]
-          ~result:Row.(t4 (text "table") (int64 "rowid") (text "parent") (int "fkid"))
-      in
-      Alcotest.(check bool)
-        "foreign keys remain valid"
-        true
-        (Rel_sqlite3.first db check
-         |> Rel_sqlite3.string_error
-         |> Result.ok_or_failwith
-         |> Option.is_none));
-    let result = import path (fixture ()) in
-    Alcotest.(check int) "bank import after migration" 3 result.inserted;
-    check_counts path 1 4 3)
-;;
-
-let failed_migration () =
-  with_database (fun path ->
-    with_raw path (fun db ->
-      sql db (In_channel.read_all "fixtures/schema-v1.sql");
-      sql db "CREATE TABLE postings_v2(collision TEXT)");
-    error (Store.with_open path (fun _ -> Ok ()));
-    with_raw path (fun db ->
-      Alcotest.(check int)
-        "version unchanged after rollback"
-        1
-        (scalar db "PRAGMA user_version");
-      Alcotest.(check int)
-        "new table creation rolled back"
-        0
-        (scalar db "SELECT count(*) FROM sqlite_master WHERE name='source_events_v2'")))
-;;
-
 let () =
   Alcotest.run
     "bank importer"
@@ -299,8 +229,6 @@ let () =
           ; "overlapping exports", overlapping_exports
           ; "atomic conflict rollback", atomic_conflict
           ; "institution scoping", institution_scoping
-          ; "version 1 migration", migration_v1
-          ; "failed migration rollback", failed_migration
           ]
           ~f:(fun (name, f) -> Alcotest.test_case name `Quick f) )
     ]

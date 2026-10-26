@@ -1,5 +1,4 @@
 open Core
-open Rel
 open Finances
 
 let ok = Or_error.ok_exn
@@ -212,76 +211,6 @@ let explicit_contradiction () =
     error (Store.set_bank_account_identities db [ imported ]))
 ;;
 
-let workspace f =
-  let path =
-    Filename_unix.temp_file ~in_dir:(Sys.getenv_exn "TMPDIR") "identity-tests" ".sqlite3"
-  in
-  Exn.protect ~finally:(fun () -> Core_unix.unlink path) ~f:(fun () -> f path)
-;;
-
-let raw path f =
-  let db =
-    Rel_sqlite3.open' ~mode:Read_write_create path
-    |> Rel_sqlite3.string_error
-    |> Result.ok_or_failwith
-  in
-  Exn.protect ~finally:(fun () -> ignore (Rel_sqlite3.close db)) ~f:(fun () -> f db)
-;;
-
-let sql db s =
-  Rel_sqlite3.exec_sql db s |> Rel_sqlite3.string_error |> Result.ok_or_failwith
-;;
-
-let scalar db s =
-  Rel_sqlite3.first db (Rel_sql.Stmt.v s ~rev_args:[] ~result:Row.(t1 (int "value")))
-  |> Rel_sqlite3.string_error
-  |> Result.ok_or_failwith
-  |> Option.value_exn
-;;
-
-let persistence_and_migration () =
-  workspace (fun path ->
-    raw path (fun db -> sql db (In_channel.read_all "fixtures/schema-v8.sql"));
-    ok
-      (Store.with_open path (fun db ->
-         seed db;
-         ignore (ok (Store.set_bank_account_identities db [ identity counterpart_iban ]));
-         Ok ()));
-    ok
-      (Store.with_open path (fun db ->
-         let info =
-           List.find_exn
-             (ok (Store.bank_account_info db))
-             ~f:(fun i -> String.equal i.Store.mapping.institution "revolut")
-         in
-         Alcotest.(check string)
-           "reopened identity"
-           counterpart_iban
-           (Option.value_exn info.iban);
-         Ok ()));
-    raw path (fun db ->
-      check "schema ten" 10 (scalar db "PRAGMA user_version");
-      check "audit row" 1 (scalar db "SELECT count(*) FROM bank_account_identity_changes");
-      Alcotest.(check bool)
-        "audit immutable"
-        true
-        (Result.is_error
-           (Rel_sqlite3.exec_sql db "DELETE FROM bank_account_identity_changes"))));
-  workspace (fun path ->
-    raw path (fun db ->
-      sql db (In_channel.read_all "fixtures/schema-v8.sql");
-      sql db "CREATE TABLE bank_account_identity_changes(collision TEXT)");
-    error (Store.with_open path (fun _ -> Ok ()));
-    raw path (fun db ->
-      check "migration rollback" 8 (scalar db "PRAGMA user_version");
-      check
-        "identity table rolled back"
-        0
-        (scalar
-           db
-           "SELECT count(*) FROM sqlite_master WHERE name='bank_account_identities'")))
-;;
-
 let () =
   Alcotest.run
     "Account identities and ranking"
@@ -294,7 +223,6 @@ let () =
           ; "identity registration and confirmed transfer guard", registration
           ; "known account contradictions", known_contradiction
           ; "explicit identity contradictions", explicit_contradiction
-          ; "identity persistence and migration", persistence_and_migration
           ]
           ~f:(fun (name, f) -> Alcotest.test_case name `Quick f) )
     ]
