@@ -34,17 +34,73 @@ The kernel does not yet fetch Paradex data, derive positions from fills, persist
 position observations, calculate funding, automatically categorize transactions, or
 infer opening balances. Those operations can be added around the core APIs.
 
+## CLI and XDG storage
+
+The executable is `fin`; the OCaml libraries and Arch package remain named
+`finances`. No database argument is needed for normal use:
+
+```sh
+fin paths
+fin accounts list
+fin bank bunq status
+fin transfers preview
+```
+
+The [XDG Base Directory specification](https://specifications.freedesktop.org/basedir/latest/)
+provides the base paths. Defaults are:
+
+| Purpose | Default | Override |
+| --- | --- | --- |
+| Database | `~/.local/share/fin/fin.sqlite3` | `$XDG_DATA_HOME/fin/fin.sqlite3` |
+| Account config | `~/.config/fin/accounts.json` | `$XDG_CONFIG_HOME/fin/accounts.json` |
+
+Empty or relative XDG environment values are ignored. `fin paths` prints expanded
+locations. First use creates database parent directories with mode 0700 where
+needed. Existing directory permissions are retained. Configuration export writes
+atomically with mode 0600. SQLite is authoritative; configuration remains an input.
+Sync uses saved account settings unless `--accounts FILE` is explicitly supplied.
+
+```sh
+fin accounts list --database /path/to/experiment.sqlite3
+fin accounts export -o "${XDG_CONFIG_HOME:-$HOME/.config}/fin/accounts.json"
+fin accounts apply --dry-run  # reads the default XDG account config
+fin accounts apply           # persist those edits
+fin accounts apply /path/to/other-accounts.json --database /path/to/experiment.sqlite3
+```
+
+`--database` (or `-d`) is an option on commands that access SQLite. Input files and
+inbox directories are positional; the old positional database argument is removed.
+Use `dune exec fin -- ...` when running from the checkout. Journals default to
+`bank.journal` beside the selected database when syncing. Original statement inboxes
+are ordinary user-chosen directories, independent of the DB/config defaults.
+
 ## Install an Arch Linux test package
 
 Build the current checkout using a prepared opam switch:
 
 ```sh
-python packaging/arch/build.py --switch 5.5.0
-sudo pacman -U dist/arch/finances-0.1.0-1-x86_64.pkg.tar.zst
-finances --version
-finances accounts list personal/finances.sqlite3
-finances bank bunq status personal/finances.sqlite3
+make package OPAM_SWITCH=5.5.0
+sudo pacman -U dist/arch/finances-0.1.0-2-x86_64.pkg.tar.zst
+fin --version
+fin accounts list
+fin bank bunq status
 ```
+
+`make package` generates `dist/arch/PKGBUILD` from
+`packaging/arch/PKGBUILD.in`, fills in the version, architecture and SHA-256 digest,
+and builds the package. To produce only the concrete recipe and its matching native
+payload archive (without running the package build):
+
+```sh
+make pkgbuild OPAM_SWITCH=5.5.0
+```
+
+Run make from the project root. Omit `OPAM_SWITCH` to use the active switch.
+`make help` lists targets, including `build`, `test` and `fmt`. Override
+`ARCH_OUTPUT` or `SCRATCH_ROOT` to change output or disk-backed scratch locations.
+The underlying commands remain `python packaging/arch/build.py --switch 5.5.0`
+and that command with `--prepare-only`, respectively. The generated PKGBUILD uses
+the generated binary archive, so copying the template alone is insufficient.
 
 The helper compiles and tests a native release executable, stages only the binary,
 public docs, license and generated man pages, then invokes makepkg. Its working
@@ -60,10 +116,10 @@ Installation is explicit; the helper never runs sudo or installs the package.
 The grouped CLI uses `db`, `accounts`, `bank`, `transfers`, and `journal`:
 
 ```sh
-finances db init personal/finances.sqlite3
-finances bank sync personal/finances.sqlite3 personal/bunq/inbox --institution bunq
-finances transfers preview personal/finances.sqlite3
-finances journal export personal/finances.sqlite3
+fin db init
+fin bank sync personal/bunq/inbox --institution bunq
+fin transfers preview
+fin journal export
 ```
 
 ## Setup
@@ -100,7 +156,7 @@ such as `csv`, check that installation and execution use the same switch:
 ```sh
 opam switch show
 opam install --switch=5.5.0 . --deps-only --with-test
-opam exec --switch=5.5.0 -- dune exec finances -- bank bunq status personal/finances.sqlite3
+opam exec --switch=5.5.0 -- dune exec fin -- bank bunq status
 ```
 
 Replace `5.5.0` with your chosen switch. To use plain `dune` commands in your shell,
@@ -129,11 +185,11 @@ version must be installed. The hook is enabled in this checkout.
 ## CLI
 
 ```sh
-dune exec finances -- db init personal.sqlite3
-dune exec finances -- db ingest personal.sqlite3 examples/source-event.json \
+dune exec fin -- db init
+dune exec fin -- db ingest examples/source-event.json \
   --venue paradex --account main --kind transfer --id example-deposit-1 \
   --at-ms 1792886400000
-dune exec finances -- db events personal.sqlite3
+dune exec fin -- db events
 ```
 
 The example is a synthetic source record, not a Paradex API response. `ingest`
@@ -145,7 +201,7 @@ to whitespace. `events` prints metadata as JSON without printing source payloads
 ## Bank imports
 
 ```sh
-dune exec finances -- bank boursobank import personal.sqlite3 /path/to/export.ofx
+dune exec fin -- bank boursobank import /path/to/export.ofx
 ```
 
 The institution identifier defaults to `boursobank`; use `--institution NAME` for
@@ -183,7 +239,8 @@ There are no historical migrations or schema fixtures. Reimport original stateme
 and reapply saved account configuration when resetting an experiment. Category and
 transfer review files use internal event IDs: inspect the new records before
 recreating those decisions instead of blindly reusing old numeric IDs.
-The current schema-10 personal database remains usable.
+The current schema-10 database remains usable, including when copied into the
+XDG data directory.
 The bank test fixture is synthetic; personal exports are not test fixtures.
 
 ## From bank export to a queryable journal
@@ -194,9 +251,9 @@ financial data, not scratch files.
 
 ```sh
 mkdir -p personal
-dune exec finances -- bank boursobank import personal/finances.sqlite3 /path/to/export.ofx
-dune exec finances -- bank project personal/finances.sqlite3
-dune exec finances -- journal export personal/finances.sqlite3 > personal/bank.journal
+dune exec fin -- bank boursobank import /path/to/export.ofx
+dune exec fin -- bank project
+dune exec fin -- journal export > personal/bank.journal
 hledger --no-conf -f personal/bank.journal check --strict
 ```
 
@@ -253,11 +310,11 @@ See [the bank workflow design](docs/bank-workflow.md) for the complete plan and
 milestones. The first milestone is available:
 
 ~~~sh
-mkdir -p personal/{boursobank,wise,bunq,revolut}/inbox personal/config
+mkdir -p personal/{boursobank,wise,bunq,revolut}/inbox personal/reviews personal/reports
 # Copy bank exports into personal/boursobank/inbox, then run after copying has completed.
-dune exec finances -- bank sync personal/finances.sqlite3 personal/boursobank/inbox \
+dune exec fin -- bank sync personal/boursobank/inbox \
   --institution boursobank --journal personal/bank.journal
-dune exec finances -- bank history personal/finances.sqlite3 --limit 100
+dune exec fin -- bank history --limit 100
 ~~~
 
 Sync traverses regular files recursively in path order and detects OFX content
@@ -285,13 +342,12 @@ entries from being exported. History is returned as JSON, newest attempt first.
 To give bank accounts readable ledger names:
 
 ~~~sh
-dune exec finances -- accounts export personal/finances.sqlite3 \
-  > personal/config/bank-accounts.json
+dune exec fin -- accounts export \
+  -o "${XDG_CONFIG_HOME:-$HOME/.config}/fin/accounts.json"
 # Edit ledger_account fields, retaining each account's source identity.
-dune exec finances -- accounts apply personal/finances.sqlite3 \
-  personal/config/bank-accounts.json
-dune exec finances -- bank sync personal/finances.sqlite3 personal/boursobank/inbox \
-  --institution boursobank --accounts personal/config/bank-accounts.json --journal personal/bank.journal
+dune exec fin -- accounts apply
+dune exec fin -- bank sync personal/boursobank/inbox \
+  --institution boursobank --accounts ~/.config/fin/accounts.json --journal personal/bank.journal
 ~~~
 
 The version 1 configuration manages ledger names, IBANs and card settlement links
@@ -311,12 +367,12 @@ SQLite is authoritative for account names, registered IBANs, and card settlement
 relationships. Configure accounts already discovered from imported statements:
 
 ```sh
-finances accounts list personal/finances.sqlite3
-finances accounts export personal/finances.sqlite3 > personal/config/bank-accounts.json
+fin accounts list
+fin accounts export -o "${XDG_CONFIG_HOME:-$HOME/.config}/fin/accounts.json"
 # Edit the exported file, then preview and apply:
-finances accounts apply personal/finances.sqlite3 personal/config/bank-accounts.json --dry-run
-finances accounts apply personal/finances.sqlite3 personal/config/bank-accounts.json
-finances accounts history personal/finances.sqlite3
+fin accounts apply --dry-run
+fin accounts apply
+fin accounts history
 ```
 
 `list` returns JSON with source identifiers, ledger account, IBAN and its provenance,
@@ -366,9 +422,8 @@ rows. A failure anywhere rolls back all account edits and posting renames togeth
 Identity edits that contradict confirmed transfers are rejected for review first.
 
 The file is an input, not a second database or watched source of truth. Re-export
-from SQLite when creating a fresh editable snapshot. Keep it under ignored
-`personal/`. To apply this same configuration during folder sync, use
-`--accounts personal/config/bank-accounts.json`; source imports happen first, then
+from SQLite when creating a fresh editable snapshot. Keep it in the XDG config directory, outside version control. To apply this same configuration during folder sync, use
+`--accounts ~/.config/fin/accounts.json`; source imports happen first, then
 the account configuration applies atomically before projection and journal output.
 Import every referenced source account before applying a complete multi-bank file.
 
@@ -380,12 +435,12 @@ flat commands and mapping-array inputs have been removed.
 List movements that still use `equity:unclassified`:
 
 ```sh
-finances bank review personal/finances.sqlite3 > personal/reports/bank-review.json
-finances bank review personal/finances.sqlite3 --all
+fin bank review > personal/reports/bank-review.json
+fin bank review --all
 ```
 
 Use the reported `event_id` values to write a JSON decision file, for example
-`personal/config/categories.json`. The ID below is illustrative; select the actual
+`personal/reviews/categories.json`. The ID below is illustrative; select the actual
 movement from the review output:
 
 ```json
@@ -398,10 +453,10 @@ Apply the entire batch atomically, then regenerate the accounting projection and
 journal:
 
 ```sh
-finances bank categories apply personal/finances.sqlite3 personal/config/categories.json
-finances bank project personal/finances.sqlite3
-finances journal export personal/finances.sqlite3 > personal/bank.journal
-finances bank categories history personal/finances.sqlite3
+fin bank categories apply personal/reviews/categories.json
+fin bank project
+fin journal export > personal/bank.journal
+fin bank categories history
 hledger -f personal/bank.journal --strict check
 hledger -f personal/bank.journal balance expenses --monthly
 ```
@@ -448,11 +503,11 @@ optional enrichment. Keep a separate inbox per institution and sync both into th
 same database and journal:
 
 ```sh
-finances bank sync personal/finances.sqlite3 personal/boursobank/inbox \
+fin bank sync personal/boursobank/inbox \
   --institution boursobank --journal personal/bank.journal
-finances bank sync personal/finances.sqlite3 personal/wise/inbox \
+fin bank sync personal/wise/inbox \
   --institution wise --journal personal/bank.journal
-finances bank wise status personal/finances.sqlite3
+fin bank wise status
 hledger -f personal/bank.journal --strict check
 hledger -f personal/bank.journal register assets:bank:wise
 ```
@@ -492,9 +547,9 @@ Put Bunq's MT940 export (including exports with no filename extension) and its
 optional seven-column CSV into `personal/bunq/inbox/`:
 
 ```sh
-finances bank sync personal/finances.sqlite3 personal/bunq/inbox \
+fin bank sync personal/bunq/inbox \
   --institution bunq --journal personal/bank.journal
-finances bank bunq status personal/finances.sqlite3
+fin bank bunq status
 ```
 
 The MT940 reader supports the observed Bunq layout: a BUNQ header, account/currency,
@@ -528,7 +583,7 @@ Bunq uses the same persisted account mappings and reviewed categories as other b
 Place the ten-column Revolut CSV export in `personal/revolut/inbox/`:
 
 ```sh
-finances bank sync personal/finances.sqlite3 personal/revolut/inbox \
+fin bank sync personal/revolut/inbox \
   --institution revolut --account-id main --journal personal/bank.journal
 ```
 
@@ -559,8 +614,8 @@ reuse movements, including identical repeated payments.
 List candidate pairs with both movements, fees, dates, currencies and descriptions:
 
 ```sh
-finances transfers candidates personal/finances.sqlite3 > personal/reports/transfer-candidates.json
-finances transfers candidates personal/finances.sqlite3 --all
+fin transfers candidates > personal/reports/transfer-candidates.json
+fin transfers candidates --all
 ```
 
 Candidates require distinct source accounts, equal opposite principal amounts in
@@ -580,10 +635,10 @@ candidate report. These IDs are illustrative:
 ```
 
 ```sh
-finances transfers review personal/finances.sqlite3 personal/config/transfers.json
-finances bank project personal/finances.sqlite3
-finances journal export personal/finances.sqlite3 > personal/bank.journal
-finances transfers history personal/finances.sqlite3
+fin transfers review personal/reviews/transfers.json
+fin bank project
+fin journal export > personal/bank.journal
+fin transfers history
 hledger -f personal/bank.journal --strict check
 hledger -f personal/bank.journal register assets:transfers
 ```
@@ -608,8 +663,8 @@ outside the seven-day window need a future explicit policy.
 ## Transfer evidence and assignment preview
 
 ```sh
-finances transfers preview personal/finances.sqlite3 > personal/reports/transfer-preview.json
-finances transfers candidates personal/finances.sqlite3 --all
+fin transfers preview > personal/reports/transfer-preview.json
+fin transfers candidates --all
 ```
 
 Structured counterparty IBAN evidence currently comes from Bunq. It is compared
@@ -680,10 +735,10 @@ conversion. CSV-only observations wait for OFX.
 
 ~~~sh
 # Recompute automatically during sync, or explicitly after other imports:
-dune exec finances -- bank boursobank csv match personal/finances.sqlite3
+dune exec fin -- bank boursobank csv match
 # Inspect all observations or just those still needing review:
-dune exec finances -- bank boursobank csv list personal/finances.sqlite3
-dune exec finances -- bank boursobank csv list personal/finances.sqlite3 --review
+dune exec fin -- bank boursobank csv list
+dune exec fin -- bank boursobank csv list --review
 ~~~
 
 Matching states and their changes are saved in SQLite. Overlapping CSV files can

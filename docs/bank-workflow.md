@@ -17,18 +17,24 @@ and accounting entries. hledger journals and reports are generated outputs. Inpu
 are never moved or modified by ingestion.
 
 ```text
-personal/
-  inbox/                 bank exports, including overlapping periods
-  config/
-    accounts.json        optional editable mapping input
-    rules.json           future categorization rules
-  finances.sqlite3       evidence, decisions, and accounting
+~/.local/share/fin/
+  fin.sqlite3            evidence, decisions, and accounting
   bank.journal           generated output
+~/.config/fin/
+  accounts.json          editable account configuration input
+personal/
+  boursobank/inbox/      original exports
+  wise/inbox/
+  bunq/inbox/
+  revolut/inbox/
+  reviews/               explicit category and transfer review batches
   reports/               generated reports
 ```
 
-This directory is durable personal data and is ignored by Git. Task scratch files
-and test databases belong in disk-backed scratch storage.
+The DB and account-config paths honor XDG_DATA_HOME and XDG_CONFIG_HOME. `fin paths`
+shows resolved locations; `--database` selects another experiment. Statement folders
+and reports remain user-selected. Repository-local `personal/` is ignored by Git.
+Task scratch files and test databases belong in disk-backed scratch storage.
 
 ## Milestones
 
@@ -51,7 +57,7 @@ FX/split transfer matching, and BoursoBank balance reconciliation are later work
 The initial entry point is an explicit command:
 
 ```sh
-finances bank sync personal/finances.sqlite3 personal/boursobank/inbox \
+fin bank sync personal/boursobank/inbox \
   --institution boursobank --journal personal/bank.journal
 ```
 
@@ -101,7 +107,7 @@ Discover bank accounts from imported evidence and expose their complete source
 identity and current ledger name:
 
 ```sh
-finances accounts export personal/finances.sqlite3 > personal/config/bank-accounts.json
+fin accounts export -o "${XDG_CONFIG_HOME:-$HOME/.config}/fin/accounts.json"
 ```
 
 Each mapping contains `institution`, `bank_id`, `account_id`, `account_type`, and
@@ -109,9 +115,9 @@ Each mapping contains `institution`, `bank_id`, `account_id`, `account_type`, an
 `assets:bank:...` name, then apply the file explicitly or during sync:
 
 ```sh
-finances accounts apply personal/finances.sqlite3 personal/config/bank-accounts.json
-finances bank sync personal/finances.sqlite3 personal/boursobank/inbox \
-  --institution boursobank --accounts personal/config/bank-accounts.json --journal personal/bank.journal
+fin accounts apply
+fin bank sync personal/boursobank/inbox \
+  --institution boursobank --accounts ~/.config/fin/accounts.json --journal personal/bank.journal
 ```
 
 Mappings are validated, persisted in SQLite, and audited. The JSON file is an input

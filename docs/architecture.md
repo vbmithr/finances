@@ -412,3 +412,20 @@ excludes the workspace's personal records. The PKGBUILD installs the native CLI,
 license, documentation and man pages with only glibc, GMP and SQLite runtime
 requirements. A concrete PKGBUILD and SHA-256 checksums accompany the local artifact.
 No system installation or opam switch mutation occurs during packaging.
+
+## CLI identity and XDG paths
+
+The public executable and Cmdliner root name are `fin`; OCaml libraries and the
+Arch package retain the `finances` name. `App_paths` resolves absolute XDG data and
+config overrides with HOME fallbacks. The database defaults to `fin/fin.sqlite3`
+under XDG_DATA_HOME, and account configuration to `fin/accounts.json` under
+XDG_CONFIG_HOME. Invalid relative overrides are ignored. With HOME unavailable,
+the CLI falls back to the user's passwd home directory.
+
+Commands take an optional `--database/-d` rather than a positional database.
+`accounts apply` accepts an optional config filename, defaulting to the XDG config.
+`accounts export --output FILE` atomically writes a private configuration and
+rejects output paths referring to its own database. Missing database parents are
+created with private permissions; library callers still pass explicit database
+paths. `fin paths` reports defaults without opening the database. Statement inboxes
+remain caller-selected, and sync does not silently apply a config file.

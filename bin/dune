@@ -1,6 +1,14 @@
 (executable
  (name main)
- (public_name finances)
- (libraries finances finances.hledger finances.bank core cmdliner yojson)
+ (public_name fin)
+ (libraries
+  finances
+  finances.hledger
+  finances.bank
+  core
+  core_unix
+  core_unix.filename_unix
+  cmdliner
+  yojson)
  (preprocess
   (pps ppx_jane)))

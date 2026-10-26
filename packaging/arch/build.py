@@ -19,6 +19,8 @@ def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--switch', help='Prepared opam switch to use')
     parser.add_argument('--output', type=Path, default=root / 'dist' / 'arch')
+    parser.add_argument('--prepare-only', action='store_true',
+                        help='Generate the native payload and PKGBUILD without building a package')
     parser.add_argument('--scratch-root', type=Path,
                         default=Path.home() / '.cache' / 'finances' / 'build')
     args = parser.parse_args()
@@ -31,6 +33,8 @@ def main():
     scratch_root.mkdir(parents=True, exist_ok=True)
     version = re.search(r'\(version\s+([a-zA-Z0-9.+_]+)\)',
                         (root / 'dune-project').read_text()).group(1)
+    recipe_template = (root / 'packaging' / 'arch' / 'PKGBUILD.in').read_text()
+    pkgrel = re.search(r'^pkgrel=([0-9]+)$', recipe_template, re.M).group(1)
     arch = platform.machine()
     if arch != 'x86_64':
         parser.error('this Arch recipe currently targets x86_64')
@@ -57,7 +61,7 @@ def main():
             raise RuntimeError('CLI and dune-project versions disagree')
         payload = work / f'finances-{version}'
         payload.mkdir()
-        shutil.copy2(executable, payload / 'finances')
+        shutil.copy2(executable, payload / 'fin')
         # Explicit public-only allowlist: never archive the checkout or personal/.
         for name in ('LICENSE.md', 'README.md'):
             shutil.copy2(root / name, payload / name)
@@ -67,7 +71,7 @@ def main():
         (payload / 'man').mkdir()
         for group in (None, 'accounts', 'bank', 'transfers', 'journal', 'db'):
             command = [str(executable)] + ([group] if group else []) + ['--help=groff']
-            name = 'finances' + (f'-{group}' if group else '')
+            name = 'fin' + (f'-{group}' if group else '')
             (payload / 'man' / f'{name}.1').write_text(
                 run(command, capture_output=True, text=True).stdout)
         revision = run(['git', 'rev-parse', 'HEAD'], capture_output=True,
@@ -82,7 +86,7 @@ def main():
         with tarfile.open(archive, 'w:gz') as tar:
             tar.add(payload, arcname=payload.name)
         digest = hashlib.sha256(archive.read_bytes()).hexdigest()
-        recipe = (root / 'packaging' / 'arch' / 'PKGBUILD.in').read_text()
+        recipe = recipe_template
         recipe = recipe.replace('@VERSION@', version).replace('@ARCH@', arch)
         recipe = recipe.replace('@SHA256@', digest)
         (work / 'PKGBUILD').write_text(recipe)
@@ -93,14 +97,18 @@ def main():
                           f'PKGDEST={shlex.quote(str(output))}\n'
                           f'SRCDEST={shlex.quote(str(work))}\n'
                           f'BUILDDIR={shlex.quote(str(work / "build"))}\n')
-        run(['makepkg', '--config', str(config), '--force', '--cleanbuild',
-             '--noconfirm'], cwd=work)
         shutil.copy2(archive, output / archive_name)
         (output / 'PKGBUILD').write_text(recipe)
         srcinfo = run(['makepkg', '--printsrcinfo'], cwd=work,
                       capture_output=True, text=True).stdout
         (output / '.SRCINFO').write_text(srcinfo)
-        package = output / f'finances-{version}-1-{arch}.pkg.tar.zst'
+        if args.prepare_only:
+            (output / 'SHA256SUMS').write_text(f'{digest}  {archive_name}\n')
+            print(f'PKGBUILD and native payload ready: {output}')
+            return
+        run(['makepkg', '--config', str(config), '--force', '--cleanbuild',
+             '--noconfirm'], cwd=work)
+        package = output / f'finances-{version}-{pkgrel}-{arch}.pkg.tar.zst'
         if not package.exists():
             raise RuntimeError('makepkg did not produce the expected artifact')
         (output / 'SHA256SUMS').write_text(

@@ -3,6 +3,47 @@ open Finances
 open Cmdliner
 open Or_error.Let_syntax
 
+let paths =
+  let home =
+    match Sys.getenv "HOME" with
+    | Some home when not (Filename.is_relative home) -> home
+    | _ -> (Core_unix.Passwd.getbyuid_exn (Core_unix.getuid ())).dir
+  in
+  App_paths.resolve ~home ~getenv:Sys.getenv
+;;
+
+let ensure_database_parent path =
+  Or_error.try_with (fun () ->
+    if not (String.equal path ":memory:")
+    then Core_unix.mkdir_p ~perm:0o700 (Filename.dirname path))
+;;
+
+let with_database path f =
+  let%bind () = ensure_database_parent path in
+  Store.with_open path f
+;;
+
+let write_file path contents =
+  Or_error.try_with (fun () ->
+    Core_unix.mkdir_p ~perm:0o700 (Filename.dirname path);
+    let temporary, channel =
+      Filename_unix.open_temp_file
+        ~in_dir:(Filename.dirname path)
+        ~perm:0o600
+        ".fin-config-"
+        ".json"
+    in
+    Exn.protect
+      ~finally:(fun () ->
+        (try Out_channel.close channel with
+         | _ -> ());
+        if Stdlib.Sys.file_exists temporary then Core_unix.unlink temporary)
+      ~f:(fun () ->
+        Out_channel.output_string channel contents;
+        Out_channel.close channel;
+        Core_unix.rename ~src:temporary ~dst:path))
+;;
+
 let read_file path = Or_error.try_with (fun () -> In_channel.read_all path)
 
 let ingest database venue account kind source_id at path =
@@ -11,7 +52,7 @@ let ingest database venue account kind source_id at path =
   let%bind event =
     Source_event.create ~venue ~account ~kind ~source_id ~occurred_at_ms ~payload
   in
-  Store.with_open database (fun db ->
+  with_database database (fun db ->
     let%bind result = Store.ingest db event in
     let status, id =
       match result with
@@ -23,7 +64,7 @@ let ingest database venue account kind source_id at path =
 ;;
 
 let list_events database =
-  Store.with_open database (fun db ->
+  with_database database (fun db ->
     let%bind events = Store.events db in
     let json =
       `List
@@ -50,9 +91,12 @@ let list_events database =
 
 let database =
   Arg.(
-    required
-    & pos 0 (some string) None
-    & info [] ~docv:"DATABASE" ~doc:"SQLite database path.")
+    value
+    & opt string paths.database
+    & info
+        [ "d"; "database" ]
+        ~docv:"DATABASE"
+        ~doc:"SQLite database (default: XDG data directory; see fin paths).")
 ;;
 
 let required name doc = Arg.(required & opt (some string) None & info [ name ] ~doc)
@@ -71,7 +115,7 @@ let init =
   command
     "init"
     "Initialize the latest experimental database schema."
-    Term.(const (fun path -> Store.with_open path (fun _ -> Ok ())) $ database)
+    Term.(const (fun path -> with_database path (fun _ -> Ok ())) $ database)
 ;;
 
 let events =
@@ -95,14 +139,14 @@ let ingest_cmd =
       $ required "at-ms" "Event timestamp in Unix milliseconds."
       $ Arg.(
           required
-          & pos 1 (some string) None
+          & pos 0 (some string) None
           & info [] ~docv:"PAYLOAD" ~doc:"File containing the unmodified source payload."))
 ;;
 
 let import_ofx database institution path =
   let%bind contents = read_file path in
   let%bind document = Bank_ofx.parse contents in
-  Store.with_open database (fun db ->
+  with_database database (fun db ->
     let%bind report = Store.import_ofx db ~institution document in
     printf
       "statements=%d inserted=%d existing=%d document=%Ld\n"
@@ -120,11 +164,11 @@ let import_ofx_cmd =
     Term.(
       const (fun database path -> import_ofx database "boursobank" path)
       $ database
-      $ Arg.(required & pos 1 (some string) None & info [] ~docv:"OFX_FILE"))
+      $ Arg.(required & pos 0 (some string) None & info [] ~docv:"OFX_FILE"))
 ;;
 
 let project_bank database =
-  Store.with_open database (fun db ->
+  with_database database (fun db ->
     let%bind report = Store.project_bank db in
     printf "inserted=%d existing=%d\n" report.inserted report.existing;
     Ok ())
@@ -138,7 +182,7 @@ let project_bank_cmd =
 ;;
 
 let export_hledger database =
-  Store.with_open database (fun db ->
+  with_database database (fun db ->
     let%bind journal = Finances_hledger.export db in
     Out_channel.output_string stdout journal;
     Ok ())
@@ -162,7 +206,7 @@ let account_info_json (info : Store.bank_account_info) =
 ;;
 
 let list_bank_accounts database =
-  Store.with_open database (fun db ->
+  with_database database (fun db ->
     let%bind accounts = Store.bank_account_info db in
     let json =
       `List
@@ -187,7 +231,7 @@ let list_bank_accounts database =
 ;;
 
 let import_history database limit =
-  Store.with_open database (fun db ->
+  with_database database (fun db ->
     let%bind attempts = Store.bank_import_history ~limit db in
     let optional f value = Option.value_map value ~default:`Null ~f in
     let json =
@@ -226,6 +270,7 @@ let sync_bank database directory institution journal accounts max_mib account_id
   if max_mib < 1 || max_mib > 1024
   then Or_error.error_string "max-file-mib must be between 1 and 1024"
   else (
+    let%bind () = ensure_database_parent database in
     let journal =
       Option.value
         journal
@@ -311,7 +356,7 @@ let sync_bank_cmd =
     Term.(
       const sync_bank
       $ database
-      $ Arg.(required & pos 1 (some string) None & info [] ~docv:"INBOX")
+      $ Arg.(required & pos 0 (some string) None & info [] ~docv:"INBOX")
       $ Arg.(
           value
           & opt string "boursobank"
@@ -341,7 +386,7 @@ let sync_bank_cmd =
 ;;
 
 let csv_enrichments database review =
-  Store.with_open database (fun db ->
+  with_database database (fun db ->
     let%bind observations = Store.bank_csv_observations db in
     let optional f value = Option.value_map value ~default:`Null ~f in
     let string s = `String s in
@@ -414,7 +459,7 @@ let csv_enrichments_cmd =
 ;;
 
 let match_csv database =
-  Store.with_open database (fun db ->
+  with_database database (fun db ->
     let%bind result = Store.match_bank_csv db in
     printf
       "matched=%d unmatched=%d ambiguous=%d conflicts=%d changed=%d\n"
@@ -434,7 +479,7 @@ let match_csv_cmd =
 ;;
 
 let wise_status database =
-  Store.with_open database (fun db ->
+  with_database database (fun db ->
     let%bind statements = Store.wise_reconciliations db in
     let%bind rows = Store.wise_csv_observations db in
     let string s = `String s in
@@ -486,7 +531,7 @@ let wise_status_cmd =
 let categorize_bank database path =
   let%bind contents = read_file path in
   let%bind decisions = Bank_category.of_json contents in
-  Store.with_open database (fun db ->
+  with_database database (fun db ->
     let%bind changed = Store.set_bank_categories db decisions in
     printf "category_changes=%d\n" changed;
     Ok ())
@@ -501,12 +546,12 @@ let categorize_bank_cmd =
       $ database
       $ Arg.(
           required
-          & pos 1 (some string) None
+          & pos 0 (some string) None
           & info [] ~docv:"DECISIONS" ~doc:"JSON decisions: event_id, account, reason."))
 ;;
 
 let bank_review database all =
-  Store.with_open database (fun db ->
+  with_database database (fun db ->
     let%bind rows = Store.bank_review db in
     let rows =
       List.filter rows ~f:(fun r ->
@@ -547,7 +592,7 @@ let bank_review_cmd =
 ;;
 
 let category_history database =
-  Store.with_open database (fun db ->
+  with_database database (fun db ->
     let%bind rows = Store.bank_category_history db in
     let json =
       `List
@@ -575,7 +620,7 @@ let category_history_cmd =
 ;;
 
 let bunq_status database =
-  Store.with_open database (fun db ->
+  with_database database (fun db ->
     let%bind statements = Store.bunq_reconciliations db in
     let%bind rows = Store.bunq_csv_observations db in
     let json =
@@ -635,7 +680,7 @@ let transfer_leg event_id (event : Source_event.t) (tx : Bank_transaction.t) =
 ;;
 
 let transfer_candidates database all =
-  Store.with_open database (fun db ->
+  with_database database (fun db ->
     let%bind rows = Store.transfer_candidates ~include_reviewed:all db in
     let json =
       `List
@@ -677,7 +722,7 @@ let transfer_candidates_cmd =
 let review_transfers database path =
   let%bind contents = read_file path in
   let%bind decisions = Bank_transfer.of_json contents in
-  Store.with_open database (fun db ->
+  with_database database (fun db ->
     let%bind changed = Store.set_bank_transfers db decisions in
     printf "transfer_changes=%d\n" changed;
     Ok ())
@@ -693,12 +738,12 @@ let review_transfers_cmd =
       $ database
       $ Arg.(
           required
-          & pos 1 (some string) None
+          & pos 0 (some string) None
           & info [] ~docv:"DECISIONS" ~doc:"JSON transfer review decisions."))
 ;;
 
 let transfer_history database =
-  Store.with_open database (fun db ->
+  with_database database (fun db ->
     let%bind rows = Store.bank_transfer_history db in
     let json =
       `List
@@ -727,7 +772,7 @@ let transfer_history_cmd =
 ;;
 
 let transfer_preview database =
-  Store.with_open database (fun db ->
+  with_database database (fun db ->
     let%bind candidates = Store.transfer_candidates db in
     let%bind all_candidates = Store.transfer_candidates ~include_reviewed:true db in
     let%bind ranked = Transfer_ranking.analyze candidates in
@@ -809,11 +854,29 @@ let transfer_preview_cmd =
     Term.(const transfer_preview $ database)
 ;;
 
-let accounts_export database =
-  Store.with_open database (fun db ->
+let accounts_export database output =
+  with_database database (fun db ->
+    let%bind () =
+      match output with
+      | None -> Ok ()
+      | Some output ->
+        let same =
+          Or_error.try_with (fun () ->
+            let a = Core_unix.stat database
+            and b = Core_unix.stat output in
+            a.st_dev = b.st_dev && a.st_ino = b.st_ino)
+        in
+        if Result.ok same |> Option.value ~default:false
+        then Or_error.error_string "configuration output must not overwrite the database"
+        else Ok ()
+    in
     let%bind config = Store.export_bank_accounts db in
-    print_endline (Bank_account_config.to_json config);
-    Ok ())
+    let contents = Bank_account_config.to_json config ^ "\n" in
+    match output with
+    | None ->
+      print_string contents;
+      Ok ()
+    | Some path -> write_file path contents)
 ;;
 
 let account_change_json (r : Store.account_change) =
@@ -837,7 +900,7 @@ let account_change_json (r : Store.account_change) =
 let accounts_apply database path dry_run =
   let%bind contents = read_file path in
   let%bind config = Bank_account_config.of_json contents in
-  Store.with_open database (fun db ->
+  with_database database (fun db ->
     let%bind result = Store.apply_bank_accounts ~dry_run db config in
     print_endline
       (Yojson.Safe.pretty_to_string
@@ -852,7 +915,7 @@ let accounts_apply database path dry_run =
 ;;
 
 let accounts_history database =
-  Store.with_open database (fun db ->
+  with_database database (fun db ->
     let%bind rows = Store.bank_account_history db in
     print_endline
       (Yojson.Safe.pretty_to_string (`List (List.map rows ~f:account_change_json)));
@@ -871,14 +934,32 @@ let accounts_cmd =
     ; command
         "export"
         "Export version 1 account configuration for editing."
-        Term.(const accounts_export $ database)
+        Term.(
+          const accounts_export
+          $ database
+          $ Arg.(
+              value
+              & opt (some string) None
+              & info
+                  [ "o"; "output" ]
+                  ~docv:"FILE"
+                  ~doc:
+                    "Write configuration atomically to FILE instead of standard output."))
     ; command
         "apply"
         "Apply the whole account configuration atomically, or preview it with --dry-run."
         Term.(
           const accounts_apply
           $ database
-          $ Arg.(required & pos 1 (some string) None & info [] ~docv:"CONFIG")
+          $ Arg.(
+              value
+              & pos 0 string paths.accounts_config
+              & info
+                  []
+                  ~docv:"CONFIG"
+                  ~doc:
+                    "Account configuration (default: XDG config directory; see fin \
+                     paths).")
           $ Arg.(
               value
               & flag
@@ -894,6 +975,24 @@ let accounts_cmd =
     ]
 ;;
 
+let paths_cmd =
+  command
+    "paths"
+    "Display resolved XDG data and configuration locations."
+    Term.(
+      const (fun () ->
+        print_endline
+          (Yojson.Safe.pretty_to_string
+             (`Assoc
+                 [ "data_dir", `String paths.data_dir
+                 ; "config_dir", `String paths.config_dir
+                 ; "database", `String paths.database
+                 ; "accounts_config", `String paths.accounts_config
+                 ]));
+        Ok ())
+      $ const ())
+;;
+
 let group name doc commands = Cmd.group (Cmd.info name ~doc) commands
 
 let () =
@@ -901,10 +1000,11 @@ let () =
     (Cmd.eval
        (Cmd.group
           (Cmd.info
-             "finances"
+             "fin"
              ~version:"0.1.0"
              ~doc:"Personal finance accounting and position tracking.")
-          [ accounts_cmd
+          [ paths_cmd
+          ; accounts_cmd
           ; group
               "db"
               "Initialize and inspect local source evidence."

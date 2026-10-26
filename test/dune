@@ -153,3 +153,8 @@
   alcotest
   rel
   rel.sqlite3))
+
+(test
+ (name paths_test)
+ (modules paths_test)
+ (libraries finances core alcotest))
