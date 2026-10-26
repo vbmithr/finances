@@ -434,7 +434,7 @@ let migration_v2 () =
         0
         (List.length (ok (Store.bank_import_history db))));
     raw (database root) (fun db ->
-      Alcotest.(check int) "version 8" 8 (scalar db "PRAGMA user_version")))
+      Alcotest.(check int) "version 10" 10 (scalar db "PRAGMA user_version")))
 ;;
 
 let failed_migration_v2 () =

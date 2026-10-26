@@ -515,3 +515,66 @@ BEGIN SELECT RAISE(ABORT, 'Transfer history is append-only'); END;
 PRAGMA user_version=8;
 |}
 ;;
+
+let upgrade_v8 =
+  {|
+CREATE TABLE bank_account_identities (
+  institution TEXT NOT NULL,
+  source_account TEXT NOT NULL,
+  iban TEXT NOT NULL,
+  PRIMARY KEY(institution,source_account)
+) STRICT;
+CREATE TABLE bank_account_identity_changes (
+  id INTEGER PRIMARY KEY,
+  institution TEXT NOT NULL,
+  source_account TEXT NOT NULL,
+  previous_iban TEXT,
+  iban TEXT NOT NULL,
+  changed_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now'))
+) STRICT;
+CREATE TRIGGER bank_account_identity_changes_no_update BEFORE UPDATE ON bank_account_identity_changes
+BEGIN SELECT RAISE(ABORT, 'Account identity history is append-only'); END;
+CREATE TRIGGER bank_account_identity_changes_no_delete BEFORE DELETE ON bank_account_identity_changes
+BEGIN SELECT RAISE(ABORT, 'Account identity history is append-only'); END;
+PRAGMA user_version=9;
+|}
+;;
+
+let upgrade_v9 =
+  {|
+CREATE TABLE bank_account_identity_changes_v10 (
+  id INTEGER PRIMARY KEY,
+  institution TEXT NOT NULL,
+  source_account TEXT NOT NULL,
+  previous_iban TEXT,
+  iban TEXT,
+  changed_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now'))
+) STRICT;
+INSERT INTO bank_account_identity_changes_v10 SELECT * FROM bank_account_identity_changes;
+DROP TABLE bank_account_identity_changes;
+ALTER TABLE bank_account_identity_changes_v10 RENAME TO bank_account_identity_changes;
+CREATE TRIGGER bank_account_identity_changes_no_update BEFORE UPDATE ON bank_account_identity_changes
+BEGIN SELECT RAISE(ABORT, 'Account identity history is append-only'); END;
+CREATE TRIGGER bank_account_identity_changes_no_delete BEFORE DELETE ON bank_account_identity_changes
+BEGIN SELECT RAISE(ABORT, 'Account identity history is append-only'); END;
+CREATE TABLE bank_account_settlements (
+  institution TEXT NOT NULL,
+  source_account TEXT NOT NULL,
+  settlement_account TEXT NOT NULL,
+  PRIMARY KEY(institution,source_account)
+) STRICT;
+CREATE TABLE bank_account_settlement_changes (
+  id INTEGER PRIMARY KEY,
+  institution TEXT NOT NULL,
+  source_account TEXT NOT NULL,
+  previous_settlement TEXT,
+  settlement_account TEXT,
+  changed_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now'))
+) STRICT;
+CREATE TRIGGER bank_account_settlement_changes_no_update BEFORE UPDATE ON bank_account_settlement_changes
+BEGIN SELECT RAISE(ABORT, 'Account settlement history is append-only'); END;
+CREATE TRIGGER bank_account_settlement_changes_no_delete BEFORE DELETE ON bank_account_settlement_changes
+BEGIN SELECT RAISE(ABORT, 'Account settlement history is append-only'); END;
+PRAGMA user_version=10;
+|}
+;;

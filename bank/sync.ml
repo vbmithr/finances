@@ -4,6 +4,8 @@ open Finances
 type report =
   { inbox : Inbox.report
   ; mapping_changes : int
+  ; identity_changes : int
+  ; settlement_changes : int
   ; projection : Store.projection_report
   ; csv : Store.csv_report
   ; bunq_csv : Finances.Store.csv_report
@@ -96,12 +98,12 @@ let run
        | _ -> ());
       database, directory, journal, accounts)
   in
-  let%bind mappings =
+  let%bind account_config =
     match accounts with
     | None -> Ok []
     | Some path ->
       let%bind contents = Or_error.try_with (fun () -> In_channel.read_all path) in
-      Bank_account_mapping.of_json contents
+      Bank_account_config.of_json contents
   in
   Store.with_open database (fun db ->
     let%bind () =
@@ -119,12 +121,24 @@ let run
         ~institution
         ~directory
     in
-    let%bind mapping_changes = Store.set_bank_account_mappings db mappings in
+    let%bind account_changes = Store.apply_bank_accounts db account_config in
+    let mapping_changes = account_changes.mapping_changes
+    and identity_changes = account_changes.identity_changes
+    and settlement_changes = account_changes.settlement_changes in
     let%bind csv = Store.match_bank_csv db in
     let%bind wise_csv = Store.match_wise_csv db in
     let%bind bunq_csv = Store.match_bunq_csv db in
     let%bind projection = Store.project_bank db in
     let%bind contents = Finances_hledger.export db in
     let%map () = write_journal ~path:journal contents in
-    { inbox; mapping_changes; projection; csv; wise_csv; bunq_csv; journal })
+    { inbox
+    ; mapping_changes
+    ; identity_changes
+    ; settlement_changes
+    ; projection
+    ; csv
+    ; wise_csv
+    ; bunq_csv
+    ; journal
+    })
 ;;

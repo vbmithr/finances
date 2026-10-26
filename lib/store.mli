@@ -205,9 +205,56 @@ type transfer_candidate =
   ; state : Bank_transfer.state option
   ; reason : string option
   ; unique : bool
+  ; iban_compatible : bool
+  ; iban_match : bool
+  ; iban_evidence : string list
   }
 
 val transfer_candidates
   :  ?include_reviewed:bool
   -> t
   -> transfer_candidate list Or_error.t
+
+type bank_account_info =
+  { mapping : Bank_account_mapping.t
+  ; iban : string option
+  ; iban_source : string
+  ; currency : string
+  ; movements : int
+  ; first_on : Date.t
+  ; last_on : Date.t
+  ; settlement_account : Bank_account_config.reference option
+  }
+
+val bank_account_info : t -> bank_account_info list Or_error.t
+
+(** Audited registration; rejects contradictions with imported identifiers or
+    confirmed transfers. Null template rows are ignored by Account_identity. *)
+val set_bank_account_identities : t -> Account_identity.t list -> int Or_error.t
+
+type account_change =
+  { id : int64
+  ; kind : string
+  ; institution : string
+  ; source_account : string
+  ; previous_value : string option
+  ; value : string option
+  ; changed_at : string
+  }
+
+type account_config_report =
+  { mapping_changes : int
+  ; identity_changes : int
+  ; settlement_changes : int
+  ; changes : account_change list
+  }
+
+val export_bank_accounts : t -> Bank_account_config.t list Or_error.t
+
+val apply_bank_accounts
+  :  ?dry_run:bool
+  -> t
+  -> Bank_account_config.t list
+  -> account_config_report Or_error.t
+
+val bank_account_history : t -> account_change list Or_error.t

@@ -3,6 +3,8 @@ open Core
 type report =
   { inbox : Inbox.report
   ; mapping_changes : int
+  ; identity_changes : int
+  ; settlement_changes : int
   ; projection : Finances.Store.projection_report
   ; csv : Finances.Store.csv_report
   ; bunq_csv : Finances.Store.csv_report

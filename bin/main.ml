@@ -157,18 +157,96 @@ let export_hledger_cmd =
     Term.(const export_hledger $ database)
 ;;
 
-let list_bank_accounts database =
+let account_info_json (info : Store.bank_account_info) =
+  let a = info.mapping in
+  [ "institution", `String a.institution
+  ; "bank_id", `String a.bank_id
+  ; "account_id", `String a.account_id
+  ; "account_type", `String a.account_type
+  ; "iban", Option.value_map info.iban ~default:`Null ~f:(fun s -> `String s)
+  ]
+;;
+
+let list_bank_accounts database details =
   Store.with_open database (fun db ->
-    let%bind accounts = Store.bank_accounts db in
-    Out_channel.print_endline (Bank_account_mapping.to_json accounts);
-    Ok ())
+    if not details
+    then (
+      let%bind accounts = Store.bank_accounts db in
+      print_endline (Bank_account_mapping.to_json accounts);
+      Ok ())
+    else (
+      let%bind accounts = Store.bank_account_info db in
+      let json =
+        `List
+          (List.map accounts ~f:(fun info ->
+             `Assoc
+               (account_info_json info
+                @ [ "iban_source", `String info.Store.iban_source
+                  ; "ledger_account", `String info.mapping.ledger_account
+                  ; "currency", `String info.currency
+                  ; "movements", `Int info.movements
+                  ; "first_on", `String (Date.to_string info.first_on)
+                  ; "last_on", `String (Date.to_string info.last_on)
+                  ; ( "settlement_account"
+                    , Option.value_map
+                        info.settlement_account
+                        ~default:`Null
+                        ~f:Bank_account_config.reference_to_json )
+                  ])))
+      in
+      print_endline (Yojson.Safe.pretty_to_string json);
+      Ok ()))
 ;;
 
 let bank_accounts_cmd =
   command
     "bank-accounts"
-    "List source bank accounts and current ledger names as mapping JSON."
-    Term.(const list_bank_accounts $ database)
+    "List source accounts and ledger names; --details includes IBAN provenance and \
+     record coverage."
+    Term.(
+      const list_bank_accounts
+      $ database
+      $ Arg.(
+          value
+          & flag
+          & info
+              [ "details" ]
+              ~doc:"Include IBAN, its source, currency and imported record coverage."))
+;;
+
+let bank_identities database =
+  Store.with_open database (fun db ->
+    let%bind rows = Store.bank_account_info db in
+    print_endline
+      (Yojson.Safe.pretty_to_string
+         (`List (List.map rows ~f:(fun r -> `Assoc (account_info_json r)))));
+    Ok ())
+;;
+
+let bank_identities_cmd =
+  command
+    "bank-identities"
+    "Export an editable IBAN identity template; null means missing or not applicable."
+    Term.(const bank_identities $ database)
+;;
+
+let map_bank_identities database path =
+  let%bind contents = read_file path in
+  let%bind identities = Account_identity.of_json contents in
+  Store.with_open database (fun db ->
+    let%bind changed = Store.set_bank_account_identities db identities in
+    printf "identity_changes=%d\n" changed;
+    Ok ())
+;;
+
+let map_bank_identities_cmd =
+  command
+    "map-bank-identities"
+    "Persist and audit IBAN identities from a private JSON file."
+    Term.(
+      const map_bank_identities
+      $ database
+      $ Arg.(required & pos 1 (some string) None & info [] ~docv:"IDENTITIES"))
 ;;
 
 let map_bank_accounts database path =
@@ -274,6 +352,10 @@ let sync_bank database directory institution journal accounts max_mib account_id
       report.projection.existing
       report.journal;
     printf
+      "identity_changes=%d settlement_changes=%d\n"
+      report.identity_changes
+      report.settlement_changes;
+    printf
       "csv_matched=%d csv_unmatched=%d csv_ambiguous=%d csv_conflicts=%d csv_changes=%d\n"
       report.csv.matched
       report.csv.unmatched
@@ -325,7 +407,9 @@ let sync_bank_cmd =
       $ Arg.(
           value
           & opt (some string) None
-          & info [ "accounts" ] ~doc:"Optional account mapping JSON input.")
+          & info
+              [ "accounts" ]
+              ~doc:"Versioned account configuration or legacy ledger mapping JSON input.")
       $ Arg.(
           value
           & opt int 64
@@ -645,6 +729,9 @@ let transfer_candidates database all =
              ; "second", transfer_leg r.second_event_id r.second r.second_transaction
              ; "days_apart", `Int r.days_apart
              ; "unique_both_directions", `Bool r.unique
+             ; "iban_compatible", `Bool r.iban_compatible
+             ; "iban_match", `Bool r.iban_match
+             ; "iban_evidence", `List (List.map r.iban_evidence ~f:(fun s -> `String s))
              ; ( "state"
                , Option.value_map r.state ~default:(`String "unreviewed") ~f:(fun s ->
                    `String (Bank_transfer.state_name s)) )
@@ -723,18 +810,189 @@ let transfer_history_cmd =
     Term.(const transfer_history $ database)
 ;;
 
+let transfer_preview database =
+  Store.with_open database (fun db ->
+    let%bind candidates = Store.transfer_candidates db in
+    let%bind all_candidates = Store.transfer_candidates ~include_reviewed:true db in
+    let%bind ranked = Transfer_ranking.analyze candidates in
+    let id x = `Intlit (Int64.to_string x) in
+    let optional_int = Option.value_map ~default:`Null ~f:(fun x -> `Int x) in
+    let json =
+      `Assoc
+        [ "policy", `String Transfer_ranking.policy
+        ; ( "notice"
+          , `String
+              "Heuristic evidence, not calibrated probabilities. Conditional on imported \
+               records, registered identities and the seven-day candidate policy. Review \
+               is required; nothing is confirmed automatically." )
+        ; "component_vertex_limit", `Int Transfer_ranking.max_component_vertices
+        ; ( "excluded_pairs"
+          , `List
+              (List.filter_map all_candidates ~f:(fun c ->
+                 if c.Store.iban_compatible
+                 then None
+                 else
+                   Some
+                     (`Assoc
+                         [ "first_event_id", id c.first_event_id
+                         ; "second_event_id", id c.second_event_id
+                         ; ( "reasons"
+                           , `List (List.map c.iban_evidence ~f:(fun s -> `String s)) )
+                         ]))) )
+        ; ( "proposed_pairs"
+          , `List
+              (List.filter_map ranked ~f:(fun r ->
+                 if String.equal r.Transfer_ranking.assignment.status "supported"
+                 then
+                   Some
+                     (`Assoc
+                         [ "first_event_id", id r.candidate.first_event_id
+                         ; "second_event_id", id r.candidate.second_event_id
+                         ; "confidence", `String r.confidence
+                         ; "review_required", `Bool true
+                         ])
+                 else None)) )
+        ; ( "candidates"
+          , `List
+              (List.map ranked ~f:(fun r ->
+                 let c = r.Transfer_ranking.candidate in
+                 `Assoc
+                   [ "first", transfer_leg c.first_event_id c.first c.first_transaction
+                   ; ( "second"
+                     , transfer_leg c.second_event_id c.second c.second_transaction )
+                   ; "score", `Int r.score
+                   ; "confidence", `String r.confidence
+                   ; "iban_match", `Bool c.iban_match
+                   ; ( "evidence"
+                     , `List
+                         (List.map r.evidence ~f:(fun e ->
+                            `Assoc
+                              [ "code", `String e.Transfer_ranking.code
+                              ; "points", `Int e.points
+                              ; "detail", `String e.detail
+                              ])) )
+                   ; ( "iban_evidence"
+                     , `List (List.map c.iban_evidence ~f:(fun s -> `String s)) )
+                   ; "component", `Int r.assignment.component
+                   ; "assignment_status", `String r.assignment.status
+                   ; "component_best_score", optional_int r.assignment.best_score
+                   ; "exclusion_margin", optional_int r.assignment.exclusion_margin
+                   ; "inclusion_penalty", optional_int r.assignment.inclusion_penalty
+                   ])) )
+        ]
+    in
+    print_endline (Yojson.Safe.pretty_to_string json);
+    Ok ())
+;;
+
+let transfer_preview_cmd =
+  command
+    "transfer-preview"
+    "Rank compatible transfer candidates and preview globally consistent pairs; scores \
+     are not probabilities."
+    Term.(const transfer_preview $ database)
+;;
+
+let accounts_export database =
+  Store.with_open database (fun db ->
+    let%bind config = Store.export_bank_accounts db in
+    print_endline (Bank_account_config.to_json config);
+    Ok ())
+;;
+
+let account_change_json (r : Store.account_change) =
+  let value =
+    Option.value_map ~default:`Null ~f:(fun text ->
+      if String.equal r.kind "settlement_account"
+      then Yojson.Safe.from_string text
+      else `String text)
+  in
+  `Assoc
+    [ "id", `Intlit (Int64.to_string r.id)
+    ; "kind", `String r.kind
+    ; "institution", `String r.institution
+    ; "source_account", `String r.source_account
+    ; "previous_value", value r.previous_value
+    ; "value", value r.value
+    ; "changed_at", `String r.changed_at
+    ]
+;;
+
+let accounts_apply database path dry_run =
+  let%bind contents = read_file path in
+  let%bind config = Bank_account_config.of_json contents in
+  Store.with_open database (fun db ->
+    let%bind result = Store.apply_bank_accounts ~dry_run db config in
+    print_endline
+      (Yojson.Safe.pretty_to_string
+         (`Assoc
+             [ "dry_run", `Bool dry_run
+             ; "mapping_changes", `Int result.mapping_changes
+             ; "identity_changes", `Int result.identity_changes
+             ; "settlement_changes", `Int result.settlement_changes
+             ; "changes", `List (List.map result.changes ~f:account_change_json)
+             ]));
+    Ok ())
+;;
+
+let accounts_history database =
+  Store.with_open database (fun db ->
+    let%bind rows = Store.bank_account_history db in
+    print_endline
+      (Yojson.Safe.pretty_to_string (`List (List.map rows ~f:account_change_json)));
+    Ok ())
+;;
+
+let accounts_cmd =
+  Cmd.group
+    (Cmd.info
+       "accounts"
+       ~doc:"Manage discovered bank accounts through SQLite and versioned configuration.")
+    [ command
+        "list"
+        "List account details, IBAN provenance, coverage and card settlement links."
+        Term.(const (fun db -> list_bank_accounts db true) $ database)
+    ; command
+        "export"
+        "Export version 1 account configuration for editing."
+        Term.(const accounts_export $ database)
+    ; command
+        "apply"
+        "Apply the whole account configuration atomically, or preview it with --dry-run."
+        Term.(
+          const accounts_apply
+          $ database
+          $ Arg.(required & pos 1 (some string) None & info [] ~docv:"CONFIG")
+          $ Arg.(
+              value
+              & flag
+              & info
+                  [ "dry-run" ]
+                  ~doc:
+                    "Validate and report changes without committing updates or audit \
+                     rows."))
+    ; command
+        "history"
+        "Inspect audited ledger name, IBAN and settlement relationship changes."
+        Term.(const accounts_history $ database)
+    ]
+;;
+
 let () =
   exit
     (Cmd.eval
        (Cmd.group
           (Cmd.info "finances" ~doc:"Personal finance accounting and position tracking.")
-          [ init
+          [ accounts_cmd
+          ; init
           ; ingest_cmd
           ; events
           ; import_ofx_cmd
           ; project_bank_cmd
           ; export_hledger_cmd
           ; bank_accounts_cmd
+          ; bank_identities_cmd
+          ; map_bank_identities_cmd
           ; map_bank_accounts_cmd
           ; import_history_cmd
           ; sync_bank_cmd
@@ -746,6 +1004,7 @@ let () =
           ; bank_review_cmd
           ; category_history_cmd
           ; transfer_candidates_cmd
+          ; transfer_preview_cmd
           ; review_transfers_cmd
           ; transfer_history_cmd
           ]))

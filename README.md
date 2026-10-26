@@ -145,7 +145,7 @@ to a transaction's canonical XML cause a conflict. CSV enrichment is described b
 `Source_event.occurrence` distinguishes `At_ms` from `On_date`. The `events` command
 prints `occurred_at_ms: null` and a populated `occurred_on` for OFX records.
 Wise records retain an instant and project using the local booking date.
-Opening a schema version 1 through 7 database migrates it atomically to version 8,
+Opening a schema version 1 through 9 database migrates it atomically to version 10,
 preserving source IDs, evidence, journal entries, and exact posting quantities.
 The bank test fixture is synthetic; personal exports are not test fixtures.
 
@@ -273,6 +273,79 @@ all accounting work succeeds; mapping,
 projection, or output failures leave the old journal intact. Previously accepted
 source files remain in SQLite for retry. The staging directory is TMPDIR (or the
 journal directory when unset) and must share the journal's filesystem.
+
+## Manage bank accounts
+
+SQLite is authoritative for account names, registered IBANs, and card settlement
+relationships. Configure accounts already discovered from imported statements:
+
+```sh
+finances accounts list personal/finances.sqlite3
+finances accounts export personal/finances.sqlite3 > personal/config/bank-accounts.json
+# Edit the exported file, then preview and apply:
+finances accounts apply personal/finances.sqlite3 personal/config/bank-accounts.json --dry-run
+finances accounts apply personal/finances.sqlite3 personal/config/bank-accounts.json
+finances accounts history personal/finances.sqlite3
+```
+
+`list` returns JSON with source identifiers, ledger account, IBAN and its provenance,
+currency, movement count, first/last imported movement dates, and settlement links.
+These dates describe observed records, not proof of complete statement coverage.
+IBAN provenance is `imported`, `registered`, `missing`, or `not_applicable` for a
+credit-card account. `bank-accounts --details` offers the same detailed view;
+`bank-accounts` without flags retains its original ledger-mapping output.
+
+The canonical private configuration has a version and an accounts array. This
+example is illustrative; keep the source identifiers from your actual export:
+
+```json
+{
+  "version": 1,
+  "accounts": [
+    {
+      "institution": "example-bank",
+      "bank_id": "EXAMPLE",
+      "account_id": "current",
+      "account_type": "CHECKING",
+      "ledger_account": "assets:bank:daily",
+      "iban": "FR1420041010050500013M02606",
+      "settlement_account": null
+    }
+  ]
+}
+```
+
+The four source identity fields are immutable selectors; changing them does not
+rename or merge a source account. `ledger_account` changes its display/accounting
+name after verifying existing projections. `iban` supplies an account identifier
+missing from exports; spaces and case are normalized and check digits validated.
+An IBAN already present as a source identifier cannot be replaced or cleared.
+IBAN registration does not change movement IDs or historical source evidence.
+
+For a credit card, leave `iban` null and set `settlement_account` to the associated
+bank account's reference: an object with `institution`, `bank_id`, `account_id`,
+and `account_type`. Settlement targets must be known non-card accounts in the same
+currency. This is an informational relationship: it does not copy the parent's IBAN
+onto the card, create postings, or infer deferred-debit settlement transfers.
+
+Omitted accounts and optional properties keep their current settings. In version 1
+configuration, `iban: null` clears a manually registered IBAN and
+`settlement_account: null` removes a link. Clearing and updates are audited.
+`--dry-run` returns the planned changes and counts without persisting data or audit
+rows. A failure anywhere rolls back all account edits and posting renames together.
+Identity edits that contradict confirmed transfers are rejected for review first.
+
+The file is an input, not a second database or watched source of truth. Re-export
+from SQLite when creating a fresh editable snapshot. Keep it under ignored
+`personal/`. To apply this same configuration during folder sync, use
+`--accounts personal/config/bank-accounts.json`; source imports happen first, then
+the account configuration applies atomically before projection and journal output.
+Import every referenced source account before applying a complete multi-bank file.
+
+Legacy mapping arrays remain supported by `--accounts` and `accounts apply`.
+Existing `map-bank-accounts`, `bank-identities` and `map-bank-identities` commands
+remain available; the legacy identity-only template treats null as an unfilled
+placeholder. Use the versioned account configuration for new workflows.
 
 ## Review and categorize bank movements
 
@@ -503,6 +576,55 @@ existing projections. Account remapping, sync and reimports preserve decisions.
 Default candidate output hides reviewed pairs and movements already confirmed
 elsewhere; `--all` includes them for inspection. FX, splits and delayed transfers
 outside the seven-day window need a future explicit policy.
+
+## Transfer evidence and assignment preview
+
+```sh
+finances transfer-preview personal/finances.sqlite3 > personal/reports/transfer-preview.json
+finances transfer-candidates personal/finances.sqlite3 --all
+```
+
+Structured counterparty IBAN evidence currently comes from Bunq. It is compared
+with imported account IBANs and registered identities. A counterparty IBAN belonging
+to another known account, or differing from the proposed counterpart's IBAN, rules
+out that pair. Such contradictions are excluded from default candidates, retained
+with reasons under `--all`, and block confirmation. The preview lists excluded
+pairs separately. Missing identity data is unknown evidence, not a contradiction.
+
+The versioned `transfer-evidence-v1` score is an explainable heuristic, not a
+calibrated probability or percentage. Its additive points are:
+
+| Evidence | Points |
+| --- | ---: |
+| Exact opposite principal and currency | 30 |
+| Same booking day | 35 |
+| One day apart | 20 |
+| Two or more days apart | max(0, 16 − 3 × days) |
+| Matching structured counterparty/account IBAN | 80 |
+| No competing compatible counterpart | 10 |
+| Explicit mention of the other bank | 8 |
+| Shared explicit reference token in descriptions | 50 |
+
+Same-day booking has strong weight; an IBAN contradiction always takes precedence.
+No ownership is inferred from a name. Candidate generation still requires exact
+principal/currency and the seven-day booking window. Estimates are conditional on
+the imported records, available identities and this policy; missing records can
+change the conclusion.
+
+The preview solves maximum-weight one-to-one matching for each connected candidate
+component, allowing movements to remain unmatched. `supported` means the edge is
+in every highest-scoring assignment; `alternative` means equally good assignments
+can choose different counterparts; `not_preferred` has a lower best possible total.
+`exclusion_margin` is how much the best total falls if a pair is forbidden, and
+`inclusion_penalty` is the loss if the pair is required. Equal optima remain
+ambiguous, without tie-breaking by row order. Components larger than 18 movements
+are explicitly `not_evaluated` and yield no proposed confirmations.
+
+Supported pairs score `high` when score ≥65 and exclusion margin ≥15, with same-day,
+IBAN or shared-reference support; other supported pairs are `medium`. Alternatives
+and unevaluated pairs remain `ambiguous`. The proposed pairs are a preview requiring
+review, never automatic confirmations. Use the existing `review-transfers` workflow
+after checking identities and evidence.
 
 ## Optional CSV enrichment
 

@@ -251,7 +251,7 @@ VALUES(9,0,'assets:cash','EUR','0.1234567890123456789'),
            (List.hd_exn entry.postings).quantity
            (Bigdecimal.of_string "0.1234567890123456789")));
     with_raw path (fun db ->
-      Alcotest.(check int) "version advanced" 8 (scalar db "PRAGMA user_version");
+      Alcotest.(check int) "version advanced" 10 (scalar db "PRAGMA user_version");
       let check =
         Rel_sql.Stmt.v
           "PRAGMA foreign_key_check"

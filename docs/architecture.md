@@ -63,7 +63,7 @@ not yet calculate average entry price from fills or model inverse contracts.
 
 `Store` uses Rel's typed statement bindings and SQLite backend. SQL parameters are
 bound rather than interpolated. `Db_schema` defines versioned SQL migrations.
-Schema version 8 contains source events, journal entries, postings, immutable
+Schema version 10 contains source events, journal entries, postings, immutable
 import documents, document/event links, append-only bank import attempts, persisted
 bank account mappings, an append-only mapping change log, immutable CSV rows,
 derived CSV matches, and append-only match change history. Decimal posting
@@ -369,3 +369,44 @@ Effective counter-account resolution checks confirmed transfer membership before
 manual categories. Projection, account remapping and bank review all use that view.
 Journal generation includes active pair/reason tags. The immutable evidence and
 stable projection identity are preserved; no transfer duplicates a bank movement.
+
+## Account identity and configuration
+
+Schema 9 adds per-source-account IBAN aliases and append-only change history.
+Source identifiers remain unchanged: a Revolut label or domestic account number
+can have a registered IBAN without reidentifying movements. Source identifiers
+that are themselves valid IBANs provide imported evidence. Card accounts have no
+IBAN; their relationship to a bank account is modeled separately.
+
+Schema 10 makes identity history support explicit clearing and adds card settlement
+metadata and its audit history. `Bank_account_config` defines a version 1 format
+with source references, optional ledger names, IBAN updates and settlement links.
+Omitted properties retain state; explicit null clears optional curated metadata.
+Imported IBANs cannot be changed. Settlement links connect a card source account
+to a known non-card account in the same currency and never create accounting entries.
+
+`accounts export/list/apply/history` exposes this single workflow. Applying a
+configuration validates source references, composes ledger/identity/relationship
+mutations inside one transaction, and checks existing projections and confirmed
+transfers. A dry run uses a savepoint and rolls back every update and audit row,
+while returning concrete planned changes. Sync accepts the same versioned file
+through `--accounts`, alongside legacy mapping arrays. SQLite remains authoritative;
+configuration is an optional explicit input. Legacy identity commands are retained.
+
+## Explainable transfer ranking
+
+Structured Bunq counterparty IBANs are compared with inferred or registered own
+account IBANs. Contradictory pairs are diagnostic-only and cannot be confirmed.
+Identity updates that contradict existing confirmations roll back atomically.
+Known identities can exclude false counterparts even when their actual matching
+movements are outside the imported date range.
+
+`Transfer_ranking` scores compatible, unreviewed candidates using the documented
+versioned evidence policy. Same-day booking is strongly weighted, while identity
+contradictions are hard exclusions. Numeric scores are not calibrated probabilities.
+The graph solver computes exact maximum-weight matchings with unmatched vertices
+allowed, independently per connected component. Edge inclusion/exclusion solves
+identify forced edges, equal alternatives and score margins without arbitrary tie
+breaking. Components above 18 vertices remain unevaluated. `transfer-preview`
+returns evidence, confidence bands, assignment diagnostics, excluded pairs and
+review-required proposals; it never mutates transfer decisions or journal entries.

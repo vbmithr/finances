@@ -196,7 +196,7 @@ let migrations () =
          ignore (classify db [ decision (id db) "expenses:food" ]);
          Ok ()));
     with_raw path (fun db ->
-      check "schema eight" 8 (scalar db "PRAGMA user_version");
+      check "schema ten" 10 (scalar db "PRAGMA user_version");
       Alcotest.(check bool)
         "append-only audit"
         true

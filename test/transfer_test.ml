@@ -424,7 +424,7 @@ let migrations () =
          ignore (ok (Store.set_bank_transfers db [ decision (candidate db) ]));
          Ok ()));
     raw path (fun db ->
-      check "version eight" 8 (scalar db "PRAGMA user_version");
+      check "version ten" 10 (scalar db "PRAGMA user_version");
       Alcotest.(check bool)
         "audit immutable"
         true

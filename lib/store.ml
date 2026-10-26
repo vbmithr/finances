@@ -34,7 +34,9 @@ let migrate db =
       let* () = db_result (Db.exec_sql db Db_schema.upgrade_v4) in
       let* () = db_result (Db.exec_sql db Db_schema.upgrade_v5) in
       let* () = db_result (Db.exec_sql db Db_schema.upgrade_v6) in
-      db_result (Db.exec_sql db Db_schema.upgrade_v7)
+      let* () = db_result (Db.exec_sql db Db_schema.upgrade_v7) in
+      let* () = db_result (Db.exec_sql db Db_schema.upgrade_v8) in
+      db_result (Db.exec_sql db Db_schema.upgrade_v9)
     | Some 1 ->
       let* () = db_result (Db.exec_sql db Db_schema.upgrade_v1) in
       let* () = db_result (Db.exec_sql db Db_schema.upgrade_v2) in
@@ -42,34 +44,53 @@ let migrate db =
       let* () = db_result (Db.exec_sql db Db_schema.upgrade_v4) in
       let* () = db_result (Db.exec_sql db Db_schema.upgrade_v5) in
       let* () = db_result (Db.exec_sql db Db_schema.upgrade_v6) in
-      db_result (Db.exec_sql db Db_schema.upgrade_v7)
+      let* () = db_result (Db.exec_sql db Db_schema.upgrade_v7) in
+      let* () = db_result (Db.exec_sql db Db_schema.upgrade_v8) in
+      db_result (Db.exec_sql db Db_schema.upgrade_v9)
     | Some 2 ->
       let* () = db_result (Db.exec_sql db Db_schema.upgrade_v2) in
       let* () = db_result (Db.exec_sql db Db_schema.upgrade_v3) in
       let* () = db_result (Db.exec_sql db Db_schema.upgrade_v4) in
       let* () = db_result (Db.exec_sql db Db_schema.upgrade_v5) in
       let* () = db_result (Db.exec_sql db Db_schema.upgrade_v6) in
-      db_result (Db.exec_sql db Db_schema.upgrade_v7)
+      let* () = db_result (Db.exec_sql db Db_schema.upgrade_v7) in
+      let* () = db_result (Db.exec_sql db Db_schema.upgrade_v8) in
+      db_result (Db.exec_sql db Db_schema.upgrade_v9)
     | Some 3 ->
       let* () = db_result (Db.exec_sql db Db_schema.upgrade_v3) in
       let* () = db_result (Db.exec_sql db Db_schema.upgrade_v4) in
       let* () = db_result (Db.exec_sql db Db_schema.upgrade_v5) in
       let* () = db_result (Db.exec_sql db Db_schema.upgrade_v6) in
-      db_result (Db.exec_sql db Db_schema.upgrade_v7)
+      let* () = db_result (Db.exec_sql db Db_schema.upgrade_v7) in
+      let* () = db_result (Db.exec_sql db Db_schema.upgrade_v8) in
+      db_result (Db.exec_sql db Db_schema.upgrade_v9)
     | Some 4 ->
       let* () = db_result (Db.exec_sql db Db_schema.upgrade_v4) in
       let* () = db_result (Db.exec_sql db Db_schema.upgrade_v5) in
       let* () = db_result (Db.exec_sql db Db_schema.upgrade_v6) in
-      db_result (Db.exec_sql db Db_schema.upgrade_v7)
+      let* () = db_result (Db.exec_sql db Db_schema.upgrade_v7) in
+      let* () = db_result (Db.exec_sql db Db_schema.upgrade_v8) in
+      db_result (Db.exec_sql db Db_schema.upgrade_v9)
     | Some 5 ->
       let* () = db_result (Db.exec_sql db Db_schema.upgrade_v5) in
       let* () = db_result (Db.exec_sql db Db_schema.upgrade_v6) in
-      db_result (Db.exec_sql db Db_schema.upgrade_v7)
+      let* () = db_result (Db.exec_sql db Db_schema.upgrade_v7) in
+      let* () = db_result (Db.exec_sql db Db_schema.upgrade_v8) in
+      db_result (Db.exec_sql db Db_schema.upgrade_v9)
     | Some 6 ->
       let* () = db_result (Db.exec_sql db Db_schema.upgrade_v6) in
-      db_result (Db.exec_sql db Db_schema.upgrade_v7)
-    | Some 7 -> db_result (Db.exec_sql db Db_schema.upgrade_v7)
-    | Some 8 -> Ok ()
+      let* () = db_result (Db.exec_sql db Db_schema.upgrade_v7) in
+      let* () = db_result (Db.exec_sql db Db_schema.upgrade_v8) in
+      db_result (Db.exec_sql db Db_schema.upgrade_v9)
+    | Some 7 ->
+      let* () = db_result (Db.exec_sql db Db_schema.upgrade_v7) in
+      let* () = db_result (Db.exec_sql db Db_schema.upgrade_v8) in
+      db_result (Db.exec_sql db Db_schema.upgrade_v9)
+    | Some 8 ->
+      let* () = db_result (Db.exec_sql db Db_schema.upgrade_v8) in
+      db_result (Db.exec_sql db Db_schema.upgrade_v9)
+    | Some 9 -> db_result (Db.exec_sql db Db_schema.upgrade_v9)
+    | Some 10 -> Ok ()
     | _ -> Or_error.error_string "unsupported database schema version")
 ;;
 
@@ -1317,90 +1338,88 @@ let rename_posting =
       (text @-> int64 @-> unit))
 ;;
 
-let set_bank_account_mappings db mappings =
+let set_bank_account_mappings_in_transaction db mappings =
   let* mappings = Bank_account_mapping.of_json (Bank_account_mapping.to_json mappings) in
-  transaction db (fun db ->
-    let* source_events = events db in
-    let rec apply changed = function
-      | [] -> Ok changed
-      | (mapping : Bank_account_mapping.t) :: rest ->
-        let source_account = Bank_account_mapping.source_account mapping in
-        let matching =
-          List.filter source_events ~f:(fun (_, event) ->
-            Bank_transaction.is_event event
-            && String.equal event.venue mapping.institution
-            && String.equal event.account source_account)
+  let* source_events = events db in
+  let rec apply changed = function
+    | [] -> Ok changed
+    | (mapping : Bank_account_mapping.t) :: rest ->
+      let source_account = Bank_account_mapping.source_account mapping in
+      let matching =
+        List.filter source_events ~f:(fun (_, event) ->
+          Bank_transaction.is_event event
+          && String.equal event.venue mapping.institution
+          && String.equal event.account source_account)
+      in
+      if List.is_empty matching
+      then
+        Or_error.error_string
+          "mapping references an unknown source account; import its records first"
+      else
+        let* previous =
+          db_result (Db.first db (find_mapping mapping.institution source_account))
         in
-        if List.is_empty matching
-        then
-          Or_error.error_string
-            "mapping references an unknown source account; import its records first"
+        if Option.equal String.equal previous (Some mapping.ledger_account)
+        then apply changed rest
         else
-          let* previous =
-            db_result (Db.first db (find_mapping mapping.institution source_account))
+          let* previous_name =
+            match previous with
+            | Some name -> Ok name
+            | None ->
+              let* transaction = Bank_transaction.of_event (snd (List.hd_exn matching)) in
+              let account = transaction.account in
+              Bank_projection.ledger_account_for ~institution:mapping.institution account
           in
-          if Option.equal String.equal previous (Some mapping.ledger_account)
-          then apply changed rest
-          else
-            let* previous_name =
-              match previous with
-              | Some name -> Ok name
-              | None ->
-                let* transaction =
-                  Bank_transaction.of_event (snd (List.hd_exn matching))
-                in
-                let account = transaction.account in
-                Bank_projection.ledger_account_for
-                  ~institution:mapping.institution
-                  account
-            in
-            let* _ =
-              traverse
-                (fun (event_id, event) ->
-                   let* existing =
-                     db_result (Db.first db (find_entry event_id Bank_projection.key))
+          let* _ =
+            traverse
+              (fun (event_id, event) ->
+                 let* existing =
+                   db_result (Db.first db (find_entry event_id Bank_projection.key))
+                 in
+                 match existing with
+                 | None -> Ok ()
+                 | Some (id, date, description) ->
+                   let* stored = read_entry db id date description in
+                   let* counter_account = counter_account db event_id in
+                   let* expected =
+                     Bank_projection.entry
+                       ~bank_account:previous_name
+                       ?counter_account
+                       event
                    in
-                   match existing with
-                   | None -> Ok ()
-                   | Some (id, date, description) ->
-                     let* stored = read_entry db id date description in
-                     let* counter_account = counter_account db event_id in
-                     let* expected =
-                       Bank_projection.entry
-                         ~bank_account:previous_name
-                         ?counter_account
-                         event
-                     in
-                     if not (same_entry stored expected)
-                     then
-                       Or_error.error_string
-                         "account mapping conflicts with an existing bank projection"
-                     else
-                       db_result (Db.exec db (rename_posting mapping.ledger_account id)))
-                matching
-            in
-            let* () =
-              db_result
-                (Db.exec
-                   db
-                   (upsert_mapping
-                      mapping.institution
-                      source_account
-                      mapping.ledger_account))
-            in
-            let* () =
-              db_result
-                (Db.exec
-                   db
-                   (audit_mapping
-                      mapping.institution
-                      source_account
-                      previous
-                      mapping.ledger_account))
-            in
-            apply (changed + 1) rest
-    in
-    apply 0 mappings)
+                   if not (same_entry stored expected)
+                   then
+                     Or_error.error_string
+                       "account mapping conflicts with an existing bank projection"
+                   else db_result (Db.exec db (rename_posting mapping.ledger_account id)))
+              matching
+          in
+          let* () =
+            db_result
+              (Db.exec
+                 db
+                 (upsert_mapping
+                    mapping.institution
+                    source_account
+                    mapping.ledger_account))
+          in
+          let* () =
+            db_result
+              (Db.exec
+                 db
+                 (audit_mapping
+                    mapping.institution
+                    source_account
+                    previous
+                    mapping.ledger_account))
+          in
+          apply (changed + 1) rest
+  in
+  apply 0 mappings
+;;
+
+let set_bank_account_mappings db mappings =
+  transaction db (fun db -> set_bank_account_mappings_in_transaction db mappings)
 ;;
 
 type csv_observation =
@@ -2119,6 +2138,94 @@ let bunq_reconciliations db =
     statements
 ;;
 
+let find_account_iban =
+  Rel_sql.Stmt.(
+    func
+      "SELECT iban FROM bank_account_identities WHERE institution=? AND source_account=?"
+      (text @-> text @-> ret Row.(t1 (text "iban"))))
+;;
+
+let account_iban db (event : Source_event.t) (tx : Bank_transaction.t) =
+  let* registered =
+    db_result (Db.first db (find_account_iban event.venue event.account))
+  in
+  let imported =
+    if String.equal tx.account.account_type "CREDITCRD"
+    then None
+    else Account_identity.inferred_iban tx.account.account_id
+  in
+  match imported, registered with
+  | Some a, Some b when not (String.equal a b) ->
+    Or_error.error_string "registered IBAN contradicts source account identifier"
+  | Some a, _ -> Ok (Some a, "imported")
+  | None, Some b -> Ok (Some b, "registered")
+  | None, None ->
+    Ok
+      ( None
+      , if String.equal tx.account.account_type "CREDITCRD"
+        then "not_applicable"
+        else "missing" )
+;;
+
+let counterparty_iban (event : Source_event.t) =
+  if String.equal event.kind "bunq-transaction"
+  then
+    let* tx = Bunq_transaction.source_transaction event in
+    Ok (Account_identity.inferred_iban tx.counterparty)
+  else Ok None
+;;
+
+let transfer_iban_evidence db source a ta b tb =
+  let* a_iban, _ = account_iban db a ta in
+  let* b_iban, _ = account_iban db b tb in
+  let* a_counterparty = counterparty_iban a in
+  let* b_counterparty = counterparty_iban b in
+  let* known =
+    traverse
+      (fun (_, event) ->
+         let* tx = Bank_transaction.of_event event in
+         let* iban, _ = account_iban db event tx in
+         Ok (event, iban))
+      (List.filter source ~f:(fun (_, e) -> Bank_transaction.is_event e)
+       |> List.dedup_and_sort ~compare:(fun (_, a) (_, b) ->
+         Tuple2.compare
+           ~cmp1:String.compare
+           ~cmp2:String.compare
+           (a.Source_event.venue, a.account)
+           (b.Source_event.venue, b.account)))
+  in
+  let assess counterparty target target_iban =
+    match counterparty, target_iban with
+    | None, _ -> None
+    | Some cp, Some own when String.equal cp own ->
+      Some (true, "counterparty IBAN matches the other source account")
+    | Some _, Some _ ->
+      Some (false, "counterparty IBAN differs from the other source account's IBAN")
+    | Some cp, None ->
+      let conflicting =
+        List.find_map known ~f:(fun (event, iban) ->
+          if
+            String.equal event.Source_event.venue target.Source_event.venue
+            && String.equal event.account target.account
+          then None
+          else if Option.equal String.equal iban (Some cp)
+          then Some event.venue
+          else None)
+      in
+      Option.map conflicting ~f:(fun institution ->
+        ( false
+        , "counterparty IBAN belongs to a different known " ^ institution ^ " account" ))
+  in
+  let evidence =
+    List.filter_opt [ assess a_counterparty b b_iban; assess b_counterparty a a_iban ]
+  in
+  let conflicts =
+    List.filter_map evidence ~f:(fun (matches, detail) ->
+      if matches then None else Some detail)
+  in
+  Ok (List.is_empty conflicts, List.exists evidence ~f:fst, List.map evidence ~f:snd)
+;;
+
 let transfer_decision_row =
   Row.(
     t4 (int64 "first_event_id") (int64 "second_event_id") (text "state") (text "reason"))
@@ -2244,6 +2351,14 @@ let set_bank_transfers db decisions =
             let was_confirmed =
               Option.exists previous ~f:(fun (_, _, state, _) ->
                 String.equal state "confirmed")
+            in
+            let* iban_compatible, _, _ = transfer_iban_evidence db source a ta b tb in
+            let* () =
+              if confirming && not iban_compatible
+              then
+                Or_error.error_string
+                  "counterparty IBAN contradicts this transfer pairing"
+              else Ok ()
             in
             let* () =
               if confirming && not (Bank_transfer.eligible a ta b tb)
@@ -2387,6 +2502,9 @@ type transfer_candidate =
   ; state : Bank_transfer.state option
   ; reason : string option
   ; unique : bool
+  ; iban_compatible : bool
+  ; iban_match : bool
+  ; iban_evidence : string list
   }
 
 let transfer_candidates ?(include_reviewed = false) db =
@@ -2404,38 +2522,49 @@ let transfer_candidates ?(include_reviewed = false) db =
   List.iter decisions ~f:(fun d ->
     Hashtbl.set indexed ~key:(d.Bank_transfer.first_event_id, d.second_event_id) ~data:d);
   let rec pairs acc = function
-    | [] -> acc
+    | [] -> Ok acc
     | (id, a, ta, la) :: rest ->
-      let next =
-        List.filter_map rest ~f:(fun (other, b, tb, lb) ->
-          if not (Bank_transfer.eligible a ta b tb)
-          then None
-          else (
-            let id, a, ta, other, b, tb =
-              if Int64.(id < other)
-              then id, a, ta, other, b, tb
-              else other, b, tb, id, a, ta
-            in
-            let decision = Hashtbl.find indexed (id, other) in
-            if (not include_reviewed) && (la || lb || Option.is_some decision)
-            then None
-            else
-              Some
-                { first_event_id = id
-                ; second_event_id = other
-                ; first = a
-                ; second = b
-                ; first_transaction = ta
-                ; second_transaction = tb
-                ; days_apart = Int.abs (Date.diff ta.booked_on tb.booked_on)
-                ; state = Option.map decision ~f:(fun d -> d.state)
-                ; reason = Option.map decision ~f:(fun d -> d.reason)
-                ; unique = false
-                }))
+      let* next =
+        traverse
+          (fun (other, b, tb, lb) ->
+             if not (Bank_transfer.eligible a ta b tb)
+             then Ok None
+             else (
+               let id, a, ta, other, b, tb =
+                 if Int64.(id < other)
+                 then id, a, ta, other, b, tb
+                 else other, b, tb, id, a, ta
+               in
+               let decision = Hashtbl.find indexed (id, other) in
+               let* iban_compatible, iban_match, iban_evidence =
+                 transfer_iban_evidence db source a ta b tb
+               in
+               if
+                 (not include_reviewed)
+                 && (la || lb || Option.is_some decision || not iban_compatible)
+               then Ok None
+               else
+                 Ok
+                   (Some
+                      { first_event_id = id
+                      ; second_event_id = other
+                      ; first = a
+                      ; second = b
+                      ; first_transaction = ta
+                      ; second_transaction = tb
+                      ; days_apart = Int.abs (Date.diff ta.booked_on tb.booked_on)
+                      ; state = Option.map decision ~f:(fun d -> d.state)
+                      ; reason = Option.map decision ~f:(fun d -> d.reason)
+                      ; unique = false
+                      ; iban_compatible
+                      ; iban_match
+                      ; iban_evidence
+                      })))
+          rest
       in
-      pairs (next @ acc) rest
+      pairs (List.filter_opt next @ acc) rest
   in
-  let candidates = pairs [] items in
+  let* candidates = pairs [] items in
   let claims = Int64.Table.create () in
   List.iter candidates ~f:(fun c ->
     Hashtbl.incr claims c.first_event_id;
@@ -2453,4 +2582,459 @@ let transfer_candidates ?(include_reviewed = false) db =
          ~cmp2:Int64.compare
          (a.first_event_id, a.second_event_id)
          (b.first_event_id, b.second_event_id)))
+;;
+
+let find_settlement =
+  Rel_sql.Stmt.(
+    func
+      "SELECT settlement_account FROM bank_account_settlements WHERE institution=? AND \
+       source_account=?"
+      (text @-> text @-> ret Row.(t1 (text "settlement_account"))))
+;;
+
+type bank_account_info =
+  { mapping : Bank_account_mapping.t
+  ; iban : string option
+  ; iban_source : string
+  ; currency : string
+  ; movements : int
+  ; first_on : Date.t
+  ; last_on : Date.t
+  ; settlement_account : Bank_account_config.reference option
+  }
+
+let bank_account_info db =
+  let* mappings = bank_accounts db in
+  let* source = events db in
+  traverse
+    (fun mapping ->
+       let members =
+         List.filter source ~f:(fun (_, e) ->
+           Bank_transaction.is_event e
+           && String.equal e.Source_event.venue mapping.Bank_account_mapping.institution
+           && String.equal e.account (Bank_account_mapping.source_account mapping))
+       in
+       let event = snd (List.hd_exn members) in
+       let* tx = Bank_transaction.of_event event in
+       let* iban, iban_source = account_iban db event tx in
+       let* settlement =
+         db_result
+           (Db.first
+              db
+              (find_settlement
+                 mapping.institution
+                 (Bank_account_mapping.source_account mapping)))
+       in
+       let* settlement_account =
+         match settlement with
+         | None -> Ok None
+         | Some text ->
+           let* json = Or_error.try_with (fun () -> Yojson.Safe.from_string text) in
+           let* reference = Bank_account_config.reference_of_json json in
+           Ok (Some reference)
+       in
+       let* dates =
+         traverse
+           (fun (_, e) ->
+              let* tx = Bank_transaction.of_event e in
+              Ok tx.booked_on)
+           members
+       in
+       Ok
+         { mapping
+         ; iban
+         ; iban_source
+         ; currency = tx.account.currency
+         ; movements = List.length members
+         ; first_on = List.min_elt dates ~compare:Date.compare |> Option.value_exn
+         ; last_on = List.max_elt dates ~compare:Date.compare |> Option.value_exn
+         ; settlement_account
+         })
+    mappings
+;;
+
+let set_bank_account_identities_in_transaction db identities =
+  let* identities =
+    traverse
+      (fun (i : Account_identity.t) ->
+         Account_identity.create
+           ~institution:i.institution
+           ~bank_id:i.bank_id
+           ~account_id:i.account_id
+           ~account_type:i.account_type
+           ~iban:i.iban)
+      identities
+  in
+  if
+    List.contains_dup
+      (List.map identities ~f:(fun i ->
+         i.Account_identity.institution, Account_identity.source_account i))
+      ~compare:(Tuple2.compare ~cmp1:String.compare ~cmp2:String.compare)
+  then Or_error.error_string "duplicate account identity"
+  else
+    let* accounts = bank_accounts db in
+    let* source = events db in
+    let upsert =
+      Rel_sql.Stmt.(
+        func
+          "INSERT INTO bank_account_identities(institution,source_account,iban) VALUES \
+           (?,?,?) ON CONFLICT(institution,source_account) DO UPDATE SET \
+           iban=excluded.iban"
+          (text @-> text @-> text @-> unit))
+    in
+    let audit =
+      Rel_sql.Stmt.(
+        func
+          "INSERT INTO \
+           bank_account_identity_changes(institution,source_account,previous_iban,iban) \
+           VALUES (?,?,?,?)"
+          (text @-> text @-> option text @-> text @-> unit))
+    in
+    let rec apply count = function
+      | [] -> Ok count
+      | i :: rest ->
+        let identity = Account_identity.source_account i in
+        let account =
+          List.find accounts ~f:(fun a ->
+            String.equal a.Bank_account_mapping.institution i.institution
+            && String.equal (Bank_account_mapping.source_account a) identity)
+        in
+        let* account =
+          Or_error.of_option
+            account
+            ~error:(Error.of_string "unknown account identity; import the account first")
+        in
+        let* () =
+          if String.equal account.account_type "CREDITCRD"
+          then
+            Or_error.error_string
+              "credit-card accounts have no IBAN; register the associated bank account \
+               instead"
+          else Ok ()
+        in
+        let* () =
+          match Account_identity.inferred_iban account.account_id with
+          | Some old when not (String.equal old i.iban) ->
+            Or_error.error_string "IBAN contradicts imported account identifier"
+          | _ -> Ok ()
+        in
+        let* previous =
+          db_result (Db.first db (find_account_iban i.institution identity))
+        in
+        if Option.equal String.equal previous (Some i.iban)
+        then apply count rest
+        else
+          let* () = db_result (Db.exec db (upsert i.institution identity i.iban)) in
+          let* () =
+            db_result (Db.exec db (audit i.institution identity previous i.iban))
+          in
+          apply (count + 1) rest
+    in
+    let* changed = apply 0 identities in
+    let* transfers = bank_transfer_decisions db in
+    let* _ =
+      traverse
+        (fun (d : Bank_transfer.decision) ->
+           if Poly.equal d.state Rejected
+           then Ok ()
+           else (
+             let get id =
+               Or_error.of_option
+                 (List.Assoc.find source id ~equal:Int64.equal)
+                 ~error:(Error.of_string "missing transfer source")
+             in
+             let* a = get d.first_event_id in
+             let* b = get d.second_event_id in
+             let* ta = Bank_transaction.of_event a in
+             let* tb = Bank_transaction.of_event b in
+             let* compatible, _, _ = transfer_iban_evidence db source a ta b tb in
+             if compatible
+             then Ok ()
+             else
+               Or_error.error_string
+                 "new identity contradicts a confirmed transfer; reject the transfer \
+                  before correcting identities"))
+        transfers
+    in
+    Ok changed
+;;
+
+let set_bank_account_identities db identities =
+  transaction db (fun db -> set_bank_account_identities_in_transaction db identities)
+;;
+
+type account_change =
+  { id : int64
+  ; kind : string
+  ; institution : string
+  ; source_account : string
+  ; previous_value : string option
+  ; value : string option
+  ; changed_at : string
+  }
+
+let bank_account_history db =
+  let row =
+    Row.(
+      unit (fun id kind institution source_account previous_value value changed_at ->
+        { id; kind; institution; source_account; previous_value; value; changed_at })
+      * int64 "id"
+      * text "kind"
+      * text "institution"
+      * text "source_account"
+      * col "previous_value" Type.(option text)
+      * col "value" Type.(option text)
+      * text "changed_at")
+  in
+  collect
+    db
+    (statement
+       "SELECT id,'ledger_account' AS \
+        kind,institution,source_account,previous_ledger_account AS \
+        previous_value,ledger_account AS value,changed_at FROM \
+        bank_account_mapping_changes UNION ALL SELECT \
+        id,'iban',institution,source_account,previous_iban,iban,changed_at FROM \
+        bank_account_identity_changes UNION ALL SELECT \
+        id,'settlement_account',institution,source_account,previous_settlement,settlement_account,changed_at \
+        FROM bank_account_settlement_changes ORDER BY changed_at,kind,id"
+       row)
+;;
+
+type account_config_report =
+  { mapping_changes : int
+  ; identity_changes : int
+  ; settlement_changes : int
+  ; changes : account_change list
+  }
+
+let export_bank_accounts db =
+  let* accounts = bank_account_info db in
+  Ok
+    (List.map accounts ~f:(fun info ->
+       let a = info.mapping in
+       let reference =
+         { Bank_account_config.institution = a.institution
+         ; bank_id = a.bank_id
+         ; account_id = a.account_id
+         ; account_type = a.account_type
+         }
+       in
+       { Bank_account_config.reference
+       ; ledger_account = Some a.ledger_account
+       ; iban =
+           Option.value_map info.iban ~default:Bank_account_config.Clear ~f:(fun s ->
+             Set s)
+       ; settlement_account =
+           Option.value_map
+             info.settlement_account
+             ~default:Bank_account_config.Clear
+             ~f:(fun r -> Set r)
+       }))
+;;
+
+let apply_bank_accounts ?(dry_run = false) db config =
+  let* config = Bank_account_config.of_json (Bank_account_config.to_json config) in
+  transaction db (fun db ->
+    let* () =
+      if dry_run then db_result (Db.exec_sql db "SAVEPOINT account_preview") else Ok ()
+    in
+    let* before_history = bank_account_history db in
+    let* info = bank_account_info db in
+    let resolve r =
+      Or_error.of_option
+        (List.find info ~f:(fun i ->
+           String.equal i.mapping.institution r.Bank_account_config.institution
+           && String.equal
+                (Bank_account_mapping.source_account i.mapping)
+                (Bank_account_config.source_account r)))
+        ~error:
+          (Error.of_string
+             "unknown source account; import its statements before configuring it")
+    in
+    let* _ =
+      traverse
+        (fun row ->
+           let* _ = resolve row.Bank_account_config.reference in
+           Ok ())
+        config
+    in
+    let* mappings =
+      traverse
+        (fun row ->
+           match row.Bank_account_config.ledger_account with
+           | None -> Ok None
+           | Some ledger_account ->
+             let* current = resolve row.reference in
+             if String.equal current.mapping.ledger_account ledger_account
+             then Ok None
+             else (
+               let r = row.reference in
+               let* mapping =
+                 Bank_account_mapping.create
+                   ~institution:r.institution
+                   ~bank_id:r.bank_id
+                   ~account_id:r.account_id
+                   ~account_type:r.account_type
+                   ~ledger_account
+               in
+               Ok (Some mapping)))
+        config
+    in
+    let* mapping_changes =
+      set_bank_account_mappings_in_transaction db (List.filter_opt mappings)
+    in
+    let remove_iban =
+      Rel_sql.Stmt.(
+        func
+          "DELETE FROM bank_account_identities WHERE institution=? AND source_account=?"
+          (text @-> text @-> unit))
+    in
+    let audit_iban =
+      Rel_sql.Stmt.(
+        func
+          "INSERT INTO \
+           bank_account_identity_changes(institution,source_account,previous_iban,iban) \
+           VALUES (?,?,?,NULL)"
+          (text @-> text @-> text @-> unit))
+    in
+    let* clears =
+      traverse
+        (fun row ->
+           match row.Bank_account_config.iban with
+           | Keep | Set _ -> Ok 0
+           | Clear ->
+             let r = row.reference in
+             let* () =
+               if
+                 (not (String.equal r.account_type "CREDITCRD"))
+                 && Option.is_some (Account_identity.inferred_iban r.account_id)
+               then Or_error.error_string "an imported source IBAN cannot be cleared"
+               else Ok ()
+             in
+             let source = Bank_account_config.source_account r in
+             let* old =
+               db_result (Db.first db (find_account_iban r.institution source))
+             in
+             (match old with
+              | None -> Ok 0
+              | Some iban ->
+                let* () = db_result (Db.exec db (remove_iban r.institution source)) in
+                let* () = db_result (Db.exec db (audit_iban r.institution source iban)) in
+                Ok 1))
+        config
+    in
+    let* sets =
+      traverse
+        (fun row ->
+           match row.Bank_account_config.iban with
+           | Keep | Clear -> Ok None
+           | Set iban ->
+             let* current = resolve row.reference in
+             if Option.equal String.equal current.iban (Some iban)
+             then Ok None
+             else (
+               let r = row.reference in
+               let* identity =
+                 Account_identity.create
+                   ~institution:r.institution
+                   ~bank_id:r.bank_id
+                   ~account_id:r.account_id
+                   ~account_type:r.account_type
+                   ~iban
+               in
+               Ok (Some identity)))
+        config
+    in
+    let* identity_sets =
+      set_bank_account_identities_in_transaction db (List.filter_opt sets)
+    in
+    let set =
+      Rel_sql.Stmt.(
+        func
+          "INSERT INTO \
+           bank_account_settlements(institution,source_account,settlement_account) \
+           VALUES (?,?,?) ON CONFLICT(institution,source_account) DO UPDATE SET \
+           settlement_account=excluded.settlement_account"
+          (text @-> text @-> text @-> unit))
+    in
+    let remove =
+      Rel_sql.Stmt.(
+        func
+          "DELETE FROM bank_account_settlements WHERE institution=? AND source_account=?"
+          (text @-> text @-> unit))
+    in
+    let audit =
+      Rel_sql.Stmt.(
+        func
+          "INSERT INTO \
+           bank_account_settlement_changes(institution,source_account,previous_settlement,settlement_account) \
+           VALUES (?,?,?,?)"
+          (text @-> text @-> option text @-> option text @-> unit))
+    in
+    let* settlements =
+      traverse
+        (fun row ->
+           match row.Bank_account_config.settlement_account with
+           | Keep -> Ok 0
+           | update ->
+             let r = row.reference in
+             let source = Bank_account_config.source_account r in
+             let* child = resolve r in
+             let* value =
+               match update with
+               | Keep | Clear -> Ok None
+               | Set parent ->
+                 let* parent_info = resolve parent in
+                 if
+                   (not (String.equal r.account_type "CREDITCRD"))
+                   || String.equal parent.account_type "CREDITCRD"
+                   || not (String.equal child.currency parent_info.currency)
+                 then
+                   Or_error.error_string
+                     "card settlement must link a credit-card account to a non-card \
+                      account in the same currency"
+                 else
+                   Ok
+                     (Some
+                        (Yojson.Safe.to_string
+                           (Bank_account_config.reference_to_json parent)))
+             in
+             let* previous =
+               db_result (Db.first db (find_settlement r.institution source))
+             in
+             if Option.equal String.equal previous value
+             then Ok 0
+             else
+               let* () =
+                 match value with
+                 | None -> db_result (Db.exec db (remove r.institution source))
+                 | Some value -> db_result (Db.exec db (set r.institution source value))
+               in
+               let* () =
+                 db_result (Db.exec db (audit r.institution source previous value))
+               in
+               Ok 1)
+        config
+    in
+    let* after_history = bank_account_history db in
+    let changes =
+      List.filter after_history ~f:(fun change ->
+        not
+          (List.exists before_history ~f:(fun old ->
+             String.equal old.kind change.kind && Int64.equal old.id change.id)))
+    in
+    let result =
+      { mapping_changes
+      ; identity_changes = identity_sets + List.sum (module Int) clears ~f:Fn.id
+      ; settlement_changes = List.sum (module Int) settlements ~f:Fn.id
+      ; changes
+      }
+    in
+    let* () =
+      if dry_run
+      then
+        db_result (Db.exec_sql db "ROLLBACK TO account_preview; RELEASE account_preview")
+      else Ok ()
+    in
+    Ok result)
 ;;

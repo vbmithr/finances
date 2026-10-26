@@ -234,7 +234,7 @@ let migrations () =
          accepted (import db "bunq.mt940" (mt ()));
          Ok ()));
     raw path (fun db ->
-      check "version eight" 8 (scalar db "PRAGMA user_version");
+      check "version ten" 10 (scalar db "PRAGMA user_version");
       Alcotest.(check bool)
         "immutable inventories"
         true

@@ -293,3 +293,20 @@ confirmed counterpart per movement is allowed. Rejection can undo confirmation.
 Existing categories must be reset before confirming, and confirmed transfers must
 be rejected before recategorization. FX, splits and broader date policies remain
 future work. Rebuild the journal after decisions; sync also preserves them.
+
+## Account management and identity-backed transfer review
+
+Use one private version 1 account configuration exported by `accounts export`,
+with `accounts list`, `accounts apply --dry-run`, `accounts apply` and
+`accounts history`. It manages ledger names, registered IBANs and card settlement
+relationships atomically. SQLite is authoritative; the config is an editable input,
+not a watched database. Sync accepts the same file through `--accounts`. Legacy
+mapping and identity commands remain compatible. Explicit null in the versioned
+format clears curated metadata; omitted properties preserve it.
+
+IBAN contradictions exclude pairs even when amount and booking date agree.
+`transfer-preview` adds documented evidence points and globally consistent
+one-to-one assignment diagnostics, strongly favoring same-day bookings. It reports
+high/medium/ambiguous support rather than invented probability percentages. Missing
+records remain a limitation. Equal best assignments stay ambiguous, and oversized
+components are not evaluated. Proposals still require explicit confirmation.

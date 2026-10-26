@@ -111,3 +111,31 @@
   alcotest
   rel
   rel.sqlite3))
+
+(test
+ (name ranking_test)
+ (modules ranking_test)
+ (deps
+  (glob_files fixtures/*))
+ (libraries
+  finances
+  core
+  core_unix
+  core_unix.filename_unix
+  alcotest
+  rel
+  rel.sqlite3))
+
+(test
+ (name accounts_test)
+ (modules accounts_test)
+ (deps
+  (glob_files fixtures/*))
+ (libraries
+  finances
+  core
+  core_unix
+  core_unix.filename_unix
+  alcotest
+  rel
+  rel.sqlite3))
