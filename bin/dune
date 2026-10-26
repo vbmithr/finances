@@ -1,4 +1,6 @@
 (executable
  (name main)
  (public_name finances)
- (libraries finances finances.hledger finances.bank core cmdliner yojson))
+ (libraries finances finances.hledger finances.bank core cmdliner yojson)
+ (preprocess
+  (pps ppx_jane)))

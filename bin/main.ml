@@ -1,18 +1,18 @@
 open Core
 open Finances
 open Cmdliner
+open Or_error.Let_syntax
 
-let ( let* ) x f = Result.bind x ~f
 let read_file path = Or_error.try_with (fun () -> In_channel.read_all path)
 
 let ingest database venue account kind source_id at path =
-  let* payload = read_file path in
-  let* occurred_at_ms = Or_error.try_with (fun () -> Int64.of_string at) in
-  let* event =
+  let%bind payload = read_file path in
+  let%bind occurred_at_ms = Or_error.try_with (fun () -> Int64.of_string at) in
+  let%bind event =
     Source_event.create ~venue ~account ~kind ~source_id ~occurred_at_ms ~payload
   in
   Store.with_open database (fun db ->
-    let* result = Store.ingest db event in
+    let%bind result = Store.ingest db event in
     let status, id =
       match result with
       | Store.Inserted id -> "inserted", id
@@ -24,7 +24,7 @@ let ingest database venue account kind source_id at path =
 
 let list_events database =
   Store.with_open database (fun db ->
-    let* events = Store.events db in
+    let%bind events = Store.events db in
     let json =
       `List
         (List.map events ~f:(fun (id, (e : Source_event.t)) ->
@@ -100,10 +100,10 @@ let ingest_cmd =
 ;;
 
 let import_ofx database institution path =
-  let* contents = read_file path in
-  let* document = Bank_ofx.parse contents in
+  let%bind contents = read_file path in
+  let%bind document = Bank_ofx.parse contents in
   Store.with_open database (fun db ->
-    let* report = Store.import_ofx db ~institution document in
+    let%bind report = Store.import_ofx db ~institution document in
     printf
       "statements=%d inserted=%d existing=%d document=%Ld\n"
       report.statements
@@ -131,7 +131,7 @@ let import_ofx_cmd =
 
 let project_bank database =
   Store.with_open database (fun db ->
-    let* report = Store.project_bank db in
+    let%bind report = Store.project_bank db in
     printf "inserted=%d existing=%d\n" report.inserted report.existing;
     Ok ())
 ;;
@@ -145,7 +145,7 @@ let project_bank_cmd =
 
 let export_hledger database =
   Store.with_open database (fun db ->
-    let* journal = Finances_hledger.export db in
+    let%bind journal = Finances_hledger.export db in
     Out_channel.output_string stdout journal;
     Ok ())
 ;;
@@ -159,7 +159,7 @@ let export_hledger_cmd =
 
 let list_bank_accounts database =
   Store.with_open database (fun db ->
-    let* accounts = Store.bank_accounts db in
+    let%bind accounts = Store.bank_accounts db in
     Out_channel.print_endline (Bank_account_mapping.to_json accounts);
     Ok ())
 ;;
@@ -172,10 +172,10 @@ let bank_accounts_cmd =
 ;;
 
 let map_bank_accounts database path =
-  let* contents = read_file path in
-  let* mappings = Bank_account_mapping.of_json contents in
+  let%bind contents = read_file path in
+  let%bind mappings = Bank_account_mapping.of_json contents in
   Store.with_open database (fun db ->
-    let* changed = Store.set_bank_account_mappings db mappings in
+    let%bind changed = Store.set_bank_account_mappings db mappings in
     printf "mapping_changes=%d\n" changed;
     Ok ())
 ;;
@@ -192,7 +192,7 @@ let map_bank_accounts_cmd =
 
 let import_history database limit =
   Store.with_open database (fun db ->
-    let* attempts = Store.bank_import_history ~limit db in
+    let%bind attempts = Store.bank_import_history ~limit db in
     let optional f value = Option.value_map value ~default:`Null ~f in
     let json =
       `List
@@ -235,7 +235,7 @@ let sync_bank database directory institution journal accounts max_mib =
         journal
         ~default:(Filename.concat (Filename.dirname database) "bank.journal")
     in
-    let* report =
+    let%bind report =
       Finances_bank.Sync.run
         ?accounts
         ~max_file_bytes:Int64.(of_int max_mib * 1048576L)
@@ -327,7 +327,7 @@ let sync_bank_cmd =
 
 let csv_enrichments database review =
   Store.with_open database (fun db ->
-    let* observations = Store.bank_csv_observations db in
+    let%bind observations = Store.bank_csv_observations db in
     let optional f value = Option.value_map value ~default:`Null ~f in
     let string s = `String s in
     let id n = `Intlit (Int64.to_string n) in
@@ -400,7 +400,7 @@ let csv_enrichments_cmd =
 
 let match_csv database =
   Store.with_open database (fun db ->
-    let* result = Store.match_bank_csv db in
+    let%bind result = Store.match_bank_csv db in
     printf
       "matched=%d unmatched=%d ambiguous=%d conflicts=%d changed=%d\n"
       result.matched
@@ -420,8 +420,8 @@ let match_csv_cmd =
 
 let wise_status database =
   Store.with_open database (fun db ->
-    let* statements = Store.wise_reconciliations db in
-    let* rows = Store.wise_csv_observations db in
+    let%bind statements = Store.wise_reconciliations db in
+    let%bind rows = Store.wise_csv_observations db in
     let string s = `String s in
     let json =
       `Assoc
