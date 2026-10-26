@@ -291,43 +291,46 @@ let same_entry (a : Accounting.entry) (b : Accounting.entry) =
          && Bigdecimal.equal a.quantity b.quantity)
 ;;
 
-let record_entry db ~event_id ~key (entry : Accounting.entry) =
+let record_entry_in_transaction db ~event_id ~key (entry : Accounting.entry) =
   let* key = Validation.text "projection key" key in
-  transaction db (fun db ->
-    let* existing = db_result (Db.first db (find_entry event_id key)) in
-    match existing with
-    | Some (id, date, description) ->
-      let* previous = read_entry db id date description in
-      if same_entry previous entry
-      then Ok (Existing id)
-      else
-        Or_error.error_string
-          "projection key already exists with different accounting entries"
-    | None ->
-      let* () =
-        db_result
-          (Db.exec
-             db
-             (insert_entry event_id key (Date.to_string entry.date) entry.description))
-      in
-      let id = Db.last_insert_rowid db in
-      let rec write ordinal = function
-        | [] -> Ok (Inserted id)
-        | (p : Accounting.posting) :: rest ->
-          let* () =
-            db_result
-              (Db.exec
-                 db
-                 (insert_posting
-                    id
-                    ordinal
-                    p.account
-                    p.commodity
-                    (Bigdecimal.to_string_no_sn p.quantity)))
-          in
-          write (ordinal + 1) rest
-      in
-      write 0 entry.postings)
+  let* existing = db_result (Db.first db (find_entry event_id key)) in
+  match existing with
+  | Some (id, date, description) ->
+    let* previous = read_entry db id date description in
+    if same_entry previous entry
+    then Ok (Existing id)
+    else
+      Or_error.error_string
+        "projection key already exists with different accounting entries"
+  | None ->
+    let* () =
+      db_result
+        (Db.exec
+           db
+           (insert_entry event_id key (Date.to_string entry.date) entry.description))
+    in
+    let id = Db.last_insert_rowid db in
+    let rec write ordinal = function
+      | [] -> Ok (Inserted id)
+      | (p : Accounting.posting) :: rest ->
+        let* () =
+          db_result
+            (Db.exec
+               db
+               (insert_posting
+                  id
+                  ordinal
+                  p.account
+                  p.commodity
+                  (Bigdecimal.to_string_no_sn p.quantity)))
+        in
+        write (ordinal + 1) rest
+    in
+    write 0 entry.postings
+;;
+
+let record_entry db ~event_id ~key entry =
+  transaction db (fun db -> record_entry_in_transaction db ~event_id ~key entry)
 ;;
 
 let entries db =
@@ -353,4 +356,29 @@ let entries db =
        let* entry = read_entry db id date description in
        Ok (event_id, key, entry))
     rows
+;;
+
+type projection_report =
+  { inserted : int
+  ; existing : int
+  }
+
+let project_bank db =
+  transaction db (fun db ->
+    let* source_events = events db in
+    let rec project inserted existing = function
+      | [] -> Ok { inserted; existing }
+      | (event_id, (event : Source_event.t)) :: rest ->
+        if not (String.equal event.kind "bank-transaction")
+        then project inserted existing rest
+        else
+          let* entry = Bank_projection.entry event in
+          let* result =
+            record_entry_in_transaction db ~event_id ~key:Bank_projection.key entry
+          in
+          (match result with
+           | Inserted _ -> project (inserted + 1) existing rest
+           | Existing _ -> project inserted (existing + 1) rest)
+    in
+    project 0 0 source_events)
 ;;

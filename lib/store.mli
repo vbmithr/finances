@@ -40,3 +40,13 @@ val record_entry
   -> ingest Or_error.t
 
 val entries : t -> (int64 * string * Accounting.entry) list Or_error.t
+
+type projection_report =
+  { inserted : int
+  ; existing : int
+  }
+
+(** Project every stored bank event against equity:unclassified, atomically.
+    Source documents are not needed again. Repeating this operation is harmless;
+    a conflict or invalid event rolls back the complete projection batch. *)
+val project_bank : t -> projection_report Or_error.t

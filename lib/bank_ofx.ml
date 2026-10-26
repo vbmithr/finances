@@ -239,3 +239,42 @@ let parse contents =
     { contents; statements })
   |> fun result -> Or_error.tag result ~tag:"OFX import"
 ;;
+
+let source_transaction (event : Source_event.t) =
+  Or_error.try_with (fun () ->
+    if not (String.equal event.kind "bank-transaction")
+    then failwith "not a bank source event";
+    let identity, currency, tree =
+      match Yojson.Safe.from_string event.payload with
+      | `List [ `String identity; `String currency; tree ] -> identity, currency, tree
+      | _ -> failwith "unsupported bank source payload"
+    in
+    let bank_id, account_id, account_type =
+      match Yojson.Safe.from_string identity with
+      | `List [ `String bank_id; `String account_id; `String account_type ] ->
+        bank_id, account_id, account_type
+      | _ -> failwith "invalid bank account identity"
+    in
+    let account = { bank_id; account_id; account_type; currency } in
+    let rec decode = function
+      | `String s -> Text s
+      | `List [ `String tag; `List nodes ] -> Element (tag, List.map nodes ~f:decode)
+      | _ -> failwith "invalid canonical bank XML"
+    in
+    let node = decode tree in
+    (match node with
+     | Element ("STMTTRN", _) -> ()
+     | _ -> failwith "expected a bank transaction");
+    let trn = parse_transaction account node in
+    if
+      not
+        (String.equal identity (account_identity account)
+         && String.equal identity event.account
+         && String.equal trn.fitid event.source_id)
+    then failwith "bank event identity disagrees with payload";
+    (match event.occurred with
+     | On_date date when Date.equal date trn.booked_on -> ()
+     | _ -> failwith "bank event booking date disagrees with payload");
+    account, trn)
+  |> fun result -> Or_error.tag result ~tag:"stored bank transaction"
+;;

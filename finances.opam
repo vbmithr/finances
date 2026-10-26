@@ -19,9 +19,11 @@ depends: [
   "xmlm"
   "re"
   "digestif"
+  "hledger"
   "alcotest" {with-test}
 ]
 pin-depends: [
+  ["hledger.dev" "git+https://github.com/vbmithr/ocaml-hledger.git#8ae0e0e48652af83549f857be6eee3d79f54db07"]
   ["rel.dev" "git+https://github.com/dbuenzli/rel.git#f196804c51031870327ecc482d0b97f052941081"]
 ]
 build: [

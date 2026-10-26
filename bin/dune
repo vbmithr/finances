@@ -1,4 +1,4 @@
 (executable
  (name main)
  (public_name finances)
- (libraries finances core cmdliner yojson))
+ (libraries finances finances.hledger core cmdliner yojson))

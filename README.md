@@ -18,11 +18,13 @@ through Rel. SQLite is the source of truth.
 - A small CLI for database initialization and importing source evidence.
 - OFX 2.x XML bank imports covering all statement blocks and accounts, with exact
   amounts, original document archives, and duplicate detection across exports.
+- Bank movement accounting entries against `equity:unclassified`, with atomic,
+  repeatable projection from stored events.
+- Deterministic hledger journal export through the separate OCaml hledger binding.
 
 The kernel does not yet fetch Paradex data, derive positions from fills, persist
-position observations, calculate funding, import CSV, implement accounting
-policies, or export hledger journals. Those operations can be added around the
-core APIs.
+position observations, calculate funding, import CSV, categorize transactions, or
+infer opening balances. Those operations can be added around the core APIs.
 
 ## Setup
 
@@ -31,6 +33,10 @@ Use an opam switch with OCaml 5.1 or later and SQLite development headers
 `f196804c51031870327ecc482d0b97f052941081` from
 [dbuenzli/rel](https://github.com/dbuenzli/rel). This is an immutable Git revision,
 not a branch pin. `conf-sqlite3` is required so Rel builds its SQLite backend.
+The OCaml `hledger` binding is also pinned to upstream commit
+`8ae0e0e48652af83549f857be6eee3d79f54db07` of
+[ocaml-hledger](https://github.com/vbmithr/ocaml-hledger). This opam package is
+distinct from the hledger command-line program, which is used to query journals.
 
 From this directory, in your chosen switch:
 
@@ -39,6 +45,8 @@ mkdir -p "$HOME/.cache/codex/scratch/finances"
 export TMPDIR="$HOME/.cache/codex/scratch/finances"
 opam pin add --no-action rel \
   'git+https://github.com/dbuenzli/rel.git#f196804c51031870327ecc482d0b97f052941081'
+opam pin add --no-action hledger \
+  'git+https://github.com/vbmithr/ocaml-hledger.git#8ae0e0e48652af83549f857be6eee3d79f54db07'
 opam install . --deps-only --with-test
 opam exec -- dune build
 opam exec -- dune runtest
@@ -105,6 +113,67 @@ prints `occurred_at_ms: null` and a populated `occurred_on` for bank records.
 Opening an existing schema version 1 database migrates it atomically to version 2,
 preserving source IDs, evidence, journal entries, and exact posting quantities.
 The bank test fixture is synthetic; personal exports are not test fixtures.
+
+## From bank export to a queryable journal
+
+The following workflow stores the source data and accounting entries in SQLite,
+then generates a journal. `personal/` is ignored by Git and holds durable local
+financial data, not scratch files.
+
+```sh
+mkdir -p personal
+dune exec finances -- import-ofx personal/finances.sqlite3 /path/to/export.ofx
+dune exec finances -- project-bank personal/finances.sqlite3
+dune exec finances -- export-hledger personal/finances.sqlite3 > personal/bank.journal
+hledger --no-conf -f personal/bank.journal check --strict
+```
+
+`project-bank` reads the stored canonical source events; it does not need the OFX
+file again. It creates one balanced entry per bank transaction, with the signed
+amount posted to the bank account and its opposite to `equity:unclassified`.
+Reimporting or projecting again creates no duplicate entries. A projection conflict
+or invalid source event rolls back the complete projection batch.
+
+Bank ledger names are
+`assets:bank:INSTITUTION:BANK_ID:ACCOUNT_TYPE:ACCOUNT_ID`. Components containing
+characters such as masking asterisks are encoded as `x-` followed by their UTF-8
+bytes in hexadecimal. Literal components starting with `x-` are also encoded,
+preventing collisions. Original identifiers remain in SQLite. Names and memos are
+used in descriptions; control characters become spaces and literal semicolons and
+pipes within source fields use their fullwidth equivalents to avoid changing
+journal syntax. Source text remains intact in the database archive.
+
+Journal entries contain a `source-event-id` tag and projection key for tracing back
+to SQLite. Accounts and commodities are declared, and commodity precision retains
+every stored decimal digit. The export is stable across repeated runs. Regenerate
+it after changing the database; journal edits do not flow back into SQLite.
+
+Useful [hledger queries](https://hledger.org/hledger.html):
+
+```sh
+# All bank transactions, with descriptions and running movement totals
+hledger --no-conf -f personal/bank.journal register assets:bank
+
+# Monthly net movements, grouped by account
+hledger --no-conf -f personal/bank.journal balance assets:bank -M --tree
+
+# Monthly money leaving or entering bank accounts
+hledger --no-conf -f personal/bank.journal balance assets:bank 'amt:<0' -M --tree
+hledger --no-conf -f personal/bank.journal balance assets:bank 'amt:>0' -M --tree
+
+# Search descriptions; replace TEXT with a merchant or other search expression
+hledger --no-conf -f personal/bank.journal register assets:bank 'desc:TEXT'
+```
+
+These reports describe the imported period's movements. They are not current
+balances without verified opening balances, and outflows/inflows include transfers
+and other unclassified movements. No expense or income category is guessed. The
+observed export supplies available balances, which are not used as ledger opening
+balances. Adding CSV categories and reviewed transfer matching is a later step.
+
+The core `finances` library remains independent of hledger. The
+`finances.hledger` adapter and CLI use the pinned OCaml binding to render the
+journal; the external hledger CLI validates and queries that output.
 
 ## Library
 

@@ -4,6 +4,12 @@
  (libraries finances core alcotest rel rel.sqlite3))
 
 (test
+ (name journal_test)
+ (modules journal_test)
+ (deps fixtures/bank.ofx)
+ (libraries finances finances.hledger hledger core alcotest))
+
+(test
  (name bank_test)
  (modules bank_test)
  (deps

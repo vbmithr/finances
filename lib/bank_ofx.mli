@@ -45,3 +45,8 @@ val parse : string -> t Or_error.t
 
 (** Collision-free identity for the bank's account fields, not a ledger account. *)
 val account_identity : account -> string
+
+(** Reconstruct a transaction from its canonical SQLite source event. Validates
+    that the payload agrees with the event's identity and booking date. DTUSER
+    is available only in the archived document, not in this canonical payload. *)
+val source_transaction : Source_event.t -> (account * transaction) Or_error.t

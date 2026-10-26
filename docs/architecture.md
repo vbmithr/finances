@@ -15,11 +15,18 @@ source_events (SQLite, immutable)
       +--> accounting policy --> journal_entries + postings (SQLite)
       |
       +--> position reconstruction (future)
+
+journal_entries + postings
+      |
+      v
+finances.hledger adapter --> generated .journal --> hledger queries
 ```
 
 The core library has no dependency on exchange APIs, network clients, or hledger.
-The CLI imports opaque payload files or OFX XML bank statements and lists metadata;
-it does not interpret an exchange's financial semantics or categorize bank entries.
+The CLI imports opaque payload files or OFX XML bank statements, projects bank
+movements into accounting entries, and exports journals through a separate
+`finances.hledger` adapter. It does not categorize bank entries or interpret an
+exchange's financial semantics.
 
 ## Domain boundaries
 
@@ -122,9 +129,43 @@ cause an explicit conflict, including changes to names or memos. A changed balan
 snapshot does not change transaction identity or overwrite earlier snapshots.
 
 This stage supplies parsed domain values and persistent source evidence. It does
-not yet create a separate normalized bank transaction table, import CSV value dates
-or categories, or derive accounting entries. Balance observations are preserved in
-the archived statement; they are not yet used to reconcile account balances.
+not yet create a separate normalized bank transaction table or import CSV value
+dates or categories. Balance observations are preserved in the archived statement;
+they are not yet used to reconcile account balances.
+
+## Bank accounting and journal export
+
+`Bank_ofx.source_transaction` reconstructs a typed bank transaction from the
+canonical source payload. It validates the payload's account identity, FITID, and
+booking date against the enclosing source event, so journal generation can work
+entirely from the database without reopening source files.
+
+`Bank_projection` implements the initial `bank-unclassified-v1` policy. Each event
+produces two explicit, exact postings: its signed bank movement and the opposite
+amount in `equity:unclassified`. This does not claim a withdrawal is an expense or
+a deposit is income. Ledger account names include the institution and the bank's
+complete account identity. Components outside the supported token alphabet, and
+components starting with the reserved `x-` prefix, are reversibly hex encoded.
+
+`Store.project_bank` runs the complete projection batch in one SQLite transaction.
+It shares the internal entry writer with `record_entry` without nesting
+transactions. Identical projections reuse existing entries; a conflict or malformed
+source event rolls back all new entries in that batch. Non-bank events are skipped.
+No schema migration is needed because the existing entry and posting tables own
+the accounting projection.
+
+`finances.hledger` converts persisted entries to the OCaml hledger binding's AST
+and delegates rendering to its printer. The core library does not depend on that
+binding. The adapter declares every account and commodity, preserves exact decimal
+precision, adds source event IDs and projection keys, and sanitizes description
+characters that could change journal syntax. No generated timestamp is included,
+so repeated exports of the same stored entries are byte-identical.
+
+Bank journals currently have no inferred opening balances, expense categories,
+income categories, or transfer matching. They support register and period movement
+queries. Available balance observations cannot safely supply ledger opening
+balances. Corrections and reclassification still need an explicit future workflow;
+generated journals do not become a second editable accounting source of truth.
 
 ## Next milestone
 
@@ -138,5 +179,6 @@ Implement a Paradex adapter for one account and a bounded historical period:
 - Apply an explicit accounting policy for collateral and realized flows.
 - Store timestamped exchange snapshots and reconcile collateral and positions.
 
-Only then add portfolio valuation and generated hledger output. No API credentials
-or live exchange operations are needed by the current kernel.
+Portfolio valuation, categorization, and verified opening balances remain separate
+next steps. No API credentials or live exchange operations are needed by the
+current kernel.

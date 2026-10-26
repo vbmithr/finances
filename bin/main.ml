@@ -129,10 +129,44 @@ let import_ofx_cmd =
       $ Arg.(required & pos 1 (some string) None & info [] ~docv:"OFX_FILE"))
 ;;
 
+let project_bank database =
+  Store.with_open database (fun db ->
+    let* report = Store.project_bank db in
+    printf "inserted=%d existing=%d\n" report.inserted report.existing;
+    Ok ())
+;;
+
+let project_bank_cmd =
+  command
+    "project-bank"
+    "Create balanced bank movement entries from stored events."
+    Term.(const project_bank $ database)
+;;
+
+let export_hledger database =
+  Store.with_open database (fun db ->
+    let* journal = Finances_hledger.export db in
+    Out_channel.output_string stdout journal;
+    Ok ())
+;;
+
+let export_hledger_cmd =
+  command
+    "export-hledger"
+    "Write a reproducible hledger journal to standard output."
+    Term.(const export_hledger $ database)
+;;
+
 let () =
   exit
     (Cmd.eval
        (Cmd.group
           (Cmd.info "finances" ~doc:"Personal finance accounting and position tracking.")
-          [ init; ingest_cmd; events; import_ofx_cmd ]))
+          [ init
+          ; ingest_cmd
+          ; events
+          ; import_ofx_cmd
+          ; project_bank_cmd
+          ; export_hledger_cmd
+          ]))
 ;;
