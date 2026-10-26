@@ -12,6 +12,7 @@ depends: [
   "rel"
   "conf-sqlite3"
   "core"
+  "core_unix"
   "ppx_jane"
   "bigdecimal"
   "cmdliner" {>= "1.3.0"}
@@ -19,6 +20,7 @@ depends: [
   "xmlm"
   "re"
   "digestif"
+  "csv" {>= "2.4"}
   "hledger"
   "alcotest" {with-test}
 ]

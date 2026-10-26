@@ -21,9 +21,14 @@ through Rel. SQLite is the source of truth.
 - Bank movement accounting entries against `equity:unclassified`, with atomic,
   repeatable projection from stored events.
 - Deterministic hledger journal export through the separate OCaml hledger binding.
+- Recursive inbox sync with content detection, per-file import history, and
+  atomic journal publication.
+- Persisted bank account names with audited updates to verified generated entries.
+- BoursoBank CSV enrichment with conservative OFX matching and a review report for
+  unmatched, ambiguous, or conflicting observations.
 
 The kernel does not yet fetch Paradex data, derive positions from fills, persist
-position observations, calculate funding, import CSV, categorize transactions, or
+position observations, calculate funding, categorize transactions, or
 infer opening balances. Those operations can be added around the core APIs.
 
 ## Setup
@@ -59,6 +64,18 @@ ocamlformat 0.29.0 with the Jane Street profile:
 opam install ocamlformat.0.29.0
 opam exec -- dune fmt
 ```
+
+Enable the version-controlled pre-commit formatting check in each checkout:
+
+```sh
+git config --local core.hooksPath .githooks
+```
+
+The hook checks all staged OCaml sources with ocamlformat using the repository's
+configuration. It never rewrites files. If it blocks a commit, run `opam exec --
+dune fmt`, stage the formatted files, and retry. Opam and the pinned ocamlformat
+version must be installed. The hook is enabled in this checkout.
+
 
 ## CLI
 
@@ -106,11 +123,12 @@ dates. OFX `DTUSER` was an invalid calendar date in every transaction, so the
 parser keeps it as opaque metadata. It is omitted from the canonical transaction
 payload used for replay; its original value remains in the archived document.
 Formatting whitespace is normalized in transaction payloads, while other changes
-to a transaction's canonical XML cause a conflict. CSV enrichment is a future step.
+to a transaction's canonical XML cause a conflict. CSV enrichment is described below.
 
 `Source_event.occurrence` distinguishes `At_ms` from `On_date`. The `events` command
-prints `occurred_at_ms: null` and a populated `occurred_on` for bank records.
-Opening an existing schema version 1 database migrates it atomically to version 2,
+prints `occurred_at_ms: null` and a populated `occurred_on` for OFX records.
+Wise records retain an instant and project using the local booking date.
+Opening a schema version 1, 2, 3, or 4 database migrates it atomically to version 5,
 preserving source IDs, evidence, journal entries, and exact posting quantities.
 The bank test fixture is synthetic; personal exports are not test fixtures.
 
@@ -169,11 +187,177 @@ These reports describe the imported period's movements. They are not current
 balances without verified opening balances, and outflows/inflows include transfers
 and other unclassified movements. No expense or income category is guessed. The
 observed export supplies available balances, which are not used as ledger opening
-balances. Adding CSV categories and reviewed transfer matching is a later step.
+balances. Reviewed categorization and transfer matching are later steps.
 
 The core `finances` library remains independent of hledger. The
 `finances.hledger` adapter and CLI use the pinned OCaml binding to render the
 journal; the external hledger CLI validates and queries that output.
+
+## Folder workflow
+
+See [the bank workflow design](docs/bank-workflow.md) for the complete plan and
+milestones. The first milestone is available:
+
+~~~sh
+mkdir -p personal/inbox personal/config
+# Copy bank exports into personal/inbox, then run after copying has completed.
+dune exec finances -- sync-bank personal/finances.sqlite3 personal/inbox \
+  --journal personal/bank.journal
+dune exec finances -- import-history personal/finances.sqlite3 --limit 100
+~~~
+
+Sync traverses regular files recursively in path order and detects OFX content
+even when an export has a different extension. It ignores symbolic links, hidden
+paths, and names ending in .part, .tmp, or ~. Readable rejected and unsupported
+files are archived in SQLite with append-only attempt history. A bad file does not
+prevent unrelated files from importing. The default per-file limit is 64 MiB;
+--max-file-mib accepts 1–1024. Repeated or overlapping exports reuse existing
+evidence and entries. Input files are never modified or moved.
+
+The summary distinguishes imported documents, unchanged documents, rejected inputs,
+unsupported formats, unreadable files, and ignored paths. The observed BoursoBank
+CSV layout and Wise 23-column CSV are supported as enrichment. Excel, QIF, and other CSV layouts are
+reported as unsupported. CSV never creates a second
+transaction stream.
+
+Successful files commit independently. Sync generates a journal from successfully
+imported data even if some files need review, and returns a nonzero exit for
+rejected or unreadable inputs. Unsupported companions are visible in the summary
+without failing sync. The CSV summary separately counts matched, unmatched,
+ambiguous, and conflicting observations; review items do not prevent valid OFX
+entries from being exported. History is returned as JSON, newest attempt first.
+
+To give bank accounts readable ledger names:
+
+~~~sh
+dune exec finances -- bank-accounts personal/finances.sqlite3 \
+  > personal/config/accounts.json
+# Edit ledger_account fields, retaining each account's source identity.
+dune exec finances -- map-bank-accounts personal/finances.sqlite3 \
+  personal/config/accounts.json
+dune exec finances -- sync-bank personal/finances.sqlite3 personal/inbox \
+  --accounts personal/config/accounts.json --journal personal/bank.journal
+~~~
+
+Mapping JSON contains exactly institution, bank_id, account_id, account_type,
+and ledger_account per object. Targets must be below assets:bank:. Mappings are
+stored in SQLite and remain effective without the JSON file. A partial config
+retains omitted mappings. Unknown or duplicate source identities are rejected.
+Changing a name updates only the bank posting of verified existing generated
+entries, preserving amounts and dates; conflicting edits roll back all mappings,
+audit rows, and posting changes. A shared ledger name consolidates reporting but
+does not merge source identities or deduplicate differently masked account exports.
+
+Keep the database, mapping config, and journal outside the inbox. Sync rejects
+paths that would ingest its own outputs or overwrite a control file, and skips
+hard links to its control files. Journal publication uses an atomic rename after
+all accounting work succeeds; mapping,
+projection, or output failures leave the old journal intact. Previously accepted
+source files remain in SQLite for retry. The staging directory is TMPDIR (or the
+journal directory when unset) and must share the journal's filesystem.
+
+## Wise and multiple banks
+
+Wise CAMT.053.001.10 XML supplies movements, full booking timestamps, account
+currency, and opening/closing booked balances. The matching 23-column Wise CSV is
+optional enrichment. Keep a separate inbox per institution and sync both into the
+same database and journal:
+
+```sh
+finances sync-bank personal/finances.sqlite3 personal/inbox \
+  --institution boursobank --journal personal/bank.journal
+finances sync-bank personal/finances.sqlite3 personal/wise/inbox \
+  --institution wise --journal personal/bank.journal
+finances wise-status personal/finances.sqlite3
+hledger -f personal/bank.journal --strict check
+hledger -f personal/bank.journal register assets:bank:wise
+```
+
+Each sync regenerates the journal from all stored bank entries. Default account
+names include institution, bank, account type, and account ID; Wise balance account
+types include currency. Existing account mappings also work for Wise. Wise exports
+require `--institution wise` to prevent accidental imports under the BoursoBank
+default. CSV and XML may arrive in either order.
+
+Wise references can repeat for reversals. Identity therefore includes the
+normalized proprietary transaction reference, full UTC nanosecond booking instant,
+and debit/credit direction, scoped by institution and balance account. Cashback
+UUID formatting is normalized. Amount is evidence, so a changed amount for an
+existing identity rejects the whole import. Indistinguishable duplicate movements
+within a statement are rejected rather than collapsed. Original bytes remain archived.
+
+The parser requires booked entries and exact reconciliation of opening balance
+plus signed movements with closing balance. `wise-status` independently computes
+that difference from stored statement/event links and lists CSV matching states.
+Statement balances are observations; the journal contains movements without
+inferred opening-balance entries.
+
+Wise CSV matching requires reference, local millisecond booking clock, exact signed
+amount, and currency to agree uniquely in both directions within a document. CSV
+has no timezone or reliable balance-account identity, so ambiguity remains visible.
+Fees and FX metadata disagreements across exports are audited as conflicts.
+Uncontested matches add `wise-merchant`, `wise-payment-reference`,
+`wise-reported-fees`, and `wise-csv-row-id` journal tags where available. Fees remain
+metadata: no extra fee posting or currency conversion is inferred. The supplied
+samples cover EUR with zero fees; synthetic tests cover fee metadata and currency
+isolation, but real FX and nonzero-fee exports need further validation.
+
+## Optional CSV enrichment
+
+OFX is sufficient to import transactions. For BoursoBank's fuller data, put both
+OFX and CSV exports for the same accounts and period in the inbox. Either may
+arrive first; repeat sync when more evidence arrives. The current reader supports
+the observed UTF-8 semicolon CSV layout, including quoted/multiline fields and an
+optional BOM. The two columns named Solde are interpreted by their fixed positions:
+column 7 is the exact French-decimal movement amount, and column 11 is a separate
+reported balance using dot decimals. A different layout is not guessed.
+
+CSV rows are immutable observations keyed by archived document and logical data
+row number. They preserve value dates, original and suggested descriptions, bank
+categories and parent categories, comments, account labels, reported balances, and
+raw pointage. The exact input file stays archived. No CSV row creates a source
+movement or posting.
+
+Automatic linking requires an exact institution, source account ID, booking date,
+amount, and whitespace-normalized original description match to OFX. It does not
+use suggested labels as identity. Multiple OFX candidates, multiple rows claiming
+one movement within one CSV document, or conflicting nonempty metadata across
+exports require review. Account masks are not guessed or stripped. Currency comes
+from the matched OFX movement; CSV does not supply a currency or perform FX
+conversion. CSV-only observations wait for OFX.
+
+~~~sh
+# Recompute automatically during sync, or explicitly after other imports:
+dune exec finances -- match-bank-csv personal/finances.sqlite3
+# Inspect all observations or just those still needing review:
+dune exec finances -- csv-enrichments personal/finances.sqlite3
+dune exec finances -- csv-enrichments personal/finances.sqlite3 --review
+~~~
+
+Matching states and their changes are saved in SQLite. Overlapping CSV files can
+observe the same movement without creating it again. Later OFX evidence can make
+an earlier automatic match ambiguous; the rematch is audited, and uncertain
+metadata is removed from the generated journal. This is a review report, not yet a
+manual match-approval interface.
+
+For uncontested matches, the journal includes CSV value dates as secondary dates,
+bank category/parent-category/suggested-description tags, and CSV row IDs. Commas,
+colons, semicolons, and control characters in source labels are rendered safely;
+original text remains in SQLite. These tags are source suggestions, not accepted
+expense or income classifications. Core accounting postings and booking dates are
+unchanged, and CSV pointage does not mark entries cleared.
+
+~~~sh
+# Transactions with uniquely matched bank category metadata:
+hledger --no-conf -f personal/bank.journal register assets:bank tag:bank-category
+# Secondary dates use CSV value dates where available:
+hledger --no-conf -f personal/bank.journal register assets:bank --date2
+~~~
+
+The journal header reports matched-event and review-row counts. Entries without a
+matched CSV value date retain no secondary date; hledger falls back to the booking
+date for those entries. Do not treat a partial match as complete value-date coverage.
+
 
 ## Library
 
@@ -211,7 +395,7 @@ tokens; tokens allow letters, digits, underscores, and hyphens.
 ## Design
 
 See [the architecture notes](docs/architecture.md) for storage ownership,
-invariants, and the next steps toward Paradex reconciliation.
+invariants, and the bank workflow milestones.
 
 ## License
 

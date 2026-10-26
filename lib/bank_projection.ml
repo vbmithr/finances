@@ -14,7 +14,7 @@ let account_component value =
        |> String.concat)
 ;;
 
-let ledger_account ~institution (account : Bank_ofx.account) =
+let ledger_account_for ~institution (account : Bank_transaction.account) =
   let name =
     String.concat
       ~sep:":"
@@ -24,6 +24,16 @@ let ledger_account ~institution (account : Bank_ofx.account) =
            ~f:account_component)
   in
   Validation.account name
+;;
+
+let ledger_account ~institution (account : Bank_ofx.account) =
+  ledger_account_for
+    ~institution
+    { Bank_transaction.bank_id = account.bank_id
+    ; account_id = account.account_id
+    ; account_type = account.account_type
+    ; currency = account.currency
+    }
 ;;
 
 let description_component text =
@@ -41,10 +51,15 @@ let description_component text =
   |> String.concat ~sep:" "
 ;;
 
-let entry event =
+let entry ?bank_account event =
   let open Or_error.Let_syntax in
-  let%bind account, transaction = Bank_ofx.source_transaction event in
-  let%bind bank_account = ledger_account ~institution:event.venue account in
+  let%bind transaction = Bank_transaction.of_event event in
+  let account = transaction.account in
+  let%bind bank_account =
+    match bank_account with
+    | None -> ledger_account_for ~institution:event.venue account
+    | Some name -> Validation.account name
+  in
   let%bind incoming =
     Accounting.posting
       ~account:bank_account

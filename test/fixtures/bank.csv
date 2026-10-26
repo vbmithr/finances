@@ -1,0 +1,5 @@
+Date Opération;Date Valeur;Libellé;Libellé Suggéré;Catégorie;Catégorie Parente;Solde;Commentaire;Numéro Compte;Libellé Compte;Solde;Pointage
+2026-01-03;2026-01-04;CAFÉ & CO;Coffee;Food, drinks;Daily;-0,10;"source; note
+second line";CHECKING;Current;100.01;Non
+2026-01-04;2026-01-05;Synthetic precision example;Incoming;Transfers;Accounts;12345678901234567890,1234567890123456789;;CHECKING;Current;100.01;Non
+2026-01-04;2026-01-04;Synthetic debit;Purchase;Other;Daily;-42,95;;SAVINGS;Savings;200.02;Non

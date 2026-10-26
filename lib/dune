@@ -1,7 +1,9 @@
+(include_subdirs unqualified)
+
 (library
  (name finances)
  (public_name finances)
  (private_modules validation db_schema)
- (libraries core bigdecimal rel rel.sqlite3 yojson xmlm re digestif)
+ (libraries core bigdecimal rel rel.sqlite3 yojson xmlm re digestif csv)
  (preprocess
   (pps ppx_jane)))

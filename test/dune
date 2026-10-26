@@ -4,6 +4,40 @@
  (libraries finances core alcotest rel rel.sqlite3))
 
 (test
+ (name csv_test)
+ (modules csv_test)
+ (deps
+  (glob_files fixtures/*))
+ (libraries
+  finances
+  finances.bank
+  finances.hledger
+  hledger
+  core
+  core_unix
+  core_unix.filename_unix
+  alcotest
+  rel
+  rel.sqlite3))
+
+(test
+ (name inbox_test)
+ (modules inbox_test)
+ (deps
+  (glob_files fixtures/*))
+ (libraries
+  finances
+  finances.bank
+  finances.hledger
+  hledger
+  core
+  core_unix
+  core_unix.filename_unix
+  alcotest
+  rel
+  rel.sqlite3))
+
+(test
  (name journal_test)
  (modules journal_test)
  (deps fixtures/bank.ofx)
@@ -15,3 +49,20 @@
  (deps
   (glob_files fixtures/*))
  (libraries finances core alcotest rel rel.sqlite3))
+
+(test
+ (name wise_test)
+ (modules wise_test)
+ (deps
+  (glob_files fixtures/*))
+ (libraries
+  finances
+  finances.bank
+  finances.hledger
+  hledger
+  core
+  core_unix
+  core_unix.filename_unix
+  alcotest
+  rel
+  rel.sqlite3))

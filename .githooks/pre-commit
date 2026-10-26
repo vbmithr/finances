@@ -1,0 +1,18 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+cd "$(git rev-parse --show-toplevel)"
+
+# Check the index, so unstaged formatting cannot hide an unformatted commit.
+# Check all tracked OCaml sources, including when formatting configuration changes.
+failed=0
+while IFS= read -r -d '' path; do
+  if ! git show ":$path" | opam exec -- ocamlformat --check --name "$path" -; then
+    failed=1
+  fi
+done < <(git ls-files --cached -z -- '*.ml' '*.mli')
+
+if (( failed )); then
+  echo 'OCaml formatting check failed. Run opam exec -- dune fmt, then stage the formatted files and retry.' >&2
+  exit 1
+fi

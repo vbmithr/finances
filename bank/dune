@@ -1,0 +1,6 @@
+(library
+ (name finances_bank)
+ (public_name finances.bank)
+ (libraries finances finances.hledger core core_unix core_unix.filename_unix)
+ (preprocess
+  (pps ppx_jane)))

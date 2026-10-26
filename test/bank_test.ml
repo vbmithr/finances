@@ -1,4 +1,5 @@
 open Core
+open Rel
 open Finances
 
 let ok = Or_error.ok_exn
@@ -41,7 +42,7 @@ let sql db text =
 ;;
 
 let scalar db query =
-  let stmt = Rel_sql.Stmt.v query ~rev_args:[] ~result:Rel.Row.(t1 (int "value")) in
+  let stmt = Rel_sql.Stmt.v query ~rev_args:[] ~result:Row.(t1 (int "value")) in
   Rel_sqlite3.first db stmt
   |> Rel_sqlite3.string_error
   |> Result.ok_or_failwith
@@ -160,7 +161,7 @@ let replay_and_archive () =
         Rel_sql.Stmt.v
           "SELECT contents FROM import_documents"
           ~rev_args:[]
-          ~result:Rel.Row.(t1 (blob "contents"))
+          ~result:Row.(t1 (blob "contents"))
       in
       let archived =
         Rel_sqlite3.first db stmt
@@ -250,12 +251,12 @@ VALUES(9,0,'assets:cash','EUR','0.1234567890123456789'),
            (List.hd_exn entry.postings).quantity
            (Bigdecimal.of_string "0.1234567890123456789")));
     with_raw path (fun db ->
-      Alcotest.(check int) "version advanced" 2 (scalar db "PRAGMA user_version");
+      Alcotest.(check int) "version advanced" 5 (scalar db "PRAGMA user_version");
       let check =
         Rel_sql.Stmt.v
           "PRAGMA foreign_key_check"
           ~rev_args:[]
-          ~result:Rel.Row.(t4 (text "table") (int64 "rowid") (text "parent") (int "fkid"))
+          ~result:Row.(t4 (text "table") (int64 "rowid") (text "parent") (int "fkid"))
       in
       Alcotest.(check bool)
         "foreign keys remain valid"
