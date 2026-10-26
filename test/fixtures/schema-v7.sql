@@ -337,4 +337,3 @@ BEGIN SELECT RAISE(ABORT, 'Bunq matching history is append-only'); END;
 CREATE TRIGGER bunq_csv_match_changes_no_delete BEFORE DELETE ON bunq_csv_match_changes
 BEGIN SELECT RAISE(ABORT, 'Bunq matching history is append-only'); END;
 PRAGMA user_version=7;
-
