@@ -172,8 +172,11 @@ downloaded files; a file you name is always processed, and fails the command if
 no bank recognizes it. A file that clearly comes from another bank is rejected
 and appears in `fin bank history`.
 
-For Revolut, choose a stable account label; use separate labels and inboxes for
-different accounts. Sync scans the folder recursively, archives the inputs,
+For Revolut, choose a stable account label with `--account-id`, since its CSV does
+not identify the account; use separate labels and folders for different Revolut
+accounts. Revolut exports one file per currency: sync them together under one
+label, and each currency becomes its own account. Reverted transactions, which
+never moved money, are skipped. Sync scans the folder recursively, archives the inputs,
 imports movements, projects accounting entries and publishes a combined
 `bank.journal` beside the selected database. `--journal FILE` chooses another
 output location. Syncing each bank into the same database produces one combined

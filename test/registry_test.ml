@@ -170,6 +170,40 @@ let currencies () =
   rejected "validation" (Validation.currency "currency" "XYZ")
 ;;
 
+let reverted () =
+  let csv rows =
+    String.concat
+      ~sep:"\n"
+      ("Type,Product,Started Date,Completed \
+        Date,Description,Amount,Fee,Currency,State,Balance"
+       :: rows)
+  in
+  let completed =
+    "TOPUP,Current,2026-01-02 10:00:00,2026-01-02 \
+     10:00:01,Top-up,10.00,0.00,EUR,COMPLETED,10.00"
+  and reverted =
+    "CARD_PAYMENT,Current,2026-01-03 09:00:00,,Shop,-4.00,0.00,EUR,REVERTED,"
+  in
+  let parsed = ok (Revolut_csv.parse ~account_id:"main" (csv [ completed; reverted ])) in
+  Alcotest.(check int) "reverted row skipped" 1 (List.length parsed.transactions);
+  rejected
+    "a reverted row with a balance is not a reverted row"
+    (Revolut_csv.parse
+       ~account_id:"main"
+       (csv
+          [ completed
+          ; "CARD_PAYMENT,Current,2026-01-03 09:00:00,,Shop,-4.00,0.00,EUR,REVERTED,6.00"
+          ]));
+  rejected
+    "pending rows still reject the file"
+    (Revolut_csv.parse
+       ~account_id:"main"
+       (csv
+          [ completed
+          ; "CARD_PAYMENT,Current,2026-01-03 09:00:00,,Shop,-4.00,0.00,EUR,PENDING,"
+          ]))
+;;
+
 let () =
   Alcotest.run
     "registry"
@@ -179,6 +213,7 @@ let () =
         ; Alcotest.test_case "aliases" `Quick aliases
         ; Alcotest.test_case "unregistered institution import" `Quick unregistered_import
         ; Alcotest.test_case "ISO 4217 currencies" `Quick currencies
+        ; Alcotest.test_case "reverted Revolut rows" `Quick reverted
         ] )
     ]
 ;;

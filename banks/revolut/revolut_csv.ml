@@ -150,8 +150,12 @@ let parse ~account_id contents =
     let balances = Hashtbl.create (module Iso4217) in
     let transactions =
       Csv.input_all input
-      |> List.map ~f:(fun fields ->
+      |> List.filter_map ~f:(fun fields ->
         match fields with
+        (* A reverted transaction never completed and never changed the balance:
+           Revolut lists it with no completion date and no balance. The document
+           keeps it as evidence; it is not a movement. *)
+        | [ _; "Current"; _; ""; _; _; _; _; "REVERTED"; "" ] -> None
         | [ transaction_type
           ; "Current"
           ; started_at
@@ -204,8 +208,10 @@ let parse ~account_id contents =
               if not Quantity.(previous_balance + tx.amount = balance)
               then failwith "Revolut running balance does not agree with amount minus fee");
           Hashtbl.set balances ~key:currency ~data:(completed_at, balance);
-          tx
-        | _ -> failwith "expected ten-column completed Revolut Current transactions")
+          Some tx
+        | _ ->
+          failwith
+            "expected ten-column completed or reverted Revolut Current transactions")
     in
     { contents; transactions })
   |> fun r -> Or_error.tag r ~tag:"Revolut CSV"

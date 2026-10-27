@@ -14,6 +14,9 @@ short line of their own.
 rebuild: `fin backup`, `fin delete`, `fin init`, then sync each bank's statements
 again.
 
+- Revolut exports with reverted transactions import: reverted rows, which Revolut
+  lists with no completion date and no balance, are skipped instead of rejecting
+  the whole file. Pending rows still reject it.
 - `fin accounts edit` opens the accounts in your editor and applies the edits on
   save: ledger names, IBANs and card settlement links. Invalid edits apply nothing
   and can be edited again; the result is saved as the account configuration.

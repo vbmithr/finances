@@ -412,7 +412,8 @@ The baseline includes Revolut document/account context,
 immutable daily movement inventories, current transfer decisions, unique per-event
 confirmed memberships, and append-only transfer changes.
 
-`Revolut_csv` supports the observed completed Current-account CSV. Its caller must
+`Revolut_csv` supports the observed Current-account CSV: completed rows are
+movements, reverted rows (no completion date, no balance) are skipped. Its caller must
 provide an account label because the file cannot identify the account. Canonical
 payloads retain local start/completion clocks, signed principal and nonnegative fee;
 booking is a calendar completion date. Source identities include occurrence numbers

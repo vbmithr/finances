@@ -636,8 +636,11 @@ fin bank sync revolut personal/revolut/inbox \
 The CSV has no account identifier. Supply a stable label (`main` here) for that
 specific account every time; different accounts need different labels and inboxes.
 A previously imported document cannot be reassigned to another label. Currency is
-part of the account identity. Only completed `Current` transactions are supported;
-pending, reversed, or other products reject the file for review.
+part of the account identity, so one label covers an account's balances in every
+currency; Revolut exports one file per currency. Completed `Current` transactions
+are imported. Reverted ones, which Revolut lists with no completion date and no
+balance because they never moved money, are skipped; the stored document keeps them.
+Pending transactions or other products reject the file for review.
 
 The adapter validates exact decimal fields and each consecutive running balance
 per currency against **Amount − Fee**. The first opening balance is not independently
