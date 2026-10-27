@@ -16,3 +16,20 @@ let nanoseconds_since_epoch_exn time =
   then invalid_arg "timestamp exceeds supported nanosecond range";
   Int64.((days * ns_per_day) + fraction)
 ;;
+
+let to_rfc3339 time = Ptime.to_rfc3339 ~frac_s:12 ~tz_offset_s:0 time
+
+let of_unix_ms_exn ms =
+  let day_ms = 86400000L in
+  let days = Stdlib.Int64.div ms day_ms
+  and remainder = Stdlib.Int64.rem ms day_ms in
+  let days, remainder =
+    if Int64.(remainder < 0L)
+    then Int64.(days - 1L), Int64.(remainder + day_ms)
+    else days, remainder
+  in
+  let span = Ptime.Span.v (Int64.to_int_exn days, Int64.(remainder * 1000000000L)) in
+  match Ptime.of_span span with
+  | Some time -> time
+  | None -> invalid_arg "Unix milliseconds outside Ptime range"
+;;

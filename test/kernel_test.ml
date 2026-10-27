@@ -49,7 +49,7 @@ let event
        ~account
        ~kind
        ~source_id:id
-       ~occurred_at_ms:at
+       ~occurred_at:(Timestamp.of_unix_ms_exn at)
        ~payload)
 ;;
 
@@ -262,6 +262,50 @@ let linear_perpetual () =
        ~multiplier:Quantity.zero)
 ;;
 
+let precise_timestamps () =
+  with_database (fun path ->
+    let samples =
+      [ "latest", "9999-12-31T23:59:59.999999999999Z"
+      ; "second", "2026-10-27T00:00:00.000000000002Z"
+      ; "before_epoch", "1969-12-31T23:59:59.999000000000Z"
+      ; "first", "2026-10-27T00:00:00.000000000001Z"
+      ]
+    in
+    let make id text =
+      ok
+        (Source_event.create
+           ~venue:"clock"
+           ~account:"main"
+           ~kind:"observation"
+           ~source_id:id
+           ~occurred_at:(Timestamp.of_rfc3339_exn text)
+           ~payload:"raw")
+    in
+    with_store path (fun db ->
+      List.iter samples ~f:(fun (id, text) ->
+        ignore (ok (Store.ingest db (make id text))));
+      let equivalent = make "first" "2026-10-27T01:00:00.000000000001+01:00" in
+      (match ok (Store.ingest db equivalent) with
+       | Existing _ -> ()
+       | Inserted _ -> Alcotest.fail "equivalent offset duplicated an instant");
+      error (Store.ingest db (make "first" "2026-10-27T00:00:00.000000000002Z")));
+    with_store path (fun db ->
+      let rows = ok (Store.events db) in
+      Alcotest.(check (list string))
+        "SQL chronology preserves picoseconds"
+        [ "before_epoch"; "first"; "second"; "latest" ]
+        (List.map rows ~f:(fun (_, e) -> e.Source_event.source_id));
+      List.iter rows ~f:(fun (_, e) ->
+        match e.Source_event.occurred with
+        | At instant ->
+          let expected = List.Assoc.find_exn samples e.source_id ~equal:String.equal in
+          Alcotest.(check string)
+            "full precision survives reopen"
+            expected
+            (Timestamp.to_rfc3339 instant)
+        | On_date _ -> Alcotest.fail "instant changed into a date")))
+;;
+
 let () =
   Alcotest.run
     "finances kernel"
@@ -270,6 +314,7 @@ let () =
           [ "source replay and conflicts", replay
           ; "scoped source IDs", source_scoping
           ; "event chronology", chronology
+          ; "Ptime precision and chronological SQL ordering", precise_timestamps
           ; "journal replay and exact decimals", journal_replay
           ; "foreign keys", foreign_keys
           ; "atomic rollback", rollback

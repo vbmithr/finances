@@ -174,7 +174,7 @@ let match_rows rows candidates =
       ~key:
         (key
            tx.Wise_camt.reference
-           (Wise_camt.local_millisecond tx.booked_at)
+           (Wise_camt.local_millisecond tx.booked_at_source)
            tx.amount
            tx.account.currency)
       ~data:id);

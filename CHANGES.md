@@ -10,6 +10,20 @@ short line of their own.
 
 ### 2026-10-27
 
+**Action required:** schema 13 refuses earlier databases unchanged. Export account
+settings with the previous binary, back up, then delete/init/reimport statements
+and restore the account snapshot. See the manual's storage instructions.
+`fin db events` replaces `occurred_at_ms` with RFC 3339 `occurred_at`; statement
+report instants and audit times now use canonical UTC text with 12 fractional digits.
+
+- Instants use `Ptime.t` throughout the OCaml model, including source events, Wise
+  booking and statement times, and import/review audit timestamps. Rel codecs store
+  them as UTC text, preserving all picoseconds and indexed chronological sorting.
+- Statement boundaries distinguish dates from instants. Raw bank timestamp text,
+  Wise local booking days, source IDs and payloads remain unchanged. Offset-free
+  Revolut clocks remain local source text. The `--at-ms` ingest input converts
+  exactly at the CLI boundary, including valid pre-epoch dates.
+
 - Internal: replace the OFX bank functor with ordinary functions. Parsing takes
   an explicit institution; probing and decoding need no bank parameters. Account
   identities, imports and journal output are unchanged.

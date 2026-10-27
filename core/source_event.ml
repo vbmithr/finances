@@ -1,7 +1,7 @@
 open Base
 
 type occurrence =
-  | At_ms of int64
+  | At of Ptime.t
   | On_date of Date.t
 
 type t =
@@ -22,10 +22,8 @@ let make ~venue ~account ~kind ~source_id ~occurred ~payload =
   { venue; account; kind; source_id; occurred; payload }
 ;;
 
-let create ~venue ~account ~kind ~source_id ~occurred_at_ms ~payload =
-  if Int64.(occurred_at_ms < 0L)
-  then Or_error.error_string "event timestamp must be nonnegative Unix milliseconds"
-  else make ~venue ~account ~kind ~source_id ~occurred:(At_ms occurred_at_ms) ~payload
+let create ~venue ~account ~kind ~source_id ~occurred_at ~payload =
+  make ~venue ~account ~kind ~source_id ~occurred:(At occurred_at) ~payload
 ;;
 
 let create_dated ~venue ~account ~kind ~source_id ~occurred_on ~payload =

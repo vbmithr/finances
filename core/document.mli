@@ -2,15 +2,19 @@
     carry the adapter's institution as venue; the kernel checks this. *)
 
 (** A bank-stated period and balances, with the movements the statement lists.
-    Dates are the bank's text: a calendar date or a timestamp with offset. *)
+    Calendar dates remain dates; instants use Ptime without an invented timezone. *)
+type time =
+  | Date of Date.t
+  | Instant of Ptime.t
+
 type statement =
   { source_account : string
   ; reference : string option
   ; currency : Iso4217.t
-  ; period_start : string
-  ; period_end : string
-  ; opening_as_of : string
-  ; closing_as_of : string
+  ; period_start : time
+  ; period_end : time
+  ; opening_as_of : time
+  ; closing_as_of : time
   ; opening : Quantity.t
   ; closing : Quantity.t
   ; events : Source_event.t list
@@ -25,3 +29,5 @@ type t =
   }
 
 val empty : t
+val time_to_string : time -> string
+val time_of_string_exn : string -> time

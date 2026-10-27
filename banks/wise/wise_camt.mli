@@ -10,9 +10,9 @@ type account =
 type transaction = private
   { account : account
   ; reference : string
-  ; booked_at : string
-  ; instant_ns : string
-  ; occurred_at_ms : int64
+  ; booked_at : Ptime.t
+  ; booked_at_source : string
+    (** Original offset-bearing lexeme for evidence and local CSV matching. *)
   ; booked_on : Date.t
   ; value_on : Date.t option
   ; amount : Quantity.t
@@ -25,10 +25,10 @@ type transaction = private
 type statement = private
   { account : account
   ; statement_id : string
-  ; period_start : string
-  ; period_end : string
-  ; opening_at : string
-  ; closing_at : string
+  ; period_start : Ptime.t
+  ; period_end : Ptime.t
+  ; opening_at : Ptime.t
+  ; closing_at : Ptime.t
   ; opening : Quantity.t
   ; closing : Quantity.t
   ; transactions : transaction list

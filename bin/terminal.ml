@@ -64,7 +64,7 @@ let import_history attempts =
       Stdio.printf
         "#%Ld  %s  %s  %s\n"
         a.attempt_id
-        (text a.attempted_at)
+        (text (Timestamp.to_rfc3339 a.attempted_at))
         (text a.institution)
         (Bank_import.outcome_name a.outcome);
       Stdio.printf "  File: %s\n" (text a.path);

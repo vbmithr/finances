@@ -1,7 +1,7 @@
 open Base
 
 type occurrence =
-  | At_ms of int64
+  | At of Ptime.t
   | On_date of Date.t
 
 (** Immutable source evidence. Identity is scoped to venue, account and kind. *)
@@ -19,7 +19,7 @@ val create
   -> account:string
   -> kind:string
   -> source_id:string
-  -> occurred_at_ms:int64
+  -> occurred_at:Ptime.t
   -> payload:string
   -> t Or_error.t
 

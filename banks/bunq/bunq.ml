@@ -64,10 +64,10 @@ let parse ~context:_ ~format contents =
                     ])
           ; reference = None
           ; currency = document.currency
-          ; period_start = Date.to_string document.opening_on
-          ; period_end = Date.to_string document.closing_on
-          ; opening_as_of = Date.to_string document.opening_on
-          ; closing_as_of = Date.to_string document.closing_on
+          ; period_start = Document.Date document.opening_on
+          ; period_end = Document.Date document.closing_on
+          ; opening_as_of = Document.Date document.opening_on
+          ; closing_as_of = Document.Date document.closing_on
           ; opening = document.opening
           ; closing = document.closing
           ; events

@@ -98,6 +98,25 @@ let calendar_and_clock () =
     (Result.is_error (Or_error.try_with (fun () -> ns "1969-12-31T23:59:59Z")))
 ;;
 
+let millisecond_boundary () =
+  List.iter
+    [ -1L, "1969-12-31T23:59:59.999000000000Z"
+    ; 0L, "1970-01-01T00:00:00.000000000000Z"
+    ; 1L, "1970-01-01T00:00:00.001000000000Z"
+    ; 86400001L, "1970-01-02T00:00:00.001000000000Z"
+    ]
+    ~f:(fun (ms, expected) ->
+      Alcotest.(check string)
+        "exact conversion"
+        expected
+        (Timestamp.to_rfc3339 (Timestamp.of_unix_ms_exn ms)));
+  List.iter [ Int64.min_value; Int64.max_value ] ~f:(fun ms ->
+    check
+      "out of Ptime range rejected"
+      true
+      (Result.is_error (Or_error.try_with (fun () -> Timestamp.of_unix_ms_exn ms))))
+;;
+
 let () =
   Alcotest.run
     "Decimal and calendar migration"
@@ -106,6 +125,7 @@ let () =
           [ "exact arithmetic", exact_arithmetic
           ; "canonical storage and finite values", canonical_storage
           ; "calendar and timestamps", calendar_and_clock
+          ; "external millisecond conversion", millisecond_boundary
           ]
           ~f:(fun (name, f) -> Alcotest.test_case name `Quick f) )
     ]

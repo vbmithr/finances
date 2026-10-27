@@ -10,9 +10,8 @@ type account =
 type transaction =
   { account : account
   ; reference : string
-  ; booked_at : string
-  ; instant_ns : string
-  ; occurred_at_ms : int64
+  ; booked_at : Ptime.t
+  ; booked_at_source : string
   ; booked_on : Date.t
   ; value_on : Date.t option
   ; amount : Quantity.t
@@ -25,10 +24,10 @@ type transaction =
 type statement =
   { account : account
   ; statement_id : string
-  ; period_start : string
-  ; period_end : string
-  ; opening_at : string
-  ; closing_at : string
+  ; period_start : Ptime.t
+  ; period_end : Ptime.t
+  ; opening_at : Ptime.t
+  ; closing_at : Ptime.t
   ; opening : Quantity.t
   ; closing : Quantity.t
   ; transactions : transaction list
@@ -115,12 +114,7 @@ let normalize_reference ~description reference =
   | None -> reference
 ;;
 
-let timestamp value =
-  let time = Timestamp.of_rfc3339_exn value in
-  let ns = Timestamp.nanoseconds_since_epoch_exn time in
-  if Int64.(ns < 0L) then failwith "Wise timestamp is before the supported epoch";
-  ns
-;;
+let timestamp = Timestamp.of_rfc3339_exn
 
 let local_millisecond text =
   if String.length text < 19 then failwith "Wise booking timestamp lacks a clock time";
@@ -139,9 +133,9 @@ let local_millisecond text =
 let make_transaction account ~reference ~booked_at ~value_on ~amount ~credit ~description =
   if (credit && Quantity.(amount < zero)) || ((not credit) && Quantity.(amount > zero))
   then failwith "Wise amount sign disagrees with direction";
-  let ns = timestamp booked_at in
-  let instant_ns = Int64.to_string ns in
-  let occurred_at_ms = Int64.(ns / 1000000L) in
+  let booked_at_source = booked_at in
+  let instant = timestamp booked_at in
+  let instant_ns = Int64.to_string (Timestamp.nanoseconds_since_epoch_exn instant) in
   let booked_on = Date.of_string (String.prefix booked_at 10) in
   let reference = normalize_reference ~description reference in
   ignore (Validation.text "Wise reference" reference |> Or_error.ok_exn : string);
@@ -171,9 +165,8 @@ let make_transaction account ~reference ~booked_at ~value_on ~amount ~credit ~de
   in
   { account
   ; reference
-  ; booked_at
-  ; instant_ns
-  ; occurred_at_ms
+  ; booked_at = instant
+  ; booked_at_source
   ; booked_on
   ; value_on
   ; amount
@@ -231,9 +224,10 @@ let parse_statement node =
   let statement_id = value node [ "Id" ] in
   let period_start = value node [ "FrToDt"; "FrDtTm" ]
   and period_end = value node [ "FrToDt"; "ToDtTm" ] in
-  let from_ns = timestamp period_start
-  and to_ns = timestamp period_end in
-  if Int64.(from_ns > to_ns) then failwith "reversed Wise statement interval";
+  let period_start = timestamp period_start
+  and period_end = timestamp period_end in
+  if Ptime.compare period_start period_end > 0
+  then failwith "reversed Wise statement interval";
   let balance code =
     let balances =
       List.filter (children "Bal" node) ~f:(fun balance ->
@@ -242,8 +236,7 @@ let parse_statement node =
     match balances with
     | [ balance ] ->
       let at = value balance [ "Dt"; "DtTm" ] in
-      ignore (timestamp at : int64);
-      signed_amount currency balance, at
+      signed_amount currency balance, timestamp at
     | _ ->
       Printf.failwithf "Wise statement requires exactly one %s booked balance" code ()
   in
@@ -254,8 +247,8 @@ let parse_statement node =
       if not (String.equal (value entry [ "Sts"; "Cd" ]) "BOOK")
       then failwith "only booked Wise entries are supported";
       let booked_at = value entry [ "BookgDt"; "DtTm" ] in
-      let ns = timestamp booked_at in
-      if Int64.(ns < from_ns || ns > to_ns)
+      let instant = timestamp booked_at in
+      if Ptime.compare instant period_start < 0 || Ptime.compare instant period_end > 0
       then failwith "Wise entry lies outside statement interval";
       let value_on =
         match optional entry [ "ValDt"; "Dt" ] with
@@ -264,7 +257,7 @@ let parse_statement node =
           Option.map
             (optional entry [ "ValDt"; "DtTm" ])
             ~f:(fun date ->
-              ignore (timestamp date : int64);
+              ignore (timestamp date : Ptime.t);
               Date.of_string (String.prefix date 10))
       in
       make_transaction
@@ -387,7 +380,7 @@ let source_transaction (event : Source_event.t) =
           && String.equal event.source_id tx.source_id))
       || not
            (match event.occurred with
-            | At_ms ms -> Int64.equal ms tx.occurred_at_ms
+            | At instant -> Ptime.equal instant tx.booked_at
             | _ -> false)
     then failwith "Wise source identity or booking timestamp disagrees with payload";
     tx)

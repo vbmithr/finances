@@ -44,7 +44,7 @@ let initialize () =
          check "fresh database empty" 0 (List.length (ok (Store.events db)));
          Ok ()));
     raw path (fun db ->
-      check "latest baseline" 12 (scalar db "PRAGMA user_version");
+      check "latest baseline" 13 (scalar db "PRAGMA user_version");
       check
         "all tables are strict"
         25
@@ -81,13 +81,14 @@ let sqlite_constraints () =
       in
       let event values =
         "INSERT INTO \
-         source_events(venue,account,kind,source_id,occurred_at_ms,occurred_on,payload) \
+         source_events(venue,account,kind,source_id,occurred_at,occurred_on,payload) \
          VALUES "
         ^ values
       in
       sql
         db
-        (event "('bank','main','transaction','valid',9223372036854775807,NULL,X'00')");
+        (event
+           "('bank','main','transaction','valid','9999-12-31T23:59:59.999999999999Z',NULL,X'00')");
       check
         "database supplies retrieval timestamp"
         1
@@ -97,7 +98,7 @@ let sqlite_constraints () =
             '????-??-??T??:??:??*Z'");
       rejected (event "('bank','main','transaction','neither',NULL,NULL,X'00')");
       rejected (event "('bank','main','transaction','both',1,'2026-10-27',X'00')");
-      rejected (event "('bank','main','transaction','negative',-1,NULL,X'00')");
+      rejected (event "('bank','main','transaction','invalid-integer',-1,NULL,X'00')");
       rejected (event "('bank','main','transaction','wrong-blob',1,NULL,'text')");
       rejected "UPDATE source_events SET account='changed'";
       rejected "DELETE FROM source_events";
@@ -127,12 +128,18 @@ let sqlite_constraints () =
       rejected (matching "unmatched" "1");
       rejected (matching "matched" "999");
       sql db (matching "matched" "1");
-      sql db (event "('bank','other','transaction','second',1,NULL,X'00')");
+      sql
+        db
+        (event
+           "('bank','other','transaction','second','1970-01-01T00:00:00.001000000000Z',NULL,X'00')");
       rejected "INSERT INTO bank_transfer_decisions VALUES (2,1,'confirmed','test')";
       rejected "INSERT INTO bank_transfer_decisions VALUES (1,2,'invalid','test')";
       sql db "INSERT INTO bank_transfer_decisions VALUES (1,2,'confirmed','test')";
       rejected "INSERT INTO bank_transfer_memberships VALUES (1,2,1)";
-      sql db (event "('bank','third','transaction','third',1,NULL,X'00')");
+      sql
+        db
+        (event
+           "('bank','third','transaction','third','1970-01-01T00:00:00.001000000000Z',NULL,X'00')");
       rejected "INSERT INTO bank_transfer_memberships VALUES (3,1,2)";
       sql db "INSERT INTO bank_transfer_memberships VALUES (1,1,2)";
       let attempt format outcome document inserted =
@@ -167,7 +174,7 @@ let generated_queries () =
            ~account
            ~kind
            ~source_id
-           ~occurred_at_ms:Int64.max_value
+           ~occurred_at:Ptime.max
            ~payload:"bytes\000payload")
     in
     let first = event "checking" "deposit" "quoted ' ? identifier" in
@@ -193,9 +200,9 @@ let generated_queries () =
          check "distinct keys preserved" 4 (List.length events);
          List.iter events ~f:(fun (_, e) ->
            Alcotest.(check bool)
-             "int64 and blob round-trip"
+             "Ptime and blob round-trip"
              true
-             (Poly.equal e.Source_event.occurred (Source_event.At_ms Int64.max_value)
+             (Poly.equal e.Source_event.occurred (Source_event.At Ptime.max)
               && String.equal e.payload first.payload));
          Ok ())))
 ;;
@@ -206,9 +213,9 @@ let large_rowid () =
     raw path (fun db ->
       sql
         db
-        "INSERT INTO \
-         source_events(id,venue,account,kind,source_id,occurred_at_ms,payload) VALUES \
-         (9223372036854775807,'bank','main','test','large-id',1,X'00')");
+        "INSERT INTO source_events(id,venue,account,kind,source_id,occurred_at,payload) \
+         VALUES \
+         (9223372036854775807,'bank','main','test','large-id','1970-01-01T00:00:00.001000000000Z',X'00')");
     ok
       (Store.with_open ~registry:Test_support.registry path (fun db ->
          let id, event = List.hd_exn (ok (Store.events db)) in
@@ -221,16 +228,21 @@ let large_rowid () =
 ;;
 
 let rejects_old () =
-  workspace (fun path ->
-    raw path (fun db ->
-      sql db "CREATE TABLE experimental_marker(value TEXT); PRAGMA user_version=9");
-    error (Store.with_open ~registry:Test_support.registry path (fun _ -> Ok ()));
-    raw path (fun db ->
-      check "old version left intact" 9 (scalar db "PRAGMA user_version");
-      check
-        "no migration attempted"
-        1
-        (scalar db "SELECT count(*) FROM sqlite_master WHERE type='table'")))
+  List.iter [ 9; 12 ] ~f:(fun version ->
+    workspace (fun path ->
+      raw path (fun db ->
+        sql
+          db
+          (Printf.sprintf
+             "CREATE TABLE experimental_marker(value TEXT); PRAGMA user_version=%d"
+             version));
+      error (Store.with_open ~registry:Test_support.registry path (fun _ -> Ok ()));
+      raw path (fun db ->
+        check "old version left intact" version (scalar db "PRAGMA user_version");
+        check
+          "no migration attempted"
+          1
+          (scalar db "SELECT count(*) FROM sqlite_master WHERE type='table'"))))
 ;;
 
 let initialization_rollback () =

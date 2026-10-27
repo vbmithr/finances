@@ -37,8 +37,9 @@ let initialize db =
     | _ ->
       Or_error.errorf
         "unsupported database schema; this experimental build accepts only schema %d. \
-         Back it up with fin backup if you need it, then run fin delete and fin init, \
-         and sync your statement folders again"
+         Use the previous fin version to export account settings and run fin backup \
+         before rebuilding. Then run fin delete and fin init, sync your statement \
+         folders again and import the account snapshot"
         Db_schema.version)
 ;;
 
@@ -139,14 +140,14 @@ let find_source =
 let insert_source =
   let open Db_schema.Source_events in
   let insert = Rel_sql.insert_into_cols Db.dialect table in
-  fun v_venue v_account v_kind v_source_id v_occurred_at_ms v_occurred_on v_payload ->
+  fun v_venue v_account v_kind v_source_id v_occurred_at v_occurred_on v_payload ->
     insert
       Col.
         [ Value (venue, v_venue)
         ; Value (account, v_account)
         ; Value (kind, v_kind)
         ; Value (source_id, v_source_id)
-        ; Value (occurred_at_ms, v_occurred_at_ms)
+        ; Value (occurred_at, v_occurred_at)
         ; Value (occurred_on, v_occurred_on)
         ; Value (payload, v_payload)
         ]
@@ -246,7 +247,7 @@ let movement_columns =
 
 let occurrence_columns (e : Source_event.t) =
   match e.occurred with
-  | At_ms ms -> Some ms, None
+  | At instant -> Some instant, None
   | On_date date -> None, Some (Date.to_string date)
 ;;
 
@@ -258,7 +259,7 @@ let ingest_in_transaction db (e : Source_event.t) =
   match existing with
   | Some previous ->
     if
-      Option.equal Int64.equal at previous.occurred_at_ms
+      Option.equal Ptime.equal at previous.occurred_at
       && Option.equal String.equal on previous.occurred_on
       && String.equal previous.payload e.payload
     then Ok (Existing previous.id)
@@ -542,7 +543,7 @@ let store_companion_rows db ~document_id ~institution ~format rows =
   store 0 0 rows
 ;;
 
-(* A bank-stated period and balances, in the bank's own date or timestamp text. *)
+(* Statement dates and instants use Rel codecs at the SQLite boundary. *)
 let store_statement db ~document_id ~ordinal ~institution (s : Document.statement) =
   let insert =
     Rel_sql.Stmt.(
@@ -556,10 +557,10 @@ let store_statement db ~document_id ~ordinal ~institution (s : Document.statemen
          @-> text
          @-> option text
          @-> text
-         @-> text
-         @-> text
-         @-> text
-         @-> text
+         @-> Db_schema.statement_time
+         @-> Db_schema.statement_time
+         @-> Db_schema.statement_time
+         @-> Db_schema.statement_time
          @-> text
          @-> text
          @-> unit))
@@ -636,7 +637,7 @@ let day_groups events =
                 groups
                 ~key:(e.account, Date.to_string day)
                 ~data:e.payload)
-         | At_ms _ ->
+         | At _ ->
            Or_error.error_string "day inventories need events dated by booking day")
       events
     |> Or_error.map ~f:ignore
@@ -941,9 +942,9 @@ let events db =
       db
       (statement
          "SELECT \
-          id,venue,account,kind,source_id,occurred_at_ms,occurred_on,retrieved_at,payload \
-          FROM source_events ORDER BY coalesce(occurred_on, date(occurred_at_ms / 1000, \
-          'unixepoch')),occurred_at_ms,id"
+          id,venue,account,kind,source_id,occurred_at,occurred_on,retrieved_at,payload \
+          FROM source_events ORDER BY coalesce(occurred_on, substr(occurred_at, 1, \
+          10)),occurred_at,id"
          source_row)
   in
   traverse
@@ -952,7 +953,7 @@ let events db =
           ; account
           ; kind
           ; source_id
-          ; occurred_at_ms = at
+          ; occurred_at = at
           ; occurred_on = on
           ; payload
           ; _
@@ -960,8 +961,8 @@ let events db =
            Db_schema.Source_events.t) ->
        let* e =
          match at, on with
-         | Some occurred_at_ms, None ->
-           Source_event.create ~venue ~account ~kind ~source_id ~occurred_at_ms ~payload
+         | Some occurred_at, None ->
+           Source_event.create ~venue ~account ~kind ~source_id ~occurred_at ~payload
          | None, Some date ->
            let* occurred_on = Or_error.try_with (fun () -> Date.of_string date) in
            Source_event.create_dated
@@ -1473,7 +1474,8 @@ let upsert_companion_match =
       "INSERT INTO \
        companion_matches(row_id,event_id,state,reason,candidates_json,policy) VALUES \
        (?,?,?,?,?,?) ON CONFLICT(row_id) DO UPDATE SET \
-       event_id=excluded.event_id,state=excluded.state,reason=excluded.reason,candidates_json=excluded.candidates_json,policy=excluded.policy,updated_at=strftime('%Y-%m-%dT%H:%M:%fZ','now')"
+       event_id=excluded.event_id,state=excluded.state,reason=excluded.reason,candidates_json=excluded.candidates_json,policy=excluded.policy,updated_at=(strftime('%Y-%m-%dT%H:%M:%f','now') \
+       || '000000000Z')"
       (int64 @-> option int64 @-> text @-> text @-> text @-> text @-> unit))
 ;;
 
@@ -1636,8 +1638,8 @@ type statement_reconciliation =
   ; source_account : string
   ; reference : string option
   ; currency : Iso4217.t
-  ; period_start : string
-  ; period_end : string
+  ; period_start : Document.time
+  ; period_end : Document.time
   ; opening : Quantity.t
   ; closing : Quantity.t
   ; movements : Quantity.t
@@ -1842,7 +1844,7 @@ type category_change =
   ; previous_account : string option
   ; account : string
   ; reason : string
-  ; changed_at : string
+  ; changed_at : Ptime.t
   }
 
 let bank_category_history db =
@@ -2242,7 +2244,7 @@ type transfer_change =
   ; previous_state : string option
   ; state : Bank_transfer.state
   ; reason : string
-  ; changed_at : string
+  ; changed_at : Ptime.t
   }
 
 let bank_transfer_history db =
@@ -2306,14 +2308,13 @@ type transfer_candidate =
 let transfer_pairs =
   statement
     "WITH ordered AS (SELECT id, row_number() OVER (ORDER BY coalesce(occurred_on, \
-     date(occurred_at_ms / 1000, 'unixepoch')), occurred_at_ms, id) AS position FROM \
-     source_events) SELECT a.event_id, b.event_id FROM movements a JOIN movements b ON \
-     b.currency = a.currency AND b.principal_magnitude = a.principal_magnitude AND \
-     b.principal_sign <> a.principal_sign JOIN ordered oa ON oa.id = a.event_id JOIN \
-     ordered ob ON ob.id = b.event_id WHERE oa.position < ob.position AND \
-     a.principal_magnitude <> '0' AND NOT (a.venue = b.venue AND a.account = b.account) \
-     AND abs(julianday(a.booked_on) - julianday(b.booked_on)) <= 7 ORDER BY oa.position \
-     DESC, ob.position"
+     substr(occurred_at, 1, 10)), occurred_at, id) AS position FROM source_events) \
+     SELECT a.event_id, b.event_id FROM movements a JOIN movements b ON b.currency = \
+     a.currency AND b.principal_magnitude = a.principal_magnitude AND b.principal_sign \
+     <> a.principal_sign JOIN ordered oa ON oa.id = a.event_id JOIN ordered ob ON ob.id \
+     = b.event_id WHERE oa.position < ob.position AND a.principal_magnitude <> '0' AND \
+     NOT (a.venue = b.venue AND a.account = b.account) AND abs(julianday(a.booked_on) - \
+     julianday(b.booked_on)) <= 7 ORDER BY oa.position DESC, ob.position"
     Row.(
       t2
         (Col.make "first" Type.int64 Col.no_proj)
@@ -2590,7 +2591,7 @@ type account_change =
   ; source_account : string
   ; previous_value : string option
   ; value : string option
-  ; changed_at : string
+  ; changed_at : Ptime.t
   }
 
 let bank_account_history db =
@@ -2604,7 +2605,7 @@ let bank_account_history db =
       * text "source_account"
       * col "previous_value" Type.(option text)
       * col "value" Type.(option text)
-      * text "changed_at")
+      * Col.make "changed_at" Db_schema.instant Col.no_proj)
   in
   collect
     db

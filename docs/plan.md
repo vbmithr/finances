@@ -15,19 +15,22 @@ Last updated: 2026-10-27.
   companion), Bunq (MT940, CSV companion) and Revolut (CSV). Each is an adapter behind
   one registry; the kernel names no bank. Shared OFX parsing takes an explicit
   institution parameter rather than instantiating a functor.
-- Storage is schema 12: generic tables for every bank, plus each movement stored
+- Storage is schema 13: generic tables for every bank, plus each movement stored
   normalized at import, so reads are SQL queries instead of payload decoding. No
   migrations; older databases are refused unchanged.
+- Instants use `Ptime.t`, with Rel codecs preserving picoseconds as fixed-width UTC
+  text. Date-only statement boundaries remain dates; original source clocks and
+  Wise identity encodings stay unchanged.
 - IBANs and currencies are validated types (`Iban.t`, `Iso4217.t`).
 - Movements project to balanced entries against `equity:unclassified`, unless a
   reviewed category or confirmed transfer says otherwise. `fin journal export`
   writes a reproducible hledger journal.
-- 127 tests (117 OCaml cases and 10 CLI cases). Each change is verified
+- 130 tests (120 OCaml cases and 10 CLI cases). Each change is verified
   by rebuilding the personal database from its inboxes with the previous and the
   new build and diffing every report.
 - Issue #1 is implemented locally and awaits publication.
-- The installed Arch package is `finances 0.1.0-16` (schema 12); the tree is at
-  package revision 19 (schema 12).
+- The installed Arch package is `finances 0.1.0-19` (schema 12); the tree is at
+  package revision 20 (schema 13).
 
 ### Personal data
 
@@ -48,13 +51,14 @@ From a database rebuilt from `personal/*/inbox`:
   BoursoBank and Revolut have no statement balances to reconcile against.
 - Companion rows: all matched except 8 BoursoBank CSV rows, ambiguous because the
   OFX has identical movements.
-- The live database (`~/.local/share/fin/fin.sqlite3`) is schema 12. This change
-  keeps schema 12 and needs no rebuild.
+- The live database was last checked at schema 12. Schema 13 needs an explicit
+  rebuild; this development task leaves the live database untouched.
 
 ## Next actions
 
-1. **Install the current build** (`make install`). Issue #1 keeps schema 12, so
-   the installed schema 12 database needs no rebuild.
+1. **Export account settings and back up with the previous binary**, then install
+   (`make install`) and rebuild for schema 13 following the manual. Restore the
+   exported snapshot after syncing all banks.
 2. **Push `main`** when ready; it is public on GitHub.
 3. **Fill the coverage gaps** above: Wise for 2026, BoursoBank before September
    2026, Revolut before April 2026, if those accounts were in use.

@@ -18,7 +18,7 @@ type file_report =
   ; inserted : int
   ; existing : int
   ; message : string option
-  ; attempted_at : string
+  ; attempted_at : Ptime.t
   }
 
 let outcome_name = function

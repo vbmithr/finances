@@ -31,9 +31,11 @@ exchange's financial semantics.
 ## Domain boundaries
 
 `Source_event` describes external evidence. Its identity is
-`(venue, account, kind, source_id)`. An occurrence is either nonnegative 64-bit Unix
-milliseconds (`At_ms`) or a calendar date (`On_date`); SQLite requires exactly one
-of `occurred_at_ms` and `occurred_on`. Bank booking dates do not fabricate a UTC
+`(venue, account, kind, source_id)`. An occurrence is either `At of Ptime.t` or a
+calendar date (`On_date`); SQLite requires exactly one of `occurred_at` and
+`occurred_on`. Rel encodes instants as fixed-width UTC RFC 3339 text with 12
+fractional digits. Text comparison and indexing give full chronological ordering,
+including sub-millisecond instants; no SQLite date function rounds the ordering. Bank booking dates do not fabricate a UTC
 timestamp. SQLite assigns the internal ID and retrieval timestamp. Payload bytes
 are stored as a BLOB, including any embedded NUL characters.
 
@@ -46,8 +48,9 @@ coefficients and exponents. Inexact results are trapped; no default or global
 context is changed. Canonical plain decimal rendering preserves existing SQLite
 text, source identities and journal precision. Non-finite decimals are rejected
 at construction. `Date` delegates validation and day differences to Ptime, while
-`Timestamp` parses RFC 3339 and converts to integer nanoseconds without floating
-point. The supplied local booking date remains separate from the UTC instant.
+`Timestamp` parses and formats RFC 3339 without floating point, and provides exact
+conversion at explicit Unix-millisecond input and Wise nanosecond identity
+serialization boundaries. The supplied local booking date remains separate from the UTC instant.
 
 Bos provides directory creation, file reads and atomic config writes, path
 resolution, and temporary journal creation and atomic publication. Standard Unix
@@ -84,14 +87,14 @@ computing monetary balances. Account, movement and transfer inspection commands
 offer readable text and explicit `--json` output; their existing JSON layouts are
 preserved. Financial aggregation and reporting remain hledger's responsibility.
 
-`Db_schema` defines the 24 persistent row records, their typed Rel columns, rows,
+`Db_schema` defines the 25 persistent row records, their typed Rel columns, rows,
 tables, keys, defaults and indexes. These definitions drive table creation and
 Store's inserts and read projections, so column types are shared rather than
 repeated in an independent SQL schema. Domain types still validate and represent
 financial concepts; persistence records represent the stored columns.
 
 No table belongs to a bank. `statements` and `statement_events` hold any bank's
-stated periods and balances, with dates or timestamps as the bank wrote them;
+stated periods and balances, with typed calendar dates or Ptime instants;
 `companion_rows`, `companion_matches` and `companion_match_changes` hold
 enrichment observations, told apart by `format`; `day_inventories` and
 `document_contexts` serve the overlap policy and import hints. A schema test
@@ -115,14 +118,14 @@ joins, conflict-targeted upserts and queries that are substantially clearer as
 SQL. Their result projections reuse table columns where applicable; computed
 fields and outer joins have their own result descriptions.
 
-Schema version 10 contains source events, journal entries, postings, immutable
+Schema version 13 contains source events, journal entries, postings, immutable
 import documents, document/event links, append-only bank import attempts, persisted
 bank account mappings, an append-only mapping change log, immutable CSV rows,
 derived CSV matches, and append-only match change history. Decimal posting
 quantities use text; no financial amount uses SQLite REAL.
 
 Schema initialization runs inside an immediate transaction. `PRAGMA user_version`
-must be 0 (a fresh database) or 12 (the supported baseline). Other experiments are
+must be 0 (a fresh database) or 13 (the supported baseline). Other experiments are
 rejected without alteration. There is no historical migration chain. Initializer
 failures roll back all partial DDL. Original records and exported account settings
 can be reimported when resetting a database. Transaction decisions require renewed
@@ -303,8 +306,14 @@ including overlapping statement membership; balances never create postings.
 
 Wise events use kind `wise-transaction`, a full-precision timestamp/reference/direction
 identity, and a payload containing booking clock, amount, account/currency and
-optional value date. The generic event stores UTC milliseconds; the identity and
-payload preserve finer precision. Journal dates follow the original local date.
+optional value date. The transaction and generic event hold the full Ptime
+instant; Rel preserves all picoseconds on storage and reload. The source-ID
+encoding still uses the existing nanosecond integer string, solely at that identity
+serialization boundary. The original booking lexeme is retained for source payloads
+and local CSV matching. Journal dates follow the original local date. Statement
+boundaries use Ptime instants; the kernel represents them as `Document.Instant`,
+while Bunq supplies `Document.Date` without fabricating midnight or a timezone.
+Import and account/review audit timestamps also use Ptime through Rel codecs.
 
 Wise_csv preserves all 23 fields and matches only Wise CAMT events using normalized
 reference, local millisecond clock, amount and currency. Multiple balance accounts

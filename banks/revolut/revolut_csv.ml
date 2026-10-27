@@ -3,8 +3,8 @@ open Base
 type transaction =
   { account_id : string
   ; currency : Iso4217.t
-  ; started_at : string
-  ; completed_at : string
+  ; started_local : string
+  ; completed_local : string
   ; booked_on : Date.t
   ; transaction_type : string
   ; description : string
@@ -118,8 +118,8 @@ let make
   in
   { account_id
   ; currency
-  ; started_at
-  ; completed_at
+  ; started_local = started_at
+  ; completed_local = completed_at
   ; booked_on
   ; transaction_type
   ; description

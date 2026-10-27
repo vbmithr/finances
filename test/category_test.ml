@@ -143,7 +143,7 @@ let invalid_batch () =
            ~account:"main"
            ~kind:"opaque"
            ~source_id:"one"
-           ~occurred_at_ms:1L
+           ~occurred_at:(Timestamp.of_unix_ms_exn 1L)
            ~payload:"{}")
     in
     let other =

@@ -104,8 +104,8 @@ type projection_report =
     a conflict or invalid event rolls back the complete projection batch. *)
 val project_bank : t -> projection_report Or_error.t
 
-(** A statement's stated balances against the movements it lists. Period and
-    balance dates are the bank's text: a date or a timestamp with offset. *)
+(** A statement's stated balances against the movements it lists. Period boundaries are
+    typed calendar dates or Ptime instants. *)
 type statement_reconciliation =
   { statement_id : int64
   ; document_id : int64
@@ -113,8 +113,8 @@ type statement_reconciliation =
   ; source_account : string
   ; reference : string option
   ; currency : Iso4217.t
-  ; period_start : string
-  ; period_end : string
+  ; period_start : Document.time
+  ; period_end : Document.time
   ; opening : Quantity.t
   ; closing : Quantity.t
   ; movements : Quantity.t
@@ -138,7 +138,7 @@ type category_change =
   ; previous_account : string option
   ; account : string
   ; reason : string
-  ; changed_at : string
+  ; changed_at : Ptime.t
   }
 
 val bank_category_history : t -> category_change list Or_error.t
@@ -168,7 +168,7 @@ type transfer_change =
   ; previous_state : string option
   ; state : Bank_transfer.state
   ; reason : string
-  ; changed_at : string
+  ; changed_at : Ptime.t
   }
 
 val bank_transfer_history : t -> transfer_change list Or_error.t
@@ -218,7 +218,7 @@ type account_change =
   ; source_account : string
   ; previous_value : string option
   ; value : string option
-  ; changed_at : string
+  ; changed_at : Ptime.t
   }
 
 type account_config_report =

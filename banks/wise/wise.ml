@@ -51,17 +51,17 @@ let parse ~context:_ ~format contents =
               ~account:(Wise_camt.account_identity trn.account)
               ~kind:"wise-transaction"
               ~source_id:trn.source_id
-              ~occurred_at_ms:trn.occurred_at_ms
+              ~occurred_at:trn.booked_at
               ~payload:trn.payload)
           |> Or_error.combine_errors
         in
         { Document.source_account = Wise_camt.account_identity statement.account
         ; reference = Some statement.statement_id
         ; currency = statement.account.currency
-        ; period_start = statement.period_start
-        ; period_end = statement.period_end
-        ; opening_as_of = statement.opening_at
-        ; closing_as_of = statement.closing_at
+        ; period_start = Document.Instant statement.period_start
+        ; period_end = Document.Instant statement.period_end
+        ; opening_as_of = Document.Instant statement.opening_at
+        ; closing_as_of = Document.Instant statement.closing_at
         ; opening = statement.opening
         ; closing = statement.closing
         ; events

@@ -3,9 +3,34 @@ open Rel
 
 (** One current experimental baseline; older databases must be reimported. Banks
     have no tables of their own. *)
-let version = 12
+let version = 13
 
-let timestamp = `Expr "strftime('%Y-%m-%dT%H:%M:%fZ','now')"
+let timestamp = `Expr "(strftime('%Y-%m-%dT%H:%M:%f','now') || '000000000Z')"
+
+let decode_exn f text =
+  match Or_error.try_with (fun () -> f text) with
+  | Ok value -> value
+  | Error error -> failwith (Error.to_string_hum error)
+;;
+
+let instant =
+  Type.coded
+    (Type.Coded.make
+       ~name:"instant"
+       ~equal:Ptime.equal
+       Type.text
+       ~enc:Timestamp.to_rfc3339
+       ~dec:(decode_exn Timestamp.of_rfc3339_exn))
+;;
+
+let statement_time =
+  Type.coded
+    (Type.Coded.make
+       ~name:"statement_time"
+       Type.text
+       ~enc:Document.time_to_string
+       ~dec:(decode_exn Document.time_of_string_exn))
+;;
 
 module Source_events = struct
   type t =
@@ -14,9 +39,9 @@ module Source_events = struct
     ; account : string
     ; kind : string
     ; source_id : string
-    ; occurred_at_ms : int64 option
+    ; occurred_at : Ptime.t option
     ; occurred_on : string option
-    ; retrieved_at : string
+    ; retrieved_at : Ptime.t
     ; payload : string
     }
 
@@ -26,8 +51,8 @@ module Source_events = struct
   let kind = Col.make "kind" Type.text (fun (r : t) -> r.kind)
   let source_id = Col.make "source_id" Type.text (fun (r : t) -> r.source_id)
 
-  let occurred_at_ms =
-    Col.make "occurred_at_ms" Type.(option int64) (fun (r : t) -> r.occurred_at_ms)
+  let occurred_at =
+    Col.make "occurred_at" Type.(option instant) (fun (r : t) -> r.occurred_at)
   ;;
 
   let occurred_on =
@@ -35,7 +60,7 @@ module Source_events = struct
   ;;
 
   let retrieved_at =
-    Col.make ~default:timestamp "retrieved_at" Type.text (fun (r : t) -> r.retrieved_at)
+    Col.make ~default:timestamp "retrieved_at" instant (fun (r : t) -> r.retrieved_at)
   ;;
 
   let payload = Col.make "payload" Type.blob (fun (r : t) -> r.payload)
@@ -49,7 +74,7 @@ module Source_events = struct
              account
              kind
              source_id
-             occurred_at_ms
+             occurred_at
              occurred_on
              retrieved_at
              payload
@@ -59,7 +84,7 @@ module Source_events = struct
            ; account
            ; kind
            ; source_id
-           ; occurred_at_ms
+           ; occurred_at
            ; occurred_on
            ; retrieved_at
            ; payload
@@ -69,7 +94,7 @@ module Source_events = struct
       * account
       * kind
       * source_id
-      * occurred_at_ms
+      * occurred_at
       * occurred_on
       * retrieved_at
       * payload)
@@ -83,9 +108,7 @@ module Source_events = struct
             [ Col.Def venue; Col.Def account; Col.Def kind; Col.Def source_id ]
         ]
       ~indices:
-        [ Table.Index.make
-            ~name:"source_events_time"
-            [ Col.Def occurred_at_ms; Col.Def id ]
+        [ Table.Index.make ~name:"source_events_time" [ Col.Def occurred_at; Col.Def id ]
         ]
       "source_events"
       row
@@ -95,8 +118,8 @@ module Source_events = struct
     Sqlite_schema.table
       ~checks:
         Sqlite_schema.Check.
-          [ nonnegative_int64_option occurred_at_ms
-          ; different (present occurred_at_ms) (present occurred_on)
+          [ canonical_instant occurred_at
+          ; different (present occurred_at) (present occurred_on)
           ]
       ~immutable:"source events are immutable"
       table
@@ -357,7 +380,7 @@ module Import_documents = struct
     ; institution : string
     ; sha256 : string
     ; contents : string
-    ; imported_at : string
+    ; imported_at : Ptime.t
     }
 
   let id = Col.make "id" Type.int64 (fun (r : t) -> r.id)
@@ -366,7 +389,7 @@ module Import_documents = struct
   let contents = Col.make "contents" Type.blob (fun (r : t) -> r.contents)
 
   let imported_at =
-    Col.make ~default:timestamp "imported_at" Type.text (fun (r : t) -> r.imported_at)
+    Col.make ~default:timestamp "imported_at" instant (fun (r : t) -> r.imported_at)
   ;;
 
   let row =
@@ -474,7 +497,7 @@ module Bank_account_mapping_changes = struct
     ; source_account : string
     ; previous_ledger_account : string option
     ; ledger_account : string
-    ; changed_at : string
+    ; changed_at : Ptime.t
     }
 
   let id = Col.make "id" Type.int64 (fun (r : t) -> r.id)
@@ -496,7 +519,7 @@ module Bank_account_mapping_changes = struct
   ;;
 
   let changed_at =
-    Col.make ~default:timestamp "changed_at" Type.text (fun (r : t) -> r.changed_at)
+    Col.make ~default:timestamp "changed_at" instant (fun (r : t) -> r.changed_at)
   ;;
 
   let row =
@@ -544,10 +567,10 @@ module Statements = struct
     ; source_account : string
     ; reference : string option
     ; currency : string
-    ; period_start : string
-    ; period_end : string
-    ; opening_as_of : string
-    ; closing_as_of : string
+    ; period_start : Document.time
+    ; period_end : Document.time
+    ; opening_as_of : Document.time
+    ; closing_as_of : Document.time
     ; opening : string
     ; closing : string
     }
@@ -563,10 +586,21 @@ module Statements = struct
 
   let reference = Col.make "reference" Type.(option text) (fun (r : t) -> r.reference)
   let currency = Col.make "currency" Type.text (fun (r : t) -> r.currency)
-  let period_start = Col.make "period_start" Type.text (fun (r : t) -> r.period_start)
-  let period_end = Col.make "period_end" Type.text (fun (r : t) -> r.period_end)
-  let opening_as_of = Col.make "opening_as_of" Type.text (fun (r : t) -> r.opening_as_of)
-  let closing_as_of = Col.make "closing_as_of" Type.text (fun (r : t) -> r.closing_as_of)
+
+  let period_start =
+    Col.make "period_start" statement_time (fun (r : t) -> r.period_start)
+  ;;
+
+  let period_end = Col.make "period_end" statement_time (fun (r : t) -> r.period_end)
+
+  let opening_as_of =
+    Col.make "opening_as_of" statement_time (fun (r : t) -> r.opening_as_of)
+  ;;
+
+  let closing_as_of =
+    Col.make "closing_as_of" statement_time (fun (r : t) -> r.closing_as_of)
+  ;;
+
   let opening = Col.make "opening" Type.text (fun (r : t) -> r.opening)
   let closing = Col.make "closing" Type.text (fun (r : t) -> r.closing)
 
@@ -735,7 +769,7 @@ module Companion_matches = struct
     ; reason : string
     ; candidates_json : string
     ; policy : string
-    ; updated_at : string
+    ; updated_at : Ptime.t
     }
 
   let row_id = Col.make "row_id" Type.int64 (fun (r : t) -> r.row_id)
@@ -750,7 +784,7 @@ module Companion_matches = struct
   let policy = Col.make "policy" Type.text (fun (r : t) -> r.policy)
 
   let updated_at =
-    Col.make ~default:timestamp "updated_at" Type.text (fun (r : t) -> r.updated_at)
+    Col.make ~default:timestamp "updated_at" instant (fun (r : t) -> r.updated_at)
   ;;
 
   let row =
@@ -808,7 +842,7 @@ module Companion_match_changes = struct
     ; reason : string
     ; candidates_json : string
     ; policy : string
-    ; changed_at : string
+    ; changed_at : Ptime.t
     }
 
   let id = Col.make "id" Type.int64 (fun (r : t) -> r.id)
@@ -834,7 +868,7 @@ module Companion_match_changes = struct
   let policy = Col.make "policy" Type.text (fun (r : t) -> r.policy)
 
   let changed_at =
-    Col.make ~default:timestamp "changed_at" Type.text (fun (r : t) -> r.changed_at)
+    Col.make ~default:timestamp "changed_at" instant (fun (r : t) -> r.changed_at)
   ;;
 
   let row =
@@ -948,7 +982,7 @@ module Bank_category_changes = struct
     ; previous_account : string option
     ; account : string
     ; reason : string
-    ; changed_at : string
+    ; changed_at : Ptime.t
     }
 
   let id = Col.make "id" Type.int64 (fun (r : t) -> r.id)
@@ -962,7 +996,7 @@ module Bank_category_changes = struct
   let reason = Col.make "reason" Type.text (fun (r : t) -> r.reason)
 
   let changed_at =
-    Col.make ~default:timestamp "changed_at" Type.text (fun (r : t) -> r.changed_at)
+    Col.make ~default:timestamp "changed_at" instant (fun (r : t) -> r.changed_at)
   ;;
 
   let row =
@@ -1055,7 +1089,7 @@ module Bank_import_attempts = struct
     ; inserted_count : int
     ; existing_count : int
     ; error : string option
-    ; attempted_at : string
+    ; attempted_at : Ptime.t
     }
 
   let id = Col.make "id" Type.int64 (fun (r : t) -> r.id)
@@ -1080,7 +1114,7 @@ module Bank_import_attempts = struct
   let error = Col.make "error" Type.(option text) (fun (r : t) -> r.error)
 
   let attempted_at =
-    Col.make ~default:timestamp "attempted_at" Type.text (fun (r : t) -> r.attempted_at)
+    Col.make ~default:timestamp "attempted_at" instant (fun (r : t) -> r.attempted_at)
   ;;
 
   let row =
@@ -1317,7 +1351,7 @@ module Bank_transfer_changes = struct
     ; previous_state : string option
     ; state : string
     ; reason : string
-    ; changed_at : string
+    ; changed_at : Ptime.t
     }
 
   let id = Col.make "id" Type.int64 (fun (r : t) -> r.id)
@@ -1338,7 +1372,7 @@ module Bank_transfer_changes = struct
   let reason = Col.make "reason" Type.text (fun (r : t) -> r.reason)
 
   let changed_at =
-    Col.make ~default:timestamp "changed_at" Type.text (fun (r : t) -> r.changed_at)
+    Col.make ~default:timestamp "changed_at" instant (fun (r : t) -> r.changed_at)
   ;;
 
   let row =
@@ -1430,7 +1464,7 @@ module Bank_account_identity_changes = struct
     ; source_account : string
     ; previous_iban : string option
     ; iban : string option
-    ; changed_at : string
+    ; changed_at : Ptime.t
     }
 
   let id = Col.make "id" Type.int64 (fun (r : t) -> r.id)
@@ -1447,7 +1481,7 @@ module Bank_account_identity_changes = struct
   let iban = Col.make "iban" Type.(option text) (fun (r : t) -> r.iban)
 
   let changed_at =
-    Col.make ~default:timestamp "changed_at" Type.text (fun (r : t) -> r.changed_at)
+    Col.make ~default:timestamp "changed_at" instant (fun (r : t) -> r.changed_at)
   ;;
 
   let row =
@@ -1518,7 +1552,7 @@ module Bank_account_settlement_changes = struct
     ; source_account : string
     ; previous_settlement : string option
     ; settlement_account : string option
-    ; changed_at : string
+    ; changed_at : Ptime.t
     }
 
   let id = Col.make "id" Type.int64 (fun (r : t) -> r.id)
@@ -1540,7 +1574,7 @@ module Bank_account_settlement_changes = struct
   ;;
 
   let changed_at =
-    Col.make ~default:timestamp "changed_at" Type.text (fun (r : t) -> r.changed_at)
+    Col.make ~default:timestamp "changed_at" instant (fun (r : t) -> r.changed_at)
   ;;
 
   let row =

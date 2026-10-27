@@ -68,9 +68,11 @@ let read_file path =
 
 let ingest database venue account kind source_id at path =
   let%bind payload = read_file path in
-  let%bind occurred_at_ms = Or_error.try_with (fun () -> Int64.of_string at) in
+  let%bind occurred_at =
+    Or_error.try_with (fun () -> Timestamp.of_unix_ms_exn (Int64.of_string at))
+  in
   let%bind event =
-    Source_event.create ~venue ~account ~kind ~source_id ~occurred_at_ms ~payload
+    Source_event.create ~venue ~account ~kind ~source_id ~occurred_at ~payload
   in
   with_database database (fun db ->
     let%bind result = Store.ingest db event in
@@ -95,14 +97,14 @@ let list_events database =
              ; "account", `String e.account
              ; "kind", `String e.kind
              ; "source_id", `String e.source_id
-             ; ( "occurred_at_ms"
+             ; ( "occurred_at"
                , match e.occurred with
-                 | At_ms ms -> `Intlit (Int64.to_string ms)
+                 | At instant -> `String (Timestamp.to_rfc3339 instant)
                  | On_date _ -> `Null )
              ; ( "occurred_on"
                , match e.occurred with
                  | On_date date -> `String (Date.to_string date)
-                 | At_ms _ -> `Null )
+                 | At _ -> `Null )
              ]))
     in
     Out_channel.print_endline (Yojson.Safe.pretty_to_string json);
@@ -299,7 +301,10 @@ let ingest_cmd =
       $ required "account" "Source account identifier."
       $ required "kind" "Source record kind, for example fill."
       $ required "id" "Stable source record identifier."
-      $ required "at-ms" "Event timestamp in Unix milliseconds."
+      $ required
+          "at-ms"
+          "Event timestamp in Unix milliseconds, converted exactly to Ptime. Event \
+           output uses RFC 3339 occurred_at."
       $ Arg.(
           required
           & pos 0 (some string) None
@@ -400,7 +405,7 @@ let status database json_output =
              ; ( "latest_import"
                , Option.value_map report.latest_import ~default:`Null ~f:(fun a ->
                    `Assoc
-                     [ "attempted_at", `String a.attempted_at
+                     [ "attempted_at", `String (Timestamp.to_rfc3339 a.attempted_at)
                      ; "institution", `String a.institution
                      ; "path", `String a.path
                      ; "outcome", `String (Bank_import.outcome_name a.outcome)
@@ -438,7 +443,7 @@ let status database json_output =
      | Some a ->
        printf
          "Latest inbox import: %s  %s  %s\n  %s\n"
-         a.attempted_at
+         (Timestamp.to_rfc3339 a.attempted_at)
          (Terminal.text a.institution)
          (Bank_import.outcome_name a.outcome)
          (Terminal.text a.path);
@@ -478,7 +483,7 @@ let import_history database limit json_output =
              ; "inserted", `Int row.inserted
              ; "existing", `Int row.existing
              ; "message", optional (fun s -> `String s) row.message
-             ; "attempted_at", `String row.attempted_at
+             ; "attempted_at", `String (Timestamp.to_rfc3339 row.attempted_at)
              ]))
     in
     if json_output
@@ -759,8 +764,8 @@ let statement_json (s : Store.statement_reconciliation) =
     ; "source_account", `String s.source_account
     ; "reference", Option.value_map s.reference ~default:`Null ~f:(fun r -> `String r)
     ; "currency", `String (Iso4217.to_alpha_code s.currency)
-    ; "period_start", `String s.period_start
-    ; "period_end", `String s.period_end
+    ; "period_start", `String (Document.time_to_string s.period_start)
+    ; "period_end", `String (Document.time_to_string s.period_end)
     ; "opening", `String (Quantity.to_string s.opening)
     ; "closing", `String (Quantity.to_string s.closing)
     ; "movements", `String (Quantity.to_string s.movements)
@@ -968,7 +973,7 @@ let category_history database =
                    `String s) )
              ; "account", `String r.account
              ; "reason", `String r.reason
-             ; "changed_at", `String r.changed_at
+             ; "changed_at", `String (Timestamp.to_rfc3339 r.changed_at)
              ]))
     in
     print_endline (Yojson.Safe.pretty_to_string json);
@@ -1087,7 +1092,7 @@ let transfer_history database =
                )
              ; "state", `String (Bank_transfer.state_name r.state)
              ; "reason", `String r.reason
-             ; "changed_at", `String r.changed_at
+             ; "changed_at", `String (Timestamp.to_rfc3339 r.changed_at)
              ]))
     in
     print_endline (Yojson.Safe.pretty_to_string json);
@@ -1250,7 +1255,7 @@ let account_change_json (r : Store.account_change) =
     ; "source_account", `String r.source_account
     ; "previous_value", value r.previous_value
     ; "value", value r.value
-    ; "changed_at", `String r.changed_at
+    ; "changed_at", `String (Timestamp.to_rfc3339 r.changed_at)
     ]
 ;;
 

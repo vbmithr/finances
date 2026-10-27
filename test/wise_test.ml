@@ -171,12 +171,53 @@ let duplicate_rows () =
       (ok (Store.match_companions ~institution:"wise" db)).ambiguous)
 ;;
 
+let timestamp_precision () =
+  let source = "2025-01-02T00:00:00.123456789123+01:00" in
+  let contents = replace (xml ()) "2025-01-02T00:00:00.123456+01:00" source in
+  let tx =
+    (List.hd_exn (ok (Wise_camt.parse contents)).statements).transactions |> List.hd_exn
+  in
+  Alcotest.(check string) "raw booking text retained" source tx.booked_at_source;
+  Alcotest.(check string)
+    "full Ptime precision"
+    "2025-01-01T23:00:00.123456789123Z"
+    (Timestamp.to_rfc3339 tx.booked_at);
+  Alcotest.(check string)
+    "local date is not UTC date"
+    "2025-01-02"
+    (Date.to_string tx.booked_on);
+  Alcotest.(check string)
+    "source identity retains legacy nanosecond encoding"
+    "[\"CARD-1\",\"1735772400123456789\",\"DBIT\"]"
+    tx.source_id;
+  memory (fun db ->
+    accepted (import db "precise.xml" contents);
+    let rows = ok (Store.events db) in
+    let event =
+      List.find_exn rows ~f:(fun (_, e) ->
+        String.equal e.Source_event.source_id tx.source_id)
+      |> snd
+    in
+    (match event.occurred with
+     | At instant ->
+       Alcotest.(check bool)
+         "SQL keeps all picoseconds"
+         true
+         (Ptime.equal instant tx.booked_at)
+     | On_date _ -> Alcotest.fail "Wise instant lost");
+    let decoded = ok (Wise_camt.source_transaction event) in
+    Alcotest.(check string) "payload remains byte-identical" tx.payload decoded.payload;
+    let replay = import db "precise.xml" contents in
+    Alcotest.(check bool) "replay unchanged" true (Poly.equal replay.outcome Unchanged))
+;;
+
 let () =
   Alcotest.run
     "Wise and multiple banks"
     [ ( "adapter"
       , List.map
           [ "parser and balances", parser
+          ; "Ptime instants, raw text and stable identity", timestamp_precision
           ; "two banks, replay, conflict", multi_bank
           ; "currency and fee conflicts", currencies
           ; "duplicate CSV claims", duplicate_rows

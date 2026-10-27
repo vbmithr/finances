@@ -8,7 +8,7 @@ module Check : sig
 
   val positive : ('r, int) Col.t -> 'r t
   val nonnegative : ('r, int) Col.t -> 'r t
-  val nonnegative_int64_option : ('r, int64 option) Col.t -> 'r t
+  val canonical_instant : ('r, Ptime.t option) Col.t -> 'r t
   val one_of : ('r, string) Col.t -> string list -> 'r t
   val present : ('r, 'a option) Col.t -> 'r t
   val absent : ('r, 'a option) Col.t -> 'r t
@@ -26,7 +26,37 @@ end = struct
   let literal = Rel_sql.Syntax.string_to_literal
   let positive c = Check (column c ^ " > 0")
   let nonnegative c = Check (column c ^ " >= 0")
-  let nonnegative_int64_option c = Check (column c ^ " >= 0")
+
+  let canonical_instant c =
+    let name = column c in
+    let digit = "[0-9]" in
+    let digits n = String.concat (List.init n ~f:(fun _ -> digit)) in
+    let pattern =
+      digits 4
+      ^ "-"
+      ^ digits 2
+      ^ "-"
+      ^ digits 2
+      ^ "T"
+      ^ digits 2
+      ^ ":"
+      ^ digits 2
+      ^ ":"
+      ^ digits 2
+      ^ "."
+      ^ digits 12
+      ^ "Z"
+    in
+    Check
+      (name
+       ^ " IS NULL OR (length("
+       ^ name
+       ^ ") = 33 AND "
+       ^ name
+       ^ " GLOB "
+       ^ literal pattern
+       ^ ")")
+  ;;
 
   let one_of c values =
     Check (column c ^ " IN (" ^ String.concat ~sep:"," (List.map values ~f:literal) ^ ")")

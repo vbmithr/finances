@@ -106,7 +106,7 @@ exported account snapshots are never touched. In a script, `fin delete --yes`
 skips the question; without a terminal and without `--yes` it refuses.
 `--database FILE` selects which database and associated files to delete.
 
-This experimental release accepts schema version 12; it does not migrate older
+This experimental release accepts schema version 13; it does not migrate older
 experimental databases, and refuses them without changing the file. After
 installing a release with a new schema, save an account snapshot as well as a
 full backup, then delete and rebuild:
@@ -348,7 +348,7 @@ belongs to hledger; `fin` tracks import evidence, account identity and review st
 ## Library and dependency changes
 
 This build uses Base, decimal, Ptime and Bos, with no Core or Bigdecimal
-dependency. Saved configuration remains compatible; databases use schema 12 and
+dependency. Version 1 account snapshots remain compatible; databases use schema 13 and
 are rebuilt from the original statements (see above).
 
 OCaml callers use `Quantity.t` (a `Decimal.t` alias) and `Date.t` (a `Ptime.date`
@@ -356,7 +356,27 @@ alias). Use the `Quantity` functions for exact accounting sums and products:
 ordinary decimal arithmetic follows its configured precision and rounding rules.
 Dates remain calendar dates, and Wise booking days retain their supplied local
 date. Bos handles high-level file operations; import file-identity checks and
-private configuration permissions remain in place.
+private snapshot and draft permissions remain in place.
+
+`Source_event.create` takes `~occurred_at:Ptime.t`, and its occurrence constructor
+is `At` instead of `At_ms`. Instants in the OCaml API use `Ptime.t`, including
+source occurrences, Wise booking times, statement instants and audit times. Calendar dates remain `Ptime.date`;
+statement metadata uses `Document.Date` or `Document.Instant`. Offset-free Revolut
+CSV clocks remain explicitly named local source text, not UTC instants.
+
+SQLite stores instants as canonical UTC RFC 3339 text with 12 fractional digits.
+`ORDER BY occurred_at` and ordinary comparisons/indexes preserve the complete
+chronological order. SQLite's date functions are not used for fine-grained
+instant comparisons. Bank audit times reflect the clock precision SQLite provides,
+padded to the canonical representation, without claiming extra clock resolution.
+
+`fin db events` now returns `occurred_at` (RFC 3339 or null) instead of
+`occurred_at_ms`; `occurred_on` is unchanged. The low-level `fin db ingest --at-ms`
+input remains an explicit Unix-millisecond boundary and converts exactly to Ptime.
+Statement report timestamps are normalized to UTC; calendar-date boundaries remain
+dates. Wise movement IDs, raw payloads, local booking dates and journal output
+remain unchanged. Schema 12 databases must be rebuilt using the storage instructions
+above; no automatic migration runs.
 
 ## Command reference
 

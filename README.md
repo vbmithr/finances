@@ -271,10 +271,11 @@ payload used for replay; its original value remains in the archived document.
 Formatting whitespace is normalized in transaction payloads, while other changes
 to a transaction's canonical XML cause a conflict. CSV enrichment is described below.
 
-`Source_event.occurrence` distinguishes `At_ms` from `On_date`. The `events` command
-prints `occurred_at_ms: null` and a populated `occurred_on` for OFX records.
+`Source_event.occurrence` distinguishes `At of Ptime.t` from `On_date of Date.t`.
+The `events` command prints an RFC 3339 `occurred_at` for instants, or
+`occurred_at: null` and a populated `occurred_on` for date-only OFX records.
 Wise records retain an instant and project using the local booking date.
-This experimental build supports only the current schema baseline (11). Fresh
+This experimental build supports only the current schema baseline (13). Fresh
 files initialize it atomically; other schema versions are rejected without changes.
 There are no historical migrations or schema fixtures. Reimport original statements
 and import exported account settings when resetting an experiment. Category and
@@ -851,7 +852,13 @@ and are stored as canonical plain decimal strings through `Quantity.to_string`
 in SQLite `TEXT` columns. `Quantity` delegates arithmetic to decimal with local
 operand-sized contexts and traps inexact results, preserving exact sums and
 products independently of `Decimal.Context.default`. Dates use `Ptime.date`
-through the small ISO/calendar-day helpers in `Date`. Base supplies general
+through the small ISO/calendar-day helpers in `Date`. Instants use `Ptime.t`,
+including Wise booking times, statement boundaries and audit timestamps. Rel
+codecs encode instants as fixed-width UTC RFC 3339 text with 12 fractional digits;
+SQLite can compare, sort and index it chronologically without date functions.
+`Document.time` distinguishes calendar dates from instants for statement metadata.
+Original bank timestamp text stays in source evidence; Wise also retains its raw
+booking lexeme for local-time CSV matching. Base supplies general
 utilities, and Bos handles high-level filesystem operations. Core, Core_unix,
 Bigdecimal and `ppx_jane` are not dependencies. Do monetary arithmetic in OCaml:
 SQLite numeric casts and `SUM` on these strings would lose exactness.
