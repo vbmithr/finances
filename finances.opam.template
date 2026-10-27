@@ -1,0 +1,4 @@
+pin-depends: [
+  ["hledger.dev" "git+https://github.com/vbmithr/ocaml-hledger.git#cad809fa47876142cfdf361bde2a2e506ebdadad"]
+  ["rel.dev" "git+https://github.com/dbuenzli/rel.git#f196804c51031870327ecc482d0b97f052941081"]
+]
