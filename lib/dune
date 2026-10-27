@@ -3,7 +3,7 @@
 (library
  (name finances)
  (public_name finances)
- (private_modules validation db_schema)
+ (private_modules validation db_schema sqlite_schema)
  (libraries core bigdecimal rel rel.sqlite3 yojson xmlm re digestif csv)
  (preprocess
   (pps ppx_jane)))

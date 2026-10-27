@@ -15,7 +15,7 @@ let workspace f =
 
 let raw path f =
   let db =
-    Rel_sqlite3.open' ~mode:Read_write_create path
+    Rel_sqlite3.open' ~foreign_keys:true ~mode:Read_write_create path
     |> Rel_sqlite3.string_error
     |> Result.ok_or_failwith
   in
@@ -41,6 +41,13 @@ let initialize () =
          Ok ()));
     raw path (fun db ->
       check "latest baseline" 10 (scalar db "PRAGMA user_version");
+      check
+        "all tables are strict"
+        32
+        (scalar
+           db
+           "SELECT count(*) FROM pragma_table_list WHERE schema='main' AND name NOT LIKE \
+            'sqlite_%' AND strict=1");
       List.iter
         [ "source_events"
         ; "bank_categories"
@@ -58,6 +65,151 @@ let initialize () =
                ("SELECT count(*) FROM sqlite_master WHERE type='table' AND name='"
                 ^ table
                 ^ "'")))))
+;;
+
+let sqlite_constraints () =
+  workspace (fun path ->
+    ok (Store.with_open path (fun _ -> Ok ()));
+    raw path (fun db ->
+      let rejected s =
+        Alcotest.(check bool) s true (Result.is_error (Rel_sqlite3.exec_sql db s))
+      in
+      let event values =
+        "INSERT INTO \
+         source_events(venue,account,kind,source_id,occurred_at_ms,occurred_on,payload) \
+         VALUES "
+        ^ values
+      in
+      sql
+        db
+        (event "('bank','main','transaction','valid',9223372036854775807,NULL,X'00')");
+      check
+        "database supplies retrieval timestamp"
+        1
+        (scalar
+           db
+           "SELECT count(*) FROM source_events WHERE retrieved_at GLOB \
+            '????-??-??T??:??:??*Z'");
+      rejected (event "('bank','main','transaction','neither',NULL,NULL,X'00')");
+      rejected (event "('bank','main','transaction','both',1,'2026-10-27',X'00')");
+      rejected (event "('bank','main','transaction','negative',-1,NULL,X'00')");
+      rejected (event "('bank','main','transaction','wrong-blob',1,NULL,'text')");
+      rejected "UPDATE source_events SET account='changed'";
+      rejected "DELETE FROM source_events";
+      sql
+        db
+        "INSERT INTO import_documents(institution,sha256,contents) VALUES \
+         ('bank','digest',X'00')";
+      rejected
+        "INSERT INTO wise_csv_rows(document_id,row_number,institution,fields_json) \
+         VALUES (1,0,'bank','{}')";
+      sql
+        db
+        "INSERT INTO wise_csv_rows(document_id,row_number,institution,fields_json) \
+         VALUES (1,1,'bank','{}')";
+      let matching state event =
+        Printf.sprintf
+          "INSERT INTO \
+           wise_csv_matches(row_id,event_id,state,reason,candidates_json,policy) VALUES \
+           (1,%s,'%s','test','[]','test')"
+          event
+          state
+      in
+      rejected (matching "invalid" "NULL");
+      rejected (matching "matched" "NULL");
+      rejected (matching "unmatched" "1");
+      rejected (matching "matched" "999");
+      sql db (matching "matched" "1");
+      sql db (event "('bank','other','transaction','second',1,NULL,X'00')");
+      rejected "INSERT INTO bank_transfer_decisions VALUES (2,1,'confirmed','test')";
+      rejected "INSERT INTO bank_transfer_decisions VALUES (1,2,'invalid','test')";
+      sql db "INSERT INTO bank_transfer_decisions VALUES (1,2,'confirmed','test')";
+      rejected "INSERT INTO bank_transfer_memberships VALUES (1,2,1)";
+      sql db (event "('bank','third','transaction','third',1,NULL,X'00')");
+      rejected "INSERT INTO bank_transfer_memberships VALUES (3,1,2)";
+      sql db "INSERT INTO bank_transfer_memberships VALUES (1,1,2)";
+      let attempt format outcome document inserted =
+        Printf.sprintf
+          "INSERT INTO \
+           bank_import_attempts(institution,path,document_id,format,outcome,inserted_count,existing_count) \
+           VALUES ('bank','input',%s,'%s','%s',%d,0)"
+          document
+          format
+          outcome
+          inserted
+      in
+      rejected (attempt "invalid" "imported" "1" 0);
+      rejected (attempt "csv" "invalid" "1" 0);
+      rejected (attempt "csv" "imported" "NULL" 0);
+      rejected (attempt "csv" "unreadable" "1" 0);
+      rejected (attempt "csv" "imported" "1" (-1));
+      sql db (attempt "csv" "unreadable" "NULL" 0);
+      check
+        "foreign keys remain consistent"
+        0
+        (scalar db "SELECT count(*) FROM pragma_foreign_key_check")))
+;;
+
+let generated_queries () =
+  workspace (fun path ->
+    let event account kind source_id =
+      ok
+        (Source_event.create
+           ~venue:"test bank"
+           ~account
+           ~kind
+           ~source_id
+           ~occurred_at_ms:Int64.max_value
+           ~payload:"bytes\000payload")
+    in
+    let first = event "checking" "deposit" "quoted ' ? identifier" in
+    let others =
+      [ event "savings" "deposit" first.source_id
+      ; event "checking" "withdrawal" first.source_id
+      ; event "checking" "deposit" "another identifier"
+      ]
+    in
+    ok
+      (Store.with_open path (fun db ->
+         let id =
+           match ok (Store.ingest db first) with
+           | Inserted id -> id
+           | Existing _ -> failwith "fresh event expected"
+         in
+         List.iter others ~f:(fun e -> ignore (ok (Store.ingest db e)));
+         (match ok (Store.ingest db first) with
+          | Existing existing ->
+            Alcotest.(check int64) "four bound keys keep their order" id existing
+          | Inserted _ -> failwith "replay inserted a duplicate");
+         let events = ok (Store.events db) in
+         check "distinct keys preserved" 4 (List.length events);
+         List.iter events ~f:(fun (_, e) ->
+           Alcotest.(check bool)
+             "int64 and blob round-trip"
+             true
+             (Poly.equal e.Source_event.occurred (Source_event.At_ms Int64.max_value)
+              && String.equal e.payload first.payload));
+         Ok ())))
+;;
+
+let large_rowid () =
+  workspace (fun path ->
+    ok (Store.with_open path (fun _ -> Ok ()));
+    raw path (fun db ->
+      sql
+        db
+        "INSERT INTO \
+         source_events(id,venue,account,kind,source_id,occurred_at_ms,payload) VALUES \
+         (9223372036854775807,'bank','main','test','large-id',1,X'00')");
+    ok
+      (Store.with_open path (fun db ->
+         let id, event = List.hd_exn (ok (Store.events db)) in
+         Alcotest.(check int64) "full SQLite rowid range" Int64.max_value id;
+         (match ok (Store.ingest db event) with
+          | Existing id ->
+            Alcotest.(check int64) "generated lookup keeps rowid" Int64.max_value id
+          | Inserted _ -> failwith "large rowid replay inserted a duplicate");
+         Ok ())))
 ;;
 
 let rejects_old () =
@@ -208,6 +360,9 @@ let () =
     [ ( "baseline"
       , List.map
           [ "initialize latest", initialize
+          ; "SQLite extensions preserve constraints", sqlite_constraints
+          ; "generated queries preserve bindings and types", generated_queries
+          ; "64-bit primary keys", large_rowid
           ; "reject old without alteration", rejects_old
           ; "atomic initialization rollback", initialization_rollback
           ; "reopen preserves reviewed state and audit", persistent_state

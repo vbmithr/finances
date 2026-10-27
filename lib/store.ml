@@ -56,35 +56,85 @@ let with_open path f =
     result
 ;;
 
-let source_row =
-  Row.(
-    unit (fun id venue account kind source_id occurred_at_ms occurred_on payload ->
-      id, venue, account, kind, source_id, occurred_at_ms, occurred_on, payload)
-    * int64 "id"
-    * text "venue"
-    * text "account"
-    * text "kind"
-    * text "source_id"
-    * col "occurred_at_ms" Type.(option int64)
-    * col "occurred_on" Type.(option text)
-    * blob "payload")
+(* Read-only result projections share their column types with the table model. *)
+let read_column col = Col.make (Col.name col) (Col.type' col) Col.no_proj
+
+(* Rel_query.Sql builds curried arguments inside out: its predicate receives
+   parameters in reverse order. Keep public lookup arguments in key order. *)
+let select_by_pair table first second value =
+  let open Rel_query.Syntax in
+  let select =
+    Rel_query.Sql.(
+      func
+        (Col.type' first
+         @-> Col.type' second
+         @-> ret
+               Row.(t1 (read_column value))
+               (fun b a ->
+                  let* row = Bag.table table in
+                  Bag.where
+                    (Coded.equal (Col.type' first) row#.first a
+                     && Coded.equal (Col.type' second) row#.second b)
+                    (Bag.yield row#.value))))
+  in
+  select
 ;;
 
+let select_by_column table key value =
+  let open Rel_query.Syntax in
+  let select =
+    Rel_query.Sql.(
+      func
+        (Col.type' key
+         @-> ret
+               Row.(t1 (read_column value))
+               (fun x ->
+                  let* row = Bag.table table in
+                  Bag.where
+                    (Coded.equal (Col.type' key) row#.key x)
+                    (Bag.yield row#.value))))
+  in
+  select
+;;
+
+let source_row = Db_schema.Source_events.row
+
 let find_source =
-  Rel_sql.Stmt.(
-    func
-      "SELECT id,venue,account,kind,source_id,occurred_at_ms,occurred_on,payload FROM \
-       source_events WHERE venue=? AND account=? AND kind=? AND source_id=?"
-      (text @-> text @-> text @-> text @-> ret source_row))
+  let open Db_schema.Source_events in
+  let open Rel_query.Syntax in
+  let select =
+    Rel_query.Sql.(
+      func
+        (text
+         @-> text
+         @-> text
+         @-> text
+         @-> ret row (fun v_source_id v_kind v_account v_venue ->
+           let* r = Bag.table table in
+           Bag.where
+             (Text.(r#.venue = v_venue)
+              && Text.(r#.account = v_account)
+              && Text.(r#.kind = v_kind)
+              && Text.(r#.source_id = v_source_id))
+             (Bag.yield r))))
+  in
+  select
 ;;
 
 let insert_source =
-  Rel_sql.Stmt.(
-    func
-      "INSERT INTO \
-       source_events(venue,account,kind,source_id,occurred_at_ms,occurred_on,payload) \
-       VALUES (?,?,?,?,?,?,?)"
-      (text @-> text @-> text @-> text @-> option int64 @-> option text @-> blob @-> unit))
+  let open Db_schema.Source_events in
+  let insert = Rel_sql.insert_into_cols Db.dialect table in
+  fun v_venue v_account v_kind v_source_id v_occurred_at_ms v_occurred_on v_payload ->
+    insert
+      Col.
+        [ Value (venue, v_venue)
+        ; Value (account, v_account)
+        ; Value (kind, v_kind)
+        ; Value (source_id, v_source_id)
+        ; Value (occurred_at_ms, v_occurred_at_ms)
+        ; Value (occurred_on, v_occurred_on)
+        ; Value (payload, v_payload)
+        ]
 ;;
 
 let occurrence_columns (e : Source_event.t) =
@@ -99,12 +149,12 @@ let ingest_in_transaction db (e : Source_event.t) =
     db_result (Db.first db (find_source e.venue e.account e.kind e.source_id))
   in
   match existing with
-  | Some (id, _, _, _, _, previous_at, previous_on, payload) ->
+  | Some previous ->
     if
-      Option.equal Int64.equal at previous_at
-      && Option.equal String.equal on previous_on
-      && String.equal payload e.payload
-    then Ok (Existing id)
+      Option.equal Int64.equal at previous.occurred_at_ms
+      && Option.equal String.equal on previous.occurred_on
+      && String.equal previous.payload e.payload
+    then Ok (Existing previous.id)
     else
       Or_error.error_string
         "source identity already exists with different timestamp/date or payload"
@@ -133,17 +183,34 @@ type bank_import =
   }
 
 let find_document =
-  Rel_sql.Stmt.(
-    func
-      "SELECT id,contents FROM import_documents WHERE institution=? AND sha256=?"
-      (text @-> text @-> ret Row.(t2 (int64 "id") (blob "contents"))))
+  let open Db_schema.Import_documents in
+  let result = Row.(t2 (read_column id) (read_column contents)) in
+  let open Rel_query.Syntax in
+  let select =
+    Rel_query.Sql.(
+      func
+        (text
+         @-> text
+         @-> ret result (fun hash i ->
+           let* r = Bag.table table in
+           Bag.where
+             (Text.(r#.institution = i) && Text.(r#.sha256 = hash))
+             (Bag.yield (Bag.row (fun id contents -> id, contents) $ r#.id $ r#.contents)))
+        ))
+  in
+  select
 ;;
 
 let insert_document =
-  Rel_sql.Stmt.(
-    func
-      "INSERT INTO import_documents(institution,sha256,contents) VALUES (?,?,?)"
-      (text @-> text @-> blob @-> unit))
+  let open Db_schema.Import_documents in
+  let insert = Rel_sql.insert_into_cols Db.dialect table in
+  fun v_institution v_sha256 v_contents ->
+    insert
+      Col.
+        [ Value (institution, v_institution)
+        ; Value (sha256, v_sha256)
+        ; Value (contents, v_contents)
+        ]
 ;;
 
 let link_document =
@@ -243,17 +310,17 @@ let attempt_row =
          , existing
          , message
          , attempted_at ))
-    * int64 "id"
-    * text "institution"
-    * text "path"
-    * text "format"
-    * text "outcome"
-    * col "document_id" Type.(option int64)
+    * read_column Db_schema.Bank_import_attempts.id
+    * read_column Db_schema.Bank_import_attempts.institution
+    * read_column Db_schema.Bank_import_attempts.path
+    * read_column Db_schema.Bank_import_attempts.format
+    * read_column Db_schema.Bank_import_attempts.outcome
+    * read_column Db_schema.Bank_import_attempts.document_id
     * col "sha256" Type.(option text)
-    * int "inserted_count"
-    * int "existing_count"
-    * col "error" Type.(option text)
-    * text "attempted_at")
+    * read_column Db_schema.Bank_import_attempts.inserted_count
+    * read_column Db_schema.Bank_import_attempts.existing_count
+    * read_column Db_schema.Bank_import_attempts.error
+    * read_column Db_schema.Bank_import_attempts.attempted_at)
 ;;
 
 let attempt_select =
@@ -293,20 +360,27 @@ let decode_attempt
 ;;
 
 let insert_attempt =
-  Rel_sql.Stmt.(
-    func
-      "INSERT INTO \
-       bank_import_attempts(institution,path,document_id,format,outcome,inserted_count,existing_count,error) \
-       VALUES (?,?,?,?,?,?,?,?)"
-      (text
-       @-> text
-       @-> option int64
-       @-> text
-       @-> text
-       @-> int
-       @-> int
-       @-> option text
-       @-> unit))
+  let open Db_schema.Bank_import_attempts in
+  let insert = Rel_sql.insert_into_cols Db.dialect table in
+  fun v_institution
+    v_path
+    v_document_id
+    v_format
+    v_outcome
+    v_inserted_count
+    v_existing_count
+    v_error ->
+    insert
+      Col.
+        [ Value (institution, v_institution)
+        ; Value (path, v_path)
+        ; Value (document_id, v_document_id)
+        ; Value (format, v_format)
+        ; Value (outcome, v_outcome)
+        ; Value (inserted_count, v_inserted_count)
+        ; Value (existing_count, v_existing_count)
+        ; Value (error, v_error)
+        ]
 ;;
 
 let read_attempt =
@@ -380,10 +454,8 @@ let insert_csv_row =
 ;;
 
 let existing_csv_row =
-  Rel_sql.Stmt.(
-    func
-      "SELECT fields_json FROM bank_csv_rows WHERE document_id=? AND row_number=?"
-      (int64 @-> int @-> ret Row.(t1 (text "fields_json"))))
+  let open Db_schema.Bank_csv_rows in
+  select_by_pair table document_id row_number fields_json
 ;;
 
 let import_csv_rows db ~institution ~contents rows =
@@ -477,10 +549,8 @@ let import_wise db ~institution ~contents (document : Wise_camt.t) =
                    (Bigdecimal.to_string_no_sn statement.closing)))
          in
          let find =
-           Rel_sql.Stmt.(
-             func
-               "SELECT id FROM wise_statements WHERE document_id=? AND ordinal=?"
-               (int64 @-> int @-> ret Row.(t1 (int64 "id"))))
+           let open Db_schema.Wise_statements in
+           select_by_pair table document_id ordinal id
          in
          let* statement_id = db_result (Db.first db (find document_id ordinal)) in
          let* statement_id =
@@ -564,19 +634,20 @@ let import_bunq db ~institution ~contents (document : Bunq_mt940.t) =
   List.iter document.transactions ~f:(fun tx ->
     Hashtbl.add_multi days ~key:(Date.to_string tx.Bunq_transaction.booked_on) ~data:tx);
   let find =
-    Rel_sql.Stmt.(
-      func
-        "SELECT signature FROM bunq_day_inventories WHERE source_account=? AND \
-         booked_on=?"
-        (text @-> text @-> ret Row.(t1 (text "signature"))))
+    let open Db_schema.Bunq_day_inventories in
+    select_by_pair table source_account booked_on signature
   in
   let insert_day =
-    Rel_sql.Stmt.(
-      func
-        "INSERT INTO \
-         bunq_day_inventories(source_account,booked_on,signature,document_id) VALUES \
-         (?,?,?,?)"
-        (text @-> text @-> text @-> int64 @-> unit))
+    let open Db_schema.Bunq_day_inventories in
+    let insert = Rel_sql.insert_into_cols Db.dialect table in
+    fun v_source_account v_booked_on v_signature v_document_id ->
+      insert
+        Col.
+          [ Value (source_account, v_source_account)
+          ; Value (booked_on, v_booked_on)
+          ; Value (signature, v_signature)
+          ; Value (document_id, v_document_id)
+          ]
   in
   let* _ =
     traverse
@@ -677,10 +748,8 @@ let import_bunq_csv db ~institution ~contents rows =
 let import_revolut db ~institution ~account_id (document : Revolut_csv.t) =
   let* document_id = archive_document db ~institution ~contents:document.contents in
   let context =
-    Rel_sql.Stmt.(
-      func
-        "SELECT account_id FROM revolut_documents WHERE document_id=?"
-        (int64 @-> ret Row.(t1 (text "account_id"))))
+    let open Db_schema.Revolut_documents in
+    select_by_column table document_id account_id
   in
   let* previous = db_result (Db.first db (context document_id)) in
   let* () =
@@ -690,10 +759,11 @@ let import_revolut db ~institution ~account_id (document : Revolut_csv.t) =
     | Some _ -> Ok ()
     | None ->
       let insert =
-        Rel_sql.Stmt.(
-          func
-            "INSERT INTO revolut_documents(document_id,account_id) VALUES (?,?)"
-            (int64 @-> text @-> unit))
+        let open Db_schema.Revolut_documents in
+        let insert = Rel_sql.insert_into_cols Db.dialect table in
+        fun v_document_id v_account_id ->
+          insert
+            Col.[ Value (document_id, v_document_id); Value (account_id, v_account_id) ]
       in
       db_result (Db.exec db (insert document_id account_id))
   in
@@ -704,19 +774,20 @@ let import_revolut db ~institution ~account_id (document : Revolut_csv.t) =
       ~key:(Revolut_csv.account_identity tx, Date.to_string tx.booked_on)
       ~data:tx);
   let find =
-    Rel_sql.Stmt.(
-      func
-        "SELECT signature FROM revolut_day_inventories WHERE source_account=? AND \
-         booked_on=?"
-        (text @-> text @-> ret Row.(t1 (text "signature"))))
+    let open Db_schema.Revolut_day_inventories in
+    select_by_pair table source_account booked_on signature
   in
   let insert_day =
-    Rel_sql.Stmt.(
-      func
-        "INSERT INTO \
-         revolut_day_inventories(source_account,booked_on,signature,document_id) VALUES \
-         (?,?,?,?)"
-        (text @-> text @-> text @-> int64 @-> unit))
+    let open Db_schema.Revolut_day_inventories in
+    let insert = Rel_sql.insert_into_cols Db.dialect table in
+    fun v_source_account v_booked_on v_signature v_document_id ->
+      insert
+        Col.
+          [ Value (source_account, v_source_account)
+          ; Value (booked_on, v_booked_on)
+          ; Value (signature, v_signature)
+          ; Value (document_id, v_document_id)
+          ]
   in
   let* _ =
     traverse
@@ -1003,13 +1074,24 @@ let events db =
     collect
       db
       (statement
-         "SELECT id,venue,account,kind,source_id,occurred_at_ms,occurred_on,payload FROM \
-          source_events ORDER BY coalesce(occurred_on, date(occurred_at_ms / 1000, \
+         "SELECT \
+          id,venue,account,kind,source_id,occurred_at_ms,occurred_on,retrieved_at,payload \
+          FROM source_events ORDER BY coalesce(occurred_on, date(occurred_at_ms / 1000, \
           'unixepoch')),occurred_at_ms,id"
          source_row)
   in
   traverse
-    (fun (id, venue, account, kind, source_id, at, on, payload) ->
+    (fun ({ id
+          ; venue
+          ; account
+          ; kind
+          ; source_id
+          ; occurred_at_ms = at
+          ; occurred_on = on
+          ; payload
+          ; _
+          } :
+           Db_schema.Source_events.t) ->
        let* e =
          match at, on with
          | Some occurred_at_ms, None ->
@@ -1029,7 +1111,13 @@ let events db =
     rows
 ;;
 
-let posting_row = Row.(t3 (text "account") (text "commodity") (text "quantity"))
+let posting_row =
+  Row.(
+    t3
+      (read_column Db_schema.Postings.account)
+      (read_column Db_schema.Postings.commodity)
+      (read_column Db_schema.Postings.quantity))
+;;
 
 let select_postings =
   Rel_sql.Stmt.(
@@ -1056,23 +1144,41 @@ let find_entry =
     func
       "SELECT id,date,description FROM journal_entries WHERE event_id=? AND \
        projection_key=?"
-      (int64 @-> text @-> ret Row.(t3 (int64 "id") (text "date") (text "description"))))
+      (int64
+       @-> text
+       @-> ret
+             Row.(
+               t3
+                 (read_column Db_schema.Journal_entries.id)
+                 (read_column Db_schema.Journal_entries.date)
+                 (read_column Db_schema.Journal_entries.description))))
 ;;
 
 let insert_entry =
-  Rel_sql.Stmt.(
-    func
-      "INSERT INTO journal_entries(event_id,projection_key,date,description) VALUES \
-       (?,?,?,?)"
-      (int64 @-> text @-> text @-> text @-> unit))
+  let open Db_schema.Journal_entries in
+  let insert = Rel_sql.insert_into_cols Db.dialect table in
+  fun v_event_id v_projection_key v_date v_description ->
+    insert
+      Col.
+        [ Value (event_id, v_event_id)
+        ; Value (projection_key, v_projection_key)
+        ; Value (date, v_date)
+        ; Value (description, v_description)
+        ]
 ;;
 
 let insert_posting =
-  Rel_sql.Stmt.(
-    func
-      "INSERT INTO postings(entry_id,ordinal,account,commodity,quantity) VALUES \
-       (?,?,?,?,?)"
-      (int64 @-> int @-> text @-> text @-> text @-> unit))
+  let open Db_schema.Postings in
+  let insert = Rel_sql.insert_into_cols Db.dialect table in
+  fun v_entry_id v_ordinal v_account v_commodity v_quantity ->
+    insert
+      Col.
+        [ Value (entry_id, v_entry_id)
+        ; Value (ordinal, v_ordinal)
+        ; Value (account, v_account)
+        ; Value (commodity, v_commodity)
+        ; Value (quantity, v_quantity)
+        ]
 ;;
 
 let same_entry (a : Accounting.entry) (b : Accounting.entry) =
@@ -1127,18 +1233,20 @@ let record_entry_in_transaction db ~event_id ~key (entry : Accounting.entry) =
 ;;
 
 let find_mapping =
-  Rel_sql.Stmt.(
-    func
-      "SELECT ledger_account FROM bank_account_mappings WHERE institution=? AND \
-       source_account=?"
-      (text @-> text @-> ret Row.(t1 (text "ledger_account"))))
+  let open Db_schema.Bank_account_mappings in
+  select_by_pair table institution source_account ledger_account
 ;;
 
 let find_category =
   Rel_sql.Stmt.(
     func
       "SELECT account,reason FROM bank_categories WHERE event_id=?"
-      (int64 @-> ret Row.(t2 (text "account") (text "reason"))))
+      (int64
+       @-> ret
+             Row.(
+               t2
+                 (read_column Db_schema.Bank_categories.account)
+                 (read_column Db_schema.Bank_categories.reason))))
 ;;
 
 let find_linked_transfer =
@@ -1148,8 +1256,12 @@ let find_linked_transfer =
        m JOIN bank_transfer_decisions d ON d.first_event_id=m.first_event_id AND \
        d.second_event_id=m.second_event_id WHERE m.event_id=? AND d.state='confirmed'"
       (int64
-       @-> ret Row.(t3 (int64 "first_event_id") (int64 "second_event_id") (text "reason"))
-      ))
+       @-> ret
+             Row.(
+               t3
+                 (read_column Db_schema.Bank_transfer_memberships.first_event_id)
+                 (read_column Db_schema.Bank_transfer_memberships.second_event_id)
+                 (read_column Db_schema.Bank_transfer_decisions.reason))))
 ;;
 
 let linked_transfer db event_id = db_result (Db.first db (find_linked_transfer event_id))
@@ -1180,11 +1292,11 @@ let entries db =
   let row =
     Row.(
       t5
-        (int64 "id")
-        (int64 "event_id")
-        (text "projection_key")
-        (text "date")
-        (text "description"))
+        (read_column Db_schema.Journal_entries.id)
+        (read_column Db_schema.Journal_entries.event_id)
+        (read_column Db_schema.Journal_entries.projection_key)
+        (read_column Db_schema.Journal_entries.date)
+        (read_column Db_schema.Journal_entries.description))
   in
   let* rows =
     collect
@@ -1265,20 +1377,28 @@ let upsert_mapping =
 ;;
 
 let audit_mapping =
-  Rel_sql.Stmt.(
-    func
-      "INSERT INTO \
-       bank_account_mapping_changes(institution,source_account,previous_ledger_account,ledger_account) \
-       VALUES (?,?,?,?)"
-      (text @-> text @-> option text @-> text @-> unit))
+  let open Db_schema.Bank_account_mapping_changes in
+  let insert = Rel_sql.insert_into_cols Db.dialect table in
+  fun v_institution v_source_account v_previous_ledger_account v_ledger_account ->
+    insert
+      Col.
+        [ Value (institution, v_institution)
+        ; Value (source_account, v_source_account)
+        ; Value (previous_ledger_account, v_previous_ledger_account)
+        ; Value (ledger_account, v_ledger_account)
+        ]
 ;;
 
-let rename_posting =
-  Rel_sql.Stmt.(
-    func
-      "UPDATE postings SET account=? WHERE entry_id=? AND ordinal=0"
-      (text @-> int64 @-> unit))
+let update_posting v_account v_entry_id v_ordinal =
+  let open Db_schema.Postings in
+  Rel_sql.update
+    Db.dialect
+    table
+    ~set:Col.[ Value (account, v_account) ]
+    ~where:Col.[ Value (entry_id, v_entry_id); Value (ordinal, v_ordinal) ]
 ;;
+
+let rename_posting account entry_id = update_posting account entry_id 0
 
 let set_bank_account_mappings_in_transaction db mappings =
   let* mappings = Bank_account_mapping.of_json (Bank_account_mapping.to_json mappings) in
@@ -1380,26 +1500,26 @@ type csv_report =
   ; changed : int
   }
 
-let csv_row =
+let csv_row id document_id institution row_number fields_json =
   Row.(
     t5
-      (int64 "id")
-      (int64 "document_id")
-      (text "institution")
-      (int "row_number")
-      (text "fields_json"))
+      (read_column id)
+      (read_column document_id)
+      (read_column institution)
+      (read_column row_number)
+      (read_column fields_json))
 ;;
 
-let csv_match_row =
+let csv_match_row row_id event_id state reason candidates_json policy =
   Row.(
     unit (fun row_id event_id state reason candidates policy ->
       row_id, event_id, state, reason, candidates, policy)
-    * int64 "row_id"
-    * col "event_id" Type.(option int64)
-    * text "state"
-    * text "reason"
-    * text "candidates_json"
-    * text "policy")
+    * read_column row_id
+    * read_column event_id
+    * read_column state
+    * read_column reason
+    * read_column candidates_json
+    * read_column policy)
 ;;
 
 let decode_csv_match (row_id, event_id, state, reason, candidates, policy) =
@@ -1424,7 +1544,8 @@ let read_csv_matches db =
       (statement
          "SELECT row_id,event_id,state,reason,candidates_json,policy FROM \
           bank_csv_matches ORDER BY row_id"
-         csv_match_row)
+         Db_schema.Bank_csv_matches.(
+           csv_match_row row_id event_id state reason candidates_json policy))
   in
   traverse decode_csv_match rows
 ;;
@@ -1436,7 +1557,8 @@ let read_csv_inputs db =
       (statement
          "SELECT id,document_id,institution,row_number,fields_json FROM bank_csv_rows \
           ORDER BY document_id,row_number"
-         csv_row)
+         Db_schema.Bank_csv_rows.(
+           csv_row id document_id institution row_number fields_json))
   in
   traverse
     (fun (row_id, document_id, institution, row_number, fields) ->
@@ -1480,20 +1602,27 @@ let upsert_csv_match =
 ;;
 
 let audit_csv_match =
-  Rel_sql.Stmt.(
-    func
-      "INSERT INTO \
-       bank_csv_match_changes(row_id,previous_event_id,event_id,previous_state,state,reason,candidates_json,policy) \
-       VALUES (?,?,?,?,?,?,?,?)"
-      (int64
-       @-> option int64
-       @-> option int64
-       @-> option text
-       @-> text
-       @-> text
-       @-> text
-       @-> text
-       @-> unit))
+  let open Db_schema.Bank_csv_match_changes in
+  let insert = Rel_sql.insert_into_cols Db.dialect table in
+  fun v_row_id
+    v_previous_event_id
+    v_event_id
+    v_previous_state
+    v_state
+    v_reason
+    v_candidates_json
+    v_policy ->
+    insert
+      Col.
+        [ Value (row_id, v_row_id)
+        ; Value (previous_event_id, v_previous_event_id)
+        ; Value (event_id, v_event_id)
+        ; Value (previous_state, v_previous_state)
+        ; Value (state, v_state)
+        ; Value (reason, v_reason)
+        ; Value (candidates_json, v_candidates_json)
+        ; Value (policy, v_policy)
+        ]
 ;;
 
 let save_csv_results
@@ -1616,7 +1745,8 @@ let read_wise_inputs db =
       (statement
          "SELECT id,document_id,institution,row_number,fields_json FROM wise_csv_rows \
           ORDER BY document_id,row_number"
-         csv_row)
+         Db_schema.Wise_csv_rows.(
+           csv_row id document_id institution row_number fields_json))
   in
   traverse
     (fun (row_id, document_id, _, row_number, fields) ->
@@ -1638,7 +1768,8 @@ let read_wise_matches db =
       (statement
          "SELECT row_id,event_id,state,reason,candidates_json,policy FROM \
           wise_csv_matches ORDER BY row_id"
-         csv_match_row)
+         Db_schema.Wise_csv_matches.(
+           csv_match_row row_id event_id state reason candidates_json policy))
   in
   traverse decode_csv_match rows
 ;;
@@ -1653,20 +1784,27 @@ let upsert_wise_match =
 ;;
 
 let audit_wise_match =
-  Rel_sql.Stmt.(
-    func
-      "INSERT INTO \
-       wise_csv_match_changes(row_id,previous_event_id,event_id,previous_state,state,reason,candidates_json,policy) \
-       VALUES (?,?,?,?,?,?,?,?)"
-      (int64
-       @-> option int64
-       @-> option int64
-       @-> option text
-       @-> text
-       @-> text
-       @-> text
-       @-> text
-       @-> unit))
+  let open Db_schema.Wise_csv_match_changes in
+  let insert = Rel_sql.insert_into_cols Db.dialect table in
+  fun v_row_id
+    v_previous_event_id
+    v_event_id
+    v_previous_state
+    v_state
+    v_reason
+    v_candidates_json
+    v_policy ->
+    insert
+      Col.
+        [ Value (row_id, v_row_id)
+        ; Value (previous_event_id, v_previous_event_id)
+        ; Value (event_id, v_event_id)
+        ; Value (previous_state, v_previous_state)
+        ; Value (state, v_state)
+        ; Value (reason, v_reason)
+        ; Value (candidates_json, v_candidates_json)
+        ; Value (policy, v_policy)
+        ]
 ;;
 
 let match_wise_csv db =
@@ -1722,12 +1860,12 @@ let wise_reconciliations db =
     Row.(
       unit (fun id doc account currency opening closing ->
         id, doc, account, currency, opening, closing)
-      * int64 "id"
-      * int64 "document_id"
-      * text "source_account"
-      * text "currency"
-      * text "opening"
-      * text "closing")
+      * read_column Db_schema.Wise_statements.id
+      * read_column Db_schema.Wise_statements.document_id
+      * read_column Db_schema.Wise_statements.source_account
+      * read_column Db_schema.Wise_statements.currency
+      * read_column Db_schema.Wise_statements.opening
+      * read_column Db_schema.Wise_statements.closing)
   in
   let* statements =
     collect
@@ -1741,10 +1879,8 @@ let wise_reconciliations db =
   traverse
     (fun (statement_id, document_id, source_account, currency, opening, closing) ->
        let find =
-         Rel_sql.Stmt.(
-           func
-             "SELECT event_id FROM wise_statement_events WHERE statement_id=?"
-             (int64 @-> ret Row.(t1 (int64 "event_id"))))
+         let open Db_schema.Wise_statement_events in
+         select_by_column table statement_id event_id
        in
        let* ids = collect db (find statement_id) in
        let* amounts =
@@ -1829,10 +1965,7 @@ let set_bank_categories db decisions =
                       "category change conflicts with existing bank projection"
                   else (
                     let update =
-                      Rel_sql.Stmt.(
-                        func
-                          "UPDATE postings SET account=? WHERE entry_id=? AND ordinal=1"
-                          (text @-> int64 @-> unit))
+                      fun account entry_id -> update_posting account entry_id 1
                     in
                     db_result (Db.exec db (update d.account id)))
               in
@@ -1845,12 +1978,16 @@ let set_bank_categories db decisions =
                     (int64 @-> text @-> text @-> unit))
               in
               let audit =
-                Rel_sql.Stmt.(
-                  func
-                    "INSERT INTO \
-                     bank_category_changes(event_id,previous_account,account,reason) \
-                     VALUES (?,?,?,?)"
-                    (int64 @-> option text @-> text @-> text @-> unit))
+                let open Db_schema.Bank_category_changes in
+                let insert = Rel_sql.insert_into_cols Db.dialect table in
+                fun v_event_id v_previous_account v_account v_reason ->
+                  insert
+                    Col.
+                      [ Value (event_id, v_event_id)
+                      ; Value (previous_account, v_previous_account)
+                      ; Value (account, v_account)
+                      ; Value (reason, v_reason)
+                      ]
               in
               let* () = db_result (Db.exec db (upsert d.event_id d.account d.reason)) in
               let* () =
@@ -1878,12 +2015,12 @@ let bank_category_history db =
     Row.(
       unit (fun id event_id previous_account account reason changed_at ->
         { id; event_id; previous_account; account; reason; changed_at })
-      * int64 "id"
-      * int64 "event_id"
-      * col "previous_account" Type.(option text)
-      * text "account"
-      * text "reason"
-      * text "changed_at")
+      * read_column Db_schema.Bank_category_changes.id
+      * read_column Db_schema.Bank_category_changes.event_id
+      * read_column Db_schema.Bank_category_changes.previous_account
+      * read_column Db_schema.Bank_category_changes.account
+      * read_column Db_schema.Bank_category_changes.reason
+      * read_column Db_schema.Bank_category_changes.changed_at)
   in
   collect
     db
@@ -1941,7 +2078,8 @@ let read_bunq_inputs db =
       (statement
          "SELECT id,document_id,institution,row_number,fields_json FROM bunq_csv_rows \
           ORDER BY document_id,row_number"
-         csv_row)
+         Db_schema.Bunq_csv_rows.(
+           csv_row id document_id institution row_number fields_json))
   in
   traverse
     (fun (row_id, document_id, _, row_number, fields) ->
@@ -1963,7 +2101,8 @@ let read_bunq_matches db =
       (statement
          "SELECT row_id,event_id,state,reason,candidates_json,policy FROM \
           bunq_csv_matches ORDER BY row_id"
-         csv_match_row)
+         Db_schema.Bunq_csv_matches.(
+           csv_match_row row_id event_id state reason candidates_json policy))
   in
   traverse decode_csv_match rows
 ;;
@@ -1978,20 +2117,27 @@ let upsert_bunq_match =
 ;;
 
 let audit_bunq_match =
-  Rel_sql.Stmt.(
-    func
-      "INSERT INTO \
-       bunq_csv_match_changes(row_id,previous_event_id,event_id,previous_state,state,reason,candidates_json,policy) \
-       VALUES (?,?,?,?,?,?,?,?)"
-      (int64
-       @-> option int64
-       @-> option int64
-       @-> option text
-       @-> text
-       @-> text
-       @-> text
-       @-> text
-       @-> unit))
+  let open Db_schema.Bunq_csv_match_changes in
+  let insert = Rel_sql.insert_into_cols Db.dialect table in
+  fun v_row_id
+    v_previous_event_id
+    v_event_id
+    v_previous_state
+    v_state
+    v_reason
+    v_candidates_json
+    v_policy ->
+    insert
+      Col.
+        [ Value (row_id, v_row_id)
+        ; Value (previous_event_id, v_previous_event_id)
+        ; Value (event_id, v_event_id)
+        ; Value (previous_state, v_previous_state)
+        ; Value (state, v_state)
+        ; Value (reason, v_reason)
+        ; Value (candidates_json, v_candidates_json)
+        ; Value (policy, v_policy)
+        ]
 ;;
 
 let match_bunq_csv db =
@@ -2057,10 +2203,8 @@ let bunq_reconciliations db =
   traverse
     (fun (document_id, account_id, currency, opening, closing) ->
        let find =
-         Rel_sql.Stmt.(
-           func
-             "SELECT event_id FROM import_document_events WHERE document_id=?"
-             (int64 @-> ret Row.(t1 (int64 "event_id"))))
+         let open Db_schema.Import_document_events in
+         select_by_column table document_id event_id
        in
        let* ids = collect db (find document_id) in
        let* amounts =
@@ -2081,10 +2225,8 @@ let bunq_reconciliations db =
 ;;
 
 let find_account_iban =
-  Rel_sql.Stmt.(
-    func
-      "SELECT iban FROM bank_account_identities WHERE institution=? AND source_account=?"
-      (text @-> text @-> ret Row.(t1 (text "iban"))))
+  let open Db_schema.Bank_account_identities in
+  select_by_pair table institution source_account iban
 ;;
 
 let account_iban db (event : Source_event.t) (tx : Bank_transaction.t) =
@@ -2170,7 +2312,11 @@ let transfer_iban_evidence db source a ta b tb =
 
 let transfer_decision_row =
   Row.(
-    t4 (int64 "first_event_id") (int64 "second_event_id") (text "state") (text "reason"))
+    t4
+      (read_column Db_schema.Bank_transfer_decisions.first_event_id)
+      (read_column Db_schema.Bank_transfer_decisions.second_event_id)
+      (read_column Db_schema.Bank_transfer_decisions.state)
+      (read_column Db_schema.Bank_transfer_decisions.reason))
 ;;
 
 let find_transfer_decision =
@@ -2253,25 +2399,30 @@ let set_bank_transfers db decisions =
             (int64 @-> int64 @-> int64 @-> unit))
       in
       let remove =
-        Rel_sql.Stmt.(
-          func
-            "DELETE FROM bank_transfer_memberships WHERE first_event_id=? AND \
-             second_event_id=?"
-            (int64 @-> int64 @-> unit))
+        let open Db_schema.Bank_transfer_memberships in
+        fun v_first_event_id v_second_event_id ->
+          Rel_sql.delete_from
+            Db.dialect
+            table
+            ~where:
+              Col.
+                [ Value (first_event_id, v_first_event_id)
+                ; Value (second_event_id, v_second_event_id)
+                ]
       in
-      let update =
-        Rel_sql.Stmt.(
-          func
-            "UPDATE postings SET account=? WHERE entry_id=? AND ordinal=1"
-            (text @-> int64 @-> unit))
-      in
+      let update = fun account entry_id -> update_posting account entry_id 1 in
       let audit =
-        Rel_sql.Stmt.(
-          func
-            "INSERT INTO \
-             bank_transfer_changes(first_event_id,second_event_id,previous_state,state,reason) \
-             VALUES (?,?,?,?,?)"
-            (int64 @-> int64 @-> option text @-> text @-> text @-> unit))
+        let open Db_schema.Bank_transfer_changes in
+        let insert = Rel_sql.insert_into_cols Db.dialect table in
+        fun v_first_event_id v_second_event_id v_previous_state v_state v_reason ->
+          insert
+            Col.
+              [ Value (first_event_id, v_first_event_id)
+              ; Value (second_event_id, v_second_event_id)
+              ; Value (previous_state, v_previous_state)
+              ; Value (state, v_state)
+              ; Value (reason, v_reason)
+              ]
       in
       let rec apply changed = function
         | [] -> Ok changed
@@ -2401,13 +2552,13 @@ let bank_transfer_history db =
     Row.(
       unit (fun id first second previous state reason at ->
         id, first, second, previous, state, reason, at)
-      * int64 "id"
-      * int64 "first_event_id"
-      * int64 "second_event_id"
-      * col "previous_state" Type.(option text)
-      * text "state"
-      * text "reason"
-      * text "changed_at")
+      * read_column Db_schema.Bank_transfer_changes.id
+      * read_column Db_schema.Bank_transfer_changes.first_event_id
+      * read_column Db_schema.Bank_transfer_changes.second_event_id
+      * read_column Db_schema.Bank_transfer_changes.previous_state
+      * read_column Db_schema.Bank_transfer_changes.state
+      * read_column Db_schema.Bank_transfer_changes.reason
+      * read_column Db_schema.Bank_transfer_changes.changed_at)
   in
   let* rows =
     collect
@@ -2527,11 +2678,8 @@ let transfer_candidates ?(include_reviewed = false) db =
 ;;
 
 let find_settlement =
-  Rel_sql.Stmt.(
-    func
-      "SELECT settlement_account FROM bank_account_settlements WHERE institution=? AND \
-       source_account=?"
-      (text @-> text @-> ret Row.(t1 (text "settlement_account"))))
+  let open Db_schema.Bank_account_settlements in
+  select_by_pair table institution source_account settlement_account
 ;;
 
 type bank_account_info =
@@ -2625,12 +2773,16 @@ let set_bank_account_identities_in_transaction db identities =
           (text @-> text @-> text @-> unit))
     in
     let audit =
-      Rel_sql.Stmt.(
-        func
-          "INSERT INTO \
-           bank_account_identity_changes(institution,source_account,previous_iban,iban) \
-           VALUES (?,?,?,?)"
-          (text @-> text @-> option text @-> text @-> unit))
+      let open Db_schema.Bank_account_identity_changes in
+      let insert = Rel_sql.insert_into_cols Db.dialect table in
+      fun v_institution v_source_account v_previous_iban v_iban ->
+        insert
+          Col.
+            [ Value (institution, v_institution)
+            ; Value (source_account, v_source_account)
+            ; Value (previous_iban, v_previous_iban)
+            ; Value (iban, v_iban)
+            ]
     in
     let rec apply count = function
       | [] -> Ok count
@@ -2668,7 +2820,7 @@ let set_bank_account_identities_in_transaction db identities =
         else
           let* () = db_result (Db.exec db (upsert i.institution identity i.iban)) in
           let* () =
-            db_result (Db.exec db (audit i.institution identity previous i.iban))
+            db_result (Db.exec db (audit i.institution identity previous (Some i.iban)))
           in
           apply (count + 1) rest
     in
@@ -2826,18 +2978,28 @@ let apply_bank_accounts ?(dry_run = false) db config =
       set_bank_account_mappings_in_transaction db (List.filter_opt mappings)
     in
     let remove_iban =
-      Rel_sql.Stmt.(
-        func
-          "DELETE FROM bank_account_identities WHERE institution=? AND source_account=?"
-          (text @-> text @-> unit))
+      let open Db_schema.Bank_account_identities in
+      fun v_institution v_source_account ->
+        Rel_sql.delete_from
+          Db.dialect
+          table
+          ~where:
+            Col.
+              [ Value (institution, v_institution)
+              ; Value (source_account, v_source_account)
+              ]
     in
     let audit_iban =
-      Rel_sql.Stmt.(
-        func
-          "INSERT INTO \
-           bank_account_identity_changes(institution,source_account,previous_iban,iban) \
-           VALUES (?,?,?,NULL)"
-          (text @-> text @-> text @-> unit))
+      let open Db_schema.Bank_account_identity_changes in
+      let insert = Rel_sql.insert_into_cols Db.dialect table in
+      fun v_institution v_source_account v_previous_iban ->
+        insert
+          Col.
+            [ Value (institution, v_institution)
+            ; Value (source_account, v_source_account)
+            ; Value (previous_iban, Some v_previous_iban)
+            ; Value (iban, None)
+            ]
     in
     let* clears =
       traverse
@@ -2900,18 +3062,28 @@ let apply_bank_accounts ?(dry_run = false) db config =
           (text @-> text @-> text @-> unit))
     in
     let remove =
-      Rel_sql.Stmt.(
-        func
-          "DELETE FROM bank_account_settlements WHERE institution=? AND source_account=?"
-          (text @-> text @-> unit))
+      let open Db_schema.Bank_account_settlements in
+      fun v_institution v_source_account ->
+        Rel_sql.delete_from
+          Db.dialect
+          table
+          ~where:
+            Col.
+              [ Value (institution, v_institution)
+              ; Value (source_account, v_source_account)
+              ]
     in
     let audit =
-      Rel_sql.Stmt.(
-        func
-          "INSERT INTO \
-           bank_account_settlement_changes(institution,source_account,previous_settlement,settlement_account) \
-           VALUES (?,?,?,?)"
-          (text @-> text @-> option text @-> option text @-> unit))
+      let open Db_schema.Bank_account_settlement_changes in
+      let insert = Rel_sql.insert_into_cols Db.dialect table in
+      fun v_institution v_source_account v_previous_settlement v_settlement_account ->
+        insert
+          Col.
+            [ Value (institution, v_institution)
+            ; Value (source_account, v_source_account)
+            ; Value (previous_settlement, v_previous_settlement)
+            ; Value (settlement_account, v_settlement_account)
+            ]
     in
     let* settlements =
       traverse

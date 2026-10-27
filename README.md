@@ -241,6 +241,11 @@ transfer review files use internal event IDs: inspect the new records before
 recreating those decisions instead of blindly reusing old numeric IDs.
 The current schema-10 database remains usable, including when copied into the
 XDG data directory.
+Tables are created from typed Rel definitions in `lib/db_schema.ml`. The same
+columns supply Store's inserts and read projections. SQLite checks, strictness
+and immutability are declared alongside those tables through `Sqlite_schema`;
+there is no separate SQL schema to keep synchronized. See
+[Persistence and replay](docs/architecture.md#persistence-and-replay) for details.
 The bank test fixture is synthetic; personal exports are not test fixtures.
 
 ## From bank export to a queryable journal

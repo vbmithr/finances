@@ -61,8 +61,30 @@ not yet calculate average entry price from fills or model inverse contracts.
 
 ## Persistence and replay
 
-`Store` uses Rel's typed statement bindings and SQLite backend. SQL parameters are
-bound rather than interpolated. `Db_schema` defines one current experimental schema baseline.
+`Db_schema` defines the 32 persistent row records, their typed Rel columns, rows,
+tables, keys, defaults and indexes. These definitions drive table creation and
+Store's inserts and read projections, so column types are shared rather than
+repeated in an independent SQL schema. Domain types still validate and represent
+financial concepts; persistence records represent the stored columns.
+
+`Sqlite_schema` adds checks, strictness and immutability beside each Rel table.
+Checks use the table's typed columns; trigger names and targets come from the
+table itself. The pinned Rel SQLite generator emits `BIGINT` for OCaml `int64`,
+so the helper changes those column declarations to SQLite `INTEGER` for `STRICT`
+tables and rowid allocation. This changes the SQL type spelling, not the OCaml
+value type or SQLite's 64-bit storage. Rel generates the remaining DDL, including
+foreign keys and indexes. There is no separately maintained SQL schema.
+Native strict-table generation is tracked in
+[Rel issue 5](https://github.com/dbuenzli/rel/issues/5).
+
+`Store` uses Rel's SQLite backend, generated inserts, updates and deletes, and
+the query language for simple lookups. Query parameters are bound. Rel's curried
+query builder supplies predicate parameters in reverse order; lookup helpers
+keep their public arguments in key order. Raw SQL remains for ordered reads,
+joins, conflict-targeted upserts and queries that are substantially clearer as
+SQL. Their result projections reuse table columns where applicable; computed
+fields and outer joins have their own result descriptions.
+
 Schema version 10 contains source events, journal entries, postings, immutable
 import documents, document/event links, append-only bank import attempts, persisted
 bank account mappings, an append-only mapping change log, immutable CSV rows,
