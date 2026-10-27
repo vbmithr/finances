@@ -387,7 +387,7 @@ let status_cmd =
     Term.(const status $ database $ json_output)
 ;;
 
-let import_history database limit =
+let import_history database limit json_output =
   with_database database (fun db ->
     let%bind attempts = Store.bank_import_history ~limit db in
     let optional f value = Option.value_map value ~default:`Null ~f in
@@ -409,18 +409,21 @@ let import_history database limit =
              ; "attempted_at", `String row.attempted_at
              ]))
     in
-    Out_channel.print_endline (Yojson.Safe.pretty_to_string json);
+    if json_output
+    then Out_channel.print_endline (Yojson.Safe.pretty_to_string json)
+    else Terminal.import_history attempts;
     Ok ())
 ;;
 
 let import_history_cmd =
   command
     "history"
-    "List recent inbox import attempts, newest first, as JSON."
+    "List recent file import attempts, newest first; use --json for scripts."
     Term.(
       const import_history
       $ database
-      $ Arg.(value & opt int 100 & info [ "limit" ] ~doc:"Maximum attempts (1-10000)."))
+      $ Arg.(value & opt int 100 & info [ "limit" ] ~doc:"Maximum attempts (1-10000).")
+      $ json_output)
 ;;
 
 let sync_bank database directory institution journal accounts max_mib account_id =

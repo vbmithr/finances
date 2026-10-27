@@ -57,8 +57,9 @@ fin transfers preview --json > transfer-preview.json
 ```
 
 The existing JSON layouts of the four inspection commands are unchanged; scripts
-that previously parsed their default output now need `--json`. History and
-provider reconciliation commands still output JSON. Configuration export remains
+that previously parsed their default output now need `--json`. Bank import
+history is readable too, with `--json` retaining its existing JSON layout. Other
+history and provider reconciliation commands still output JSON. Configuration export remains
 JSON, and journal export remains hledger text.
 
 ## Storage and backups
@@ -136,6 +137,13 @@ fin bank wise status
 fin bank bunq status
 fin bank boursobank csv list --review
 ```
+
+`fin bank history` is a log of file import attempts, not a list of transactions.
+It shows the bank, timestamp, filename, outcome, new/existing movement counts and
+any diagnostic. Attempts appear newest first; an unchanged file can appear more
+than once because each attempt is recorded. Use `fin bank history --limit 10` for
+the ten latest attempts, or `fin bank history --json` for machine-readable output.
+Use `fin bank review --all` to browse individual movements instead.
 
 See [Bank import and review reference](../README.md#folder-workflow) for
 additional detail, or use `fin bank sync --help` for current options.

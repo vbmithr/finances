@@ -68,7 +68,8 @@ not proof of complete coverage; financial reports come from the exported hledger
 journal. `accounts list`, `bank review`, `transfers candidates` and
 `transfers preview` now display readable text by default. Add `--json` to those
 commands or `status` for scripts; the existing inspection JSON shapes are retained.
-History and provider reconciliation commands continue to emit JSON.
+`bank history` also displays readable file import attempts by default, with
+`--json` for scripts. Other history and provider reconciliation commands emit JSON.
 
 The [XDG Base Directory specification](https://specifications.freedesktop.org/basedir/latest/)
 provides the base paths. Defaults are:
@@ -104,7 +105,7 @@ Build the current checkout using a prepared opam switch:
 
 ```sh
 make package OPAM_SWITCH=5.5.0
-sudo pacman -U dist/arch/finances-0.1.0-3-x86_64.pkg.tar.zst
+sudo pacman -U dist/arch/finances-0.1.0-4-x86_64.pkg.tar.zst
 fin --version
 fin accounts list
 fin bank bunq status
@@ -367,7 +368,10 @@ imported data even if some files need review, and returns a nonzero exit for
 rejected or unreadable inputs. Unsupported companions are visible in the summary
 without failing sync. The CSV summary separately counts matched, unmatched,
 ambiguous, and conflicting observations; review items do not prevent valid OFX
-entries from being exported. History is returned as JSON, newest attempt first.
+entries from being exported. Import history is readable text, newest attempt
+first; use `fin bank history --json` for the original JSON layout. It lists file
+import attempts, rather than individual bank movements. Use `--limit N` to choose
+how many recent attempts to display (100 by default).
 
 To give bank accounts readable ledger names:
 

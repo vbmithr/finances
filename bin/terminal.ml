@@ -53,6 +53,30 @@ let account (a : Store.bank_account_info) =
   print_endline ""
 ;;
 
+let import_history attempts =
+  if List.is_empty attempts
+  then
+    print_endline "No import attempts yet. See fin bank sync --help to import statements."
+  else (
+    print_endline "Import attempts, newest first:\n";
+    List.iter attempts ~f:(fun (a : Bank_import.file_report) ->
+      Printf.printf
+        "#%Ld  %s  %s  %s\n"
+        a.attempt_id
+        (text a.attempted_at)
+        (text a.institution)
+        (Bank_import.outcome_name a.outcome);
+      Printf.printf "  File: %s\n" (text a.path);
+      Printf.printf
+        "  Format: %s; new movements: %d; existing movements: %d\n"
+        (Bank_import.format_name a.format)
+        a.inserted
+        a.existing;
+      Option.iter a.message ~f:(fun message ->
+        Printf.printf "  Detail: %s\n" (text message));
+      print_endline ""))
+;;
+
 let review rows =
   if List.is_empty rows
   then print_endline "No movements to review."
