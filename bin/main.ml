@@ -141,8 +141,8 @@ let reset =
         if Stdlib.Sys.file_exists paths.accounts_config
         then printf "Kept your account configuration: %s\n" paths.accounts_config;
         print_endline
-          "Next: fin bank sync FOLDER --institution INSTITUTION for each bank's \
-           statement folder, then fin accounts apply.")
+          "Next: fin bank sync BANK PATH for each bank's statement folder, then fin \
+           accounts apply.")
       $ database)
 ;;
 
@@ -174,7 +174,7 @@ let setup database =
      Database: %s\n\
      Account config (optional): %s\n\n\
      Import your first statements, for example:\n\
-     \032 fin bank sync ~/Statements/boursobank --institution boursobank%s\n\n\
+     \032 fin bank sync boursobank ~/Statements/boursobank%s\n\n\
      Accounts appear when you import statements. Then explore:\n\
      \032 fin accounts list%s\n\
      \032 fin bank review%s\n\n\
@@ -427,7 +427,7 @@ let import_history_cmd =
       $ json_output)
 ;;
 
-let sync_bank database directory institution journal accounts max_mib account_id =
+let sync_bank database institution paths journal accounts max_mib account_id =
   if max_mib < 1 || max_mib > 1024
   then Or_error.error_string "max-file-mib must be between 1 and 1024"
   else (
@@ -446,7 +446,7 @@ let sync_bank database directory institution journal accounts max_mib account_id
         ~max_file_bytes:Int64.(of_int max_mib * 1048576L)
         ~database
         ~institution
-        ~directory
+        ~paths
         ~journal
         ()
     in
@@ -489,7 +489,16 @@ let sync_bank database directory institution journal accounts max_mib account_id
       report.companions.ambiguous
       report.companions.conflicts
       report.companions.changed;
-    if count Rejected + count Unreadable > 0
+    (* A file named on the command line that no adapter recognizes was not
+       imported, unlike an unrelated file found inside a directory. *)
+    let unsupported_explicit =
+      List.count report.inbox.files ~f:(fun row ->
+        Poly.equal row.outcome Unsupported
+        && List.mem paths row.path ~equal:String.equal
+        && Stdlib.Sys.file_exists row.path
+        && not (Stdlib.Sys.is_directory row.path))
+    in
+    if count Rejected + count Unreadable + unsupported_explicit > 0
     then
       Or_error.error_string
         "some inputs need review; successful inputs were imported and the journal was \
@@ -500,20 +509,36 @@ let sync_bank database directory institution journal accounts max_mib account_id
 let sync_bank_cmd =
   command
     "sync"
-    "Import an inbox, apply mappings, and publish a bank journal."
+    "Import a bank's statement files, apply mappings, and publish a bank journal."
     Term.(
       const sync_bank
       $ database
-      $ Arg.(required & pos 0 (some string) None & info [] ~docv:"INBOX")
       $ Arg.(
-          value
-          & opt string "boursobank"
+          required
+          & pos
+              0
+              (some
+                 (enum
+                    (List.map (Registry.institutions Builtin.registry) ~f:(fun i -> i, i))))
+              None
           & info
-              [ "institution" ]
+              []
+              ~docv:"BANK"
               ~doc:
-                ("Source institution: one of "
+                ("The bank that produced the files: "
                  ^ String.concat ~sep:", " (Registry.institutions Builtin.registry)
                  ^ "."))
+      $ Arg.(
+          non_empty
+          & pos_right 0 string []
+          & info
+              []
+              ~docv:"PATH"
+              ~doc:
+                "Statement files exported from $(i,BANK), or directories holding them. \
+                 Directories are searched recursively; hidden and partially downloaded \
+                 files inside them are skipped. Files are only read, never modified, and \
+                 syncing them again imports only what is new.")
       $ Arg.(
           value
           & opt (some string) None
@@ -1160,7 +1185,7 @@ let () =
                ; `S Manpage.s_examples
                ; `Pre
                    "fin init\n\
-                    fin bank sync ~/Statements/boursobank --institution boursobank\n\
+                    fin bank sync boursobank ~/Statements/boursobank\n\
                     fin status\n\
                     fin accounts list\n\
                     fin bank review\n\

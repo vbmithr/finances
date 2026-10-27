@@ -57,8 +57,8 @@ FX/split transfer matching, and BoursoBank balance reconciliation are later work
 The initial entry point is an explicit command:
 
 ```sh
-fin bank sync personal/boursobank/inbox \
-  --institution boursobank --journal personal/bank.journal
+fin bank sync boursobank personal/boursobank/inbox \
+  --journal personal/bank.journal
 ```
 
 One invocation uses one explicit institution identifier, defaulting to
@@ -116,8 +116,8 @@ Each mapping contains `institution`, `bank_id`, `account_id`, `account_type`, an
 
 ```sh
 fin accounts apply
-fin bank sync personal/boursobank/inbox \
-  --institution boursobank --accounts ~/.config/fin/accounts.json --journal personal/bank.journal
+fin bank sync boursobank personal/boursobank/inbox \
+  --accounts ~/.config/fin/accounts.json --journal personal/bank.journal
 ```
 
 Mappings are validated, persisted in SQLite, and audited. The JSON file is an input
@@ -259,8 +259,8 @@ SQLite retains statement balances and movement membership for independent review
 CSV adds metadata only, matched by reference/local millisecond clock/amount/currency
 with conservative ambiguity and conflict handling. Reimport and overlap reuse events.
 
-Use separate inboxes with explicit `--institution wise` and
-`--institution boursobank`, sharing the same database and journal output.
+Use separate folders, synced with `fin bank sync wise …` and
+`fin bank sync boursobank …`, sharing the same database and journal output.
 `bank statements --institution wise` reports statement differences and `bank companions --institution wise` the CSV matching decisions.
 The combined journal includes every institution already stored. Opening balance
 postings, fee postings, and FX accounting are not inferred. Real FX and nonzero-fee
@@ -270,7 +270,7 @@ currency separation, reversals, and multi-bank replay.
 ## Bunq import
 
 The Bunq adapter accepts the observed MT940 export and its seven-column CSV
-companion from `personal/bunq/inbox/` with `--institution bunq`. MT940 supplies
+companion from `personal/bunq/inbox/`, synced with `fin bank sync bunq`. MT940 supplies
 movements and reconciled account/currency balances; CSV observations add corroborating
 row provenance, never extra movements. `bank statements` reports persisted reconciliation
 and CSV matching states.

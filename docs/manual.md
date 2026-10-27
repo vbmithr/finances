@@ -99,10 +99,10 @@ installing a release with a new schema, move the old database aside with
 
 ```sh
 fin db reset
-fin bank sync ~/Statements/boursobank --institution boursobank
-fin bank sync ~/Statements/wise --institution wise
-fin bank sync ~/Statements/bunq --institution bunq
-fin bank sync ~/Statements/revolut --institution revolut --account-id main
+fin bank sync boursobank ~/Statements/boursobank
+fin bank sync wise ~/Statements/wise
+fin bank sync bunq ~/Statements/bunq
+fin bank sync revolut ~/Statements/revolut --account-id main
 fin accounts apply
 ```
 
@@ -134,7 +134,7 @@ imports. Export the supported format from your bank instead.
 For example, put your BoursoBank exports in `~/Statements/boursobank`, then run:
 
 ```sh
-fin bank sync ~/Statements/boursobank --institution boursobank
+fin bank sync boursobank ~/Statements/boursobank
 fin accounts list
 fin bank review
 ```
@@ -142,14 +142,19 @@ fin bank review
 Use the corresponding institution for your other inboxes:
 
 ```sh
-fin bank sync ~/Statements/wise --institution wise
-fin bank sync ~/Statements/bunq --institution bunq
-fin bank sync ~/Statements/revolut --institution revolut --account-id main
+fin bank sync wise ~/Statements/wise
+fin bank sync bunq ~/Statements/bunq
+fin bank sync revolut ~/Statements/revolut --account-id main
 ```
 
-`--institution` must be one of the banks `fin` knows: `boursobank`, `bunq`,
-`revolut` or `wise` (listed in `fin bank sync --help`). Files synced under any
-other name are rejected and appear in `fin bank history`.
+The first argument is the bank that produced the files: one of `boursobank`,
+`bunq`, `revolut` or `wise` (listed in `fin bank sync --help`). It is required,
+since a file does not always say which bank it came from: OFX, CAMT and MT940 are
+shared formats. The arguments after it are files or directories, any number of
+them. Directories are searched recursively, skipping hidden and partially
+downloaded files; a file you name is always processed, and fails the command if
+no bank recognizes it. A file that clearly comes from another bank is rejected
+and appears in `fin bank history`.
 
 For Revolut, choose a stable account label; use separate labels and inboxes for
 different accounts. Sync scans the folder recursively, archives the inputs,

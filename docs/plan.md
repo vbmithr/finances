@@ -95,17 +95,13 @@ The import side is done; turning movements into accounting is not.
   `fin journal export`.
 - [x] `fin accounts apply` names the configured accounts that have no imported
   statements, instead of repeating "unknown source account".
-- [ ] `fin bank sync` does not describe its folder argument (`INBOX`) in `--help`,
-  and "inbox" is not explained anywhere in the CLI: it is a folder of one bank's
-  exports, searched recursively, never modified.
+- [x] `fin bank sync BANK PATH...`: the bank is a required argument, and the paths
+  are any number of files or directories, described in `--help`.
 - [ ] `fin accounts apply` without a configuration file fails with a bare "No such
   file or directory". The manual's rebuild steps end with it, so a first-time user
   without `accounts.json` hits this; it should say that no configuration exists
   and that applying one is optional.
 - [ ] `fin paths` prints only JSON, like `bank statements` and `bank companions`.
-- [ ] `fin bank sync` defaults `--institution` to `boursobank`. Adapters already
-  recognize each file's bank, so the institution could be detected, keeping
-  `--account-id` for Revolut.
 - [ ] `fin bank statements` and `fin bank companions` print only JSON, unlike the
   other commands, which print text and take `--json`.
 - [ ] The 8 ambiguous BoursoBank CSV rows need a way to be resolved.

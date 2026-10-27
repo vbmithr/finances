@@ -147,7 +147,7 @@ The CLI provides `init`, `status` and `paths`, with grouped commands under `db`,
 
 ```sh
 fin db init
-fin bank sync personal/bunq/inbox --institution bunq
+fin bank sync bunq personal/bunq/inbox
 fin transfers preview
 fin journal export
 ```
@@ -231,11 +231,10 @@ to whitespace. `events` prints metadata as JSON without printing source payloads
 ## Bank imports
 
 ```sh
-dune exec fin -- bank sync /path/to/inbox --institution boursobank
+dune exec fin -- bank sync boursobank /path/to/statements
 ```
 
-Every import goes through `bank sync`. The institution identifier defaults to
-`boursobank`; use `--institution NAME` for another institution. It must name a
+Every import goes through `bank sync BANK PATH...`. `BANK` is required and must name a
 registered bank (`boursobank`, `bunq`, `revolut` or `wise`); files imported under
 any other identifier are rejected, with the attempt recorded. The institution's
 adapter recognizes each file's format; a file another bank recognizes is rejected
@@ -291,7 +290,7 @@ financial data, not scratch files.
 
 ```sh
 mkdir -p personal
-dune exec fin -- bank sync /path/to/inbox --institution boursobank
+dune exec fin -- bank sync boursobank /path/to/statements
 dune exec fin -- bank project
 dune exec fin -- journal export > personal/bank.journal
 hledger --no-conf -f personal/bank.journal check --strict
@@ -352,8 +351,8 @@ milestones. The first milestone is available:
 ~~~sh
 mkdir -p personal/{boursobank,wise,bunq,revolut}/inbox personal/reviews personal/reports
 # Copy bank exports into personal/boursobank/inbox, then run after copying has completed.
-dune exec fin -- bank sync personal/boursobank/inbox \
-  --institution boursobank --journal personal/bank.journal
+dune exec fin -- bank sync boursobank personal/boursobank/inbox \
+  --journal personal/bank.journal
 dune exec fin -- bank history --limit 100
 ~~~
 
@@ -389,8 +388,8 @@ dune exec fin -- accounts export \
   -o "${XDG_CONFIG_HOME:-$HOME/.config}/fin/accounts.json"
 # Edit ledger_account fields, retaining each account's source identity.
 dune exec fin -- accounts apply
-dune exec fin -- bank sync personal/boursobank/inbox \
-  --institution boursobank --accounts ~/.config/fin/accounts.json --journal personal/bank.journal
+dune exec fin -- bank sync boursobank personal/boursobank/inbox \
+  --accounts ~/.config/fin/accounts.json --journal personal/bank.journal
 ~~~
 
 The version 1 configuration manages ledger names, IBANs and card settlement links
@@ -548,10 +547,10 @@ optional enrichment. Keep a separate inbox per institution and sync both into th
 same database and journal:
 
 ```sh
-fin bank sync personal/boursobank/inbox \
-  --institution boursobank --journal personal/bank.journal
-fin bank sync personal/wise/inbox \
-  --institution wise --journal personal/bank.journal
+fin bank sync boursobank personal/boursobank/inbox \
+  --journal personal/bank.journal
+fin bank sync wise personal/wise/inbox \
+  --journal personal/bank.journal
 fin bank statements --institution wise
 hledger -f personal/bank.journal --strict check
 hledger -f personal/bank.journal register assets:bank:wise
@@ -560,8 +559,7 @@ hledger -f personal/bank.journal register assets:bank:wise
 Each sync regenerates the journal from all stored bank entries. Default account
 names include institution, bank, account type, and account ID; Wise balance account
 types include currency. Existing account mappings also work for Wise. Wise exports
-require `--institution wise` to prevent accidental imports under the BoursoBank
-default. CSV and XML may arrive in either order.
+name `wise` as the bank, like every other import. CSV and XML may arrive in either order.
 
 Wise references can repeat for reversals. Identity therefore includes the
 normalized proprietary transaction reference, full UTC nanosecond booking instant,
@@ -592,8 +590,8 @@ Put Bunq's MT940 export (including exports with no filename extension) and its
 optional seven-column CSV into `personal/bunq/inbox/`:
 
 ```sh
-fin bank sync personal/bunq/inbox \
-  --institution bunq --journal personal/bank.journal
+fin bank sync bunq personal/bunq/inbox \
+  --journal personal/bank.journal
 fin bank statements --institution bunq
 ```
 
@@ -628,8 +626,8 @@ Bunq uses the same persisted account mappings and reviewed categories as other b
 Place the ten-column Revolut CSV export in `personal/revolut/inbox/`:
 
 ```sh
-fin bank sync personal/revolut/inbox \
-  --institution revolut --account-id main --journal personal/bank.journal
+fin bank sync revolut personal/revolut/inbox \
+  --account-id main --journal personal/bank.journal
 ```
 
 The CSV has no account identifier. Supply a stable label (`main` here) for that

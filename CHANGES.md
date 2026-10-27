@@ -10,6 +10,16 @@ short line of their own.
 
 ### 2026-10-27
 
+**Action required:** `fin bank sync` takes the bank as its first argument:
+`fin bank sync boursobank ~/statements/bourso` instead of
+`fin bank sync ~/statements/bourso --institution boursobank`. `--institution` is
+gone from `sync`, and so is its `boursobank` default.
+
+- `fin bank sync BANK PATH...` accepts any number of files and directories.
+  Directories are searched recursively as before; a file named explicitly is always
+  processed, even if hidden, and fails the command if no bank recognizes it. A file
+  reached twice is imported once. `--help` describes both arguments.
+
 **Action required:** schema 11 refuses databases created by earlier versions, without
 changing them. Move the old database aside and rebuild it from your statement
 folders (see "Storage and backups" in the manual).

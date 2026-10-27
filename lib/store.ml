@@ -756,7 +756,7 @@ let import_bank_file ?account_label db ~institution ~path ~contents =
          ~format
          Rejected
          (Printf.sprintf
-            "this is a %s export (%s); sync it with --institution %s"
+            "this is a %s export (%s); sync it with fin bank sync %s"
             owner
             format
             owner)
@@ -2502,8 +2502,8 @@ let apply_bank_accounts ?(dry_run = false) db config =
         ~error:
           (Error.of_string
              (Printf.sprintf
-                "%s has no imported statements; sync them with fin bank sync FOLDER \
-                 --institution %s before applying the configuration"
+                "%s has no imported statements; sync them with fin bank sync %s FOLDER \
+                 before applying the configuration"
                 (describe r)
                 r.institution))
     in
@@ -2516,8 +2516,8 @@ let apply_bank_accounts ?(dry_run = false) db config =
       | missing ->
         Or_error.errorf
           "%d configured account%s ha%s no imported statements: %s. Sync each one's \
-           statement folder with fin bank sync FOLDER --institution INSTITUTION, then \
-           apply the configuration again."
+           statement folder with fin bank sync BANK PATH, then apply the configuration \
+           again."
           (List.length missing)
           (if List.length missing = 1 then "" else "s")
           (if List.length missing = 1 then "s" else "ve")

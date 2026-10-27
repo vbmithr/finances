@@ -21,7 +21,7 @@ val run
   -> ?max_file_bytes:int64
   -> database:string
   -> institution:string
-  -> directory:string
+  -> paths:string list
   -> journal:string
   -> unit
   -> report Or_error.t

@@ -411,7 +411,7 @@ let folder_order () =
            ~registry:Builtin.registry
            ~database:(database root)
            ~institution:"boursobank"
-           ~directory:inbox
+           ~paths:[ inbox ]
            ~journal:(Stdlib.Filename.concat root "bank.journal")
            ())
     in

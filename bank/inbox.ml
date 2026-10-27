@@ -52,21 +52,18 @@ let snapshot ~max_file_bytes path =
         Buffer.contents buffer))
 ;;
 
-let scan
-      ?account_id
-      ?(max_file_bytes = 67108864L)
-      ?(exclude = [])
-      db
-      ~institution
-      ~directory
-  =
+let scan ?account_id ?(max_file_bytes = 67108864L) ?(exclude = []) db ~institution ~paths =
   let open Or_error.Let_syntax in
   let%bind () =
     Or_error.try_with (fun () ->
       if Int64.(max_file_bytes <= 0L || max_file_bytes >= of_int Int.max_value)
       then failwith "file read limit must be positive and fit in memory";
-      if Poly.((Unix.LargeFile.lstat directory).st_kind <> Unix.S_DIR)
-      then failwith "inbox must be a directory, not a symbolic link")
+      if List.is_empty paths then failwith "no file or directory to sync";
+      List.iter paths ~f:(fun path ->
+        match (Unix.LargeFile.lstat path).st_kind with
+        | S_DIR | S_REG -> ()
+        | _ ->
+          Printf.failwithf "%s must be a file or directory, not a symbolic link" path ()))
   in
   let excluded =
     List.filter_map exclude ~f:(fun path ->
@@ -74,8 +71,13 @@ let scan
       | Error _ -> None
       | Ok stat -> Some (stat.st_dev, stat.st_ino))
   in
+  let seen = Hash_set.Poly.create () in
   let files = ref []
   and ignored = ref [] in
+  let skip path reason =
+    ignored := { path; reason } :: !ignored;
+    Ok ()
+  in
   let record_error path error =
     let%map report =
       Store.record_bank_read_error
@@ -86,25 +88,40 @@ let scan
     in
     files := report :: !files
   in
-  let rec walk path =
+  let import path =
+    match snapshot ~max_file_bytes path with
+    | Error error -> record_error path error
+    | Ok contents ->
+      let%map report =
+        Store.import_bank_file ?account_label:account_id db ~institution ~path ~contents
+      in
+      files := report :: !files
+  in
+  let rec visit = function
+    | [] -> Ok ()
+    | path :: rest ->
+      let%bind () = walk ~explicit:false path in
+      visit rest
+  (* Paths given explicitly are always processed: the hidden and partial-file name
+     filters only apply to what a directory walk finds. *)
+  and walk ~explicit path =
     match Or_error.try_with (fun () -> Unix.LargeFile.lstat path) with
     | Error error -> record_error path error
     | Ok stat ->
       let name = Stdlib.Filename.basename path in
-      if
-        List.exists excluded ~f:(fun (device, inode) ->
-          device = stat.st_dev && inode = stat.st_ino)
-      then (
-        ignored := { path; reason = "control file alias" } :: !ignored;
-        Ok ())
+      let identity = stat.st_dev, stat.st_ino in
+      if List.exists excluded ~f:(Poly.equal identity)
+      then skip path "control file alias"
       else if
-        String.is_prefix name ~prefix:"."
-        || List.exists [ ".part"; ".tmp"; "~" ] ~f:(fun suffix ->
-          String.is_suffix name ~suffix)
-      then (
-        ignored := { path; reason = "hidden or partial-file path" } :: !ignored;
-        Ok ())
+        (not explicit)
+        && (String.is_prefix name ~prefix:"."
+            || List.exists [ ".part"; ".tmp"; "~" ] ~f:(fun suffix ->
+              String.is_suffix name ~suffix))
+      then skip path "hidden or partial-file path"
+      else if Hash_set.mem seen identity
+      then skip path "already listed"
       else (
+        Hash_set.add seen identity;
         match stat.st_kind with
         | S_DIR ->
           (match
@@ -114,45 +131,13 @@ let scan
                |> List.sort ~compare:String.compare)
            with
            | Error error -> record_error path error
-           | Ok names ->
-             let rec visit = function
-               | [] -> Ok ()
-               | name :: rest ->
-                 let%bind () = walk (Stdlib.Filename.concat path name) in
-                 visit rest
-             in
-             visit names)
-        | S_REG ->
-          (match snapshot ~max_file_bytes path with
-           | Error error -> record_error path error
-           | Ok contents ->
-             let%map report =
-               Store.import_bank_file
-                 ?account_label:account_id
-                 db
-                 ~institution
-                 ~path
-                 ~contents
-             in
-             files := report :: !files)
-        | S_LNK ->
-          ignored := { path; reason = "symbolic link" } :: !ignored;
-          Ok ()
-        | _ ->
-          ignored := { path; reason = "not a regular file or directory" } :: !ignored;
-          Ok ())
+           | Ok names -> visit (List.map names ~f:(Stdlib.Filename.concat path)))
+        | S_REG -> import path
+        | S_LNK -> skip path "symbolic link"
+        | _ -> skip path "not a regular file or directory")
   in
-  (* Do not apply the hidden-name filter to the explicitly selected root. *)
-  let%bind names =
-    Or_error.try_with (fun () ->
-      Stdlib.Sys.readdir directory |> Array.to_list |> List.sort ~compare:String.compare)
+  let%map () =
+    List.fold_result paths ~init:() ~f:(fun () path -> walk ~explicit:true path)
   in
-  let rec visit = function
-    | [] -> Ok ()
-    | name :: rest ->
-      let%bind () = walk (Stdlib.Filename.concat directory name) in
-      visit rest
-  in
-  let%map () = visit names in
   { files = List.rev !files; ignored = List.rev !ignored }
 ;;

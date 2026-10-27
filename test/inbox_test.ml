@@ -43,7 +43,7 @@ let sync ?accounts root =
     ?accounts
     ~database:(database root)
     ~institution:"boursobank"
-    ~directory:(inbox root)
+    ~paths:[ inbox root ]
     ~journal:(journal root)
     ()
 ;;
@@ -204,7 +204,7 @@ let read_limit () =
              ~max_file_bytes:32L
              db
              ~institution:"boursobank"
-             ~directory:(inbox root))
+             ~paths:[ inbox root ])
       in
       Alcotest.(check int) "oversize file recorded" 1 (count Unreadable report);
       let row = List.hd_exn report.files in
@@ -392,7 +392,7 @@ let path_protection () =
         ~registry:Builtin.registry
         ~database
         ~institution:"boursobank"
-        ~directory
+        ~paths:[ directory ]
         ~journal
         ()
     in
@@ -460,6 +460,40 @@ let output_failure () =
        |> List.length))
 ;;
 
+let explicit_paths () =
+  workspace (fun root ->
+    let file = join (inbox root) "bank.ofx" in
+    write file (fixture ());
+    let run paths =
+      Finances_bank.Sync.run
+        ~registry:Builtin.registry
+        ~database:(database root)
+        ~institution:"boursobank"
+        ~paths
+        ~journal:(journal root)
+        ()
+    in
+    let report = ok (run [ inbox root; file ]) in
+    Alcotest.(check int) "imported once" 1 (count Imported report.inbox);
+    Alcotest.(check (list string))
+      "second visit reported"
+      [ "already listed" ]
+      (List.map report.inbox.ignored ~f:(fun i -> i.reason));
+    let hidden = join root ".export.ofx" in
+    write hidden (fixture ());
+    let report = ok (run [ hidden ]) in
+    Alcotest.(check (list string))
+      "explicit hidden file processed"
+      [ hidden ]
+      (List.map report.inbox.files ~f:(fun f -> f.path));
+    let link = join root "link" in
+    Unix.symlink (inbox root) link;
+    error (run [ link ]);
+    error (run [ join root "missing.ofx" ]);
+    error (run [ database root ]);
+    error (run []))
+;;
+
 let () =
   Alcotest.run
     "bank inbox"
@@ -473,6 +507,7 @@ let () =
           ; "unknown and duplicate mappings", mapping_errors
           ; "mapping conflict preserves output", mapping_conflict_preserves_journal
           ; "control path protection", path_protection
+          ; "explicit files and directories", explicit_paths
           ; "invalid configuration before import", invalid_config_before_import
           ; "publication failure and retry", output_failure
           ]
