@@ -151,8 +151,8 @@ let replay_and_archive () =
       let events = ok (Store.events db) in
       List.iter events ~f:(fun (_, e) ->
         match e.occurred with
-        | On_date _ -> ()
-        | At _ -> failwith "bank date became a fabricated instant");
+        | Temporal.Date _ -> ()
+        | Temporal.Instant _ -> failwith "bank date became a fabricated instant");
       Alcotest.(check int)
         "no automatic accounting classification"
         0

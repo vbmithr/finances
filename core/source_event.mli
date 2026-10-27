@@ -1,16 +1,12 @@
 open Base
 
-type occurrence =
-  | At of Ptime.t
-  | On_date of Date.t
-
 (** Immutable source evidence. Identity is scoped to venue, account and kind. *)
 type t = private
   { venue : string
   ; account : string
   ; kind : string
   ; source_id : string
-  ; occurred : occurrence
+  ; occurred : Temporal.t
   ; payload : string
   }
 

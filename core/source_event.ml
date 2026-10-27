@@ -1,15 +1,11 @@
 open Base
 
-type occurrence =
-  | At of Ptime.t
-  | On_date of Date.t
-
 type t =
   { venue : string
   ; account : string
   ; kind : string
   ; source_id : string
-  ; occurred : occurrence
+  ; occurred : Temporal.t
   ; payload : string
   }
 
@@ -23,11 +19,11 @@ let make ~venue ~account ~kind ~source_id ~occurred ~payload =
 ;;
 
 let create ~venue ~account ~kind ~source_id ~occurred_at ~payload =
-  make ~venue ~account ~kind ~source_id ~occurred:(At occurred_at) ~payload
+  make ~venue ~account ~kind ~source_id ~occurred:(Temporal.Instant occurred_at) ~payload
 ;;
 
 let create_dated ~venue ~account ~kind ~source_id ~occurred_on ~payload =
   let open Or_error.Let_syntax in
   let%bind () = Or_error.try_with (fun () -> Date.validate_exn occurred_on) in
-  make ~venue ~account ~kind ~source_id ~occurred:(On_date occurred_on) ~payload
+  make ~venue ~account ~kind ~source_id ~occurred:(Temporal.Date occurred_on) ~payload
 ;;

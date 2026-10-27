@@ -10,6 +10,11 @@ short line of their own.
 
 ### 2026-10-27
 
+- Unify event occurrences and statement times as `Temporal.t` (`Date` or
+  `Instant`), with shared `to_string`/`of_string_exn` conversion. This replaces
+  `Source_event.occurrence`, `Document.time` and the document time conversion
+  functions. Stored text, schema 13 and CLI output are unchanged.
+
 - Status and account listings now ask SQLite for movement counts and per-account
   date ranges; status also queries the unclassified count. Only candidate legs
   and representative account movements are decoded. Account discovery reuses

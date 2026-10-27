@@ -28,8 +28,8 @@ let statement_time =
     (Type.Coded.make
        ~name:"statement_time"
        Type.text
-       ~enc:Document.time_to_string
-       ~dec:(decode_exn Document.time_of_string_exn))
+       ~enc:Temporal.to_string
+       ~dec:(decode_exn Temporal.of_string_exn))
 ;;
 
 module Source_events = struct
@@ -567,10 +567,10 @@ module Statements = struct
     ; source_account : string
     ; reference : string option
     ; currency : string
-    ; period_start : Document.time
-    ; period_end : Document.time
-    ; opening_as_of : Document.time
-    ; closing_as_of : Document.time
+    ; period_start : Temporal.t
+    ; period_end : Temporal.t
+    ; opening_as_of : Temporal.t
+    ; closing_as_of : Temporal.t
     ; opening : string
     ; closing : string
     }

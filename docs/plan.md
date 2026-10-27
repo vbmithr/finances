@@ -18,6 +18,8 @@ Last updated: 2026-10-27.
 - Storage is schema 13: generic tables for every bank, plus each movement stored
   normalized at import, so reads are SQL queries instead of payload decoding. No
   migrations; older databases are refused unchanged.
+- Event occurrences and statement boundaries share `Temporal.t` (`Date` or
+  `Instant`) and its text codec; calendar dates never imply a time or timezone.
 - Instants use `Ptime.t`, with Rel codecs preserving picoseconds as fixed-width UTC
   text. Date-only statement boundaries remain dates; original source clocks and
   Wise identity encodings stay unchanged. Revolut start/completion clocks are
@@ -34,7 +36,7 @@ Last updated: 2026-10-27.
 - Movements project to balanced entries against `equity:unclassified`, unless a
   reviewed category or confirmed transfer says otherwise. `fin journal export`
   writes a reproducible hledger journal.
-- 134 tests (124 OCaml cases and 10 CLI cases). Each change is verified
+- 135 tests (125 OCaml cases and 10 CLI cases). Each change is verified
   by rebuilding the personal database from its inboxes with the previous and the
   new build and diffing every report.
 - Issue #1 is implemented locally and awaits publication.

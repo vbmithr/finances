@@ -247,8 +247,8 @@ let movement_columns =
 
 let occurrence_columns (e : Source_event.t) =
   match e.occurred with
-  | At instant -> Some instant, None
-  | On_date date -> None, Some (Date.to_string date)
+  | Temporal.Instant instant -> Some instant, None
+  | Temporal.Date date -> None, Some (Date.to_string date)
 ;;
 
 let ingest_in_transaction db (e : Source_event.t) =
@@ -631,13 +631,13 @@ let day_groups events =
     traverse
       (fun (e : Source_event.t) ->
          match e.occurred with
-         | On_date day ->
+         | Temporal.Date day ->
            Ok
              (Hashtbl.add_multi
                 groups
                 ~key:(e.account, Date.to_string day)
                 ~data:e.payload)
-         | At _ ->
+         | Temporal.Instant _ ->
            Or_error.error_string "day inventories need events dated by booking day")
       events
     |> Or_error.map ~f:ignore
@@ -1642,8 +1642,8 @@ type statement_reconciliation =
   ; source_account : string
   ; reference : string option
   ; currency : Iso4217.t
-  ; period_start : Document.time
-  ; period_end : Document.time
+  ; period_start : Temporal.t
+  ; period_end : Temporal.t
   ; opening : Quantity.t
   ; closing : Quantity.t
   ; movements : Quantity.t

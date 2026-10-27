@@ -379,7 +379,7 @@ let source_transaction (event : Source_event.t) =
           && String.equal event.source_id tx.source_id))
       || not
            (match event.occurred with
-            | At instant -> Ptime.equal instant tx.booked_at
+            | Temporal.Instant instant -> Ptime.equal instant tx.booked_at
             | _ -> false)
     then failwith "Wise source identity or booking timestamp disagrees with payload";
     tx)

@@ -165,7 +165,7 @@ let source_transaction (event : Source_event.t) =
          && String.equal trn.fitid event.source_id)
     then failwith "bank event identity disagrees with payload";
     (match event.occurred with
-     | On_date date when Date.equal date trn.booked_on -> ()
+     | Temporal.Date date when Date.equal date trn.booked_on -> ()
      | _ -> failwith "bank event booking date disagrees with payload");
     account, trn)
   |> fun result -> Or_error.tag result ~tag:"stored bank transaction"

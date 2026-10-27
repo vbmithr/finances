@@ -245,7 +245,7 @@ Bank-specific tables are replaced by:
 
 Notes:
 
-- Statement period and balance times use `Document.time`: `Date of Date.t`
+- Event occurrences and statement period and balance times use `Temporal.t`: `Date of Date.t`
   (Bunq) or `Instant of Ptime.t` (Wise). Rel codecs serialize them to calendar-date
   or canonical UTC text. Original offset-bearing text remains in archived source
   documents; local booking dates and raw matching clocks stay separate.

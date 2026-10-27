@@ -58,10 +58,10 @@ let parse ~context:_ ~format contents =
         { Document.source_account = Wise_camt.account_identity statement.account
         ; reference = Some statement.statement_id
         ; currency = statement.account.currency
-        ; period_start = Document.Instant statement.period_start
-        ; period_end = Document.Instant statement.period_end
-        ; opening_as_of = Document.Instant statement.opening_at
-        ; closing_as_of = Document.Instant statement.closing_at
+        ; period_start = Temporal.Instant statement.period_start
+        ; period_end = Temporal.Instant statement.period_end
+        ; opening_as_of = Temporal.Instant statement.opening_at
+        ; closing_as_of = Temporal.Instant statement.closing_at
         ; opening = statement.opening
         ; closing = statement.closing
         ; events

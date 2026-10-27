@@ -297,13 +297,33 @@ let precise_timestamps () =
         (List.map rows ~f:(fun (_, e) -> e.Source_event.source_id));
       List.iter rows ~f:(fun (_, e) ->
         match e.Source_event.occurred with
-        | At instant ->
+        | Temporal.Instant instant ->
           let expected = List.Assoc.find_exn samples e.source_id ~equal:String.equal in
           Alcotest.(check string)
             "full precision survives reopen"
             expected
             (Timestamp.to_rfc3339 instant)
-        | On_date _ -> Alcotest.fail "instant changed into a date")))
+        | Temporal.Date _ -> Alcotest.fail "instant changed into a date")))
+;;
+
+let temporal_codec () =
+  let date = Temporal.of_string_exn "2026-10-27" in
+  let instant = Temporal.of_string_exn "2026-10-27T01:00:00.000000000001+01:00" in
+  (match date, instant with
+   | Temporal.Date d, Temporal.Instant t ->
+     Alcotest.(check string) "date stays a date" "2026-10-27" (Date.to_string d);
+     Alcotest.(check string)
+       "instant preserves precision and normalizes offset"
+       "2026-10-27T00:00:00.000000000001Z"
+       (Timestamp.to_rfc3339 t)
+   | _ -> Alcotest.fail "temporal precision changed");
+  List.iter [ date; instant ] ~f:(fun value ->
+    Alcotest.(check bool)
+      "temporal roundtrip"
+      true
+      (Poly.equal value (Temporal.of_string_exn (Temporal.to_string value))));
+  List.iter [ "2026-02-30"; "2026-10-27T25:00:00Z"; "garbage" ] ~f:(fun text ->
+    error (Or_error.try_with (fun () -> Temporal.of_string_exn text)))
 ;;
 
 let () =
@@ -323,7 +343,8 @@ let () =
           ]
           ~f:(fun (name, f) -> Alcotest.test_case name `Quick f) )
     ; ( "model"
-      , [ Alcotest.test_case "accounting invariants" `Quick accounting_invariants
+      , [ Alcotest.test_case "shared temporal codec" `Quick temporal_codec
+        ; Alcotest.test_case "accounting invariants" `Quick accounting_invariants
         ; Alcotest.test_case "linear perpetual valuation" `Quick linear_perpetual
         ] )
     ]

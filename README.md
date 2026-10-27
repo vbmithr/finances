@@ -275,7 +275,8 @@ payload used for replay; its original value remains in the archived document.
 Formatting whitespace is normalized in transaction payloads, while other changes
 to a transaction's canonical XML cause a conflict. CSV enrichment is described below.
 
-`Source_event.occurrence` distinguishes `At of Ptime.t` from `On_date of Date.t`.
+`Source_event.occurred` uses the shared `Temporal.t`: `Instant of Ptime.t`
+or `Date of Date.t`.
 The `events` command prints an RFC 3339 `occurred_at` for instants, or
 `occurred_at: null` and a populated `occurred_on` for date-only OFX records.
 Wise records retain an instant and project using the local booking date.
@@ -868,7 +869,8 @@ through the small ISO/calendar-day helpers in `Date`. Instants use `Ptime.t`,
 including Wise booking times, statement boundaries and audit timestamps. Rel
 codecs encode instants as fixed-width UTC RFC 3339 text with 12 fractional digits;
 SQLite can compare, sort and index it chronologically without date functions.
-`Document.time` distinguishes calendar dates from instants for statement metadata.
+`Temporal.t` distinguishes calendar dates from instants for both event occurrences
+and statement metadata; `Temporal.to_string` and `of_string_exn` share their codec.
 Original bank timestamp text stays in source evidence; Wise also retains its raw
 booking lexeme for local-time CSV matching. Base supplies general
 utilities, and Bos handles high-level filesystem operations. Core, Core_unix,

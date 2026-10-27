@@ -113,8 +113,8 @@ type statement_reconciliation =
   ; source_account : string
   ; reference : string option
   ; currency : Iso4217.t
-  ; period_start : Document.time
-  ; period_end : Document.time
+  ; period_start : Temporal.t
+  ; period_end : Temporal.t
   ; opening : Quantity.t
   ; closing : Quantity.t
   ; movements : Quantity.t

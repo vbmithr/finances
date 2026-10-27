@@ -31,9 +31,9 @@ exchange's financial semantics.
 ## Domain boundaries
 
 `Source_event` describes external evidence. Its identity is
-`(venue, account, kind, source_id)`. An occurrence is either `At of Ptime.t` or a
-calendar date (`On_date`); SQLite requires exactly one of `occurred_at` and
-`occurred_on`. Rel encodes instants as fixed-width UTC RFC 3339 text with 12
+`(venue, account, kind, source_id)`. Occurrences and statement boundaries share
+`Temporal.t`: `Instant of Ptime.t` or `Date of Date.t`. SQLite requires exactly one
+of `occurred_at` and `occurred_on`. Rel encodes instants as fixed-width UTC RFC 3339 text with 12
 fractional digits. Text comparison and indexing give full chronological ordering,
 including sub-millisecond instants; no SQLite date function rounds the ordering. Bank booking dates do not fabricate a UTC
 timestamp. SQLite assigns the internal ID and retrieval timestamp. Payload bytes
@@ -317,8 +317,8 @@ instant; Rel preserves all picoseconds on storage and reload. The source-ID
 encoding still uses the existing nanosecond integer string, solely at that identity
 serialization boundary. The original booking lexeme is retained for source payloads
 and local CSV matching. Journal dates follow the original local date. Statement
-boundaries use Ptime instants; the kernel represents them as `Document.Instant`,
-while Bunq supplies `Document.Date` without fabricating midnight or a timezone.
+boundaries use Ptime instants; the kernel represents them as `Temporal.Instant`,
+while Bunq supplies `Temporal.Date` without fabricating midnight or a timezone.
 Import and account/review audit timestamps also use Ptime through Rel codecs.
 
 Wise_csv exposes `booked_at` as a Ptime instant under a UTC assumption, retaining

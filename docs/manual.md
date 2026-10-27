@@ -363,7 +363,7 @@ private snapshot and draft permissions remain in place.
 is `At` instead of `At_ms`. Instants in the OCaml API use `Ptime.t`, including
 source occurrences, Wise booking times, statement instants and audit times.
 Calendar dates remain `Ptime.date`;
-statement metadata uses `Document.Date` or `Document.Instant`. Revolut CSV start
+statement metadata uses `Temporal.Date` or `Temporal.Instant`. Revolut CSV start
 and completion clocks are assumed UTC and exposed as `started_at` and `completed_at`
 of type `Ptime.t`. This assumption does not depend on your system timezone.
 Wise CSV also exposes

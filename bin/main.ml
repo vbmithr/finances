@@ -99,12 +99,12 @@ let list_events database =
              ; "source_id", `String e.source_id
              ; ( "occurred_at"
                , match e.occurred with
-                 | At instant -> `String (Timestamp.to_rfc3339 instant)
-                 | On_date _ -> `Null )
+                 | Temporal.Instant instant -> `String (Timestamp.to_rfc3339 instant)
+                 | Temporal.Date _ -> `Null )
              ; ( "occurred_on"
                , match e.occurred with
-                 | On_date date -> `String (Date.to_string date)
-                 | At _ -> `Null )
+                 | Temporal.Date date -> `String (Date.to_string date)
+                 | Temporal.Instant _ -> `Null )
              ]))
     in
     Out_channel.print_endline (Yojson.Safe.pretty_to_string json);
@@ -771,8 +771,8 @@ let statement_json (s : Store.statement_reconciliation) =
     ; "source_account", `String s.source_account
     ; "reference", Option.value_map s.reference ~default:`Null ~f:(fun r -> `String r)
     ; "currency", `String (Iso4217.to_alpha_code s.currency)
-    ; "period_start", `String (Document.time_to_string s.period_start)
-    ; "period_end", `String (Document.time_to_string s.period_end)
+    ; "period_start", `String (Temporal.to_string s.period_start)
+    ; "period_end", `String (Temporal.to_string s.period_end)
     ; "opening", `String (Quantity.to_string s.opening)
     ; "closing", `String (Quantity.to_string s.closing)
     ; "movements", `String (Quantity.to_string s.movements)

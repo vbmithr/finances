@@ -246,7 +246,7 @@ let source_transaction (event : Source_event.t) =
          && String.equal event.source_id tx.source_id
          &&
          match event.occurred with
-         | On_date d -> Date.equal d tx.booked_on
+         | Temporal.Date d -> Date.equal d tx.booked_on
          | _ -> false)
     then failwith "Revolut source identity disagrees with payload";
     tx)

@@ -199,12 +199,12 @@ let timestamp_precision () =
       |> snd
     in
     (match event.occurred with
-     | At instant ->
+     | Temporal.Instant instant ->
        Alcotest.(check bool)
          "SQL keeps all picoseconds"
          true
          (Ptime.equal instant tx.booked_at)
-     | On_date _ -> Alcotest.fail "Wise instant lost");
+     | Temporal.Date _ -> Alcotest.fail "Wise instant lost");
     let decoded = ok (Wise_camt.source_transaction event) in
     Alcotest.(check string) "payload remains byte-identical" tx.payload decoded.payload;
     let replay = import db "precise.xml" contents in

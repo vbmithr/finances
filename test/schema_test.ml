@@ -202,7 +202,7 @@ let generated_queries () =
            Alcotest.(check bool)
              "Ptime and blob round-trip"
              true
-             (Poly.equal e.Source_event.occurred (Source_event.At Ptime.max)
+             (Poly.equal e.Source_event.occurred (Temporal.Instant Ptime.max)
               && String.equal e.payload first.payload));
          Ok ())))
 ;;
