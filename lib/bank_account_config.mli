@@ -15,7 +15,7 @@ type 'a update =
 type t =
   { reference : reference
   ; ledger_account : string option
-  ; iban : string update
+  ; iban : Iban.t update
   ; settlement_account : reference update
   }
 

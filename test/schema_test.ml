@@ -283,7 +283,7 @@ let persistent_state () =
              then
                { r with
                  ledger_account = Some "assets:bank:daily"
-               ; iban = Set "BE68539007547034"
+               ; iban = Set (ok (Iban.of_string "BE68539007547034"))
                }
              else r)
          in
@@ -341,7 +341,7 @@ let persistent_state () =
          Alcotest.(check string)
            "IBAN retained"
            "BE68539007547034"
-           (Option.value_exn revolut.iban);
+           (Iban.to_string (Option.value_exn revolut.iban));
          check "projection remains idempotent" 0 (ok (Store.project_bank db)).inserted;
          Ok ()));
     raw path (fun db ->

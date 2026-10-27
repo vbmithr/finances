@@ -66,7 +66,10 @@ Start in this repository under `formats/` as separate dune libraries, each with
 its own public name. Extract once an interface has survived two banks. Check
 names against opam before publishing.
 
-### `iban`: ISO 13616
+### `iban`: ISO 13616 (implemented)
+
+`formats/iban`, public name `finances.iban`. The kernel uses `Iban.t` for every
+IBAN it holds; text appears only in SQLite and JSON.
 
 ISO 13616-1:2020 defines the IBAN structure. Check digits use ISO/IEC 7064
 MOD 97-10. SWIFT, as registration authority under ISO 13616-2, publishes the
@@ -77,14 +80,16 @@ length bounds, the `CCdd` prefix and MOD 97-10. The library adds:
 
 - An abstract `Iban.t` that can only be built validated; electronic and
   printed (groups of four) renderings.
-- Per-country length and BBAN structure from a table generated from the SWIFT
-  registry file, with the registry release recorded in the source. Unknown
+- Per-country length and BBAN structure, bank and branch identifier positions
+  and SEPA membership, from a table generated from the SWIFT registry PDF by
+  `tools/registry_of_pdf.py` (Release 103, Sep 2026; 89 countries). The script
+  rejects any block whose structure, lengths or example disagree. Unknown
   country codes are rejected.
 - Rejection of check digits `00`, `01` and `99`. They can pass MOD 97-10 but
   are never issued.
 - Country code, check digits and BBAN accessors, plus, where the registry
   defines them, the bank and branch identifiers.
-- Optionally `Bic.t` (ISO 9362) beside it, since CAMT carries both.
+- Not yet: `Bic.t` (ISO 9362), which CAMT will need.
 
 This also tightens `inferred_iban`. Today any checksum-valid 15–34 character
 account identifier counts as IBAN evidence; with the registry, the country
@@ -266,7 +271,8 @@ companion match states, and the exported journal after reapplying decisions.
 1. **Baseline.** Snapshot the personal database (21 OFX, 154 Bunq, 35
    Revolut, 538 Wise events): event set, journal, reconciliations, companion
    matches, transfer candidates. Every later step diffs against it.
-2. **`iban` library.** Small and independent; switch `Account_identity` to it.
+2. **`iban` library.** Done: `Account_identity`, account configuration and Store
+   use `Iban.t`; reports on the personal database are unchanged.
 3. **Kernel types and registry.** `Movement.t`, adapter signature, registry,
    generic overlap and companion machinery. Switch projection, transfers,
    ranking, IBAN evidence and journal export to `Movement.t`.

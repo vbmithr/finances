@@ -129,21 +129,51 @@
  (modules ranking_test)
  (deps
   (glob_files fixtures/*))
- (libraries finances base stdio bos fpath unix alcotest rel rel.sqlite3))
+ (libraries
+  finances
+  finances.iban
+  base
+  stdio
+  bos
+  fpath
+  unix
+  alcotest
+  rel
+  rel.sqlite3))
 
 (test
  (name accounts_test)
  (modules accounts_test)
  (deps
   (glob_files fixtures/*))
- (libraries finances base stdio bos fpath unix alcotest rel rel.sqlite3))
+ (libraries
+  finances
+  finances.iban
+  base
+  stdio
+  bos
+  fpath
+  unix
+  alcotest
+  rel
+  rel.sqlite3))
 
 (test
  (name schema_test)
  (modules schema_test)
  (deps
   (glob_files fixtures/*))
- (libraries finances base stdio bos fpath unix alcotest rel rel.sqlite3))
+ (libraries
+  finances
+  finances.iban
+  base
+  stdio
+  bos
+  fpath
+  unix
+  alcotest
+  rel
+  rel.sqlite3))
 
 (test
  (name paths_test)
@@ -161,3 +191,8 @@
  (name quantity_test)
  (modules quantity_test)
  (libraries finances base decimal ptime zarith alcotest))
+
+(test
+ (name iban_test)
+ (modules iban_test)
+ (libraries finances.iban base alcotest))

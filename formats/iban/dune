@@ -1,0 +1,7 @@
+(library
+ (name iban)
+ (public_name finances.iban)
+ (private_modules registry_data)
+ (libraries base)
+ (preprocess
+  (pps ppx_let)))

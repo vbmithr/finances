@@ -438,7 +438,9 @@ example is illustrative; keep the source identifiers from your actual export:
 The four source identity fields are immutable selectors; changing them does not
 rename or merge a source account. `ledger_account` changes its display/accounting
 name after verifying existing projections. `iban` supplies an account identifier
-missing from exports; spaces and case are normalized and check digits validated.
+missing from exports; spaces and case are normalized, then the country code,
+that country's length and BBAN structure from the SWIFT IBAN Registry, and the
+MOD 97-10 check digits are validated (ISO 13616-1).
 An IBAN already present as a source identifier cannot be replaced or cleared.
 IBAN registration does not change movement IDs or historical source evidence.
 

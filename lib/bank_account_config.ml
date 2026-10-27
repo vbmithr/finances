@@ -15,7 +15,7 @@ type 'a update =
 type t =
   { reference : reference
   ; ledger_account : string option
-  ; iban : string update
+  ; iban : Iban.t update
   ; settlement_account : reference update
   }
 
@@ -123,8 +123,7 @@ let of_json contents =
           { reference = r
           ; ledger_account
           ; iban =
-              update "iban" (fun v ->
-                Account_identity.normalize_iban (to_string v) |> Or_error.ok_exn)
+              update "iban" (fun v -> Iban.of_string (to_string v) |> Or_error.ok_exn)
           ; settlement_account =
               update "settlement_account" (fun v ->
                 reference_of_json v |> Or_error.ok_exn)
@@ -155,7 +154,7 @@ let to_json rows =
                    (reference_fields row.reference
                     @ Option.value_map row.ledger_account ~default:[] ~f:(fun a ->
                       [ "ledger_account", `String a ])
-                    @ update "iban" (fun s -> `String s) row.iban
+                    @ update "iban" (fun iban -> `String (Iban.to_string iban)) row.iban
                     @ update "settlement_account" reference_to_json row.settlement_account
                    ))) )
         ])

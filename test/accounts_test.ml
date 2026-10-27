@@ -46,7 +46,7 @@ let changes db =
   and credit = card rows in
   [ { cash with
       ledger_account = Some "assets:bank:daily"
-    ; iban = Set "FR1420041010050500013M02606"
+    ; iban = Set (ok (Iban.of_string "FR1420041010050500013M02606"))
     }
   ; { credit with settlement_account = Set cash.reference }
   ]

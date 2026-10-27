@@ -157,7 +157,9 @@ fin accounts export -o "${XDG_CONFIG_HOME:-$HOME/.config}/fin/accounts.json"
 
 Export after importing your statements, then edit that JSON file to set ledger
 account names, register known IBANs and associate a credit card with its settlement
-account. A credit card does not need its own IBAN. Keep the exported account
+account. A credit card does not need its own IBAN. IBANs may use spaces or lower
+case; `fin` checks them against the country's registered length and structure
+and the check digits, and refuses invalid ones. Keep the exported account
 identity fields unchanged so settings refer to the correct imported account.
 Export writes a new snapshot to the chosen file; keep existing edits before
 exporting over it.

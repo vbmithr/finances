@@ -5,20 +5,19 @@ type t = private
   ; bank_id : string
   ; account_id : string
   ; account_type : string
-  ; iban : string
+  ; iban : Iban.t
   }
 
-val normalize_iban : string -> string Or_error.t
-
-(** A checksum-valid source identifier is usable as imported IBAN evidence. *)
-val inferred_iban : string -> string option
+(** A source account identifier that is a valid IBAN is usable as imported IBAN
+    evidence. *)
+val inferred_iban : string -> Iban.t option
 
 val create
   :  institution:string
   -> bank_id:string
   -> account_id:string
   -> account_type:string
-  -> iban:string
+  -> iban:Iban.t
   -> t Or_error.t
 
 val source_account : t -> string

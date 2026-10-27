@@ -37,7 +37,7 @@ let account (a : Store.bank_account_info) =
     (text a.mapping.account_type);
   Stdio.printf
     "  IBAN: %s (%s)\n"
-    (text (Option.value a.iban ~default:"none"))
+    (text (Option.value_map a.iban ~default:"none" ~f:Iban.to_string))
     a.iban_source;
   Stdio.printf
     "  Records: %d movements in %s; %s to %s\n"

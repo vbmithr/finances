@@ -256,7 +256,9 @@ let account_info_json (info : Store.bank_account_info) =
   ; "bank_id", `String a.bank_id
   ; "account_id", `String a.account_id
   ; "account_type", `String a.account_type
-  ; "iban", Option.value_map info.iban ~default:`Null ~f:(fun s -> `String s)
+  ; ( "iban"
+    , Option.value_map info.iban ~default:`Null ~f:(fun iban ->
+        `String (Iban.to_string iban)) )
   ]
 ;;
 

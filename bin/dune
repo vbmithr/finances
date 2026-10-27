@@ -5,6 +5,7 @@
   finances
   finances.hledger
   finances.bank
+  finances.iban
   base
   stdio
   bos

@@ -93,7 +93,7 @@ let identity iban =
        ~bank_id:"revolut"
        ~account_id:"main"
        ~account_type:"current-EUR"
-       ~iban)
+       ~iban:(ok (Iban.of_string iban)))
 ;;
 
 let unique db =
@@ -113,9 +113,9 @@ let iban_validation () =
   Alcotest.(check string)
     "normalize spaces/case"
     counterpart_iban
-    (ok (Account_identity.normalize_iban "be68 5390 0754 7034"));
-  error (Account_identity.normalize_iban "BE69539007547034");
-  error (Account_identity.normalize_iban "main");
+    (Iban.to_string (ok (Iban.of_string "be68 5390 0754 7034")));
+  error (Iban.of_string "BE69539007547034");
+  error (Iban.of_string "main");
   check
     "null template has no update"
     0
@@ -142,7 +142,10 @@ let registration () =
         ~f:(fun i -> String.equal i.Store.mapping.institution "revolut")
     in
     Alcotest.(check string) "manual provenance" "registered" info.iban_source;
-    Alcotest.(check string) "saved IBAN" counterpart_iban (Option.value_exn info.iban);
+    Alcotest.(check string)
+      "saved IBAN"
+      counterpart_iban
+      (Iban.to_string (Option.value_exn info.iban));
     let ranked = ok (Transfer_ranking.analyze (ok (Store.transfer_candidates db))) in
     let r =
       List.find_exn ranked ~f:(fun r ->
@@ -165,7 +168,7 @@ let registration () =
     Alcotest.(check string)
       "identity conflict rolled back"
       counterpart_iban
-      (Option.value_exn info.iban))
+      (Iban.to_string (Option.value_exn info.iban)))
 ;;
 
 let known_contradiction () =
@@ -207,7 +210,7 @@ let explicit_contradiction () =
            ~bank_id:"bunq"
            ~account_id:bunq_iban
            ~account_type:"current-EUR"
-           ~iban:other_iban)
+           ~iban:(ok (Iban.of_string other_iban)))
     in
     error (Store.set_bank_account_identities db [ imported ]))
 ;;

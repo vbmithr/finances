@@ -218,7 +218,7 @@ val transfer_candidates
 
 type bank_account_info =
   { mapping : Bank_account_mapping.t
-  ; iban : string option
+  ; iban : Iban.t option
   ; iban_source : string
   ; currency : string
   ; movements : int

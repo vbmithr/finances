@@ -17,6 +17,7 @@
   xmlm
   re
   digestif
-  csv)
+  csv
+  iban)
  (preprocess
   (pps ppx_sexp_conv ppx_compare ppx_let)))

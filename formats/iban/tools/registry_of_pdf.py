@@ -1,0 +1,174 @@
+#!/usr/bin/env python3
+"""Generate registry_data.ml from the SWIFT IBAN Registry PDF.
+
+SWIFT publishes the registry as a PDF (and a TXT export behind a login). Convert
+the PDF with poppler and pipe the text through this script:
+
+    pdftotext -layout iban-registry.pdf - \
+      | python3 -I tools/registry_of_pdf.py > registry_data.ml
+    dune fmt
+
+Only chapter 2 (ISO 13616-compliant IBAN formats) is read. Every country block
+is checked for internal consistency (structure against lengths, IBAN structure
+against BBAN structure, example against structure and MOD 97-10) and the
+script fails rather than emitting a doubtful table.
+"""
+
+import re
+import sys
+
+CLASSES = {"n": "[0-9]", "a": "[A-Z]", "c": "[A-Za-z0-9]"}
+LABELS = {
+    "code": r"IBAN prefix country code \(ISO 3166\)",
+    "sepa": "SEPA country",
+    "bban": "BBAN structure",
+    "bban_length": "BBAN length",
+    "bank": "Bank identifier position within the BBAN",
+    "branch": "Branch identifier position within the BBAN",
+    "iban": "IBAN structure",
+    "length": "IBAN length",
+    "electronic": "IBAN electronic format example",
+    "print": "IBAN print format example",
+}
+
+
+def fail(message):
+    sys.exit("registry_of_pdf: " + message)
+
+
+def value(block, label):
+    """A labelled value, joined with any wrapped continuation lines."""
+    lines = block.split("\n")
+    for i, line in enumerate(lines):
+        m = re.match(r"^ *" + label + r"(?: {2,}(.*))?$", line)
+        if m:
+            parts = [m.group(1).strip()] if m.group(1) else []
+            for following in lines[i + 1 :]:
+                c = re.match(r"^ {30,}(\S.*)$", following)
+                if not c:
+                    break
+                parts.append(c.group(1).strip())
+            return parts
+    return []
+
+
+def segments(structure):
+    found = re.findall(r"(\d+)!([nac])", structure)
+    if "".join(k + "!" + c for k, c in found) != structure:
+        fail("unsupported structure notation " + structure)
+    return [(int(k), c) for k, c in found]
+
+
+def expand(structure):
+    return "".join(c * k for k, c in segments(structure))
+
+
+def position(text, bban_length, country):
+    if text in ("", "N/A"):
+        return None
+    m = re.fullmatch(r"(\d+)-(\d+)", text)
+    if not m:
+        fail(country + ": invalid identifier position " + text)
+    first, last = int(m.group(1)), int(m.group(2))
+    if not 1 <= first <= last <= bban_length:
+        fail(country + ": identifier position outside the BBAN")
+    return first, last
+
+
+def mod97(text):
+    rotated = text[4:] + text[:4]
+    return int("".join(str(int(ch, 36)) for ch in rotated)) % 97
+
+
+def ocaml_string(s):
+    return '"' + s.replace("\\", "\\\\").replace('"', '\\"') + '"'
+
+
+def ocaml_position(p):
+    return "None" if p is None else "Some (%d, %d)" % p
+
+
+def main():
+    text = sys.stdin.read()
+    release = re.search(r"Release (\d+) [–-] (\w+ \d{4})", text)
+    if not release:
+        fail("release line not found")
+    heads = list(re.finditer(r"^ *2\.(\d+) ([A-Z]{2}) [–-] ([^.\n]+)$", text, re.M))
+    if not heads:
+        fail("no country sections found")
+    rows = []
+    for i, head in enumerate(heads):
+        end = heads[i + 1].start() if i + 1 < len(heads) else len(text)
+        block = text[head.start() : end]
+        row = {k: " ".join(value(block, label)) for k, label in LABELS.items()}
+        country = head.group(2)
+        if row["code"] != country:
+            fail(country + ": section and country code disagree")
+        bban = segments(row["bban"])
+        bban_length = sum(k for k, _ in bban)
+        length = bban_length + 4
+        if int(row["bban_length"]) != bban_length or int(row["length"]) != length:
+            fail(country + ": lengths disagree with the BBAN structure")
+        if expand(row["iban"][2:]) != "nn" + expand(row["bban"]):
+            fail(country + ": IBAN structure disagrees with the BBAN structure")
+        if row["sepa"] not in ("Yes", "No"):
+            fail(country + ": invalid SEPA flag")
+        example = row["electronic"].replace(" ", "") or "".join(
+            value(block, LABELS["print"])
+        ).replace(" ", "")
+        pattern = "".join("%s{%d}" % (CLASSES[c], k) for k, c in bban)
+        if not (
+            len(example) == length
+            and example[:2] == country
+            and re.fullmatch(pattern, example[4:])
+            and mod97(example) == 1
+        ):
+            fail(country + ": example does not validate")
+        rows.append(
+            (
+                country,
+                head.group(3).strip(),
+                row["bban"],
+                position(row["bank"], bban_length, country),
+                position(row["branch"], bban_length, country),
+                row["sepa"] == "Yes",
+                example,
+            )
+        )
+    countries = [r[0] for r in rows]
+    if len(set(countries)) != len(countries):
+        fail("duplicate country sections")
+    rows.sort()
+    out = sys.stdout
+    out.write(
+        "(* Generated by tools/registry_of_pdf.py from the SWIFT IBAN Registry.\n"
+        "   Do not edit; regenerate from a newer registry release instead. *)\n\n"
+    )
+    out.write(
+        "let release = %s\n\n"
+        % ocaml_string("Release %s (%s)" % (release.group(1), release.group(2)))
+    )
+    out.write(
+        "(* Country, name, BBAN structure, bank and branch identifier positions\n"
+        "   (1-based, inclusive, within the BBAN), SEPA membership, example. *)\n"
+    )
+    out.write("let entries =\n  [ ")
+    out.write(
+        "\n  ; ".join(
+            "( %s, %s, %s, %s, %s, %s, %s )"
+            % (
+                ocaml_string(c),
+                ocaml_string(n),
+                ocaml_string(s),
+                ocaml_position(b),
+                ocaml_position(br),
+                "true" if sepa else "false",
+                ocaml_string(e),
+            )
+            for c, n, s, b, br, sepa, e in rows
+        )
+    )
+    out.write("\n  ]\n;;\n")
+
+
+main()

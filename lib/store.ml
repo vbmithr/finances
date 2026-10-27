@@ -2226,17 +2226,26 @@ let find_account_iban =
   select_by_pair table institution source_account iban
 ;;
 
+(* IBANs are validated when written. A stored value that no longer parses (for
+   example after a registry update) is reported, never silently ignored. *)
+let registered_iban db institution source_account =
+  let* stored = db_result (Db.first db (find_account_iban institution source_account)) in
+  match stored with
+  | None -> Ok None
+  | Some text ->
+    let* iban = Or_error.tag (Iban.of_string text) ~tag:"stored account IBAN" in
+    Ok (Some iban)
+;;
+
 let account_iban db (event : Source_event.t) (tx : Bank_transaction.t) =
-  let* registered =
-    db_result (Db.first db (find_account_iban event.venue event.account))
-  in
+  let* registered = registered_iban db event.venue event.account in
   let imported =
     if String.equal tx.account.account_type "CREDITCRD"
     then None
     else Account_identity.inferred_iban tx.account.account_id
   in
   match imported, registered with
-  | Some a, Some b when not (String.equal a b) ->
+  | Some a, Some b when not (Iban.equal a b) ->
     Or_error.error_string "registered IBAN contradicts source account identifier"
   | Some a, _ -> Ok (Some a, "imported")
   | None, Some b -> Ok (Some b, "registered")
@@ -2276,7 +2285,7 @@ let transfer_iban_evidence db source a ta b tb =
   let assess counterparty target target_iban =
     match counterparty, target_iban with
     | None, _ -> None
-    | Some cp, Some own when String.equal cp own ->
+    | Some cp, Some own when Iban.equal cp own ->
       Some (true, "counterparty IBAN matches the other source account")
     | Some _, Some _ ->
       Some (false, "counterparty IBAN differs from the other source account's IBAN")
@@ -2287,7 +2296,7 @@ let transfer_iban_evidence db source a ta b tb =
             String.equal event.Source_event.venue target.Source_event.venue
             && String.equal event.account target.account
           then None
-          else if Option.equal String.equal iban (Some cp)
+          else if Option.equal Iban.equal iban (Some cp)
           then Some event.venue
           else None)
       in
@@ -2677,7 +2686,7 @@ let find_settlement =
 
 type bank_account_info =
   { mapping : Bank_account_mapping.t
-  ; iban : string option
+  ; iban : Iban.t option
   ; iban_source : string
   ; currency : string
   ; movements : int
@@ -2801,19 +2810,22 @@ let set_bank_account_identities_in_transaction db identities =
         in
         let* () =
           match Account_identity.inferred_iban account.account_id with
-          | Some old when not (String.equal old i.iban) ->
+          | Some old when not (Iban.equal old i.iban) ->
             Or_error.error_string "IBAN contradicts imported account identifier"
           | _ -> Ok ()
         in
         let* previous =
           db_result (Db.first db (find_account_iban i.institution identity))
         in
-        if Option.equal String.equal previous (Some i.iban)
+        (* The previous value stays text, so an entry that today's rules reject
+           can still be corrected and is audited exactly as stored. *)
+        let iban = Iban.to_string i.iban in
+        if Option.equal String.equal previous (Some iban)
         then apply count rest
         else
-          let* () = db_result (Db.exec db (upsert i.institution identity i.iban)) in
+          let* () = db_result (Db.exec db (upsert i.institution identity iban)) in
           let* () =
-            db_result (Db.exec db (audit i.institution identity previous (Some i.iban)))
+            db_result (Db.exec db (audit i.institution identity previous (Some iban)))
           in
           apply (count + 1) rest
     in
@@ -3027,7 +3039,7 @@ let apply_bank_accounts ?(dry_run = false) db config =
            | Keep | Clear -> Ok None
            | Set iban ->
              let* current = resolve row.reference in
-             if Option.equal String.equal current.iban (Some iban)
+             if Option.equal Iban.equal current.iban (Some iban)
              then Ok None
              else (
                let r = row.reference in
