@@ -21,12 +21,12 @@ Last updated: 2026-10-27.
 - Movements project to balanced entries against `equity:unclassified`, unless a
   reviewed category or confirmed transfer says otherwise. `fin journal export`
   writes a reproducible hledger journal.
-- 119 tests (112 OCaml cases and 7 terminal CLI cases). Each change is verified
+- 126 tests (118 OCaml cases and 8 CLI cases). Each change is verified
   by rebuilding the personal database from its inboxes with the previous and the
   new build and diffing every report.
 - Issue #1 is implemented locally and awaits publication.
 - The installed Arch package is `finances 0.1.0-16` (schema 12); the tree is at
-  package revision 17 (schema 12).
+  package revision 18 (schema 12).
 
 ### Personal data
 
@@ -89,6 +89,9 @@ The import side is done; turning movements into accounting is not.
   there is no correction workflow for changed source evidence.
 
 ### 3. Smaller gaps
+
+- [x] ZIP statement exports import directly through Zipc, with per-member history,
+  idempotent replay, bounded expansion and no filesystem extraction.
 
 - [x] Issue #1: shared-IBAN currency siblings do not contradict transfers; sync
   asks for missing labels and new account IBANs on a terminal and keeps an

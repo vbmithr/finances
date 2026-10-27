@@ -102,6 +102,11 @@ Use `dune exec fin -- ...` when running from the checkout. Journals default to
 `bank.journal` beside the selected database when syncing. Original statement inboxes
 are ordinary user-chosen directories, independent of the DB/config defaults.
 
+Bank sync accepts ZIP exports directly, including Wise CAMT.053 downloads. It
+reads members in memory with Zipc, preserves per-member import history and replay
+checks, and applies the configured size limit to the archive and its expanded
+contents. See the [manual](docs/manual.md) for limits and supported compression.
+
 ## Install an Arch Linux test package
 
 Build the current checkout using a prepared opam switch, and install it:

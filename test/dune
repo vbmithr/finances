@@ -353,3 +353,22 @@
  (deps sync_cli_test.py fixtures/revolut.csv fixtures/bank.ofx)
  (action
   (run python3 %{dep:sync_cli_test.py} %{exe:../bin/main.exe})))
+
+(test
+ (name zip_test)
+ (modules zip_test)
+ (deps
+  (glob_files fixtures/*))
+ (flags
+  (:standard -open Finances_core -open Finances_banks))
+ (libraries
+  finances
+  finances.banks
+  finances.core
+  finances.bank
+  finances.hledger
+  base
+  stdio
+  unix
+  zipc
+  alcotest))

@@ -783,7 +783,9 @@ let sync_bank_cmd =
                 "Statement files exported from $(i,BANK), or directories holding them. \
                  Directories are searched recursively; hidden and partially downloaded \
                  files inside them are skipped. Files are only read, never modified, and \
-                 syncing them again imports only what is new.")
+                 syncing them again imports only what is new. ZIP files are opened \
+                 automatically in memory; each member follows the same import rules. \
+                 Nested ZIPs and encrypted archives are unsupported.")
       $ Arg.(
           value
           & opt (some string) None
@@ -799,7 +801,9 @@ let sync_bank_cmd =
           & opt int 64
           & info
               [ "max-file-mib" ]
-              ~doc:"Per-file read limit in MiB (1-1024, default 64).")
+              ~doc:
+                "Per-file read limit in MiB (1-1024, default 64). For ZIPs, also limits \
+                 the total expanded size; at most 1024 members per archive.")
       $ Arg.(
           value
           & opt (some string) None

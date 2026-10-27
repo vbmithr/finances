@@ -9,6 +9,7 @@ import sys
 import tempfile
 import time
 import unittest
+import zipfile
 
 FIN = str(Path(sys.argv.pop(1)).resolve())
 FIXTURE = Path('fixtures/revolut.csv').read_text()
@@ -148,6 +149,24 @@ class SyncOnboarding(unittest.TestCase):
         accounts = self.accounts()
         self.assertEqual(sum(row['iban'] == IBAN for row in accounts), 1)
         self.assertFalse(self.config.exists())
+
+    def test_zip_cli_outcomes_and_history(self):
+        archive = self.root / 'export.zip'
+        args = ['bank', 'sync', 'revolut', archive, '--account-id', 'main']
+        with zipfile.ZipFile(archive, 'w', compression=zipfile.ZIP_DEFLATED) as z:
+            z.writestr('statement.csv', FIXTURE)
+            z.writestr('README.txt', 'An unrelated file')
+        self.run_fin(*args)
+        history = json.loads(self.run_fin('bank', 'history', '--json').stdout)
+        self.assertTrue(any(row['path'] == str(archive) + '/statement.csv' for row in history))
+        self.assertIn('imported=0', self.run_fin(*args).stdout)
+        # Unknown members must fail when the explicitly named archive has no
+        # recognizable bank records, but do not fail a mixed archive above.
+        with zipfile.ZipFile(archive, 'w') as z:
+            z.writestr('README.txt', 'An unrelated file')
+        self.assertNotEqual(self.run_fin(*args, check=False).returncode, 0)
+        archive.write_bytes(b'not a ZIP')
+        self.assertNotEqual(self.run_fin(*args, check=False).returncode, 0)
 
     def test_card_never_prompts(self):
         csv = self.root / 'card.ofx'

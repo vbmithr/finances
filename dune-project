@@ -43,5 +43,7 @@
    (>= 2.4))
   hledger
   iso4217
+  (zipc
+   (>= 0.2.0))
   (alcotest :with-test)
   (zarith :with-test)))

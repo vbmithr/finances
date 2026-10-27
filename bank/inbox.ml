@@ -88,14 +88,72 @@ let scan ?account_id ?(max_file_bytes = 67108864L) ?(exclude = []) db ~instituti
     in
     files := report :: !files
   in
+  let import_contents path contents =
+    let%map report =
+      Store.import_bank_file ?account_label:account_id db ~institution ~path ~contents
+    in
+    files := report :: !files;
+    report
+  in
+  let import_zip path contents =
+    match Zip_archive.decode ~max_bytes:max_file_bytes contents with
+    | Error error -> record_error path (Error.tag error ~tag:"ZIP archive")
+    | Ok members ->
+      let handled = ref false in
+      let%bind () =
+        List.fold_result members ~init:() ~f:(fun () member ->
+          let name = Zipc.Member.path member in
+          let member_path = path ^ "/" ^ name in
+          if not (Zip_archive.valid_path name)
+          then (
+            handled := true;
+            record_error
+              (path ^ "/" ^ Printf.sprintf "%S" name)
+              (Error.of_string "unsafe ZIP member path"))
+          else if Zip_archive.ignored_path name
+          then skip member_path "hidden or partial-file ZIP path"
+          else (
+            match Zipc.Member.kind member with
+            | Dir -> Ok ()
+            | File file ->
+              if not (Zipc.File.can_extract file)
+              then (
+                handled := true;
+                record_error
+                  member_path
+                  (Error.of_string "encrypted ZIP member or unsupported compression"))
+              else if Zip_archive.is_zip name
+              then (
+                handled := true;
+                record_error
+                  member_path
+                  (Error.of_string "nested ZIP archives are not supported"))
+              else (
+                match Zip_archive.contents file with
+                | Error error ->
+                  handled := true;
+                  record_error member_path (Error.tag error ~tag:"ZIP member")
+                | Ok contents ->
+                  let%map report = import_contents member_path contents in
+                  if not (Poly.equal report.outcome Unsupported) then handled := true)))
+      in
+      (* Give an explicitly named archive with no recognized documents the same
+         failing outcome as an explicitly named unsupported ordinary file. *)
+      if !handled
+      then Ok ()
+      else if List.is_empty members
+      then record_error path (Error.of_string "empty ZIP archive")
+      else (
+        let%map _ = import_contents path contents in
+        ())
+  in
   let import path =
     match snapshot ~max_file_bytes path with
     | Error error -> record_error path error
+    | Ok contents when Zip_archive.is_zip path -> import_zip path contents
     | Ok contents ->
-      let%map report =
-        Store.import_bank_file ?account_label:account_id db ~institution ~path ~contents
-      in
-      files := report :: !files
+      let%map _ = import_contents path contents in
+      ()
   in
   let rec visit = function
     | [] -> Ok ()

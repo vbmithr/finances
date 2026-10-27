@@ -172,6 +172,31 @@ downloaded files; a file you name is always processed, and fails the command if
 no bank recognizes it. A file that clearly comes from another bank is rejected
 and appears in `fin bank history`.
 
+ZIP exports can be passed directly, including Wise's CAMT.053 downloads:
+
+```sh
+fin bank sync wise ~/statements/wise
+# Or name a ZIP file explicitly:
+fin bank sync wise ~/statements/wise/statement.zip
+```
+
+Files ending in `.zip` (case insensitive) are opened in memory with Zipc; nothing
+is extracted onto disk. Each member goes through the selected bank's usual
+import and companion matching. History identifies it as `archive.zip/member.xml`.
+The member's original bytes are archived in SQLite in the same way as an ordinary
+input file. Replaying a ZIP, or later importing its extracted files, does not
+create duplicate movements.
+
+The default 64 MiB limit applies both to the ZIP file and to the total expanded
+size, with a maximum of 1024 members per archive. `--max-file-mib` changes the
+byte limit. Members are processed in name order; hidden and partial paths are
+ignored. Unsafe paths, corrupt data, encrypted members, unsupported compression
+and nested ZIPs are reported as read failures. Stored and deflate compression
+are supported. Valid members commit independently if another member fails.
+An explicitly named ZIP containing no recognized bank documents fails the
+command, just like an unsupported file; unrelated members alongside valid
+statements are reported as unsupported without failing the command.
+
 For Revolut, choose a stable account label with `--account-id`, since its CSV does
 not identify the account; use separate labels and folders for different Revolut
 accounts. If you omit it on a terminal, sync asks for the label; scripts must

@@ -10,6 +10,13 @@ short line of their own.
 
 ### 2026-10-27
 
+- `fin bank sync` imports ZIP exports automatically using Zipc, including Wise
+  CAMT.053 downloads. Members appear in history as `archive.zip/member`; nothing
+  is extracted onto disk. The read limit also bounds total expanded bytes, and
+  archives have a 1024-member limit. Corrupt, encrypted and nested archive members
+  are reported without preventing valid members from importing. Schema 12 and
+  movement identities are unchanged.
+
 - Fix transfer evidence when an IBAN is registered on another currency of the
   same bank account: that sibling no longer hides a genuine transfer. Different
   accounts and explicit IBAN contradictions still conflict (issue #1).
