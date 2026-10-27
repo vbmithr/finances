@@ -338,3 +338,8 @@
  (deps
   (glob_files fixtures/*))
  (libraries finances.ofx base stdio alcotest))
+
+(test
+ (name reset_test)
+ (modules reset_test)
+ (libraries finances base bos fpath ptime alcotest))

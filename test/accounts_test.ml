@@ -66,7 +66,19 @@ let roundtrip () =
       (Bank_account_config.of_json
          (Bank_account_config.to_json [ checking rows; checking rows ]));
     let unknown = { (checking rows).reference with account_id = "unknown" } in
-    error (Store.apply_bank_accounts db [ { (checking rows) with reference = unknown } ]))
+    match
+      Store.apply_bank_accounts db [ { (checking rows) with reference = unknown } ]
+    with
+    | Ok _ -> Alcotest.fail "an account with no imported statements was configured"
+    | Error e ->
+      let message = Error.to_string_hum e in
+      List.iter
+        [ "1 configured account has no imported statements"
+        ; "boursobank CHECKING unknown"
+        ; "fin bank sync FOLDER --institution INSTITUTION"
+        ]
+        ~f:(fun part ->
+          Alcotest.(check bool) part true (String.is_substring message ~substring:part)))
 ;;
 
 let dry_run () =

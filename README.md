@@ -3,6 +3,9 @@
 Personal finance kernel in OCaml, using Jane Street Base, decimal, Ptime, Bos, and SQLite
 through Rel. SQLite is the source of truth.
 
+Where the project stands and what comes next: [docs/plan.md](docs/plan.md). What
+changed: [CHANGES.md](CHANGES.md).
+
 ## Current scope
 
 - Immutable source payloads with venue, account, event kind, source ID, either an
@@ -101,19 +104,20 @@ are ordinary user-chosen directories, independent of the DB/config defaults.
 
 ## Install an Arch Linux test package
 
-Build the current checkout using a prepared opam switch:
+Build the current checkout using a prepared opam switch, and install it:
 
 ```sh
-make package OPAM_SWITCH=5.5.0
-sudo pacman -U dist/arch/finances-0.1.0-5-x86_64.pkg.tar.zst
+make install OPAM_SWITCH=5.5.0
 fin --version
 fin accounts list
 fin bank statements --institution bunq
 ```
 
-`make package` generates `dist/arch/PKGBUILD` from
+`make install` builds the package as `make package` does, then installs it with
+`sudo pacman -U`, which asks for your password and confirmation. `make package`
+only builds it: it generates `dist/arch/PKGBUILD` from
 `packaging/arch/PKGBUILD.in`, fills in the version, architecture and SHA-256 digest,
-and builds the package. To produce only the concrete recipe and its matching native
+and builds `dist/arch/finances-VERSION-PKGREL-x86_64.pkg.tar.zst`. To produce only the concrete recipe and its matching native
 payload archive (without running the package build):
 
 ```sh

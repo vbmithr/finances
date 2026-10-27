@@ -37,7 +37,8 @@ let initialize db =
     | _ ->
       Or_error.errorf
         "unsupported database schema; this experimental build accepts only schema %d. \
-         Reimport the original records into a new database"
+         Run fin db reset to move the old database aside, then sync your statement \
+         folders again"
         Db_schema.version)
 ;;
 
@@ -2485,23 +2486,44 @@ let apply_bank_accounts ?(dry_run = false) db config =
     in
     let* before_history = bank_account_history db in
     let* info = bank_account_info db in
+    let find r =
+      List.find info ~f:(fun i ->
+        String.equal i.mapping.institution r.Bank_account_config.institution
+        && String.equal
+             (Bank_account_mapping.source_account i.mapping)
+             (Bank_account_config.source_account r))
+    in
+    let describe (r : Bank_account_config.reference) =
+      Printf.sprintf "%s %s %s" r.institution r.account_type r.account_id
+    in
     let resolve r =
       Or_error.of_option
-        (List.find info ~f:(fun i ->
-           String.equal i.mapping.institution r.Bank_account_config.institution
-           && String.equal
-                (Bank_account_mapping.source_account i.mapping)
-                (Bank_account_config.source_account r)))
+        (find r)
         ~error:
           (Error.of_string
-             "unknown source account; import its statements before configuring it")
+             (Printf.sprintf
+                "%s has no imported statements; sync them with fin bank sync FOLDER \
+                 --institution %s before applying the configuration"
+                (describe r)
+                r.institution))
     in
-    let* _ =
-      traverse
-        (fun row ->
-           let* _ = resolve row.Bank_account_config.reference in
-           Ok ())
-        config
+    let* () =
+      match
+        List.filter config ~f:(fun row ->
+          Option.is_none (find row.Bank_account_config.reference))
+      with
+      | [] -> Ok ()
+      | missing ->
+        Or_error.errorf
+          "%d configured account%s ha%s no imported statements: %s. Sync each one's \
+           statement folder with fin bank sync FOLDER --institution INSTITUTION, then \
+           apply the configuration again."
+          (List.length missing)
+          (if List.length missing = 1 then "" else "s")
+          (if List.length missing = 1 then "s" else "ve")
+          (String.concat
+             ~sep:"; "
+             (List.map missing ~f:(fun row -> describe row.Bank_account_config.reference)))
     in
     let* mappings =
       traverse

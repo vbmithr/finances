@@ -124,6 +124,28 @@ let init =
     Term.(const (fun path -> with_database path (fun _ -> Ok ())) $ database)
 ;;
 
+let reset =
+  command
+    "reset"
+    "Move the database aside so that the next command starts a fresh one."
+    Term.(
+      const (fun database ->
+        let open Or_error.Let_syntax in
+        let%map moved = Database_reset.archive ~now:(Ptime_clock.now ()) ~database in
+        (match moved with
+         | [] -> printf "No database at %s; nothing to move.\n" database
+         | moved ->
+           print_endline "Moved aside:";
+           List.iter moved ~f:(fun { Database_reset.from; to_ } ->
+             printf "  %s\n    -> %s\n" from to_));
+        if Stdlib.Sys.file_exists paths.accounts_config
+        then printf "Kept your account configuration: %s\n" paths.accounts_config;
+        print_endline
+          "Next: fin bank sync FOLDER --institution INSTITUTION for each bank's \
+           statement folder, then fin accounts apply.")
+      $ database)
+;;
+
 let welcome () =
   print_endline
     "fin - your personal finances\n\n\
@@ -1154,7 +1176,7 @@ let () =
           ; group
               "db"
               "Initialize and inspect local source evidence."
-              [ init; events; ingest_cmd ]
+              [ init; reset; events; ingest_cmd ]
           ; group
               "bank"
               "Import and review banking records."

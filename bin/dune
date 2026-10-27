@@ -16,6 +16,8 @@
   bos
   fpath
   unix
+  ptime
+  ptime.clock.os
   cmdliner
   yojson)
  (preprocess

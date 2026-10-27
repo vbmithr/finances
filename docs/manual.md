@@ -69,9 +69,18 @@ configuration is `~/.config/fin/accounts.json`. `XDG_DATA_HOME` and
 `XDG_CONFIG_HOME` override those base directories when set to absolute paths.
 `fin paths` shows the resolved locations.
 
-SQLite holds the imported source documents, transactions, account settings and
-review history. The JSON configuration is an editable input, not a second live
-database. Statement folders can live anywhere you choose.
+fin keeps two things, and you never need their paths for normal use:
+
+- The database, `fin.sqlite3`: everything fin knows. It holds a copy of every
+  statement file you imported, the movements and accounting entries, account
+  settings and review history.
+- The account configuration, `accounts.json`: optional and yours to edit.
+  `fin accounts apply` reads it; fin writes it only when you run
+  `fin accounts export`.
+
+`bank.journal`, beside the database, is not state: every `fin bank sync` rewrites
+it from the database for hledger. Statement folders can live anywhere you
+choose; fin only reads them.
 
 Use `--database FILE` (or `-d FILE`) on each database command to work with an
 alternative database:
@@ -85,10 +94,11 @@ Back up the database while no `fin` process is using it, or use SQLite's backup
 facility. Keep your original bank exports and any review/configuration files too.
 This experimental release accepts schema version 11; it does not migrate older
 experimental databases, and refuses them without changing the file. After
-installing a release with a new schema, move the old database aside and rebuild:
+installing a release with a new schema, move the old database aside with
+`fin db reset` and rebuild:
 
 ```sh
-mv ~/.local/share/fin/fin.sqlite3 ~/.local/share/fin/fin.sqlite3.old
+fin db reset
 fin bank sync ~/Statements/boursobank --institution boursobank
 fin bank sync ~/Statements/wise --institution wise
 fin bank sync ~/Statements/bunq --institution bunq
@@ -96,8 +106,11 @@ fin bank sync ~/Statements/revolut --institution revolut --account-id main
 fin accounts apply
 ```
 
-Apply the account configuration after every inbox is synced: it refers to
-accounts from all banks.
+`fin db reset` renames the database and `bank.journal` with a timestamp, for
+example `fin.sqlite3.20261027T172203Z.old`, and leaves the account configuration
+alone; delete the `.old` files once you no longer need them. It works on the
+database `--database` names, or the default one. Apply the account configuration
+after every inbox is synced: it refers to accounts from all banks.
 Review decisions contain database-specific event IDs, so inspect new IDs before
 reapplying decisions to a rebuilt database.
 
@@ -281,6 +294,7 @@ private configuration permissions remain in place.
 | `fin bank --help` | Imports, reconciliation and category review |
 | `fin transfers --help` | Candidates, preview and explicit decisions |
 | `fin journal --help` | hledger journal export |
+| `fin db reset` | Move the database aside to start over |
 | `fin db --help` | Lower-level database and source-event commands |
 
 For detailed options, put `--help` after the specific command. Argument errors
