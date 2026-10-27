@@ -3,7 +3,7 @@ open Rel
 
 (** One current experimental baseline; older databases must be reimported. Banks
     have no tables of their own. *)
-let version = 11
+let version = 12
 
 let timestamp = `Expr "strftime('%Y-%m-%dT%H:%M:%fZ','now')"
 
@@ -99,6 +99,155 @@ module Source_events = struct
           ; different (present occurred_at_ms) (present occurred_on)
           ]
       ~immutable:"source events are immutable"
+      table
+  ;;
+end
+
+(* A bank movement as its adapter decoded it from the source event, stored once at
+   import so that queries can use amounts and dates. Derived from the immutable
+   event, so immutable too. The principal (amount plus fee) is split into its
+   canonical magnitude and its sign, so that opposite amounts match exactly. *)
+module Movements = struct
+  type t =
+    { event_id : int64
+    ; venue : string
+    ; account : string
+    ; bank_id : string
+    ; account_id : string
+    ; account_type : string
+    ; currency : string
+    ; own_iban_status : string
+    ; own_iban : string option
+    ; booked_on : string
+    ; value_on : string option
+    ; amount : string
+    ; fee : string
+    ; principal_magnitude : string
+    ; principal_sign : string
+    ; counterparty_iban : string option
+    ; descriptions : string
+    }
+
+  let event_id = Col.make "event_id" Type.int64 (fun (r : t) -> r.event_id)
+  let venue = Col.make "venue" Type.text (fun (r : t) -> r.venue)
+  let account = Col.make "account" Type.text (fun (r : t) -> r.account)
+  let bank_id = Col.make "bank_id" Type.text (fun (r : t) -> r.bank_id)
+  let account_id = Col.make "account_id" Type.text (fun (r : t) -> r.account_id)
+  let account_type = Col.make "account_type" Type.text (fun (r : t) -> r.account_type)
+  let currency = Col.make "currency" Type.text (fun (r : t) -> r.currency)
+
+  let own_iban_status =
+    Col.make "own_iban_status" Type.text (fun (r : t) -> r.own_iban_status)
+  ;;
+
+  let own_iban = Col.make "own_iban" Type.(option text) (fun (r : t) -> r.own_iban)
+  let booked_on = Col.make "booked_on" Type.text (fun (r : t) -> r.booked_on)
+  let value_on = Col.make "value_on" Type.(option text) (fun (r : t) -> r.value_on)
+  let amount = Col.make "amount" Type.text (fun (r : t) -> r.amount)
+  let fee = Col.make "fee" Type.text (fun (r : t) -> r.fee)
+
+  let principal_magnitude =
+    Col.make "principal_magnitude" Type.text (fun (r : t) -> r.principal_magnitude)
+  ;;
+
+  let principal_sign =
+    Col.make "principal_sign" Type.text (fun (r : t) -> r.principal_sign)
+  ;;
+
+  let counterparty_iban =
+    Col.make "counterparty_iban" Type.(option text) (fun (r : t) -> r.counterparty_iban)
+  ;;
+
+  (* A JSON array of strings, in source order. *)
+  let descriptions = Col.make "descriptions" Type.text (fun (r : t) -> r.descriptions)
+
+  let row =
+    Row.(
+      unit
+        (fun
+            event_id
+             venue
+             account
+             bank_id
+             account_id
+             account_type
+             currency
+             own_iban_status
+             own_iban
+             booked_on
+             value_on
+             amount
+             fee
+             principal_magnitude
+             principal_sign
+             counterparty_iban
+             descriptions
+           ->
+           { event_id
+           ; venue
+           ; account
+           ; bank_id
+           ; account_id
+           ; account_type
+           ; currency
+           ; own_iban_status
+           ; own_iban
+           ; booked_on
+           ; value_on
+           ; amount
+           ; fee
+           ; principal_magnitude
+           ; principal_sign
+           ; counterparty_iban
+           ; descriptions
+           })
+      * event_id
+      * venue
+      * account
+      * bank_id
+      * account_id
+      * account_type
+      * currency
+      * own_iban_status
+      * own_iban
+      * booked_on
+      * value_on
+      * amount
+      * fee
+      * principal_magnitude
+      * principal_sign
+      * counterparty_iban
+      * descriptions)
+  ;;
+
+  let table =
+    Table.make
+      ~primary_key:(Table.Primary_key.make [ Col.Def event_id ])
+      ~foreign_keys:
+        [ Table.Foreign_key.make
+            ~cols:[ Col.Def event_id ]
+            ~parent:
+              (Table.Foreign_key.Table (Source_events.table, [ Col.Def Source_events.id ]))
+            ()
+        ]
+      ~indices:
+        [ Table.Index.make
+            ~name:"movements_principal"
+            [ Col.Def currency; Col.Def principal_magnitude ]
+        ]
+      "movements"
+      row
+  ;;
+
+  let definition =
+    Sqlite_schema.table
+      ~checks:
+        Sqlite_schema.Check.
+          [ one_of principal_sign [ "+"; "-" ]
+          ; one_of own_iban_status [ "known"; "unknown"; "not_applicable" ]
+          ; equivalent (text_equal own_iban_status "known") (present own_iban)
+          ]
+      ~immutable:"movements are derived from immutable source events"
       table
   ;;
 end
@@ -1434,6 +1583,7 @@ end
 
 let definitions =
   [ Source_events.definition
+  ; Movements.definition
   ; Journal_entries.definition
   ; Postings.definition
   ; Import_documents.definition

@@ -133,12 +133,19 @@ let malformed_source_rollback () =
              ~occurred_on:(Date.of_string "2026-01-06")
              ~payload:last.payload)
       in
-      ignore (ok (Store.ingest db fake));
-      error (Store.project_bank db);
+      let before = List.length (ok (Store.events db)) in
+      (* Movements are decoded when they are stored, so an event whose payload
+         disagrees with its identity never enters the database. *)
+      error (Store.ingest db fake);
       Alcotest.(check int)
-        "entire batch rolled back"
-        0
-        (List.length (ok (Store.entries db)))))
+        "inconsistent event not stored"
+        before
+        (List.length (ok (Store.events db)));
+      ignore (ok (Store.project_bank db));
+      Alcotest.(check bool)
+        "projection unaffected"
+        true
+        (not (List.is_empty (ok (Store.entries db))))))
 ;;
 
 let existing_conflict_rollback () =

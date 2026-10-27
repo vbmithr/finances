@@ -152,6 +152,98 @@ let insert_source =
         ]
 ;;
 
+let insert_movement =
+  let open Db_schema.Movements in
+  let insert = Rel_sql.insert_into_cols Db.dialect table in
+  fun v_event_id (e : Source_event.t) (m : Movement.t) ->
+    let principal = Movement.principal m in
+    let negative = Quantity.(principal < zero) in
+    let status, iban =
+      match m.own_iban with
+      | Known iban -> "known", Some (Iban.to_string iban)
+      | Unknown -> "unknown", None
+      | Not_applicable -> "not_applicable", None
+    in
+    insert
+      Col.
+        [ Value (event_id, v_event_id)
+        ; Value (venue, e.venue)
+        ; Value (account, e.account)
+        ; Value (bank_id, m.account.bank_id)
+        ; Value (account_id, m.account.account_id)
+        ; Value (account_type, m.account.account_type)
+        ; Value (currency, Iso4217.to_alpha_code m.account.currency)
+        ; Value (own_iban_status, status)
+        ; Value (own_iban, iban)
+        ; Value (booked_on, Date.to_string m.booked_on)
+        ; Value (value_on, Option.map m.value_on ~f:Date.to_string)
+        ; Value (amount, Quantity.to_string m.amount)
+        ; Value (fee, Quantity.to_string m.fee)
+        ; Value
+            ( principal_magnitude
+            , Quantity.to_string (if negative then Quantity.neg principal else principal)
+            )
+        ; Value (principal_sign, if negative then "-" else "+")
+        ; Value (counterparty_iban, Option.map m.counterparty_iban ~f:Iban.to_string)
+        ; Value
+            ( descriptions
+            , Yojson.Safe.to_string
+                (`List (List.map m.descriptions ~f:(fun d -> `String d))) )
+        ]
+;;
+
+(* The movement stored at import, rebuilt and validated again. *)
+let movement_of_row (r : Db_schema.Movements.t) =
+  Or_error.tag
+    ~tag:(Printf.sprintf "stored movement %Ld" r.event_id)
+    (let* currency = Validation.currency "currency" r.currency in
+     let iban label s =
+       Result.map_error (Iban.of_string s) ~f:(fun e -> Error.tag e ~tag:label)
+     in
+     let* own_iban =
+       match r.own_iban_status, r.own_iban with
+       | "known", Some s -> Result.map (iban "own IBAN" s) ~f:(fun i -> Movement.Known i)
+       | "unknown", None -> Ok Movement.Unknown
+       | "not_applicable", None -> Ok Movement.Not_applicable
+       | _ -> Or_error.error_string "inconsistent own IBAN status"
+     in
+     let* counterparty_iban =
+       match r.counterparty_iban with
+       | None -> Ok None
+       | Some s -> Result.map (iban "counterparty IBAN" s) ~f:Option.some
+     in
+     let* descriptions =
+       Or_error.try_with (fun () ->
+         Yojson.Safe.Util.(
+           Yojson.Safe.from_string r.descriptions |> to_list |> List.map ~f:to_string))
+     in
+     let* booked_on, value_on, amount, fee =
+       Or_error.try_with (fun () ->
+         ( Date.of_string r.booked_on
+         , Option.map r.value_on ~f:Date.of_string
+         , Quantity.of_string r.amount
+         , Quantity.of_string r.fee ))
+     in
+     Movement.create
+       ~account:
+         { bank_id = r.bank_id
+         ; account_id = r.account_id
+         ; account_type = r.account_type
+         ; currency
+         }
+       ~own_iban
+       ~booked_on
+       ?value_on
+       ~amount
+       ~fee
+       ?counterparty_iban
+       descriptions)
+;;
+
+let movement_columns =
+  "event_id,venue,account,bank_id,account_id,account_type,currency,own_iban_status,own_iban,booked_on,value_on,amount,fee,principal_magnitude,principal_sign,counterparty_iban,descriptions"
+;;
+
 let occurrence_columns (e : Source_event.t) =
   match e.occurred with
   | At_ms ms -> Some ms, None
@@ -180,7 +272,16 @@ let ingest_in_transaction db (e : Source_event.t) =
            db.conn
            (insert_source e.venue e.account e.kind e.source_id at on e.payload))
     in
-    Ok (Inserted (Db.last_insert_rowid db.conn))
+    let id = Db.last_insert_rowid db.conn in
+    (* Movements are decoded once, here, and stored for queries. *)
+    let* () =
+      if Registry.is_movement db.registry e
+      then
+        let* m = Registry.movement db.registry e in
+        db_result (Db.exec db.conn (insert_movement id e m))
+      else Ok ()
+    in
+    Ok (Inserted id)
 ;;
 
 let ingest db e = transaction db (fun db -> ingest_in_transaction db e)
@@ -800,6 +901,40 @@ let bank_import_history ?(limit = 100) db =
     traverse decode_attempt rows)
 ;;
 
+let movement_rows db where =
+  let* rows =
+    collect
+      db
+      (statement
+         ("SELECT " ^ movement_columns ^ " FROM movements" ^ where)
+         Db_schema.Movements.row)
+  in
+  traverse
+    (fun (r : Db_schema.Movements.t) ->
+       let* m = movement_of_row r in
+       Ok (r.event_id, m))
+    rows
+;;
+
+(* Every stored movement by event ID, read in one query. *)
+let movement_table db =
+  let* rows = movement_rows db "" in
+  Ok (Hashtbl.of_alist_exn (module Int64) rows)
+;;
+
+let movement db event_id =
+  let* rows = movement_rows db (Printf.sprintf " WHERE event_id = %Ld" event_id) in
+  match rows with
+  | [ (_, m) ] -> Ok m
+  | _ -> Or_error.errorf "no stored movement for event %Ld" event_id
+;;
+
+let stored table event_id =
+  Or_error.of_option
+    (Hashtbl.find table event_id)
+    ~error:(Error.createf "no stored movement for event %Ld" event_id)
+;;
+
 let events db =
   let* rows =
     collect
@@ -1016,7 +1151,7 @@ let mapped_bank_entry db event_id (event : Source_event.t) =
     db_result (Db.first db.conn (find_mapping event.venue event.account))
   in
   let* counter_account = counter_account db event_id in
-  let* movement = Registry.movement db.registry event in
+  let* movement = movement db event_id in
   Bank_projection.entry ?bank_account ?counter_account ~institution:event.venue movement
 ;;
 
@@ -1051,9 +1186,10 @@ let entries db =
 
 let movements db =
   let* source = events db in
+  let* table = movement_table db in
   traverse
     (fun (id, event) ->
-       let* movement = Registry.movement db.registry event in
+       let* movement = stored table id in
        Ok (id, event, movement))
     (List.filter source ~f:(fun (_, e) -> Registry.is_movement db.registry e))
 ;;
@@ -1086,16 +1222,16 @@ let project_bank db =
 let bank_accounts db =
   let* source_events = events db in
   let bank_events =
-    List.filter_map source_events ~f:(fun (_, event) ->
-      if Registry.is_movement db.registry event then Some event else None)
-    |> List.dedup_and_sort ~compare:(fun a b ->
+    List.filter source_events ~f:(fun (_, event) ->
+      Registry.is_movement db.registry event)
+    |> List.dedup_and_sort ~compare:(fun (_, a) (_, b) ->
       match String.compare a.Source_event.venue b.venue with
       | 0 -> String.compare a.account b.account
       | n -> n)
   in
   traverse
-    (fun (event : Source_event.t) ->
-       let* transaction = Registry.movement db.registry event in
+    (fun (event_id, (event : Source_event.t)) ->
+       let* transaction = movement db event_id in
        let account = transaction.account in
        let* mapped =
          db_result (Db.first db.conn (find_mapping event.venue event.account))
@@ -1175,15 +1311,13 @@ let set_bank_account_mappings_in_transaction db mappings =
             match previous with
             | Some name -> Ok name
             | None ->
-              let* transaction =
-                Registry.movement db.registry (snd (List.hd_exn matching))
-              in
+              let* transaction = movement db (fst (List.hd_exn matching)) in
               let account = transaction.account in
               Bank_projection.ledger_account ~institution:mapping.institution account
           in
           let* _ =
             traverse
-              (fun (event_id, event) ->
+              (fun (event_id, (event : Source_event.t)) ->
                  let* existing =
                    db_result (Db.first db.conn (find_entry event_id Bank_projection.key))
                  in
@@ -1192,7 +1326,7 @@ let set_bank_account_mappings_in_transaction db mappings =
                  | Some (id, date, description) ->
                    let* stored = read_entry db id date description in
                    let* counter_account = counter_account db event_id in
-                   let* movement = Registry.movement db.registry event in
+                   let* movement = movement db event_id in
                    let* expected =
                      Bank_projection.entry
                        ~bank_account:previous_name
@@ -1741,9 +1875,10 @@ type bank_review =
 
 let bank_review db =
   let* source = events db in
+  let* table = movement_table db in
   traverse
-    (fun (event_id, event) ->
-       let* transaction = Registry.movement db.registry event in
+    (fun (event_id, (event : Source_event.t)) ->
+       let* transaction = stored table event_id in
        let* category = db_result (Db.first db.conn (find_category event_id)) in
        let* transfer = linked_transfer db event_id in
        Ok
@@ -1811,8 +1946,8 @@ let own_iban db source (account : Bank_account_mapping.t) =
       && String.equal e.account identity)
   with
   | None -> Or_error.error_string "account has no imported movements"
-  | Some (_, event) ->
-    let* movement = Registry.movement db.registry event in
+  | Some (event_id, _) ->
+    let* movement = movement db event_id in
     Ok movement.Movement.own_iban
 ;;
 
@@ -1823,8 +1958,8 @@ let transfer_iban_evidence db source a ta b tb =
   and b_counterparty = tb.Movement.counterparty_iban in
   let* known =
     traverse
-      (fun (_, event) ->
-         let* tx = Registry.movement db.registry event in
+      (fun (event_id, event) ->
+         let* tx = movement db event_id in
          let* iban, _ = account_iban db event tx in
          Ok (event, iban))
       (List.filter source ~f:(fun (_, e) -> Registry.is_movement db.registry e)
@@ -1988,8 +2123,8 @@ let set_bank_transfers db decisions =
           and second = d.second_event_id in
           let* a = get first in
           let* b = get second in
-          let* ta = Registry.movement db.registry a in
-          let* tb = Registry.movement db.registry b in
+          let* ta = movement db first in
+          let* tb = movement db second in
           let* previous =
             db_result (Db.first db.conn (find_transfer_decision first second))
           in
@@ -2159,64 +2294,92 @@ type transfer_candidate =
   ; iban_evidence : string list
   }
 
+(* Movement pairs that may be one transfer between owned accounts: exactly opposite
+   principals in one currency, on different accounts, booked at most seven days
+   apart. Bank_transfer.eligible states the same rule for confirmations. Pairs come
+   in the order of a scan over events in their listing order: later first
+   movements first, then their counterparts in order. *)
+let transfer_pairs =
+  statement
+    "WITH ordered AS (SELECT id, row_number() OVER (ORDER BY coalesce(occurred_on, \
+     date(occurred_at_ms / 1000, 'unixepoch')), occurred_at_ms, id) AS position FROM \
+     source_events) SELECT a.event_id, b.event_id FROM movements a JOIN movements b ON \
+     b.currency = a.currency AND b.principal_magnitude = a.principal_magnitude AND \
+     b.principal_sign <> a.principal_sign JOIN ordered oa ON oa.id = a.event_id JOIN \
+     ordered ob ON ob.id = b.event_id WHERE oa.position < ob.position AND \
+     a.principal_magnitude <> '0' AND NOT (a.venue = b.venue AND a.account = b.account) \
+     AND abs(julianday(a.booked_on) - julianday(b.booked_on)) <= 7 ORDER BY oa.position \
+     DESC, ob.position"
+    Row.(
+      t2
+        (Col.make "first" Type.int64 Col.no_proj)
+        (Col.make "second" Type.int64 Col.no_proj))
+;;
+
 let transfer_candidates ?(include_reviewed = false) db =
   let* source = events db in
+  let* table = movement_table db in
   let* items =
     traverse
       (fun (id, e) ->
-         let* tx = Registry.movement db.registry e in
+         let* tx = stored table id in
          let* linked = linked_transfer db id in
-         Ok (id, e, tx, Option.is_some linked))
+         Ok (id, (id, e, tx, Option.is_some linked)))
       (List.filter source ~f:(fun (_, e) -> Registry.is_movement db.registry e))
   in
+  let items = Hashtbl.of_alist_exn (module Int64) items in
   let* decisions = bank_transfer_decisions db in
   let indexed = Hashtbl.Poly.create () in
   List.iter decisions ~f:(fun d ->
     Hashtbl.set indexed ~key:(d.Bank_transfer.first_event_id, d.second_event_id) ~data:d);
-  let rec pairs acc = function
-    | [] -> Ok acc
-    | (id, a, ta, la) :: rest ->
-      let* next =
-        traverse
-          (fun (other, b, tb, lb) ->
-             if not (Bank_transfer.eligible a ta b tb)
-             then Ok None
-             else (
-               let id, a, ta, other, b, tb =
-                 if Int64.(id < other)
-                 then id, a, ta, other, b, tb
-                 else other, b, tb, id, a, ta
-               in
-               let decision = Hashtbl.find indexed (id, other) in
-               let* iban_compatible, iban_match, iban_evidence =
-                 transfer_iban_evidence db source a ta b tb
-               in
-               if
-                 (not include_reviewed)
-                 && (la || lb || Option.is_some decision || not iban_compatible)
-               then Ok None
-               else
-                 Ok
-                   (Some
-                      { first_event_id = id
-                      ; second_event_id = other
-                      ; first = a
-                      ; second = b
-                      ; first_transaction = ta
-                      ; second_transaction = tb
-                      ; days_apart = Int.abs (Date.diff ta.booked_on tb.booked_on)
-                      ; state = Option.map decision ~f:(fun d -> d.state)
-                      ; reason = Option.map decision ~f:(fun d -> d.reason)
-                      ; unique = false
-                      ; iban_compatible
-                      ; iban_match
-                      ; iban_evidence
-                      })))
-          rest
-      in
-      pairs (List.filter_opt next @ acc) rest
+  let candidate (id, a, ta, la) (other, b, tb, lb) =
+    let id, a, ta, other, b, tb =
+      if Int64.(id < other) then id, a, ta, other, b, tb else other, b, tb, id, a, ta
+    in
+    let decision = Hashtbl.find indexed (id, other) in
+    let* iban_compatible, iban_match, iban_evidence =
+      transfer_iban_evidence db source a ta b tb
+    in
+    if
+      (not include_reviewed)
+      && (la || lb || Option.is_some decision || not iban_compatible)
+    then Ok None
+    else
+      Ok
+        (Some
+           { first_event_id = id
+           ; second_event_id = other
+           ; first = a
+           ; second = b
+           ; first_transaction = ta
+           ; second_transaction = tb
+           ; days_apart = Int.abs (Date.diff ta.booked_on tb.booked_on)
+           ; state = Option.map decision ~f:(fun d -> d.state)
+           ; reason = Option.map decision ~f:(fun d -> d.reason)
+           ; unique = false
+           ; iban_compatible
+           ; iban_match
+           ; iban_evidence
+           })
   in
-  let* candidates = pairs [] items in
+  let* pairs = collect db transfer_pairs in
+  let* found =
+    traverse
+      (fun (first, second) ->
+         let* x =
+           Or_error.of_option
+             (Hashtbl.find items first)
+             ~error:(Error.of_string "missing transfer movement")
+         in
+         let* y =
+           Or_error.of_option
+             (Hashtbl.find items second)
+             ~error:(Error.of_string "missing transfer movement")
+         in
+         candidate x y)
+      pairs
+  in
+  let candidates = List.filter_opt found in
   let claims = Hashtbl.create (module Int64) in
   List.iter candidates ~f:(fun c ->
     Hashtbl.incr claims c.first_event_id;
@@ -2253,6 +2416,7 @@ type bank_account_info =
 let bank_account_info db =
   let* mappings = bank_accounts db in
   let* source = events db in
+  let* table = movement_table db in
   traverse
     (fun mapping ->
        let members =
@@ -2261,8 +2425,8 @@ let bank_account_info db =
            && String.equal e.Source_event.venue mapping.Bank_account_mapping.institution
            && String.equal e.account (Bank_account_mapping.source_account mapping))
        in
-       let event = snd (List.hd_exn members) in
-       let* tx = Registry.movement db.registry event in
+       let event_id, event = List.hd_exn members in
+       let* tx = stored table event_id in
        let* iban, iban_source = account_iban db event tx in
        let* settlement =
          db_result
@@ -2282,8 +2446,8 @@ let bank_account_info db =
        in
        let* dates =
          traverse
-           (fun (_, e) ->
-              let* tx = Registry.movement db.registry e in
+           (fun (event_id, _) ->
+              let* tx = stored table event_id in
               Ok tx.booked_on)
            members
        in
@@ -2397,8 +2561,8 @@ let set_bank_account_identities_in_transaction db identities =
              in
              let* a = get d.first_event_id in
              let* b = get d.second_event_id in
-             let* ta = Registry.movement db.registry a in
-             let* tb = Registry.movement db.registry b in
+             let* ta = movement db d.first_event_id in
+             let* tb = movement db d.second_event_id in
              let* compatible, _, _ = transfer_iban_evidence db source a ta b tb in
              if compatible
              then Ok ()

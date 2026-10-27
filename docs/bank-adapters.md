@@ -271,7 +271,7 @@ rebuilt with the previous build against one rebuilt with the new build.
    read side (`decode`, `kinds`, `aliases`); `probe`/`parse`, overlap policy and
    companions are added with steps 4 and 5. Reports and a full inbox replay on
    the personal database are unchanged.
-4. **Schema 11.** Done: the generic tables above, with Store's import, matching
+4. **Schema 11.** Done (schema 12 later added the `movements` table): the generic tables above, with Store's import, matching
    and reconciliation code written over them and one `statement_reconciliations`
    for every bank. Rebuilding the personal database gives the same events,
    journal entries, reconciliations and match states; only companion row IDs in

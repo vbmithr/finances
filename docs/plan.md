@@ -14,17 +14,18 @@ Last updated: 2026-10-27.
 - All four banks import: BoursoBank (OFX, CSV companion), Wise (CAMT.053, CSV
   companion), Bunq (MT940, CSV companion) and Revolut (CSV). Each is an adapter behind
   one registry; the kernel names no bank.
-- Storage is schema 11: generic tables for every bank, no migrations. Older
-  databases are refused unchanged.
+- Storage is schema 12: generic tables for every bank, plus each movement stored
+  normalized at import, so reads are SQL queries instead of payload decoding. No
+  migrations; older databases are refused unchanged.
 - IBANs and currencies are validated types (`Iban.t`, `Iso4217.t`).
 - Movements project to balanced entries against `equity:unclassified`, unless a
   reviewed category or confirmed transfer says otherwise. `fin journal export`
   writes a reproducible hledger journal.
-- 107 tests. Each change is verified by rebuilding the personal database from its
+- 110 tests. Each change is verified by rebuilding the personal database from its
   inboxes with the previous and the new build and diffing every report.
-- `main` is 22 commits ahead of `origin/main`.
-- The installed Arch package is `finances 0.1.0-6` (schema 10); the tree is at
-  package revision 11 (schema 11).
+- `main` is 25 commits ahead of `origin/main`.
+- The installed Arch package is `finances 0.1.0-14` (schema 11); the tree is at
+  package revision 15 (schema 12).
 
 ### Personal data
 

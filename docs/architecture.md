@@ -182,8 +182,9 @@ the parsed observation and archived document. Other changed transaction fields
 cause an explicit conflict, including changes to names or memos. A changed balance
 snapshot does not change transaction identity or overwrite earlier snapshots.
 
-This stage supplies parsed domain values and persistent source evidence. It does
-not yet create a separate normalized bank transaction table. CSV observations add
+This stage supplies parsed domain values and persistent source evidence. Each
+movement is also stored normalized in the `movements` table (see "Bank movements"
+below). CSV observations add
 value dates and bank metadata without creating movements. OFX balance observations are preserved in the archived statement;
 they are not yet used to reconcile account balances. Wise reconciliation is
 implemented separately below.
@@ -334,9 +335,13 @@ nothing about banks or accounting: `finances.iban` (ISO 13616) and
 `finances.ofx` (OFX 2.x). Adapters build on them and add their bank's rules.
 
 `Store.with_open ~registry` receives the banks it may decode; the CLI passes
-`Builtin.registry`. Every kernel read of a bank event goes through
-`Registry.movement`, which dispatches by venue and kind to the adapter that
-produced the event. `Movement.t` carries what the kernel needs: account,
+`Builtin.registry`. When a bank event is stored, `Registry.movement` dispatches by
+venue and kind to the adapter that produced it, and the decoded movement is written
+to the `movements` table in the same transaction; an event that does not decode is
+not stored. Kernel reads use that table and never decode payloads again, so
+queries can use amounts and dates: transfer candidates are a SQL self-join on
+currency and principal, indexed by `movements_principal`. Movements are derived,
+immutable data; adapters' `decode` must therefore be pure. `Movement.t` carries what the kernel needs: account,
 own-IBAN status (known, unknown, or not applicable for cards), booking and value
 dates, net amount, separately posted fee, descriptions and counterparty IBAN.
 Imports go through the same registry: adapters recognize and parse files into a

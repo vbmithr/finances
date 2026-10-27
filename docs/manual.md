@@ -109,7 +109,7 @@ are never touched. In a script, `fin delete --yes` skips the question; without a
 terminal and without `--yes` it refuses. With `--database FILE` it deletes that
 database and keeps the account configuration, which belongs to the default one.
 
-This experimental release accepts schema version 11; it does not migrate older
+This experimental release accepts schema version 12; it does not migrate older
 experimental databases, and refuses them without changing the file. After
 installing a release with a new schema, back up, delete and rebuild:
 
@@ -294,7 +294,7 @@ belongs to hledger; `fin` tracks import evidence, account identity and review st
 ## Library and dependency changes
 
 This build uses Base, decimal, Ptime and Bos, with no Core or Bigdecimal
-dependency. Saved configuration remains compatible; databases use schema 11 and
+dependency. Saved configuration remains compatible; databases use schema 12 and
 are rebuilt from the original statements (see above).
 
 OCaml callers use `Quantity.t` (a `Decimal.t` alias) and `Date.t` (a `Ptime.date`

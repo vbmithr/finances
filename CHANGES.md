@@ -10,6 +10,18 @@ short line of their own.
 
 ### 2026-10-27
 
+**Action required:** schema 12 refuses schema 11 databases. Back up, delete and
+rebuild: `fin backup`, `fin delete`, `fin init`, then sync each bank's statements
+again.
+
+- Movements are stored normalized when they are imported (new `movements` table),
+  and every read uses that table instead of decoding payloads again. Transfer
+  candidates are a SQL self-join on currency and principal instead of a comparison
+  of every pair of movements in OCaml: on 1,955 movements, `fin status` takes
+  0.09 s instead of 0.62 s, `fin transfers candidates` 0.05 s instead of 0.57 s
+  and `fin transfers preview` 0.09 s instead of 1.14 s, with identical output. An
+  event whose payload does not decode is now rejected when it is imported.
+
 **Action required:** `fin bank sync` takes the bank as its first argument:
 `fin bank sync boursobank ~/statements/bourso` instead of
 `fin bank sync ~/statements/bourso --institution boursobank`. `--institution` is

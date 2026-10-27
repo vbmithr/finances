@@ -44,16 +44,17 @@ let initialize () =
          check "fresh database empty" 0 (List.length (ok (Store.events db)));
          Ok ()));
     raw path (fun db ->
-      check "latest baseline" 11 (scalar db "PRAGMA user_version");
+      check "latest baseline" 12 (scalar db "PRAGMA user_version");
       check
         "all tables are strict"
-        24
+        25
         (scalar
            db
            "SELECT count(*) FROM pragma_table_list WHERE schema='main' AND name NOT LIKE \
             'sqlite_%' AND strict=1");
       List.iter
         [ "source_events"
+        ; "movements"
         ; "bank_categories"
         ; "statements"
         ; "bank_transfer_decisions"
