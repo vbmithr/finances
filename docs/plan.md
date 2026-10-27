@@ -13,7 +13,8 @@ Last updated: 2026-10-27.
 
 - All four banks import: BoursoBank (OFX, CSV companion), Wise (CAMT.053, CSV
   companion), Bunq (MT940, CSV companion) and Revolut (CSV). Each is an adapter behind
-  one registry; the kernel names no bank.
+  one registry; the kernel names no bank. Shared OFX parsing takes an explicit
+  institution parameter rather than instantiating a functor.
 - Storage is schema 12: generic tables for every bank, plus each movement stored
   normalized at import, so reads are SQL queries instead of payload decoding. No
   migrations; older databases are refused unchanged.

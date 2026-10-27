@@ -1,21 +1,20 @@
 open Base
 
 (* BoursoBank is an OFX bank whose CSV export enriches the OFX movements. *)
-include Ofx_bank.Make (struct
-    let institution = "boursobank"
-    let aliases = [ "boursorama" ]
-  end)
+include Ofx_bank
 
+let institution = "boursobank"
+let aliases = [ "boursorama" ]
 let csv = "csv"
 let formats = [ ofx; csv ]
 
 let probe ~filename contents =
-  match probe ~filename contents with
+  match Ofx_bank.probe ~filename contents with
   | Some format -> Some format
   | None -> Option.some_if (Bank_csv.recognizes contents) csv
 ;;
 
-let parse ~context ~format contents =
+let parse ~context:_ ~format contents =
   if String.equal format csv
   then
     Or_error.map (Bank_csv.parse contents) ~f:(fun rows ->
@@ -23,7 +22,7 @@ let parse ~context ~format contents =
         companion_rows =
           List.map rows ~f:(fun (row : Bank_csv.row) -> row.row_number, row.fields)
       })
-  else parse ~context ~format contents
+  else Ofx_bank.parse ~institution contents
 ;;
 
 let row (r : Companion.row) = Bank_csv.of_fields ~row_number:r.row_number r.fields

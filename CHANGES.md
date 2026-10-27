@@ -10,6 +10,10 @@ short line of their own.
 
 ### 2026-10-27
 
+- Internal: replace the OFX bank functor with ordinary functions. Parsing takes
+  an explicit institution; probing and decoding need no bank parameters. Account
+  identities, imports and journal output are unchanged.
+
 **Action required:** use `fin accounts import FILE` instead of `accounts apply`;
 there is no default account file. Existing version 1 JSON files still import.
 `accounts edit CONFIG` and `bank sync --accounts FILE` have been removed: edit

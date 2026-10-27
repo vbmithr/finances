@@ -194,8 +194,10 @@ end
   and describes rows for `fin bank companions`. Storage, audit, journal emission
   and listing are the kernel's.
 
-`Ofx_bank.Make (struct let institution = … let aliases = … end)` is a complete
-adapter for any OFX bank. BoursoBank is that plus its CSV companion.
+`Ofx_bank` shares OFX decoding, probing and adapter defaults. Parsing takes the
+institution explicitly: `Ofx_bank.parse ~institution contents`. Each adapter
+supplies its own institution and aliases, wrapping the parser to match
+`Adapter.S`; no functor is needed. BoursoBank adds its CSV companion.
 
 ### Normalized movement
 

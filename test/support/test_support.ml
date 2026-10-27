@@ -3,10 +3,13 @@ open Finances
 
 (** A second OFX institution, registered only in tests, to check that
     identities are scoped by institution. *)
-module Other_bank = Ofx_bank.Make (struct
-    let institution = "other-bank"
-    let aliases = []
-  end)
+module Other_bank = struct
+  include Ofx_bank
+
+  let institution = "other-bank"
+  let aliases = []
+  let parse ~context:_ ~format:_ contents = Ofx_bank.parse ~institution contents
+end
 
 let registry =
   Registry.create (Builtin.adapters @ [ (module Other_bank : Adapter.S) ])
