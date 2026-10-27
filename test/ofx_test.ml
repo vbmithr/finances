@@ -89,12 +89,40 @@ let corrections () =
   Alcotest.(check (list string)) "flagged" [ "credit-id" ] corrected
 ;;
 
+let instants () =
+  List.iter
+    [ "20260103", "2026-01-03T00:00:00.000000000000Z"
+    ; "20260105123000", "2026-01-05T12:30:00.000000000000Z"
+    ; "20260103235959.123456789123[-5:EST]", "2026-01-04T04:59:59.123456789123Z"
+    ; "20260103010000[5.5:IST]", "2026-01-02T19:30:00.000000000000Z"
+    ; "20260103010000[0.25]", "2026-01-03T00:45:00.000000000000Z"
+    ; "20260103010000[-3.50:NST]", "2026-01-03T04:30:00.000000000000Z"
+    ; "20260103010000[0.00:GMT]", "2026-01-03T01:00:00.000000000000Z"
+    ]
+    ~f:(fun (source, expected) ->
+      Alcotest.(check string)
+        source
+        expected
+        (Ptime.to_rfc3339 ~frac_s:12 ~tz_offset_s:0 (ok (Ofx.instant source))));
+  List.iter
+    [ "20260230"
+    ; "20260103240000"
+    ; "20260103016000"
+    ; "20260103010000[13:BAD]"
+    ; "20260103010000[12.01]"
+    ; "20260103010000[5.123]"
+    ; "00009999"
+    ]
+    ~f:(fun source -> rejected source (Ofx.instant source))
+;;
+
 let () =
   Alcotest.run
     "OFX"
     [ ( "ofx"
       , [ Alcotest.test_case "statements" `Quick statements
         ; Alcotest.test_case "dates" `Quick dates
+        ; Alcotest.test_case "typed instants, offsets and defaults" `Quick instants
         ; Alcotest.test_case "rejections" `Quick rejections
         ; Alcotest.test_case "corrections" `Quick corrections
         ] )

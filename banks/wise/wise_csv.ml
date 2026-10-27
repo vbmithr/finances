@@ -3,7 +3,7 @@ open Base
 type row =
   { row_number : int
   ; reference : string
-  ; booked_local : string
+  ; booked_at : Ptime.t
   ; amount : Quantity.t
   ; currency : Iso4217.t
   ; description : string
@@ -102,9 +102,10 @@ let of_fields ~row_number fields =
     let day = date a.(1) in
     if not (Date.equal day (date (String.prefix a.(2) 10)))
     then failwith "Wise CSV date and datetime disagree";
-    let booked_local = Date.to_string day ^ "T" ^ String.drop_prefix a.(2) 11 in
-    (* Validate the clock without assigning a timezone to the CSV observation. *)
-    ignore (Timestamp.of_rfc3339_exn (booked_local ^ "Z") : Ptime.t);
+    let booked_at =
+      Timestamp.of_rfc3339_exn
+        (Date.to_string day ^ "T" ^ String.drop_prefix a.(2) 11 ^ "Z")
+    in
     let amount = decimal a.(3) in
     if not (List.mem [ "DEBIT"; "CREDIT" ] a.(21) ~equal:String.equal)
     then failwith "invalid Wise CSV transaction direction";
@@ -120,7 +121,7 @@ let of_fields ~row_number fields =
     let currency = Validation.currency "Wise CSV currency" a.(4) |> Or_error.ok_exn in
     { row_number
     ; reference
-    ; booked_local
+    ; booked_at
     ; amount
     ; currency
     ; description = a.(5)
@@ -164,7 +165,11 @@ let match_rows rows candidates =
     Sexp.to_string
       (Sexp.List
          (List.map
-            [ reference; local; amount_key amount; Iso4217.to_alpha_code currency ]
+            [ reference
+            ; Timestamp.to_rfc3339 local
+            ; amount_key amount
+            ; Iso4217.to_alpha_code currency
+            ]
             ~f:(fun s -> Sexp.Atom s)))
   in
   let index = Hashtbl.create (module String) in
@@ -174,7 +179,7 @@ let match_rows rows candidates =
       ~key:
         (key
            tx.Wise_camt.reference
-           (Wise_camt.local_millisecond tx.booked_at_source)
+           (Wise_camt.matching_time tx)
            tx.amount
            tx.account.currency)
       ~data:id);
@@ -183,9 +188,7 @@ let match_rows rows candidates =
       let row = input.row in
       let candidates =
         Option.value
-          (Hashtbl.find
-             index
-             (key row.reference row.booked_local row.amount row.currency))
+          (Hashtbl.find index (key row.reference row.booked_at row.amount row.currency))
           ~default:[]
         |> List.dedup_and_sort ~compare:Int64.compare
       in

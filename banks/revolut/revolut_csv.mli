@@ -3,8 +3,8 @@ open Base
 type transaction = private
   { account_id : string
   ; currency : Iso4217.t
-  ; started_local : string (** Source wall clock, with no asserted timezone. *)
-  ; completed_local : string (** Source wall clock, with no asserted timezone. *)
+  ; started_at : Ptime.t (** CSV clock interpreted as UTC. *)
+  ; completed_at : Ptime.t (** CSV clock interpreted as UTC. *)
   ; booked_on : Date.t
   ; transaction_type : string
   ; description : string

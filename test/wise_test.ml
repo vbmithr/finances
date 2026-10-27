@@ -211,6 +211,37 @@ let timestamp_precision () =
     Alcotest.(check bool) "replay unchanged" true (Poly.equal replay.outcome Unchanged))
 ;;
 
+let csv_times () =
+  let rows = ok (Wise_csv.parse (csv ())) in
+  let first = List.hd_exn rows in
+  Alcotest.(check string)
+    "CSV clock assumed UTC"
+    "2025-01-02T00:00:00.123000000000Z"
+    (Timestamp.to_rfc3339 first.booked_at);
+  List.iter [ "+01:00"; "-05:00"; "+05:30" ] ~f:(fun offset ->
+    let document = ok (Wise_camt.parse (replace (xml ()) "+01:00" offset)) in
+    let transactions = (List.hd_exn document.statements).transactions in
+    let tx = List.hd_exn transactions in
+    Alcotest.(check bool)
+      "matching key uses source-local clock"
+      true
+      (Ptime.equal first.booked_at (Wise_camt.matching_time tx));
+    Alcotest.(check bool)
+      "matching clock is distinct from actual CAMT instant"
+      false
+      (Ptime.equal first.booked_at tx.booked_at);
+    let input =
+      List.mapi rows ~f:(fun i row ->
+        { Wise_csv.row_id = Int64.of_int (i + 1); document_id = 1L; row })
+    in
+    let candidates = List.mapi transactions ~f:(fun i tx -> Int64.of_int (i + 100), tx) in
+    let results = Wise_csv.match_rows input candidates in
+    check
+      "all local-clock matches preserved"
+      3
+      (List.count results ~f:(fun row -> Poly.equal row.Bank_match.state Matched)))
+;;
+
 let () =
   Alcotest.run
     "Wise and multiple banks"
@@ -218,6 +249,7 @@ let () =
       , List.map
           [ "parser and balances", parser
           ; "Ptime instants, raw text and stable identity", timestamp_precision
+          ; "CSV UTC assumption and source-local matching", csv_times
           ; "two banks, replay, conflict", multi_bank
           ; "currency and fee conflicts", currencies
           ; "duplicate CSV claims", duplicate_rows

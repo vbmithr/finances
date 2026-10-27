@@ -42,5 +42,9 @@ type t = private
 val parse : string -> t Or_error.t
 val account_identity : account -> string
 val normalize_reference : description:string -> string -> string
-val local_millisecond : string -> string
+
+(** Source-local booking clock interpreted as UTC and truncated to milliseconds
+    for matching a timezone-free CSV. Not the transaction's actual UTC instant. *)
+val matching_time : transaction -> Ptime.t
+
 val source_transaction : Source_event.t -> transaction Or_error.t

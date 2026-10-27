@@ -260,6 +260,10 @@ new document together. No accounting entries are generated automatically.
 
 `Bank_ofx.parse` supplies typed statements, exact amounts, booking dates, optional
 names/memos, and separately identified available and ledger balance observations.
+Balance observations expose `as_of : Ptime.t`, parsed through `Ofx.instant`. OFX's omitted
+clock and timezone default to midnight and GMT; explicit numeric offsets are
+honored. The invalid BoursoBank `DTUSER` placeholder remains raw evidence under
+`user_date_source`, rather than being treated as a validated date or instant.
 Its scope is OFX 2.x XML bank messages; OFX 1.x SGML, credit-card and investment
 message sets, and transaction corrections are rejected explicitly.
 
@@ -582,6 +586,12 @@ that difference from stored statement/event links and lists CSV matching states.
 Statement balances are observations; the journal contains movements without
 inferred opening-balance entries.
 
+Wise CSV exposes its booking clock as `booked_at : Ptime.t`, assuming UTC because
+the CSV supplies no offset. Its original fields remain unchanged. Matching still
+uses the CAMT source-local clock, not equality with the CAMT UTC instant: the
+matching key retains local-clock semantics and truncates only to milliseconds.
+Companion inspection displays the assumed-UTC clock as canonical RFC 3339.
+
 Wise CSV matching requires reference, local millisecond booking clock, exact signed
 amount, and currency to agree uniquely in both directions within a document. CSV
 has no timezone or reliable balance-account identity, so ambiguity remains visible.
@@ -651,7 +661,9 @@ The adapter validates exact decimal fields and each consecutive running balance
 per currency against **Amount − Fee**. The first opening balance is not independently
 reported, so this validates the running balance sequence without asserting an
 external opening balance. Source booking dates use completion dates; the CSV's
-local clocks are retained without assigning a timezone.
+clocks are interpreted as UTC and exposed as `Ptime.t` in `started_at` and
+`completed_at`. Original clock text stays unchanged in payloads and source-ID
+encoding.
 
 Each bank posting uses the net movement, the counter-posting uses the opposite
 principal amount, and a nonzero fee creates a separate `expenses:bank-fees` posting.

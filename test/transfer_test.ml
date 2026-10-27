@@ -99,6 +99,55 @@ let parser () =
   error (Revolut_csv.parse ~account_id:"" (csv ()))
 ;;
 
+let utc_clocks () =
+  let tx =
+    (ok (Revolut_csv.parse ~account_id:"main" (csv ()))).transactions |> List.hd_exn
+  in
+  Alcotest.(check string)
+    "start is UTC"
+    "2026-01-01T09:00:00.000000000000Z"
+    (Timestamp.to_rfc3339 tx.started_at);
+  Alcotest.(check string)
+    "completion is UTC"
+    "2026-01-01T09:00:01.000000000000Z"
+    (Timestamp.to_rfc3339 tx.completed_at);
+  Alcotest.(check bool)
+    "source clock text retained"
+    true
+    (String.is_substring tx.payload ~substring:"2026-01-01 09:00:01");
+  error
+    (Revolut_csv.parse
+       ~account_id:"main"
+       (replace (csv ()) "2026-01-01 09:00:01" "2026-01-01 08:59:59"));
+  error
+    (Revolut_csv.parse
+       ~account_id:"main"
+       (replace (csv ()) "2026-01-01 09:00:00" "2026-02-30 09:00:00"));
+  memory (fun db ->
+    let event =
+      List.find_exn
+        (ok (Store.events db))
+        ~f:(fun (_, e) ->
+          String.equal e.Source_event.venue "revolut"
+          && String.equal e.source_id tx.source_id)
+      |> snd
+    in
+    let decoded = ok (Revolut_csv.source_transaction event) in
+    Alcotest.(check bool)
+      "stored start decodes as same instant"
+      true
+      (Ptime.equal tx.started_at decoded.started_at);
+    Alcotest.(check bool)
+      "stored completion decodes as same instant"
+      true
+      (Ptime.equal tx.completed_at decoded.completed_at);
+    Alcotest.(check string) "source payload unchanged" tx.payload decoded.payload;
+    check
+      "UTC assumption does not duplicate movements"
+      4
+      (import_revolut db (csv ())).existing)
+;;
+
 let import_and_fees () =
   memory (fun db ->
     let replay = import_revolut db (csv ()) in
@@ -410,6 +459,7 @@ let () =
     [ ( "workflow"
       , List.map
           [ "CSV validation and duplicate identities", parser
+          ; "UTC clock interpretation and replay", utc_clocks
           ; "import replay and fee accounting", import_and_fees
           ; "candidate ambiguity and rejections", candidates
           ; "confirm, reject, remap and reimport", confirm_and_reject

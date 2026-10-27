@@ -56,3 +56,10 @@ val transaction_of_tree : tree -> transaction Or_error.t
     time, fraction and [\[offset:TZ\]]). A time zone suffix does not move the
     calendar date: banks book in their local calendar. *)
 val calendar_date : string -> Ptime.date Or_error.t
+
+(** An OFX datetime as a Ptime instant. Missing time defaults to midnight and
+    missing timezone defaults to GMT, as specified by OFX. Numeric timezone
+    offsets are decimal hours in [-12, +12] with at most two fractional digits;
+    names are informational. Source records remain
+    lossless strings; callers opt into this typed view. *)
+val instant : string -> Ptime.t Or_error.t

@@ -734,7 +734,9 @@ let sync_bank_cmd =
                  files inside them are skipped. Files are only read, never modified, and \
                  syncing them again imports only what is new. ZIP files are opened \
                  automatically in memory; each member follows the same import rules. \
-                 Nested ZIPs and encrypted archives are unsupported.")
+                 Nested ZIPs and encrypted archives are unsupported. Revolut and Wise \
+                 CSV clocks are assumed UTC; Wise matching retains CAMT source-local \
+                 clocks.")
       $ Arg.(
           value
           & opt (some string) None

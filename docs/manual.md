@@ -361,9 +361,21 @@ private snapshot and draft permissions remain in place.
 
 `Source_event.create` takes `~occurred_at:Ptime.t`, and its occurrence constructor
 is `At` instead of `At_ms`. Instants in the OCaml API use `Ptime.t`, including
-source occurrences, Wise booking times, statement instants and audit times. Calendar dates remain `Ptime.date`;
-statement metadata uses `Document.Date` or `Document.Instant`. Offset-free Revolut
-CSV clocks remain explicitly named local source text, not UTC instants.
+source occurrences, Wise booking times, statement instants and audit times.
+Calendar dates remain `Ptime.date`;
+statement metadata uses `Document.Date` or `Document.Instant`. Revolut CSV start
+and completion clocks are assumed UTC and exposed as `started_at` and `completed_at`
+of type `Ptime.t`. This assumption does not depend on your system timezone.
+Wise CSV also exposes
+`booked_at : Ptime.t` under an explicit UTC assumption, while preserving its
+source-local matching with CAMT (whose actual instant can carry another offset).
+BoursoBank OFX balance `as_of` values use `Ptime.t`; missing OFX timezone means
+GMT and missing time means midnight according to the format. Invalid OFX balance
+clocks or unsupported offsets are rejected. Bunq and BoursoBank
+CSV booking/value dates remain `Ptime.date`, and invalid OFX `DTUSER` metadata
+remains raw `user_date_source`.
+Original source text and source-ID encoding remain unchanged. Revolut booking
+dates and source-event occurrences remain the completion calendar date.
 
 SQLite stores instants as canonical UTC RFC 3339 text with 12 fractional digits.
 `ORDER BY occurred_at` and ordinary comparisons/indexes preserve the complete
@@ -374,7 +386,8 @@ padded to the canonical representation, without claiming extra clock resolution.
 `fin db events` now returns `occurred_at` (RFC 3339 or null) instead of
 `occurred_at_ms`; `occurred_on` is unchanged. The low-level `fin db ingest --at-ms`
 input remains an explicit Unix-millisecond boundary and converts exactly to Ptime.
-Statement report timestamps are normalized to UTC; calendar-date boundaries remain
+Wise companion inspection now formats its assumed-UTC `booked_at` as canonical
+RFC 3339. Statement report timestamps are normalized to UTC; calendar-date boundaries remain
 dates. Wise movement IDs, raw payloads, local booking dates and journal output
 remain unchanged. Schema 12 databases must be rebuilt using the storage instructions
 above; no automatic migration runs.

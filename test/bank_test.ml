@@ -87,7 +87,7 @@ let multi_account_parser () =
   Alcotest.(check string)
     "opaque invalid DTUSER retained"
     "00009999"
-    (Option.value_exn debit.user_date);
+    (Option.value_exn debit.user_date_source);
   Alcotest.(check string)
     "booking date retained"
     "2026-01-03"
@@ -98,8 +98,8 @@ let multi_account_parser () =
     (Option.is_none first.ledger_balance);
   Alcotest.(check string)
     "balance observation time preserved"
-    "20260105123000"
-    (Option.value_exn first.available_balance).as_of
+    "2026-01-05T12:30:00.000000000000Z"
+    (Timestamp.to_rfc3339 (Option.value_exn first.available_balance).as_of)
 ;;
 
 let parser_rejections () =
@@ -223,6 +223,33 @@ let institution_scoping () =
     check_counts path 2 6 6)
 ;;
 
+let balance_times () =
+  let document =
+    fixture ()
+    |> fun s ->
+    String.substr_replace_all
+      s
+      ~pattern:"20260105123000"
+      ~with_:"20260105003000.123[5.5:IST]"
+  in
+  let parsed = ok (Bank_ofx.parse document) in
+  let balance = (List.hd_exn parsed.statements).available_balance |> Option.value_exn in
+  Alcotest.(check string)
+    "balance time uses numeric OFX offset"
+    "2026-01-04T19:00:00.123000000000Z"
+    (Timestamp.to_rfc3339 balance.as_of);
+  let malformed =
+    String.substr_replace_all
+      (fixture ())
+      ~pattern:"20260105123000"
+      ~with_:"20260105253000"
+  in
+  Alcotest.(check bool)
+    "invalid balance clock rejected"
+    true
+    (Result.is_error (Bank_ofx.parse malformed))
+;;
+
 let () =
   Alcotest.run
     "bank importer"
@@ -231,6 +258,7 @@ let () =
           [ "multiple accounts and exact amounts", multi_account_parser
           ; "malformed and unsupported input", parser_rejections
           ; "calendar date from timestamp", timestamp_date
+          ; "typed balance observation timestamps", balance_times
           ; "replay and original archive", replay_and_archive
           ; "overlapping exports", overlapping_exports
           ; "atomic conflict rollback", atomic_conflict

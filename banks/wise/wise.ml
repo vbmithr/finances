@@ -116,7 +116,7 @@ let companion : Companion.t =
         let%map row = row r in
         Adapter_support.
           [ "reference", Some row.reference
-          ; "booked_at", Some row.booked_local
+          ; "booked_at", Some (Timestamp.to_rfc3339 row.booked_at)
           ; "amount", Some (quantity row.amount)
           ; "currency", Some (Iso4217.to_alpha_code row.currency)
           ; "description", Some row.description

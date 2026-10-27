@@ -10,6 +10,21 @@ short line of their own.
 
 ### 2026-10-27
 
+- Wise CSV `booked_at` is now `Ptime.t` under a UTC assumption, replacing
+  `booked_local`. Matching still uses the source-local CAMT clock and milliseconds;
+  inspection displays the assumed-UTC time as canonical RFC 3339. Raw fields stay
+  unchanged.
+- OFX balance `as_of` is now `Ptime.t`. The lossless OFX reader adds `instant` for
+  explicit typed conversion using OFX's midnight/GMT defaults and numeric offsets.
+  Invalid balance clocks or unsupported timezone offsets are rejected. BoursoBank
+  DTUSER remains raw evidence as `user_date_source`. Date-only
+  values, schema 13, movement identities and journal output are unchanged.
+
+- Revolut start and completion clocks are assumed UTC. `Revolut_csv.transaction`
+  exposes `started_at` and `completed_at` as `Ptime.t` instead of local strings.
+  Timestamp validation and ordering use Ptime. Payloads, source IDs, booking dates
+  and schema 13 remain unchanged; no database rebuild is needed for this change.
+
 - `fin backup DIR` creates missing parent directories privately, so a first backup
   to a new directory succeeds. Existing backup folders are never overwritten.
 

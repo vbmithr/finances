@@ -10,7 +10,7 @@ type account =
 type transaction =
   { fitid : string
   ; booked_on : Date.t
-  ; user_date : string option
+  ; user_date_source : string option
   ; amount : Quantity.t
   ; transaction_type : string
   ; name : string option
@@ -20,7 +20,7 @@ type transaction =
 
 type balance =
   { amount : Quantity.t
-  ; as_of : string
+  ; as_of : Ptime.t
   }
 
 type statement =
@@ -54,7 +54,7 @@ let parse_transaction account (tx : Ofx.transaction) =
   let booked_on = date tx.posted in
   (* BoursoBank's observed DTUSER is not a valid calendar date. Preserve it
      verbatim as source metadata; it cannot supply a value or booking date. *)
-  let user_date = tx.user_date in
+  let user_date_source = tx.user_date in
   let amount = Quantity.of_string tx.amount in
   if tx.corrects
   then failwith "OFX transaction corrections require an explicit correction workflow";
@@ -80,7 +80,7 @@ let parse_transaction account (tx : Ofx.transaction) =
   in
   { fitid
   ; booked_on
-  ; user_date
+  ; user_date_source
   ; amount
   ; transaction_type = tx.transaction_type
   ; name = tx.name
@@ -91,8 +91,9 @@ let parse_transaction account (tx : Ofx.transaction) =
 
 let parse_balance (balance : Ofx.balance option) =
   Option.map balance ~f:(fun (b : Ofx.balance) ->
-    ignore (date b.as_of : Date.t);
-    { amount = Quantity.of_string b.amount; as_of = b.as_of })
+    { amount = Quantity.of_string b.amount
+    ; as_of = Ofx.instant b.as_of |> Or_error.ok_exn
+    })
 ;;
 
 let tagged label i f =

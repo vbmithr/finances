@@ -3,7 +3,8 @@ open Base
 type row = private
   { row_number : int
   ; reference : string
-  ; booked_local : string
+  ; booked_at : Ptime.t
+    (** Source clock assumed UTC; matching retains local-clock semantics. *)
   ; amount : Quantity.t
   ; currency : Iso4217.t
   ; description : string

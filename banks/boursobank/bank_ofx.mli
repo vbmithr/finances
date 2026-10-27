@@ -9,14 +9,14 @@ type account = private
   ; currency : Iso4217.t
   }
 
-(** [user_date] is the unparsed DTUSER field, not a validated value date. The
+(** [user_date_source] is the unparsed DTUSER field, not a validated value date. The
     observed BoursoBank export contains invalid dates there. [source_payload]
     includes account, currency and canonical transaction XML as JSON, omitting
     DTUSER; the exact original document is retained separately. *)
 type transaction = private
   { fitid : string
   ; booked_on : Date.t
-  ; user_date : string option
+  ; user_date_source : string option
   ; amount : Quantity.t
   ; transaction_type : string
   ; name : string option
@@ -26,7 +26,7 @@ type transaction = private
 
 type balance = private
   { amount : Quantity.t
-  ; as_of : string
+  ; as_of : Ptime.t (** OFX defaults omitted time to midnight and timezone to GMT. *)
   }
 
 type statement = private

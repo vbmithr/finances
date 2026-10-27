@@ -116,18 +116,17 @@ let normalize_reference ~description reference =
 
 let timestamp = Timestamp.of_rfc3339_exn
 
-let local_millisecond text =
-  if String.length text < 19 then failwith "Wise booking timestamp lacks a clock time";
-  let prefix = String.prefix text 19 in
-  let rec fraction i =
-    if i < String.length text && Char.is_digit text.[i] then fraction (i + 1) else i
+(* The CSV names the source-local wall clock without an offset. Interpret that
+   clock as UTC for this comparison key, independently of the actual CAMT instant. *)
+let matching_time (tx : transaction) =
+  let offset =
+    match Ptime.of_rfc3339 ~strict:true tx.booked_at_source with
+    | Ok (_, offset, _) -> Option.value offset ~default:0
+    | Error _ -> invalid_arg "invalid Wise source booking clock"
   in
-  let digits =
-    if String.length text > 19 && Char.equal text.[19] '.'
-    then String.sub text ~pos:20 ~len:(fraction 20 - 20)
-    else ""
-  in
-  prefix ^ "." ^ String.prefix (digits ^ "000") 3
+  match Ptime.add_span tx.booked_at (Ptime.Span.of_int_s offset) with
+  | Some local -> Ptime.truncate ~frac_s:3 local
+  | None -> invalid_arg "Wise local matching clock is outside the Ptime range"
 ;;
 
 let make_transaction account ~reference ~booked_at ~value_on ~amount ~credit ~description =

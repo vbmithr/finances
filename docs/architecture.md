@@ -47,12 +47,18 @@ Private record types ensure callers construct values through validation function
 coefficients and exponents. Inexact results are trapped; no default or global
 context is changed. Canonical plain decimal rendering preserves existing SQLite
 text, source identities and journal precision. Non-finite decimals are rejected
-at construction. `Date` delegates validation and day differences to Ptime, while
+at construction. `Date` delegates validation and day differences to Ptime.
+
+`Bank_ofx.balance.as_of` is a Ptime instant from `Ofx.instant`, which applies
+OFX's midnight/GMT defaults and explicit decimal-hour offsets. The lossless OFX
+reader retains raw strings and trees at the format boundary. Invalid `DTUSER`
+metadata is explicitly named `user_date_source` in the bank view.
+
 `Timestamp` parses and formats RFC 3339 without floating point, and provides exact
 conversion at explicit Unix-millisecond input and Wise nanosecond identity
 serialization boundaries. The supplied local booking date remains separate from the UTC instant.
 
-Bos provides directory creation, file reads and atomic config writes, path
+Bos provides directory creation, file reads and atomic snapshot writes, path
 resolution, and temporary journal creation and atomic publication. Standard Unix
 file-descriptor and inode checks retain inbox race detection and control-file
 protection. General collections and errors come from Base; no Core compatibility
@@ -315,6 +321,13 @@ boundaries use Ptime instants; the kernel represents them as `Document.Instant`,
 while Bunq supplies `Document.Date` without fabricating midnight or a timezone.
 Import and account/review audit timestamps also use Ptime through Rel codecs.
 
+Wise_csv exposes `booked_at` as a Ptime instant under a UTC assumption, retaining
+all 23 original source fields. Matching projects the CAMT booking instant back to
+its source-local wall clock using the supplied offset, treats that comparison
+clock as UTC too, and truncates it to milliseconds with Ptime. It deliberately
+compares local-clock evidence rather than requiring equality of the actual CAMT
+instant and the CSV's assumed instant.
+
 Wise_csv preserves all 23 fields and matches only Wise CAMT events using normalized
 reference, local millisecond clock, amount and currency. Multiple balance accounts
 with indistinguishable candidates remain ambiguous. Separate observation and match
@@ -424,8 +437,10 @@ confirmed memberships, and append-only transfer changes.
 `Revolut_csv` supports the observed Current-account CSV: completed rows are
 movements, reverted rows (no completion date, no balance) are skipped. Its caller must
 provide an account label because the file cannot identify the account. Canonical
-payloads retain local start/completion clocks, signed principal and nonnegative fee;
-booking is a calendar completion date. Source identities include occurrence numbers
+payloads retain original start/completion clock text, signed principal and
+nonnegative fee. The parsed transaction interprets those clocks as UTC and exposes
+`started_at` and `completed_at` as Ptime instants, independent of the system timezone;
+booking and source-event occurrences remain the completion calendar date. Source identities include occurrence numbers
 and exclude running balance observations. Per-currency running balance steps must
 equal principal minus fee, and repeated account/day inventories must agree.
 

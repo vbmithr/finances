@@ -134,7 +134,11 @@ handling and the `BUNQ` header check stay in the Bunq adapter.
 `formats/ofx`, public name `finances.ofx`, depending on Base, Ptime, Re and
 xmlm. It returns statements, accounts, balances and transactions with values as
 written and each STMTTRN tree; `calendar_date` reads OFX dates without moving
-them across time zones. BoursoBank's `Bank_ofx` keeps the bank's rules on top:
+them across time zones. `instant` provides a Ptime view of OFX datetimes, applying
+midnight and GMT defaults and explicit decimal-hour offsets per section 3.2.8 of
+the [OFX specification](https://www.financialdataexchange.org/common/Uploaded%20files/OFX%20files/OFX%202.2.pdf).
+BoursoBank's `Bank_ofx` exposes balance observation instants as Ptime and keeps the
+bank's rules on top:
 exact quantities, the `DTUSER` exclusion, correction refusal and the canonical
 payload, whose bytes are unchanged (an inbox replay re-imports every stored
 movement as existing).
@@ -209,6 +213,9 @@ enough for the kernel never to inspect a payload:
 - `own_iban`: `Iban.t option`, plus whether an IBAN is applicable at all.
   This replaces the `CREDITCRD` special case in Store.
 - `booked_on`, `value_on` (date2 in the journal; today only Wise and Bunq).
+- Typed bank timestamps use Ptime. Wise CSV clocks assume UTC but match CAMT by
+  source-local millisecond clock; original raw fields remain evidence. OFX balance
+  times follow OFX's timezone defaults. Invalid DTUSER stays raw metadata.
 - `amount` (signed, net change of the account) and `fee`, non-negative and
   posted separately. The projection invariant stays: bank `+amount`, counter
   `-(amount + fee)`, fees `+fee`.

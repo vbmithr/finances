@@ -20,17 +20,21 @@ Last updated: 2026-10-27.
   migrations; older databases are refused unchanged.
 - Instants use `Ptime.t`, with Rel codecs preserving picoseconds as fixed-width UTC
   text. Date-only statement boundaries remain dates; original source clocks and
-  Wise identity encodings stay unchanged.
+  Wise identity encodings stay unchanged. Revolut start/completion clocks are
+  interpreted as UTC Ptime instants while preserving original payload bytes.
+  Wise CSV clocks assume UTC and retain source-local CAMT matching; OFX balance
+  instants use the format's timezone defaults. Only raw source evidence and invalid
+  DTUSER placeholders remain textual.
 - IBANs and currencies are validated types (`Iban.t`, `Iso4217.t`).
 - Movements project to balanced entries against `equity:unclassified`, unless a
   reviewed category or confirmed transfer says otherwise. `fin journal export`
   writes a reproducible hledger journal.
-- 130 tests (120 OCaml cases and 10 CLI cases). Each change is verified
+- 134 tests (124 OCaml cases and 10 CLI cases). Each change is verified
   by rebuilding the personal database from its inboxes with the previous and the
   new build and diffing every report.
 - Issue #1 is implemented locally and awaits publication.
 - The installed Arch package is `finances 0.1.0-19` (schema 12); the tree is at
-  package revision 21 (schema 13).
+  package revision 23 (schema 13).
 
 ### Personal data
 

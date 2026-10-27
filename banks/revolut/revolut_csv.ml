@@ -3,8 +3,8 @@ open Base
 type transaction =
   { account_id : string
   ; currency : Iso4217.t
-  ; started_local : string
-  ; completed_local : string
+  ; started_at : Ptime.t
+  ; completed_at : Ptime.t
   ; booked_on : Date.t
   ; transaction_type : string
   ; description : string
@@ -64,8 +64,8 @@ let account_identity t =
 let make
       ~account_id
       ~currency
-      ~started_at
-      ~completed_at
+      ~started_at:started_at_source
+      ~completed_at:completed_at_source
       ~transaction_type
       ~description
       ~principal
@@ -83,26 +83,23 @@ let make
            (Re.Perl.compile_pat "^[0-9]{4}-[0-9]{2}-[0-9]{2} [0-9]{2}:[0-9]{2}:[0-9]{2}$")
            s)
     then failwith "unsupported Revolut datetime"
-    else
-      ignore
-        (Timestamp.of_rfc3339_exn (String.tr s ~target:' ' ~replacement:'T' ^ "Z")
-         : Ptime.t)
+    else Timestamp.of_rfc3339_exn (String.tr s ~target:' ' ~replacement:'T' ^ "Z")
   in
-  clock started_at;
-  clock completed_at;
-  if String.compare started_at completed_at > 0
+  let started_at = clock started_at_source
+  and completed_at = clock completed_at_source in
+  if Ptime.compare started_at completed_at > 0
   then failwith "Revolut completion precedes start";
   ignore
     (Validation.text "Revolut transaction type" transaction_type |> Or_error.ok_exn
      : string);
-  let booked_on = Date.of_string (String.prefix completed_at 10) in
+  let booked_on = Ptime.to_date ~tz_offset_s:0 completed_at in
   let amount = Quantity.(principal - fee) in
   let fields =
     [ "format", `String "revolut-v1"
     ; "account_id", `String account_id
     ; "currency", `String (Iso4217.to_alpha_code currency)
-    ; "started_at", `String started_at
-    ; "completed_at", `String completed_at
+    ; "started_at", `String started_at_source
+    ; "completed_at", `String completed_at_source
     ; "transaction_type", `String transaction_type
     ; "description", `String description
     ; "principal", `String (Quantity.to_string principal)
@@ -118,8 +115,8 @@ let make
   in
   { account_id
   ; currency
-  ; started_local = started_at
-  ; completed_local = completed_at
+  ; started_at
+  ; completed_at
   ; booked_on
   ; transaction_type
   ; description
@@ -203,11 +200,11 @@ let parse ~account_id contents =
           Option.iter
             (Hashtbl.find balances currency)
             ~f:(fun (previous_at, previous_balance) ->
-              if String.compare completed_at previous_at < 0
+              if Ptime.compare tx.completed_at previous_at < 0
               then failwith "Revolut rows are not in completion order";
               if not Quantity.(previous_balance + tx.amount = balance)
               then failwith "Revolut running balance does not agree with amount minus fee");
-          Hashtbl.set balances ~key:currency ~data:(completed_at, balance);
+          Hashtbl.set balances ~key:currency ~data:(tx.completed_at, balance);
           Some tx
         | _ ->
           failwith

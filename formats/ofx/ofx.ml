@@ -96,6 +96,66 @@ let check_status node =
     then failwith "OFX response status is not successful")
 ;;
 
+(* OFX 2.2 section 3.2.8: omitted time is midnight, omitted offset is GMT.
+   Decimal offsets are hours (e.g. 5.5 means five hours and thirty minutes). *)
+let instant value =
+  Or_error.try_with (fun () ->
+    let value = checked_date value in
+    let stamp, offset =
+      match String.lsplit2 value ~on:'[' with
+      | None -> value, 0
+      | Some (stamp, suffix) ->
+        let zone =
+          String.chop_suffix_exn suffix ~suffix:"]" |> String.split ~on:':' |> List.hd_exn
+        in
+        let sign, magnitude =
+          if String.is_prefix zone ~prefix:"-"
+          then -1, String.drop_prefix zone 1
+          else 1, Option.value (String.chop_prefix zone ~prefix:"+") ~default:zone
+        in
+        let hours, fraction =
+          match String.lsplit2 magnitude ~on:'.' with
+          | None -> magnitude, ""
+          | Some (hours, fraction) -> hours, fraction
+        in
+        if String.length fraction > 2
+        then failwith "OFX timezone supports at most two decimal places";
+        let hours = Int.of_string hours in
+        if hours > 12 then failwith "OFX timezone is outside -12 to +12 hours";
+        let hundredths =
+          (hours * 100)
+          + Int.of_string (fraction ^ String.make (2 - String.length fraction) '0')
+        in
+        if hundredths > 1200 then failwith "OFX timezone is outside -12 to +12 hours";
+        stamp, sign * hundredths * 36
+    in
+    let day =
+      String.sub stamp ~pos:0 ~len:4
+      ^ "-"
+      ^ String.sub stamp ~pos:4 ~len:2
+      ^ "-"
+      ^ String.sub stamp ~pos:6 ~len:2
+    in
+    let clock =
+      if String.length stamp = 8
+      then "00:00:00"
+      else
+        String.sub stamp ~pos:8 ~len:2
+        ^ ":"
+        ^ String.sub stamp ~pos:10 ~len:2
+        ^ ":"
+        ^ String.drop_prefix stamp 12
+    in
+    let local =
+      match Ptime.of_rfc3339 ~strict:true (day ^ "T" ^ clock ^ "Z") with
+      | Ok (time, _, _) -> time
+      | Error _ -> failwith "invalid OFX datetime"
+    in
+    match Ptime.sub_span local (Ptime.Span.of_int_s offset) with
+    | Some time -> time
+    | None -> failwith "OFX datetime is outside the Ptime range")
+;;
+
 let read_transaction node =
   (match node with
    | Element ("STMTTRN", _) -> ()
