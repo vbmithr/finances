@@ -2,7 +2,7 @@ open Base
 
 type t =
   { account_id : string
-  ; currency : string
+  ; currency : Iso4217.t
   ; booked_on : Date.t
   ; value_on : Date.t
   ; amount : Quantity.t
@@ -22,7 +22,11 @@ let normalize s =
 
 let account_identity t =
   Yojson.Safe.to_string
-    (`List [ `String "bunq"; `String t.account_id; `String ("current-" ^ t.currency) ])
+    (`List
+        [ `String "bunq"
+        ; `String t.account_id
+        ; `String ("current-" ^ Iso4217.to_alpha_code t.currency)
+        ])
 ;;
 
 let key ~account_id ~booked_on ~value_on ~amount ~counterparty ~name ~description =
@@ -64,9 +68,9 @@ let create
   =
   let open Or_error.Let_syntax in
   let%bind account_id = Validation.token "Bunq account" account_id in
-  let%bind currency = Validation.token "Bunq currency" currency in
-  if occurrence < 1 || String.length currency <> 3
-  then Or_error.error_string "invalid Bunq currency or occurrence"
+  let code = Iso4217.to_alpha_code currency in
+  if occurrence < 1
+  then Or_error.error_string "invalid Bunq occurrence"
   else (
     let counterparty = normalize counterparty
     and name = normalize name
@@ -75,7 +79,7 @@ let create
       key ~account_id ~booked_on ~value_on ~amount ~counterparty ~name ~description
     in
     let source_id =
-      Digestif.SHA256.(to_hex (digest_string (currency ^ base)))
+      Digestif.SHA256.(to_hex (digest_string (code ^ base)))
       ^ ":"
       ^ Int.to_string occurrence
     in
@@ -84,7 +88,7 @@ let create
         (`Assoc
             [ "format", `String "bunq-v1"
             ; "account_id", `String account_id
-            ; "currency", `String currency
+            ; "currency", `String code
             ; "booked_on", `String (Date.to_string booked_on)
             ; "value_on", `String (Date.to_string value_on)
             ; "amount", `String (Quantity.to_string amount)
@@ -121,7 +125,8 @@ let source_transaction (event : Source_event.t) =
     let tx =
       create
         ~account_id:(field "account_id")
-        ~currency:(field "currency")
+        ~currency:
+          (Validation.currency "Bunq currency" (field "currency") |> Or_error.ok_exn)
         ~booked_on:(Date.of_string (field "booked_on"))
         ~value_on:(Date.of_string (field "value_on"))
         ~amount:(Quantity.of_string (field "amount"))

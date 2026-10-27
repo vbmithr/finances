@@ -4,7 +4,7 @@ type account =
   { bank_id : string
   ; account_id : string
   ; account_type : string
-  ; currency : string
+  ; currency : Iso4217.t
   }
 
 type own_iban =
@@ -37,7 +37,6 @@ let create
   let%bind _ = Validation.text "bank ID" account.bank_id in
   let%bind _ = Validation.text "account ID" account.account_id in
   let%bind _ = Validation.text "account type" account.account_type in
-  let%bind _ = Validation.token "currency" account.currency in
   if Quantity.(fee < zero)
   then Or_error.error_string "movement fee must be non-negative"
   else

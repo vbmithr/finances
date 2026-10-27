@@ -42,5 +42,6 @@
   (csv
    (>= 2.4))
   hledger
+  iso4217
   (alcotest :with-test)
   (zarith :with-test)))

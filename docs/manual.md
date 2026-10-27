@@ -113,7 +113,9 @@ Keep a separate inbox for each bank. Supply the formats below:
 | Revolut | Supported ten-column Current-account CSV | None |
 
 Companion CSV files enrich the primary records; they do not create a second
-transaction stream. Arbitrary CSV layouts, Excel, PDF and QIF are not supported
+transaction stream. Currencies must be ISO 4217 alphabetic codes such as `EUR`;
+a file using any other code, or a lowercase one, is rejected and appears in
+`fin bank history`. Arbitrary CSV layouts, Excel, PDF and QIF are not supported
 imports. Export the supported format from your bank instead.
 
 For example, put your BoursoBank exports in `~/Statements/boursobank`, then run:

@@ -2,7 +2,7 @@ open Base
 
 type transaction = private
   { account_id : string
-  ; currency : string
+  ; currency : Iso4217.t
   ; started_at : string
   ; completed_at : string
   ; booked_on : Date.t

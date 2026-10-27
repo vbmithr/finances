@@ -4,7 +4,7 @@ type account =
   { bank_id : string
   ; account_id : string
   ; account_type : string
-  ; currency : string
+  ; currency : Iso4217.t
   }
 
 type transaction = private

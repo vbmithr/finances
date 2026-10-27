@@ -4,7 +4,7 @@ type account =
   { bank_id : string
   ; account_id : string
   ; account_type : string
-  ; currency : string
+  ; currency : Iso4217.t
   }
 
 type transaction =
@@ -158,7 +158,7 @@ let make_transaction account ~reference ~booked_at ~value_on ~amount ~credit ~de
       (`Assoc
           [ "format", `String "wise-camt-v1"
           ; "account", `String (account_identity account)
-          ; "currency", `String account.currency
+          ; "currency", `String (Iso4217.to_alpha_code account.currency)
           ; "reference", `String reference
           ; "booked_at", `String booked_at
           ; ( "value_on"
@@ -199,7 +199,7 @@ let signed_amount currency node =
       List.Assoc.find_exn attributes ("", "Ccy") ~equal:Poly.equal
     | _ -> assert false
   in
-  if not (String.equal currency declared)
+  if not (String.equal (Iso4217.to_alpha_code currency) declared)
   then failwith "CAMT entry currency differs from balance account currency";
   let amount = Quantity.of_string (text amount) in
   if Quantity.(amount < zero)
@@ -218,11 +218,15 @@ let parse_statement node =
     | None -> value acct [ "Id"; "Othr"; "Id" ]
   in
   let currency =
-    value acct [ "Ccy" ] |> Validation.token "Wise account currency" |> Or_error.ok_exn
+    value acct [ "Ccy" ] |> Validation.currency "Wise account currency" |> Or_error.ok_exn
   in
   ignore (Validation.text "Wise account ID" account_id |> Or_error.ok_exn : string);
   let account =
-    { bank_id = "wise"; account_id; account_type = "balance-" ^ currency; currency }
+    { bank_id = "wise"
+    ; account_id
+    ; account_type = "balance-" ^ Iso4217.to_alpha_code currency
+    ; currency
+    }
   in
   let statement_id = value node [ "Id" ] in
   let period_start = value node [ "FrToDt"; "FrDtTm" ]
@@ -352,11 +356,12 @@ let source_transaction (event : Source_event.t) =
       | _ -> failwith "invalid Wise account identity"
     in
     let currency =
-      Validation.token "Wise currency" (string "currency") |> Or_error.ok_exn
+      Validation.currency "Wise currency" (string "currency") |> Or_error.ok_exn
     in
     if
       not
-        (String.equal bank_id "wise" && String.equal account_type ("balance-" ^ currency))
+        (String.equal bank_id "wise"
+         && String.equal account_type ("balance-" ^ Iso4217.to_alpha_code currency))
     then failwith "invalid Wise balance account";
     let account = { bank_id; account_id; account_type; currency } in
     let tx =

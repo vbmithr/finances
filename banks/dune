@@ -7,6 +7,6 @@
  (public_name finances.banks)
  (flags
   (:standard -open Finances_core))
- (libraries finances.core iban ofx base yojson xmlm re digestif csv)
+ (libraries finances.core iban iso4217 ofx base yojson xmlm re digestif csv)
  (preprocess
   (pps ppx_sexp_conv ppx_compare ppx_let)))

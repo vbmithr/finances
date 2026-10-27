@@ -6,7 +6,7 @@
 type statement =
   { source_account : string
   ; reference : string option
-  ; currency : string
+  ; currency : Iso4217.t
   ; period_start : string
   ; period_end : string
   ; opening_as_of : string

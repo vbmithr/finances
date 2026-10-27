@@ -464,7 +464,7 @@ let store_statement db ~document_id ~ordinal ~institution (s : Document.statemen
             institution
             s.source_account
             s.reference
-            s.currency
+            (Iso4217.to_alpha_code s.currency)
             s.period_start
             s.period_end
             s.opening_as_of
@@ -1492,7 +1492,7 @@ type statement_reconciliation =
   ; institution : string
   ; source_account : string
   ; reference : string option
-  ; currency : string
+  ; currency : Iso4217.t
   ; period_start : string
   ; period_end : string
   ; opening : Quantity.t
@@ -1584,6 +1584,7 @@ let statement_reconciliations ?institution db =
          Or_error.try_with (fun () ->
            Quantity.of_string opening, Quantity.of_string closing)
        in
+       let* currency = Validation.currency "stored statement currency" currency in
        let movements = List.fold amounts ~init:Quantity.zero ~f:Quantity.( + ) in
        Ok
          { statement_id
@@ -2233,7 +2234,7 @@ type bank_account_info =
   { mapping : Bank_account_mapping.t
   ; iban : Iban.t option
   ; iban_source : string
-  ; currency : string
+  ; currency : Iso4217.t
   ; movements : int
   ; first_on : Date.t
   ; last_on : Date.t
@@ -2655,7 +2656,7 @@ let apply_bank_accounts ?(dry_run = false) db config =
                  if
                    (not (String.equal child.iban_source "not_applicable"))
                    || String.equal parent_info.iban_source "not_applicable"
-                   || not (String.equal child.currency parent_info.currency)
+                   || not (Iso4217.equal child.currency parent_info.currency)
                  then
                    Or_error.error_string
                      "card settlement must link a credit-card account to a non-card \

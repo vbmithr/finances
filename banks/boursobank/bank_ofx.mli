@@ -6,7 +6,7 @@ type account = private
   { bank_id : string
   ; account_id : string
   ; account_type : string
-  ; currency : string
+  ; currency : Iso4217.t
   }
 
 (** [user_date] is the unparsed DTUSER field, not a validated value date. The

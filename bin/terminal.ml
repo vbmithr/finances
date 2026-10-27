@@ -42,7 +42,7 @@ let account (a : Store.bank_account_info) =
   Stdio.printf
     "  Records: %d movements in %s; %s to %s\n"
     a.movements
-    (text a.currency)
+    (text (Iso4217.to_alpha_code a.currency))
     (Date.to_string a.first_on)
     (Date.to_string a.last_on);
   Option.iter a.settlement_account ~f:(fun parent ->
@@ -93,9 +93,9 @@ let review rows =
       Stdio.printf
         "  Amount: %s %s; fee: %s %s\n"
         (Quantity.to_string tx.amount)
-        (text tx.account.currency)
+        (text (Iso4217.to_alpha_code tx.account.currency))
         (Quantity.to_string tx.fee)
-        (text tx.account.currency);
+        (text (Iso4217.to_alpha_code tx.account.currency));
       let description = String.concat ~sep:" | " tx.descriptions in
       if not (String.is_empty description) then Stdio.printf "  %s\n" (text description);
       Stdio.printf "  Classification: %s\n" (text r.counter_account);
@@ -109,7 +109,7 @@ let transfer (c : Store.transfer_candidate) =
     c.first_event_id
     c.second_event_id
     (Quantity.to_string (Movement.principal c.first_transaction))
-    (text c.first_transaction.account.currency)
+    (text (Iso4217.to_alpha_code c.first_transaction.account.currency))
     c.days_apart;
   Stdio.printf
     "  %s / %s (%s) <-> %s / %s (%s)\n"
@@ -123,7 +123,7 @@ let transfer (c : Store.transfer_candidate) =
     "  Fees: %s / %s %s\n"
     (Quantity.to_string c.first_transaction.fee)
     (Quantity.to_string c.second_transaction.fee)
-    (text c.first_transaction.account.currency);
+    (text (Iso4217.to_alpha_code c.first_transaction.account.currency));
   List.iter [ c.first_transaction; c.second_transaction ] ~f:(fun tx ->
     let description = String.concat ~sep:" | " tx.descriptions in
     if not (String.is_empty description) then Stdio.printf "  %s\n" (text description));

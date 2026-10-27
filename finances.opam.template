@@ -1,4 +1,5 @@
 pin-depends: [
   ["hledger.dev" "git+https://github.com/vbmithr/ocaml-hledger.git#cad809fa47876142cfdf361bde2a2e506ebdadad"]
+  ["iso4217.dev" "git+https://github.com/deepmarker/ocaml-iso4217.git#834d45e771ba9ef9ff9c872b517a51efa7da4514"]
   ["rel.dev" "git+https://github.com/dbuenzli/rel.git#f196804c51031870327ecc482d0b97f052941081"]
 ]

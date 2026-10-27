@@ -3,7 +3,7 @@ open Base
 type t = private
   { contents : string
   ; account_id : string
-  ; currency : string
+  ; currency : Iso4217.t
   ; opening_on : Date.t
   ; closing_on : Date.t
   ; opening : Quantity.t

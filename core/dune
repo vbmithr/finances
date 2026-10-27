@@ -1,6 +1,6 @@
 (library
  (name finances_core)
  (public_name finances.core)
- (libraries base decimal ptime iban)
+ (libraries base decimal ptime iban iso4217)
  (preprocess
   (pps ppx_sexp_conv ppx_compare ppx_let)))

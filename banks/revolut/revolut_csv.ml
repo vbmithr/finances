@@ -2,7 +2,7 @@ open Base
 
 type transaction =
   { account_id : string
-  ; currency : string
+  ; currency : Iso4217.t
   ; started_at : string
   ; completed_at : string
   ; booked_on : Date.t
@@ -54,7 +54,11 @@ let recognizes contents =
 
 let account_identity t =
   Yojson.Safe.to_string
-    (`List [ `String "revolut"; `String t.account_id; `String ("current-" ^ t.currency) ])
+    (`List
+        [ `String "revolut"
+        ; `String t.account_id
+        ; `String ("current-" ^ Iso4217.to_alpha_code t.currency)
+        ])
 ;;
 
 let make
@@ -70,13 +74,8 @@ let make
       ~occurrence
   =
   ignore (Validation.token "Revolut account_id" account_id |> Or_error.ok_exn : string);
-  ignore (Validation.token "Revolut currency" currency |> Or_error.ok_exn : string);
-  if
-    String.length currency <> 3
-    || (not (String.for_all currency ~f:Char.is_uppercase))
-    || occurrence < 1
-    || Quantity.(fee < zero)
-  then failwith "invalid Revolut currency, occurrence or fee";
+  if occurrence < 1 || Quantity.(fee < zero)
+  then failwith "invalid Revolut occurrence or fee";
   let clock s =
     if
       not
@@ -101,7 +100,7 @@ let make
   let fields =
     [ "format", `String "revolut-v1"
     ; "account_id", `String account_id
-    ; "currency", `String currency
+    ; "currency", `String (Iso4217.to_alpha_code currency)
     ; "started_at", `String started_at
     ; "completed_at", `String completed_at
     ; "transaction_type", `String transaction_type
@@ -148,7 +147,7 @@ let parse ~account_id contents =
       else Quantity.of_string s
     in
     let counts = Hashtbl.create (module String) in
-    let balances = Hashtbl.create (module String) in
+    let balances = Hashtbl.create (module Iso4217) in
     let transactions =
       Csv.input_all input
       |> List.map ~f:(fun fields ->
@@ -166,7 +165,10 @@ let parse ~account_id contents =
           ] ->
           let principal = decimal principal
           and fee = decimal fee
-          and balance = decimal balance in
+          and balance = decimal balance
+          and currency =
+            Validation.currency "Revolut currency" currency |> Or_error.ok_exn
+          in
           let initial =
             make
               ~account_id
@@ -224,7 +226,8 @@ let source_transaction (event : Source_event.t) =
     let tx =
       make
         ~account_id:(field "account_id")
-        ~currency:(field "currency")
+        ~currency:
+          (Validation.currency "Revolut currency" (field "currency") |> Or_error.ok_exn)
         ~started_at:(field "started_at")
         ~completed_at:(field "completed_at")
         ~transaction_type:(field "transaction_type")

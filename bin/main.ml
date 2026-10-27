@@ -243,7 +243,7 @@ let account_details_json info =
     (account_info_json info
      @ [ "iban_source", `String info.Store.iban_source
        ; "ledger_account", `String info.mapping.ledger_account
-       ; "currency", `String info.currency
+       ; "currency", `String (Iso4217.to_alpha_code info.currency)
        ; "movements", `Int info.movements
        ; "first_on", `String (Date.to_string info.first_on)
        ; "last_on", `String (Date.to_string info.last_on)
@@ -331,7 +331,7 @@ let status database json_output =
           (List.map report.accounts ~f:(fun a ->
              [ a.Store.mapping.institution
              ; a.mapping.ledger_account
-             ; a.currency
+             ; Iso4217.to_alpha_code a.currency
              ; Int.to_string a.movements
              ; Date.to_string a.first_on
              ; Date.to_string a.last_on
@@ -523,7 +523,7 @@ let statement_json (s : Store.statement_reconciliation) =
     ; "institution", `String s.institution
     ; "source_account", `String s.source_account
     ; "reference", Option.value_map s.reference ~default:`Null ~f:(fun r -> `String r)
-    ; "currency", `String s.currency
+    ; "currency", `String (Iso4217.to_alpha_code s.currency)
     ; "period_start", `String s.period_start
     ; "period_end", `String s.period_end
     ; "opening", `String (Quantity.to_string s.opening)
@@ -695,7 +695,7 @@ let bank_review database all json_output =
              ; "booked_on", `String (Date.to_string tx.booked_on)
              ; "amount", `String (Quantity.to_string tx.amount)
              ; "fee", `String (Quantity.to_string tx.fee)
-             ; "currency", `String tx.account.currency
+             ; "currency", `String (Iso4217.to_alpha_code tx.account.currency)
              ; "description", `String (String.concat ~sep:" | " tx.descriptions)
              ; "account", `String r.counter_account
              ; "reason", Option.value_map r.reason ~default:`Null ~f:(fun s -> `String s)
@@ -753,7 +753,7 @@ let transfer_leg event_id (event : Source_event.t) (tx : Movement.t) =
     ; "institution", `String event.venue
     ; "source_account", `String event.account
     ; "booked_on", `String (Date.to_string tx.booked_on)
-    ; "currency", `String tx.account.currency
+    ; "currency", `String (Iso4217.to_alpha_code tx.account.currency)
     ; "bank_amount", `String (Quantity.to_string tx.amount)
     ; "principal", `String (Quantity.to_string (Movement.principal tx))
     ; "fee", `String (Quantity.to_string tx.fee)

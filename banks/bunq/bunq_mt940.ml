@@ -3,7 +3,7 @@ open Base
 type t =
   { contents : string
   ; account_id : string
-  ; currency : string
+  ; currency : Iso4217.t
   ; opening_on : Date.t
   ; closing_on : Date.t
   ; opening : Quantity.t
@@ -92,12 +92,12 @@ let parse contents =
       | _ -> failwith "expected Bunq account and currency"
     in
     ignore (Validation.token "Bunq account" account_id |> Or_error.ok_exn : string);
-    ignore (Validation.token "Bunq currency" currency |> Or_error.ok_exn : string);
+    let currency = Validation.currency "Bunq currency" currency |> Or_error.ok_exn in
+    let code = Iso4217.to_alpha_code currency in
     let opening_on, opening_currency, opening = balance (required "60F")
     and closing_on, closing_currency, closing = balance (required "62F") in
     if
-      (not
-         (String.equal currency opening_currency && String.equal currency closing_currency))
+      (not (String.equal code opening_currency && String.equal code closing_currency))
       || Date.(opening_on > closing_on)
     then failwith "inconsistent Bunq statement balance interval or currency";
     let counts = Hashtbl.create (module String) in

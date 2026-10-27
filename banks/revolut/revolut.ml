@@ -16,7 +16,7 @@ let decode event =
     ~account:
       { bank_id = "revolut"
       ; account_id = tx.account_id
-      ; account_type = "current-" ^ tx.currency
+      ; account_type = "current-" ^ Iso4217.to_alpha_code tx.currency
       ; currency = tx.currency
       }
     ~own_iban:(Adapter_support.own_iban tx.account_id)

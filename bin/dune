@@ -10,6 +10,7 @@
   finances.hledger
   finances.bank
   finances.iban
+  iso4217
   base
   stdio
   bos

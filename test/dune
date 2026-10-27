@@ -328,6 +328,7 @@
   finances.core
   finances.banks
   base
+  iso4217
   stdio
   alcotest))
 

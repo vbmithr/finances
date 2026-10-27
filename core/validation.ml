@@ -19,6 +19,12 @@ let token label s =
     Or_error.errorf "%s must contain only letters, digits, underscores or hyphens" label
 ;;
 
+let currency label s =
+  match Iso4217.of_alpha_code s with
+  | Some c -> Ok c
+  | None -> Or_error.errorf "%s must be an ISO 4217 currency code, got %S" label s
+;;
+
 let account s =
   let parts = String.split s ~on:':' in
   if List.for_all parts ~f:(fun p -> Result.is_ok (token "account component" p))

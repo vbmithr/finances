@@ -203,7 +203,7 @@ adapter for any OFX bank. BoursoBank is that plus its CSV companion.
 projection, transfers, ranking, IBAN evidence and the journal. It carries
 enough for the kernel never to inspect a payload:
 
-- `account`: bank ID, account ID, account type, currency.
+- `account`: bank ID, account ID, account type, currency (`Iso4217.t`).
 - `own_iban`: `Iban.t option`, plus whether an IBAN is applicable at all.
   This replaces the `CREDITCRD` special case in Store.
 - `booked_on`, `value_on` (date2 in the journal; today only Wise and Bunq).

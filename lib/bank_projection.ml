@@ -53,13 +53,13 @@ let entry ?bank_account ?(counter_account = "equity:unclassified") ~institution 
   let%bind incoming =
     Accounting.posting
       ~account:bank_account
-      ~commodity:account.currency
+      ~commodity:(Iso4217.to_alpha_code account.currency)
       transaction.amount
   in
   let%bind outgoing =
     Accounting.posting
       ~account:counter_account
-      ~commodity:account.currency
+      ~commodity:(Iso4217.to_alpha_code account.currency)
       (Quantity.neg Quantity.(transaction.amount + transaction.fee))
   in
   let descriptions =
@@ -79,7 +79,7 @@ let entry ?bank_account ?(counter_account = "equity:unclassified") ~institution 
       let%map fee =
         Accounting.posting
           ~account:"expenses:bank-fees"
-          ~commodity:account.currency
+          ~commodity:(Iso4217.to_alpha_code account.currency)
           transaction.fee
       in
       [ fee ])

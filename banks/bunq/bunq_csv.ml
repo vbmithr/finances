@@ -116,7 +116,7 @@ let match_rows inputs candidates =
     let ids = List.map candidates ~f:fst in
     let currencies =
       List.map candidates ~f:(fun (_, tx) -> tx.Bunq_transaction.currency)
-      |> List.dedup_and_sort ~compare:String.compare
+      |> List.dedup_and_sort ~compare:Iso4217.compare
     in
     let event_id, state, reason =
       match candidates with

@@ -5,7 +5,7 @@ type row =
   ; reference : string
   ; booked_local : string
   ; amount : Quantity.t
-  ; currency : string
+  ; currency : Iso4217.t
   ; description : string
   ; running_balance : Quantity.t
   ; fees : Quantity.t
@@ -117,7 +117,7 @@ let of_fields ~row_number fields =
       |> Or_error.ok_exn
       |> Wise_camt.normalize_reference ~description:a.(5)
     in
-    let currency = Validation.token "Wise CSV currency" a.(4) |> Or_error.ok_exn in
+    let currency = Validation.currency "Wise CSV currency" a.(4) |> Or_error.ok_exn in
     { row_number
     ; reference
     ; booked_local
@@ -164,7 +164,7 @@ let match_rows rows candidates =
     Sexp.to_string
       (Sexp.List
          (List.map
-            [ reference; local; amount_key amount; currency ]
+            [ reference; local; amount_key amount; Iso4217.to_alpha_code currency ]
             ~f:(fun s -> Sexp.Atom s)))
   in
   let index = Hashtbl.create (module String) in

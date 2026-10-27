@@ -5,7 +5,7 @@ type row = private
   ; reference : string
   ; booked_local : string
   ; amount : Quantity.t
-  ; currency : string
+  ; currency : Iso4217.t
   ; description : string
   ; running_balance : Quantity.t
   ; fees : Quantity.t

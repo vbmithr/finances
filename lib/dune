@@ -24,6 +24,7 @@
   re
   digestif
   csv
-  iban)
+  iban
+  iso4217)
  (preprocess
   (pps ppx_sexp_conv ppx_compare ppx_let)))

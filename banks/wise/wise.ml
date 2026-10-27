@@ -118,7 +118,7 @@ let companion : Companion.t =
           [ "reference", Some row.reference
           ; "booked_at", Some row.booked_local
           ; "amount", Some (quantity row.amount)
-          ; "currency", Some row.currency
+          ; "currency", Some (Iso4217.to_alpha_code row.currency)
           ; "description", Some row.description
           ; "fees", Some (quantity row.fees)
           ; "running_balance", Some (quantity row.running_balance)

@@ -108,7 +108,7 @@ type statement_reconciliation =
   ; institution : string
   ; source_account : string
   ; reference : string option
-  ; currency : string
+  ; currency : Iso4217.t
   ; period_start : string
   ; period_end : string
   ; opening : Quantity.t
@@ -194,7 +194,7 @@ type bank_account_info =
   { mapping : Bank_account_mapping.t
   ; iban : Iban.t option
   ; iban_source : string
-  ; currency : string
+  ; currency : Iso4217.t
   ; movements : int
   ; first_on : Date.t
   ; last_on : Date.t

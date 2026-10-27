@@ -4,7 +4,7 @@ type account =
   { bank_id : string
   ; account_id : string
   ; account_type : string
-  ; currency : string
+  ; currency : Iso4217.t
   }
 
 type transaction =
@@ -74,7 +74,7 @@ let parse_transaction account (tx : Ofx.transaction) =
     Yojson.Safe.to_string
       (`List
           [ `String (account_identity account)
-          ; `String account.currency
+          ; `String (Iso4217.to_alpha_code account.currency)
           ; canonical stable_node
           ])
   in
@@ -107,7 +107,7 @@ let parse_statement (statement : Ofx.statement) =
     { bank_id = a.bank_id |> Validation.text "bank ID" |> Or_error.ok_exn
     ; account_id = a.account_id |> Validation.text "account ID" |> Or_error.ok_exn
     ; account_type = a.account_type |> Validation.text "account type" |> Or_error.ok_exn
-    ; currency = a.currency |> Validation.token "currency" |> Or_error.ok_exn
+    ; currency = a.currency |> Validation.currency "currency" |> Or_error.ok_exn
     }
   in
   let transactions =
@@ -147,6 +147,7 @@ let source_transaction (event : Source_event.t) =
         bank_id, account_id, account_type
       | _ -> failwith "invalid bank account identity"
     in
+    let currency = Validation.currency "currency" currency |> Or_error.ok_exn in
     let account = { bank_id; account_id; account_type; currency } in
     let rec decode = function
       | `String s -> Ofx.Text s

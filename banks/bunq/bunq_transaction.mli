@@ -2,7 +2,7 @@ open Base
 
 type t = private
   { account_id : string
-  ; currency : string
+  ; currency : Iso4217.t
   ; booked_on : Date.t
   ; value_on : Date.t
   ; amount : Quantity.t
@@ -31,7 +31,7 @@ val account_identity : t -> string
 
 val create
   :  account_id:string
-  -> currency:string
+  -> currency:Iso4217.t
   -> booked_on:Date.t
   -> value_on:Date.t
   -> amount:Quantity.t
