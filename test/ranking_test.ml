@@ -203,6 +203,80 @@ let known_contradiction () =
     check "no invalid decision" 0 (List.length (ok (Store.bank_transfer_decisions db))))
 ;;
 
+let shared_iban () =
+  memory (fun db ->
+    let original = unique db in
+    let csv =
+      In_channel.read_all "fixtures/revolut.csv" |> fun s -> replace s ",EUR," ",USD,"
+    in
+    import db "revolut" "usd.csv" csv;
+    let sibling =
+      ok
+        (Account_identity.create
+           ~institution:"revolut"
+           ~bank_id:"revolut"
+           ~account_id:"main"
+           ~account_type:"current-USD"
+           ~iban:(ok (Iban.of_string counterpart_iban)))
+    in
+    ignore (ok (Store.set_bank_account_identities db [ sibling ]));
+    let pair () =
+      List.find_exn
+        (ok (Store.transfer_candidates ~include_reviewed:true db))
+        ~f:(fun c ->
+          Int64.equal c.Store.first_event_id original.first_event_id
+          && Int64.equal c.second_event_id original.second_event_id)
+    in
+    Alcotest.(check bool)
+      "USD sibling does not contradict EUR account"
+      true
+      (pair ()).iban_compatible;
+    Alcotest.(check bool)
+      "pair remains visible"
+      true
+      (List.exists
+         (ok (Store.transfer_candidates db))
+         ~f:(fun c ->
+           Int64.equal c.Store.first_event_id original.first_event_id
+           && Int64.equal c.second_event_id original.second_event_id));
+    ignore (ok (Store.set_bank_account_identities db [ identity other_iban ]));
+    Alcotest.(check bool)
+      "explicit EUR contradiction still wins"
+      false
+      (pair ()).iban_compatible);
+  memory (fun db ->
+    let original = unique db in
+    let csv =
+      In_channel.read_all "fixtures/revolut.csv" |> fun s -> replace s ",EUR," ",USD,"
+    in
+    ignore
+      (ok
+         (Store.import_bank_file
+            ~account_label:"other"
+            db
+            ~institution:"revolut"
+            ~path:"other.csv"
+            ~contents:csv));
+    let other =
+      ok
+        (Account_identity.create
+           ~institution:"revolut"
+           ~bank_id:"revolut"
+           ~account_id:"other"
+           ~account_type:"current-USD"
+           ~iban:(ok (Iban.of_string counterpart_iban)))
+    in
+    ignore (ok (Store.set_bank_account_identities db [ other ]));
+    let pair =
+      List.find_exn
+        (ok (Store.transfer_candidates ~include_reviewed:true db))
+        ~f:(fun c ->
+          Int64.equal c.Store.first_event_id original.first_event_id
+          && Int64.equal c.second_event_id original.second_event_id)
+    in
+    Alcotest.(check bool) "different label remains a conflict" false pair.iban_compatible)
+;;
+
 let explicit_contradiction () =
   memory (fun db ->
     let c = unique db in
@@ -235,6 +309,7 @@ let () =
           ; "IBAN validation", iban_validation
           ; "identity registration and confirmed transfer guard", registration
           ; "known account contradictions", known_contradiction
+          ; "shared IBAN across currency siblings", shared_iban
           ; "explicit identity contradictions", explicit_contradiction
           ]
           ~f:(fun (name, f) -> Alcotest.test_case name `Quick f) )

@@ -17,6 +17,10 @@ type report =
 val run
   :  registry:Finances_core.Registry.t
   -> ?account_id:string
+  -> ?configure_new_accounts:
+       (Finances.Store.t -> Finances.Store.bank_account_info list -> int Or_error.t)
+       (** Called after import and configuration, before projection, with only accounts
+      first seen in this run. Returns the number of audited IBAN registrations. *)
   -> ?accounts:string
   -> ?max_file_bytes:int64
   -> database:string

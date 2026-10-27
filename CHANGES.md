@@ -10,6 +10,15 @@ short line of their own.
 
 ### 2026-10-27
 
+- Fix transfer evidence when an IBAN is registered on another currency of the
+  same bank account: that sibling no longer hides a genuine transfer. Different
+  accounts and explicit IBAN contradictions still conflict (issue #1).
+- On a terminal, bank sync asks for a missing account label and for the IBAN of
+  newly imported accounts whose statements omit it. Currency accounts sharing a
+  bank identifier are asked together. Enter skips an IBAN; replay does not ask
+  again. Answers use the audited account settings and update an existing config.
+  Scripts still require `--account-id` and never prompt for IBANs.
+
 **Action required:** schema 12 refuses schema 11 databases. Back up, delete and
 rebuild: `fin backup`, `fin delete`, `fin init`, then sync each bank's statements
 again.

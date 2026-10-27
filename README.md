@@ -179,6 +179,8 @@ opam exec -- dune build
 opam exec -- dune runtest
 ```
 
+The test suite also needs Python 3 on Unix for terminal-driven CLI checks.
+
 Dependencies are installed per opam switch. After changing switches, rerun
 `opam install . --deps-only --with-test` in this directory. This also installs the
 project's pinned Rel and hledger dependencies. If Dune reports a missing library

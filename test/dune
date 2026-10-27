@@ -347,3 +347,9 @@
  (libraries finances test_support base stdio bos fpath unix alcotest)
  (preprocess
   (pps ppx_let)))
+
+(rule
+ (alias runtest)
+ (deps sync_cli_test.py fixtures/revolut.csv fixtures/bank.ofx)
+ (action
+  (run python3 %{dep:sync_cli_test.py} %{exe:../bin/main.exe})))

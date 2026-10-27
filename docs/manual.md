@@ -174,13 +174,26 @@ and appears in `fin bank history`.
 
 For Revolut, choose a stable account label with `--account-id`, since its CSV does
 not identify the account; use separate labels and folders for different Revolut
-accounts. Revolut exports one file per currency: sync them together under one
-label, and each currency becomes its own account. Reverted transactions, which
+accounts. If you omit it on a terminal, sync asks for the label; scripts must
+supply it. Labels accept letters, digits, underscores and hyphens. Use the same
+label every time. Revolut exports one file per currency: sync them together under
+one label, and each currency becomes its own account. Reverted transactions, which
 never moved money, are skipped. Sync scans the folder recursively, archives the inputs,
 imports movements, projects accounting entries and publishes a combined
 `bank.journal` beside the selected database. `--journal FILE` chooses another
 output location. Syncing each bank into the same database produces one combined
 view of your finances.
+
+On a terminal, sync asks for an IBAN when it first discovers an account whose
+statements do not supply one. It asks once for a group of currency accounts with
+the same bank and account identifier, and registers the answer on all missing
+accounts in that group. Invalid IBANs are explained and can be entered again.
+Enter skips; syncing those accounts again does not repeat the question. Use
+`fin accounts edit` to fill it later. Cards never prompt, and scripts never prompt
+for IBANs. Answers are audited in SQLite. If an account configuration file already
+exists (`--accounts`, or the default config for the default database), its affected
+IBANs are updated too, so applying the file later preserves your answer. Sync does
+not create a configuration file just for this question.
 
 You can add more exports and repeat the command. Unchanged documents and known
 transactions are recognized. Conflicting evidence is reported for review.
@@ -227,8 +240,8 @@ digits, nothing is applied: in a terminal you can edit again, otherwise the draf
 is kept and the next `fin accounts edit` continues from it.
 
 Statements from Wise and Bunq include the account's IBAN; for BoursoBank and
-Revolut, register it yourself. A credit card does not need its own IBAN. IBANs may
-use spaces or lower case; `fin` checks them against the country's registered
+Revolut, supply it when sync asks or register it with `fin accounts edit`. A
+credit card does not need its own IBAN. IBANs may use spaces or lower case; `fin` checks them against the country's registered
 length and structure and the check digits, and refuses invalid ones. Keep the
 account identity fields unchanged so settings refer to the correct imported
 account.

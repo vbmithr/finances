@@ -77,6 +77,7 @@ let write_journal ~path contents =
 let run
       ~registry
       ?account_id
+      ?(configure_new_accounts = fun _ _ -> Ok 0)
       ?accounts
       ?max_file_bytes
       ~database
@@ -144,6 +145,7 @@ let run
                 | None -> false)
               |> String.concat ~sep:", "))
     in
+    let%bind before = Store.bank_accounts db in
     let%bind inbox =
       Inbox.scan
         ?account_id
@@ -157,6 +159,20 @@ let run
     let mapping_changes = account_changes.mapping_changes
     and identity_changes = account_changes.identity_changes
     and settlement_changes = account_changes.settlement_changes in
+    let%bind current = Store.bank_account_info db in
+    let fresh =
+      List.filter current ~f:(fun info ->
+        not
+          (List.exists before ~f:(fun previous ->
+             String.equal
+               previous.Bank_account_mapping.institution
+               info.Store.mapping.institution
+             && String.equal
+                  (Bank_account_mapping.source_account previous)
+                  (Bank_account_mapping.source_account info.mapping))))
+    in
+    let%bind registered_identities = configure_new_accounts db fresh in
+    let identity_changes = identity_changes + registered_identities in
     let%bind companions = Store.match_companions db in
     let%bind projection = Store.project_bank db in
     let%bind contents = Finances_hledger.export db in

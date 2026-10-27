@@ -21,11 +21,12 @@ Last updated: 2026-10-27.
 - Movements project to balanced entries against `equity:unclassified`, unless a
   reviewed category or confirmed transfer says otherwise. `fin journal export`
   writes a reproducible hledger journal.
-- 110 tests. Each change is verified by rebuilding the personal database from its
-  inboxes with the previous and the new build and diffing every report.
-- `main` is 25 commits ahead of `origin/main`.
-- The installed Arch package is `finances 0.1.0-14` (schema 11); the tree is at
-  package revision 15 (schema 12).
+- 119 tests (112 OCaml cases and 7 terminal CLI cases). Each change is verified
+  by rebuilding the personal database from its inboxes with the previous and the
+  new build and diffing every report.
+- Issue #1 is implemented locally and awaits publication.
+- The installed Arch package is `finances 0.1.0-16` (schema 12); the tree is at
+  package revision 17 (schema 12).
 
 ### Personal data
 
@@ -46,13 +47,13 @@ From a database rebuilt from `personal/*/inbox`:
   BoursoBank and Revolut have no statement balances to reconcile against.
 - Companion rows: all matched except 8 BoursoBank CSV rows, ambiguous because the
   OFX has identical movements.
-- The live database (`~/.local/share/fin/fin.sqlite3`) is schema 10. Nothing is
-  lost by rebuilding it, since it holds no review decisions.
+- The live database (`~/.local/share/fin/fin.sqlite3`) is schema 12. This change
+  keeps schema 12 and needs no rebuild.
 
 ## Next actions
 
-1. **Install the current build and rebuild the database** (`make install`, then
-   the rebuild steps in the manual under "Storage and backups").
+1. **Install the current build** (`make install`). Issue #1 keeps schema 12, so
+   the installed schema 12 database needs no rebuild.
 2. **Push `main`** when ready; it is public on GitHub.
 3. **Fill the coverage gaps** above: Wise for 2026, BoursoBank before September
    2026, Revolut before April 2026, if those accounts were in use.
@@ -89,6 +90,10 @@ The import side is done; turning movements into accounting is not.
 
 ### 3. Smaller gaps
 
+- [x] Issue #1: shared-IBAN currency siblings do not contradict transfers; sync
+  asks for missing labels and new account IBANs on a terminal and keeps an
+  existing configuration in step.
+
 - [x] `fin accounts edit` sets IBANs, names and card links without handling the
   configuration file by hand.
 - [x] `fin backup` and `fin delete` save and remove all fin state without
@@ -117,8 +122,8 @@ a supported format instead.
 
 ## Suggested order
 
-1. Install and rebuild (next actions 1 and 2): there is no other way to use the
-   current code on real data.
+1. Install the current build and publish the change when ready (next actions
+   1 and 2).
 2. Categorization rules (workstream 2): the reason to keep books, and what makes the
    748 movements mean anything.
 3. Decide the 4 transfer candidates, then opening balances and reconciliation.

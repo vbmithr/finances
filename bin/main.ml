@@ -517,11 +517,161 @@ let import_history_cmd =
       $ json_output)
 ;;
 
+(* Prompts live at the CLI boundary; library callers and redirected stdin never
+   need a terminal. EOF has the same meaning as skipping an optional IBAN. *)
+let prompt text =
+  Out_channel.output_string stderr text;
+  Out_channel.flush stderr;
+  In_channel.input_line In_channel.stdin
+;;
+
+let sync_account_label institution account_id =
+  let validate = Validation.token "account label" in
+  match Registry.find Builtin.registry institution with
+  | Some (module A : Adapter.S) when A.takes_account_label ->
+    let message =
+      Printf.sprintf
+        "%s files do not say which account they come from: name it with --account-id \
+         LABEL, for example main, and use the same label every time."
+        institution
+    in
+    (match account_id with
+     | Some label -> Result.map (validate label) ~f:Option.some
+     | None when Unix.isatty Unix.stdin ->
+       eprintf "%s files do not say which account they come from.\n" institution;
+       let rec read () =
+         match
+           prompt "Label for this account (e.g. main; use the same one every time): "
+         with
+         | None -> Or_error.error_string message
+         | Some label ->
+           (match validate label with
+            | Ok label -> Ok (Some label)
+            | Error error ->
+              eprintf "%s\n" (Error.to_string_hum error);
+              read ())
+       in
+       read ()
+     | None -> Or_error.error_string message)
+  | _ -> Ok account_id
+;;
+
+let configure_new_accounts config db fresh =
+  let same_group (a : Bank_account_mapping.t) (b : Bank_account_mapping.t) =
+    String.equal a.institution b.institution
+    && String.equal a.bank_id b.bank_id
+    && String.equal a.account_id b.account_id
+  in
+  let rec groups remaining =
+    match remaining with
+    | [] -> Ok 0
+    | (first : Store.bank_account_info) :: rest ->
+      let siblings, rest =
+        List.partition_tf rest ~f:(fun info ->
+          same_group first.mapping info.Store.mapping)
+      in
+      let group = first :: siblings in
+      let missing =
+        List.filter group ~f:(fun info -> String.equal info.Store.iban_source "missing")
+      in
+      let%bind count =
+        match missing with
+        | [] -> Ok 0
+        | first :: _ ->
+          eprintf
+            "New account: %s %s (%s), %d movements, %s to %s.\n"
+            first.mapping.institution
+            first.mapping.account_id
+            (String.concat
+               ~sep:", "
+               (List.map missing ~f:(fun i -> i.Store.mapping.account_type)))
+            (List.sum (module Int) missing ~f:(fun i -> i.Store.movements))
+            (Date.to_string
+               (List.reduce_exn
+                  (List.map missing ~f:(fun i -> i.Store.first_on))
+                  ~f:(fun a b -> if Date.compare a b <= 0 then a else b)))
+            (Date.to_string
+               (List.reduce_exn
+                  (List.map missing ~f:(fun i -> i.Store.last_on))
+                  ~f:(fun a b -> if Date.compare a b >= 0 then a else b)));
+          let rec read () =
+            match
+              prompt "Its statements do not include an IBAN. IBAN (Enter to skip): "
+            with
+            | None | Some "" -> Ok None
+            | Some value ->
+              (match Iban.of_string value with
+               | Ok iban -> Ok (Some iban)
+               | Error error ->
+                 eprintf "%s\n" (Error.to_string_hum error);
+                 read ())
+          in
+          let%bind iban = read () in
+          (match iban with
+           | None -> Ok 0
+           | Some iban ->
+             let%bind current = Store.export_bank_accounts db in
+             let updates =
+               List.filter_map current ~f:(fun row ->
+                 if
+                   List.exists missing ~f:(fun info ->
+                     String.equal
+                       row.Bank_account_config.reference.institution
+                       info.Store.mapping.institution
+                     && String.equal
+                          (Bank_account_config.source_account row.reference)
+                          (Bank_account_mapping.source_account info.mapping))
+                 then Some { row with iban = Set iban }
+                 else None)
+             in
+             (* Validate before touching either state, and preserve unrelated rows
+               in an existing config (including accounts not imported yet). *)
+             let%bind _ = Store.apply_bank_accounts ~dry_run:true db updates in
+             let%bind () =
+               match config with
+               | Some path when Stdlib.Sys.file_exists path ->
+                 let%bind contents = read_file path in
+                 let%bind existing = Bank_account_config.of_json contents in
+                 let changed row =
+                   List.exists updates ~f:(fun update ->
+                     String.equal
+                       row.Bank_account_config.reference.institution
+                       update.Bank_account_config.reference.institution
+                     && String.equal
+                          (Bank_account_config.source_account row.reference)
+                          (Bank_account_config.source_account update.reference))
+                 in
+                 let merged =
+                   List.map existing ~f:(fun row ->
+                     if changed row then { row with iban = Set iban } else row)
+                   @ List.filter updates ~f:(fun update ->
+                     not
+                       (List.exists existing ~f:(fun row ->
+                          String.equal
+                            row.Bank_account_config.reference.institution
+                            update.Bank_account_config.reference.institution
+                          && String.equal
+                               (Bank_account_config.source_account row.reference)
+                               (Bank_account_config.source_account update.reference))))
+                 in
+                 write_file path (Bank_account_config.to_json merged ^ "\n")
+               | _ -> Ok ()
+             in
+             let%map result = Store.apply_bank_accounts db updates in
+             result.identity_changes)
+      in
+      let%map remaining = groups rest in
+      count + remaining
+  in
+  if Unix.isatty Unix.stdin then groups fresh else Ok 0
+;;
+
 let sync_bank database institution paths journal accounts max_mib account_id =
   if max_mib < 1 || max_mib > 1024
   then Or_error.error_string "max-file-mib must be between 1 and 1024"
   else (
     let%bind () = require_database database in
+    let%bind account_id = sync_account_label institution account_id in
     let journal =
       Option.value
         journal
@@ -531,6 +681,11 @@ let sync_bank database institution paths journal accounts max_mib account_id =
     let%bind report =
       Finances_bank.Sync.run
         ~registry:Builtin.registry
+        ~configure_new_accounts:
+          (configure_new_accounts
+             (match accounts with
+              | Some _ -> accounts
+              | None -> config_of database))
         ?account_id
         ?accounts
         ~max_file_bytes:Int64.(of_int max_mib * 1048576L)
@@ -650,7 +805,11 @@ let sync_bank_cmd =
           & opt (some string) None
           & info
               [ "account-id" ]
-              ~doc:"Stable Revolut account label, required for its account-free CSV."))
+              ~doc:
+                "Stable account label for account-free exports (Revolut). Asked on a \
+                 terminal if omitted; required in scripts. New accounts missing an IBAN \
+                 prompt once on a terminal; Enter skips, and accounts edit can add it \
+                 later."))
 ;;
 
 let statement_json (s : Store.statement_reconciliation) =

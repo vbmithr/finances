@@ -36,7 +36,10 @@ let parse ~(context : Adapter.context) ~format:_ contents =
     Or_error.of_option
       context.account_label
       ~error:
-        (Error.of_string "Revolut CSV has no account identifier; supply --account-id")
+        (Error.of_string
+           "Revolut CSV files do not say which Revolut account they come from: name it \
+            with --account-id LABEL, for example main, and use the same label every \
+            time.")
   in
   let%bind (document : Revolut_csv.t) = Revolut_csv.parse ~account_id contents in
   let%map events =

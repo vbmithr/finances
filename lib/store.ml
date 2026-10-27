@@ -1961,14 +1961,14 @@ let transfer_iban_evidence db source a ta b tb =
       (fun (event_id, event) ->
          let* tx = movement db event_id in
          let* iban, _ = account_iban db event tx in
-         Ok (event, iban))
+         Ok (event, tx.Movement.account, iban))
       (List.filter source ~f:(fun (_, e) -> Registry.is_movement db.registry e)
        |> List.dedup_and_sort ~compare:(fun (_, a) (_, b) ->
          [%compare: string * string]
            (a.Source_event.venue, a.account)
            (b.Source_event.venue, b.account)))
   in
-  let assess counterparty target target_iban =
+  let assess counterparty target target_account target_iban =
     match counterparty, target_iban with
     | None, _ -> None
     | Some cp, Some own when Iban.equal cp own ->
@@ -1977,10 +1977,11 @@ let transfer_iban_evidence db source a ta b tb =
       Some (false, "counterparty IBAN differs from the other source account's IBAN")
     | Some cp, None ->
       let conflicting =
-        List.find_map known ~f:(fun (event, iban) ->
+        List.find_map known ~f:(fun (event, (account : Movement.account), iban) ->
           if
             String.equal event.Source_event.venue target.Source_event.venue
-            && String.equal event.account target.account
+            && String.equal account.bank_id target_account.Movement.bank_id
+            && String.equal account.account_id target_account.account_id
           then None
           else if Option.equal Iban.equal iban (Some cp)
           then Some event.venue
@@ -1991,7 +1992,10 @@ let transfer_iban_evidence db source a ta b tb =
         , "counterparty IBAN belongs to a different known " ^ institution ^ " account" ))
   in
   let evidence =
-    List.filter_opt [ assess a_counterparty b b_iban; assess b_counterparty a a_iban ]
+    List.filter_opt
+      [ assess a_counterparty b tb.account b_iban
+      ; assess b_counterparty a ta.account a_iban
+      ]
   in
   let conflicts =
     List.filter_map evidence ~f:(fun (matches, detail) ->
