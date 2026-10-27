@@ -211,13 +211,13 @@ let exact_enrichment () =
       Alcotest.(check int)
         "only three observations"
         3
-        (scalar db "SELECT count(*) FROM bank_csv_rows");
+        (scalar db "SELECT count(*) FROM companion_rows WHERE format='csv'");
       Alcotest.(check int)
         "only initial audit"
         3
-        (scalar db "SELECT count(*) FROM bank_csv_match_changes");
-      error (Rel_sqlite3.exec_sql db "UPDATE bank_csv_rows SET amount='999'");
-      error (Rel_sqlite3.exec_sql db "DELETE FROM bank_csv_match_changes")))
+        (scalar db "SELECT count(*) FROM companion_match_changes");
+      error (Rel_sqlite3.exec_sql db "UPDATE companion_rows SET fields_json='[]'");
+      error (Rel_sqlite3.exec_sql db "DELETE FROM companion_match_changes")))
 ;;
 
 let metadata_tag_safety () =
@@ -257,7 +257,7 @@ let csv_first () =
       Alcotest.(check int)
         "both observations of matching state"
         6
-        (scalar db "SELECT count(*) FROM bank_csv_match_changes")))
+        (scalar db "SELECT count(*) FROM companion_match_changes")))
 ;;
 
 let duplicates_within_csv () =
@@ -380,7 +380,7 @@ let malformed_file_atomic () =
       Alcotest.(check int)
         "no partial CSV rows"
         0
-        (scalar db "SELECT count(*) FROM bank_csv_rows");
+        (scalar db "SELECT count(*) FROM companion_rows WHERE format='csv'");
       Alcotest.(check int)
         "failed input archived"
         2

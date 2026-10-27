@@ -21,9 +21,11 @@ These are invariants, not goals. Tests enforce them (see Enforcement).
 3. **Formats are not institutions.** OFX, CAMT and MT940 are standards with
    their own libraries. An adapter is an institution that combines one or more
    format parsers with that bank's quirks and identity rules.
-4. **Stored identities are frozen.** Venue, account, kind, source ID and payload
-   bytes of existing events never change. A new parser or library version must
-   produce identical values for the same input, or use a new event kind.
+4. **Identities are deterministic.** The same document always yields the same
+   events, so reimports and overlapping exports never duplicate movements. The
+   software is in development: changing an identity rule bumps the schema
+   version, and databases are rebuilt from the original statements. There are
+   no migrations.
 5. **Adapters decode their own events.** There is no generic payload codec for
    existing banks. Dispatch is by `(venue, kind)`, because one kind
    (`bank-transaction`, OFX) is shared by every OFX institution.
@@ -241,10 +243,9 @@ Bank-specific tables are replaced by:
 
 Notes:
 
-- Statement period and balance dates use the source-event convention: each
-  instant is either a calendar date or Unix milliseconds, with exactly one
-  present (`*_on` / `*_at_ms` column pairs and a CHECK). Bunq states dates;
-  Wise states instants.
+- Statement period and balance dates are the bank's own text: a calendar date
+  (Bunq) or a timestamp with its offset (Wise). Nothing reads them as instants,
+  and converting to milliseconds would lose the offset.
 - `bank_import_attempts.format` loses its CHECK list. The format is validated
   against the registry when written. Stored values are kept.
 - `companion_rows` stores fields only. BoursoBank's typed columns (category,
@@ -254,26 +255,13 @@ Notes:
 - Bunq statements gain explicit `statement_events`, so reconciliation is one
   kernel function: opening + sum of linked movements − closing.
 
-## Migration
+## No migration
 
-There is no migration machinery today: `Store.initialize` accepts only
-`user_version = 10`. Add one ordered step, v10 → v11, applied in one
-transaction:
-
-1. Create the generic tables.
-2. `INSERT … SELECT` from each bank table, keeping row IDs where they are keys
-   of audit rows (companion row IDs, statement IDs). Bunq statement membership
-   comes from `import_document_events`; the institution for Bunq inventories is
-   `'bunq'`.
-3. Drop the bank tables and their triggers; recreate `bank_import_attempts`
-   without the format CHECK.
-4. Set `user_version = 11`.
-
-In-place migration keeps event IDs, retrieval times and every audit history.
-Rebuilding from archives would lose them. Verify the migration by also
-replaying all archived documents into a fresh v11 database and comparing:
-`(venue, account, kind, source_id, payload)` sets, statement reconciliations,
-companion match states, and the exported journal after reapplying decisions.
+Schema changes bump the version; `Store` refuses any other version without
+touching the file, and the database is rebuilt by syncing the archived inboxes
+and applying the account configuration again. Schema 11 replaced the 18
+bank-specific tables this way. Verification compares reports from a database
+rebuilt with the previous build against one rebuilt with the new build.
 
 ## Implementation sequence
 
@@ -290,8 +278,11 @@ companion match states, and the exported journal after reapplying decisions.
    read side (`decode`, `kinds`, `aliases`); `probe`/`parse`, overlap policy and
    companions are added with steps 4 and 5. Reports and a full inbox replay on
    the personal database are unchanged.
-4. **Schema v11 and migration.** The generic tables, with Store's per-bank code
-   paths rewritten over them.
+4. **Schema 11.** Done: the generic tables above, with Store's import, matching
+   and reconciliation code written over them and one `statement_reconciliations`
+   for every bank. Rebuilding the personal database gives the same events,
+   journal entries, reconciliations and match states; only companion row IDs in
+   journal tags are renumbered.
 5. **Adapters, one at a time:** Revolut (context and day inventory, no
    standard format), BoursoBank (with `ofx`), Bunq (with `mt940`), then Wise
    (with `camt`). Each step replays the baseline unchanged.
@@ -315,13 +306,12 @@ companion match states, and the exported journal after reapplying decisions.
   identical payments, malformed inputs, replay without new events, decode of
   every produced event, and a stable journal.
 
-## Frozen legacy rules
+## Current identity rules
 
-Recorded here so no refactor "fixes" them:
+Changing any of these requires a schema version bump and a rebuild:
 
 - Revolut source IDs hash a JSON object that includes `"format":"revolut-v1"`.
-  The tag is therefore part of identity; a new Revolut payload format needs a
-  new event kind.
+  The tag is therefore part of identity.
 - OFX events of every institution share kind `bank-transaction` and store
   account identity, currency and canonical STMTTRN XML; `DTUSER` is omitted.
 - Bunq identity is the SHA-256 of currency plus the normalized movement key,

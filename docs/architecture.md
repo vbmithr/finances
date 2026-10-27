@@ -84,11 +84,18 @@ computing monetary balances. Account, movement and transfer inspection commands
 offer readable text and explicit `--json` output; their existing JSON layouts are
 preserved. Financial aggregation and reporting remain hledger's responsibility.
 
-`Db_schema` defines the 32 persistent row records, their typed Rel columns, rows,
+`Db_schema` defines the 24 persistent row records, their typed Rel columns, rows,
 tables, keys, defaults and indexes. These definitions drive table creation and
 Store's inserts and read projections, so column types are shared rather than
 repeated in an independent SQL schema. Domain types still validate and represent
 financial concepts; persistence records represent the stored columns.
+
+No table belongs to a bank. `statements` and `statement_events` hold any bank's
+stated periods and balances, with dates or timestamps as the bank wrote them;
+`companion_rows`, `companion_matches` and `companion_match_changes` hold
+enrichment observations, told apart by `format`; `day_inventories` and
+`document_contexts` serve the overlap policy and import hints. A schema test
+fails if any table or column name contains a registered institution.
 
 `Sqlite_schema` adds checks, strictness and immutability beside each Rel table.
 Checks use the table's typed columns; trigger names and targets come from the
@@ -378,7 +385,7 @@ separate. Its generic source events use kind `bunq-transaction` and dated bookin
 occurrences.
 
 The baseline includes immutable
-Bunq day inventories, statement balances, CSV rows and audited derived matches.
+day inventories, statements, companion rows and audited derived matches.
 Import compares the sorted canonical movement inventory for every already observed
 account/day. Any mismatch rolls back the entire source import before its rejection
 is archived. This conservatively rejects partial-day overlaps or corrections; no

@@ -121,11 +121,17 @@ type wise_csv_observation =
 
 val wise_csv_observations : t -> wise_csv_observation list Or_error.t
 
-type wise_reconciliation =
+(** A statement's stated balances against the movements it lists. Period and
+    balance dates are the bank's text: a date or a timestamp with offset. *)
+type statement_reconciliation =
   { statement_id : int64
   ; document_id : int64
+  ; institution : string
   ; source_account : string
+  ; reference : string option
   ; currency : string
+  ; period_start : string
+  ; period_end : string
   ; opening : Quantity.t
   ; closing : Quantity.t
   ; movements : Quantity.t
@@ -133,7 +139,10 @@ type wise_reconciliation =
   ; difference : Quantity.t
   }
 
-val wise_reconciliations : t -> wise_reconciliation list Or_error.t
+val statement_reconciliations
+  :  ?institution:string
+  -> t
+  -> statement_reconciliation list Or_error.t
 
 (** Atomically apply explicit category decisions and audit their reasons. Verify
     existing generated postings before changing only the counter-account.
@@ -171,16 +180,6 @@ type bunq_csv_observation =
   }
 
 val bunq_csv_observations : t -> bunq_csv_observation list Or_error.t
-
-type bunq_reconciliation =
-  { document_id : int64
-  ; account_id : string
-  ; currency : string
-  ; entries : int
-  ; difference : Quantity.t
-  }
-
-val bunq_reconciliations : t -> bunq_reconciliation list Or_error.t
 
 (** Explicit same-currency transfer decisions; a confirmation asserts ownership
     of both accounts. Each movement can have at most one confirmed counterpart.

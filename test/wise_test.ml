@@ -83,13 +83,17 @@ let multi_bank () =
          String.equal a.Bank_account_mapping.institution "wise")
        && List.exists accounts ~f:(fun a ->
          String.equal a.Bank_account_mapping.institution "boursobank"));
-    List.iter
-      (ok (Store.wise_reconciliations db))
-      ~f:(fun r ->
-        Alcotest.(check bool)
-          "stored balance reconciled"
-          true
-          (Quantity.is_zero r.Store.difference));
+    let statements = ok (Store.statement_reconciliations ~institution:"wise" db) in
+    Alcotest.(check bool) "statements stored" true (not (List.is_empty statements));
+    Alcotest.(check int)
+      "every Wise movement belongs to a statement"
+      3
+      (List.sum (module Int) statements ~f:(fun r -> r.Store.entries));
+    List.iter statements ~f:(fun r ->
+      Alcotest.(check bool)
+        "stored balance reconciled"
+        true
+        (Quantity.is_zero r.Store.difference));
     let journal = ok (Finances_hledger.export db) in
     Alcotest.(check bool)
       "merchant metadata exported"

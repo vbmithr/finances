@@ -261,14 +261,15 @@ to a transaction's canonical XML cause a conflict. CSV enrichment is described b
 `Source_event.occurrence` distinguishes `At_ms` from `On_date`. The `events` command
 prints `occurred_at_ms: null` and a populated `occurred_on` for OFX records.
 Wise records retain an instant and project using the local booking date.
-This experimental build supports only the current schema baseline (10). Fresh
+This experimental build supports only the current schema baseline (11). Fresh
 files initialize it atomically; other schema versions are rejected without changes.
 There are no historical migrations or schema fixtures. Reimport original statements
 and reapply saved account configuration when resetting an experiment. Category and
 transfer review files use internal event IDs: inspect the new records before
 recreating those decisions instead of blindly reusing old numeric IDs.
-The current schema-10 database remains usable, including when copied into the
-XDG data directory.
+Banks have no tables of their own: statements, companion observations, daily
+inventories and import contexts share generic tables keyed by institution and
+format.
 Tables are created from typed Rel definitions in `lib/db_schema.ml`. The same
 columns supply Store's inserts and read projections. SQLite checks, strictness
 and immutability are declared alongside those tables through `Sqlite_schema`;

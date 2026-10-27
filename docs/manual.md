@@ -83,8 +83,21 @@ fin accounts list --database ~/fin-experiment.sqlite3
 
 Back up the database while no `fin` process is using it, or use SQLite's backup
 facility. Keep your original bank exports and any review/configuration files too.
-This experimental release accepts schema version 10; it does not migrate older
-experimental databases. Reimport original statements when starting a new baseline.
+This experimental release accepts schema version 11; it does not migrate older
+experimental databases, and refuses them without changing the file. After
+installing a release with a new schema, move the old database aside and rebuild:
+
+```sh
+mv ~/.local/share/fin/fin.sqlite3 ~/.local/share/fin/fin.sqlite3.old
+fin bank sync ~/Statements/boursobank --institution boursobank
+fin bank sync ~/Statements/wise --institution wise
+fin bank sync ~/Statements/bunq --institution bunq
+fin bank sync ~/Statements/revolut --institution revolut --account-id main
+fin accounts apply
+```
+
+Apply the account configuration after every inbox is synced: it refers to
+accounts from all banks.
 Review decisions contain database-specific event IDs, so inspect new IDs before
 reapplying decisions to a rebuilt database.
 
@@ -239,8 +252,8 @@ belongs to hledger; `fin` tracks import evidence, account identity and review st
 ## Library and dependency changes
 
 This build uses Base, decimal, Ptime and Bos, with no Core or Bigdecimal
-dependency. CLI commands, JSON formats, schema 10 databases, saved configuration
-and generated journals remain compatible; reimporting records is unnecessary.
+dependency. Saved configuration remains compatible; databases use schema 11 and
+are rebuilt from the original statements (see above).
 
 OCaml callers use `Quantity.t` (a `Decimal.t` alias) and `Date.t` (a `Ptime.date`
 alias). Use the `Quantity` functions for exact accounting sums and products:

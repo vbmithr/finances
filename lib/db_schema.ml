@@ -1,8 +1,9 @@
 open Base
 open Rel
 
-(** One current experimental baseline; older databases must be reimported. *)
-let version = 10
+(** One current experimental baseline; older databases must be reimported. Banks
+    have no tables of their own. *)
+let version = 11
 
 let timestamp = `Expr "strftime('%Y-%m-%dT%H:%M:%fZ','now')"
 
@@ -385,340 +386,19 @@ module Bank_account_mapping_changes = struct
   let definition = Sqlite_schema.table ~immutable:"mapping history is append-only" table
 end
 
-module Bank_csv_rows = struct
-  type t =
-    { id : int64
-    ; document_id : int64
-    ; row_number : int
-    ; institution : string
-    ; account_id : string
-    ; booked_on : string
-    ; value_on : string option
-    ; amount : string
-    ; description : string
-    ; suggested_description : string option
-    ; category : string option
-    ; parent_category : string option
-    ; comment : string option
-    ; account_label : string option
-    ; reported_balance : string option
-    ; pointage : string option
-    ; fields_json : string
-    }
-
-  let id = Col.make "id" Type.int64 (fun (r : t) -> r.id)
-  let document_id = Col.make "document_id" Type.int64 (fun (r : t) -> r.document_id)
-  let row_number = Col.make "row_number" Type.int (fun (r : t) -> r.row_number)
-  let institution = Col.make "institution" Type.text (fun (r : t) -> r.institution)
-  let account_id = Col.make "account_id" Type.text (fun (r : t) -> r.account_id)
-  let booked_on = Col.make "booked_on" Type.text (fun (r : t) -> r.booked_on)
-  let value_on = Col.make "value_on" Type.(option text) (fun (r : t) -> r.value_on)
-  let amount = Col.make "amount" Type.text (fun (r : t) -> r.amount)
-  let description = Col.make "description" Type.text (fun (r : t) -> r.description)
-
-  let suggested_description =
-    Col.make
-      "suggested_description"
-      Type.(option text)
-      (fun (r : t) -> r.suggested_description)
-  ;;
-
-  let category = Col.make "category" Type.(option text) (fun (r : t) -> r.category)
-
-  let parent_category =
-    Col.make "parent_category" Type.(option text) (fun (r : t) -> r.parent_category)
-  ;;
-
-  let comment = Col.make "comment" Type.(option text) (fun (r : t) -> r.comment)
-
-  let account_label =
-    Col.make "account_label" Type.(option text) (fun (r : t) -> r.account_label)
-  ;;
-
-  let reported_balance =
-    Col.make "reported_balance" Type.(option text) (fun (r : t) -> r.reported_balance)
-  ;;
-
-  let pointage = Col.make "pointage" Type.(option text) (fun (r : t) -> r.pointage)
-  let fields_json = Col.make "fields_json" Type.text (fun (r : t) -> r.fields_json)
-
-  let row =
-    Row.(
-      unit
-        (fun
-            id
-             document_id
-             row_number
-             institution
-             account_id
-             booked_on
-             value_on
-             amount
-             description
-             suggested_description
-             category
-             parent_category
-             comment
-             account_label
-             reported_balance
-             pointage
-             fields_json
-           ->
-           { id
-           ; document_id
-           ; row_number
-           ; institution
-           ; account_id
-           ; booked_on
-           ; value_on
-           ; amount
-           ; description
-           ; suggested_description
-           ; category
-           ; parent_category
-           ; comment
-           ; account_label
-           ; reported_balance
-           ; pointage
-           ; fields_json
-           })
-      * id
-      * document_id
-      * row_number
-      * institution
-      * account_id
-      * booked_on
-      * value_on
-      * amount
-      * description
-      * suggested_description
-      * category
-      * parent_category
-      * comment
-      * account_label
-      * reported_balance
-      * pointage
-      * fields_json)
-  ;;
-
-  let table =
-    Table.make
-      ~primary_key:(Table.Primary_key.make [ Col.Def id ])
-      ~unique_keys:[ Table.Unique_key.make [ Col.Def document_id; Col.Def row_number ] ]
-      ~foreign_keys:
-        [ Table.Foreign_key.make
-            ~cols:[ Col.Def document_id ]
-            ~parent:
-              (Table.Foreign_key.Table
-                 (Import_documents.table, [ Col.Def Import_documents.id ]))
-            ()
-        ]
-      ~indices:
-        [ Table.Index.make
-            ~name:"bank_csv_rows_account_date"
-            [ Col.Def institution; Col.Def account_id; Col.Def booked_on ]
-        ]
-      "bank_csv_rows"
-      row
-  ;;
-
-  let definition =
-    Sqlite_schema.table
-      ~checks:Sqlite_schema.Check.[ positive row_number ]
-      ~immutable:"CSV observations are immutable"
-      table
-  ;;
-end
-
-module Bank_csv_matches = struct
-  type t =
-    { row_id : int64
-    ; event_id : int64 option
-    ; state : string
-    ; reason : string
-    ; candidates_json : string
-    ; policy : string
-    ; updated_at : string
-    }
-
-  let row_id = Col.make "row_id" Type.int64 (fun (r : t) -> r.row_id)
-  let event_id = Col.make "event_id" Type.(option int64) (fun (r : t) -> r.event_id)
-  let state = Col.make "state" Type.text (fun (r : t) -> r.state)
-  let reason = Col.make "reason" Type.text (fun (r : t) -> r.reason)
-
-  let candidates_json =
-    Col.make "candidates_json" Type.text (fun (r : t) -> r.candidates_json)
-  ;;
-
-  let policy = Col.make "policy" Type.text (fun (r : t) -> r.policy)
-
-  let updated_at =
-    Col.make ~default:timestamp "updated_at" Type.text (fun (r : t) -> r.updated_at)
-  ;;
-
-  let row =
-    Row.(
-      unit (fun row_id event_id state reason candidates_json policy updated_at ->
-        { row_id; event_id; state; reason; candidates_json; policy; updated_at })
-      * row_id
-      * event_id
-      * state
-      * reason
-      * candidates_json
-      * policy
-      * updated_at)
-  ;;
-
-  let table =
-    Table.make
-      ~primary_key:(Table.Primary_key.make [ Col.Def row_id ])
-      ~foreign_keys:
-        [ Table.Foreign_key.make
-            ~cols:[ Col.Def event_id ]
-            ~parent:
-              (Table.Foreign_key.Table (Source_events.table, [ Col.Def Source_events.id ]))
-            ()
-        ; Table.Foreign_key.make
-            ~cols:[ Col.Def row_id ]
-            ~parent:
-              (Table.Foreign_key.Table (Bank_csv_rows.table, [ Col.Def Bank_csv_rows.id ]))
-            ()
-        ]
-      "bank_csv_matches"
-      row
-  ;;
-
-  let definition =
-    Sqlite_schema.table
-      ~checks:
-        Sqlite_schema.Check.
-          [ one_of state [ "matched"; "unmatched"; "ambiguous"; "conflict" ]
-          ; equivalent (one_of state [ "matched"; "conflict" ]) (present event_id)
-          ]
-      table
-  ;;
-end
-
-module Bank_csv_match_changes = struct
-  type t =
-    { id : int64
-    ; row_id : int64
-    ; previous_event_id : int64 option
-    ; event_id : int64 option
-    ; previous_state : string option
-    ; state : string
-    ; reason : string
-    ; candidates_json : string
-    ; policy : string
-    ; changed_at : string
-    }
-
-  let id = Col.make "id" Type.int64 (fun (r : t) -> r.id)
-  let row_id = Col.make "row_id" Type.int64 (fun (r : t) -> r.row_id)
-
-  let previous_event_id =
-    Col.make "previous_event_id" Type.(option int64) (fun (r : t) -> r.previous_event_id)
-  ;;
-
-  let event_id = Col.make "event_id" Type.(option int64) (fun (r : t) -> r.event_id)
-
-  let previous_state =
-    Col.make "previous_state" Type.(option text) (fun (r : t) -> r.previous_state)
-  ;;
-
-  let state = Col.make "state" Type.text (fun (r : t) -> r.state)
-  let reason = Col.make "reason" Type.text (fun (r : t) -> r.reason)
-
-  let candidates_json =
-    Col.make "candidates_json" Type.text (fun (r : t) -> r.candidates_json)
-  ;;
-
-  let policy = Col.make "policy" Type.text (fun (r : t) -> r.policy)
-
-  let changed_at =
-    Col.make ~default:timestamp "changed_at" Type.text (fun (r : t) -> r.changed_at)
-  ;;
-
-  let row =
-    Row.(
-      unit
-        (fun
-            id
-             row_id
-             previous_event_id
-             event_id
-             previous_state
-             state
-             reason
-             candidates_json
-             policy
-             changed_at
-           ->
-           { id
-           ; row_id
-           ; previous_event_id
-           ; event_id
-           ; previous_state
-           ; state
-           ; reason
-           ; candidates_json
-           ; policy
-           ; changed_at
-           })
-      * id
-      * row_id
-      * previous_event_id
-      * event_id
-      * previous_state
-      * state
-      * reason
-      * candidates_json
-      * policy
-      * changed_at)
-  ;;
-
-  let table =
-    Table.make
-      ~primary_key:(Table.Primary_key.make [ Col.Def id ])
-      ~foreign_keys:
-        [ Table.Foreign_key.make
-            ~cols:[ Col.Def event_id ]
-            ~parent:
-              (Table.Foreign_key.Table (Source_events.table, [ Col.Def Source_events.id ]))
-            ()
-        ; Table.Foreign_key.make
-            ~cols:[ Col.Def previous_event_id ]
-            ~parent:
-              (Table.Foreign_key.Table (Source_events.table, [ Col.Def Source_events.id ]))
-            ()
-        ; Table.Foreign_key.make
-            ~cols:[ Col.Def row_id ]
-            ~parent:
-              (Table.Foreign_key.Table (Bank_csv_rows.table, [ Col.Def Bank_csv_rows.id ]))
-            ()
-        ]
-      "bank_csv_match_changes"
-      row
-  ;;
-
-  let definition =
-    Sqlite_schema.table ~immutable:"CSV matching history is append-only" table
-  ;;
-end
-
-module Wise_statements = struct
+module Statements = struct
   type t =
     { id : int64
     ; document_id : int64
     ; ordinal : int
     ; institution : string
     ; source_account : string
-    ; statement_reference : string
+    ; reference : string option
     ; currency : string
     ; period_start : string
     ; period_end : string
-    ; opening_at : string
-    ; closing_at : string
+    ; opening_as_of : string
+    ; closing_as_of : string
     ; opening : string
     ; closing : string
     }
@@ -732,15 +412,12 @@ module Wise_statements = struct
     Col.make "source_account" Type.text (fun (r : t) -> r.source_account)
   ;;
 
-  let statement_reference =
-    Col.make "statement_reference" Type.text (fun (r : t) -> r.statement_reference)
-  ;;
-
+  let reference = Col.make "reference" Type.(option text) (fun (r : t) -> r.reference)
   let currency = Col.make "currency" Type.text (fun (r : t) -> r.currency)
   let period_start = Col.make "period_start" Type.text (fun (r : t) -> r.period_start)
   let period_end = Col.make "period_end" Type.text (fun (r : t) -> r.period_end)
-  let opening_at = Col.make "opening_at" Type.text (fun (r : t) -> r.opening_at)
-  let closing_at = Col.make "closing_at" Type.text (fun (r : t) -> r.closing_at)
+  let opening_as_of = Col.make "opening_as_of" Type.text (fun (r : t) -> r.opening_as_of)
+  let closing_as_of = Col.make "closing_as_of" Type.text (fun (r : t) -> r.closing_as_of)
   let opening = Col.make "opening" Type.text (fun (r : t) -> r.opening)
   let closing = Col.make "closing" Type.text (fun (r : t) -> r.closing)
 
@@ -753,12 +430,12 @@ module Wise_statements = struct
              ordinal
              institution
              source_account
-             statement_reference
+             reference
              currency
              period_start
              period_end
-             opening_at
-             closing_at
+             opening_as_of
+             closing_as_of
              opening
              closing
            ->
@@ -767,12 +444,12 @@ module Wise_statements = struct
            ; ordinal
            ; institution
            ; source_account
-           ; statement_reference
+           ; reference
            ; currency
            ; period_start
            ; period_end
-           ; opening_at
-           ; closing_at
+           ; opening_as_of
+           ; closing_as_of
            ; opening
            ; closing
            })
@@ -781,12 +458,12 @@ module Wise_statements = struct
       * ordinal
       * institution
       * source_account
-      * statement_reference
+      * reference
       * currency
       * period_start
       * period_end
-      * opening_at
-      * closing_at
+      * opening_as_of
+      * closing_as_of
       * opening
       * closing)
   ;;
@@ -803,14 +480,14 @@ module Wise_statements = struct
                  (Import_documents.table, [ Col.Def Import_documents.id ]))
             ()
         ]
-      "wise_statements"
+      "statements"
       row
   ;;
 
-  let definition = Sqlite_schema.table ~immutable:"Wise statements are immutable" table
+  let definition = Sqlite_schema.table ~immutable:"statements are immutable" table
 end
 
-module Wise_statement_events = struct
+module Statement_events = struct
   type t =
     { statement_id : int64
     ; event_id : int64
@@ -838,23 +515,23 @@ module Wise_statement_events = struct
         ; Table.Foreign_key.make
             ~cols:[ Col.Def statement_id ]
             ~parent:
-              (Table.Foreign_key.Table
-                 (Wise_statements.table, [ Col.Def Wise_statements.id ]))
+              (Table.Foreign_key.Table (Statements.table, [ Col.Def Statements.id ]))
             ()
         ]
-      "wise_statement_events"
+      "statement_events"
       row
   ;;
 
   let definition = Sqlite_schema.table table
 end
 
-module Wise_csv_rows = struct
+module Companion_rows = struct
   type t =
     { id : int64
     ; document_id : int64
     ; row_number : int
     ; institution : string
+    ; format : string
     ; fields_json : string
     }
 
@@ -862,16 +539,18 @@ module Wise_csv_rows = struct
   let document_id = Col.make "document_id" Type.int64 (fun (r : t) -> r.document_id)
   let row_number = Col.make "row_number" Type.int (fun (r : t) -> r.row_number)
   let institution = Col.make "institution" Type.text (fun (r : t) -> r.institution)
+  let format = Col.make "format" Type.text (fun (r : t) -> r.format)
   let fields_json = Col.make "fields_json" Type.text (fun (r : t) -> r.fields_json)
 
   let row =
     Row.(
-      unit (fun id document_id row_number institution fields_json ->
-        { id; document_id; row_number; institution; fields_json })
+      unit (fun id document_id row_number institution format fields_json ->
+        { id; document_id; row_number; institution; format; fields_json })
       * id
       * document_id
       * row_number
       * institution
+      * format
       * fields_json)
   ;;
 
@@ -887,19 +566,19 @@ module Wise_csv_rows = struct
                  (Import_documents.table, [ Col.Def Import_documents.id ]))
             ()
         ]
-      "wise_csv_rows"
+      "companion_rows"
       row
   ;;
 
   let definition =
     Sqlite_schema.table
       ~checks:Sqlite_schema.Check.[ positive row_number ]
-      ~immutable:"Wise CSV observations are immutable"
+      ~immutable:"companion observations are immutable"
       table
   ;;
 end
 
-module Wise_csv_matches = struct
+module Companion_matches = struct
   type t =
     { row_id : int64
     ; event_id : int64 option
@@ -950,10 +629,11 @@ module Wise_csv_matches = struct
         ; Table.Foreign_key.make
             ~cols:[ Col.Def row_id ]
             ~parent:
-              (Table.Foreign_key.Table (Wise_csv_rows.table, [ Col.Def Wise_csv_rows.id ]))
+              (Table.Foreign_key.Table
+                 (Companion_rows.table, [ Col.Def Companion_rows.id ]))
             ()
         ]
-      "wise_csv_matches"
+      "companion_matches"
       row
   ;;
 
@@ -968,7 +648,7 @@ module Wise_csv_matches = struct
   ;;
 end
 
-module Wise_csv_match_changes = struct
+module Companion_match_changes = struct
   type t =
     { id : int64
     ; row_id : int64
@@ -1063,15 +743,16 @@ module Wise_csv_match_changes = struct
         ; Table.Foreign_key.make
             ~cols:[ Col.Def row_id ]
             ~parent:
-              (Table.Foreign_key.Table (Wise_csv_rows.table, [ Col.Def Wise_csv_rows.id ]))
+              (Table.Foreign_key.Table
+                 (Companion_rows.table, [ Col.Def Companion_rows.id ]))
             ()
         ]
-      "wise_csv_match_changes"
+      "companion_match_changes"
       row
   ;;
 
   let definition =
-    Sqlite_schema.table ~immutable:"Wise matching history is append-only" table
+    Sqlite_schema.table ~immutable:"companion matching history is append-only" table
   ;;
 end
 
@@ -1164,13 +845,16 @@ module Bank_category_changes = struct
   let definition = Sqlite_schema.table ~immutable:"category history is append-only" table
 end
 
-module Bunq_day_inventories = struct
+module Day_inventories = struct
   type t =
-    { source_account : string
+    { institution : string
+    ; source_account : string
     ; booked_on : string
     ; signature : string
     ; document_id : int64
     }
+
+  let institution = Col.make "institution" Type.text (fun (r : t) -> r.institution)
 
   let source_account =
     Col.make "source_account" Type.text (fun (r : t) -> r.source_account)
@@ -1182,8 +866,9 @@ module Bunq_day_inventories = struct
 
   let row =
     Row.(
-      unit (fun source_account booked_on signature document_id ->
-        { source_account; booked_on; signature; document_id })
+      unit (fun institution source_account booked_on signature document_id ->
+        { institution; source_account; booked_on; signature; document_id })
+      * institution
       * source_account
       * booked_on
       * signature
@@ -1192,7 +877,9 @@ module Bunq_day_inventories = struct
 
   let table =
     Table.make
-      ~primary_key:(Table.Primary_key.make [ Col.Def source_account; Col.Def booked_on ])
+      ~primary_key:
+        (Table.Primary_key.make
+           [ Col.Def institution; Col.Def source_account; Col.Def booked_on ])
       ~foreign_keys:
         [ Table.Foreign_key.make
             ~cols:[ Col.Def document_id ]
@@ -1201,289 +888,11 @@ module Bunq_day_inventories = struct
                  (Import_documents.table, [ Col.Def Import_documents.id ]))
             ()
         ]
-      "bunq_day_inventories"
+      "day_inventories"
       row
   ;;
 
-  let definition =
-    Sqlite_schema.table ~immutable:"Bunq daily inventories are immutable" table
-  ;;
-end
-
-module Bunq_statements = struct
-  type t =
-    { document_id : int64
-    ; account_id : string
-    ; currency : string
-    ; opening_on : string
-    ; closing_on : string
-    ; opening : string
-    ; closing : string
-    }
-
-  let document_id = Col.make "document_id" Type.int64 (fun (r : t) -> r.document_id)
-  let account_id = Col.make "account_id" Type.text (fun (r : t) -> r.account_id)
-  let currency = Col.make "currency" Type.text (fun (r : t) -> r.currency)
-  let opening_on = Col.make "opening_on" Type.text (fun (r : t) -> r.opening_on)
-  let closing_on = Col.make "closing_on" Type.text (fun (r : t) -> r.closing_on)
-  let opening = Col.make "opening" Type.text (fun (r : t) -> r.opening)
-  let closing = Col.make "closing" Type.text (fun (r : t) -> r.closing)
-
-  let row =
-    Row.(
-      unit (fun document_id account_id currency opening_on closing_on opening closing ->
-        { document_id; account_id; currency; opening_on; closing_on; opening; closing })
-      * document_id
-      * account_id
-      * currency
-      * opening_on
-      * closing_on
-      * opening
-      * closing)
-  ;;
-
-  let table =
-    Table.make
-      ~primary_key:(Table.Primary_key.make [ Col.Def document_id ])
-      ~foreign_keys:
-        [ Table.Foreign_key.make
-            ~cols:[ Col.Def document_id ]
-            ~parent:
-              (Table.Foreign_key.Table
-                 (Import_documents.table, [ Col.Def Import_documents.id ]))
-            ()
-        ]
-      "bunq_statements"
-      row
-  ;;
-
-  let definition = Sqlite_schema.table ~immutable:"Bunq statements are immutable" table
-end
-
-module Bunq_csv_rows = struct
-  type t =
-    { id : int64
-    ; document_id : int64
-    ; row_number : int
-    ; institution : string
-    ; fields_json : string
-    }
-
-  let id = Col.make "id" Type.int64 (fun (r : t) -> r.id)
-  let document_id = Col.make "document_id" Type.int64 (fun (r : t) -> r.document_id)
-  let row_number = Col.make "row_number" Type.int (fun (r : t) -> r.row_number)
-  let institution = Col.make "institution" Type.text (fun (r : t) -> r.institution)
-  let fields_json = Col.make "fields_json" Type.text (fun (r : t) -> r.fields_json)
-
-  let row =
-    Row.(
-      unit (fun id document_id row_number institution fields_json ->
-        { id; document_id; row_number; institution; fields_json })
-      * id
-      * document_id
-      * row_number
-      * institution
-      * fields_json)
-  ;;
-
-  let table =
-    Table.make
-      ~primary_key:(Table.Primary_key.make [ Col.Def id ])
-      ~unique_keys:[ Table.Unique_key.make [ Col.Def document_id; Col.Def row_number ] ]
-      ~foreign_keys:
-        [ Table.Foreign_key.make
-            ~cols:[ Col.Def document_id ]
-            ~parent:
-              (Table.Foreign_key.Table
-                 (Import_documents.table, [ Col.Def Import_documents.id ]))
-            ()
-        ]
-      "bunq_csv_rows"
-      row
-  ;;
-
-  let definition =
-    Sqlite_schema.table
-      ~checks:Sqlite_schema.Check.[ positive row_number ]
-      ~immutable:"Bunq CSV observations are immutable"
-      table
-  ;;
-end
-
-module Bunq_csv_matches = struct
-  type t =
-    { row_id : int64
-    ; event_id : int64 option
-    ; state : string
-    ; reason : string
-    ; candidates_json : string
-    ; policy : string
-    ; updated_at : string
-    }
-
-  let row_id = Col.make "row_id" Type.int64 (fun (r : t) -> r.row_id)
-  let event_id = Col.make "event_id" Type.(option int64) (fun (r : t) -> r.event_id)
-  let state = Col.make "state" Type.text (fun (r : t) -> r.state)
-  let reason = Col.make "reason" Type.text (fun (r : t) -> r.reason)
-
-  let candidates_json =
-    Col.make "candidates_json" Type.text (fun (r : t) -> r.candidates_json)
-  ;;
-
-  let policy = Col.make "policy" Type.text (fun (r : t) -> r.policy)
-
-  let updated_at =
-    Col.make ~default:timestamp "updated_at" Type.text (fun (r : t) -> r.updated_at)
-  ;;
-
-  let row =
-    Row.(
-      unit (fun row_id event_id state reason candidates_json policy updated_at ->
-        { row_id; event_id; state; reason; candidates_json; policy; updated_at })
-      * row_id
-      * event_id
-      * state
-      * reason
-      * candidates_json
-      * policy
-      * updated_at)
-  ;;
-
-  let table =
-    Table.make
-      ~primary_key:(Table.Primary_key.make [ Col.Def row_id ])
-      ~foreign_keys:
-        [ Table.Foreign_key.make
-            ~cols:[ Col.Def event_id ]
-            ~parent:
-              (Table.Foreign_key.Table (Source_events.table, [ Col.Def Source_events.id ]))
-            ()
-        ; Table.Foreign_key.make
-            ~cols:[ Col.Def row_id ]
-            ~parent:
-              (Table.Foreign_key.Table (Bunq_csv_rows.table, [ Col.Def Bunq_csv_rows.id ]))
-            ()
-        ]
-      "bunq_csv_matches"
-      row
-  ;;
-
-  let definition =
-    Sqlite_schema.table
-      ~checks:
-        Sqlite_schema.Check.
-          [ one_of state [ "matched"; "unmatched"; "ambiguous"; "conflict" ]
-          ; equivalent (one_of state [ "matched"; "conflict" ]) (present event_id)
-          ]
-      table
-  ;;
-end
-
-module Bunq_csv_match_changes = struct
-  type t =
-    { id : int64
-    ; row_id : int64
-    ; previous_event_id : int64 option
-    ; event_id : int64 option
-    ; previous_state : string option
-    ; state : string
-    ; reason : string
-    ; candidates_json : string
-    ; policy : string
-    ; changed_at : string
-    }
-
-  let id = Col.make "id" Type.int64 (fun (r : t) -> r.id)
-  let row_id = Col.make "row_id" Type.int64 (fun (r : t) -> r.row_id)
-
-  let previous_event_id =
-    Col.make "previous_event_id" Type.(option int64) (fun (r : t) -> r.previous_event_id)
-  ;;
-
-  let event_id = Col.make "event_id" Type.(option int64) (fun (r : t) -> r.event_id)
-
-  let previous_state =
-    Col.make "previous_state" Type.(option text) (fun (r : t) -> r.previous_state)
-  ;;
-
-  let state = Col.make "state" Type.text (fun (r : t) -> r.state)
-  let reason = Col.make "reason" Type.text (fun (r : t) -> r.reason)
-
-  let candidates_json =
-    Col.make "candidates_json" Type.text (fun (r : t) -> r.candidates_json)
-  ;;
-
-  let policy = Col.make "policy" Type.text (fun (r : t) -> r.policy)
-
-  let changed_at =
-    Col.make ~default:timestamp "changed_at" Type.text (fun (r : t) -> r.changed_at)
-  ;;
-
-  let row =
-    Row.(
-      unit
-        (fun
-            id
-             row_id
-             previous_event_id
-             event_id
-             previous_state
-             state
-             reason
-             candidates_json
-             policy
-             changed_at
-           ->
-           { id
-           ; row_id
-           ; previous_event_id
-           ; event_id
-           ; previous_state
-           ; state
-           ; reason
-           ; candidates_json
-           ; policy
-           ; changed_at
-           })
-      * id
-      * row_id
-      * previous_event_id
-      * event_id
-      * previous_state
-      * state
-      * reason
-      * candidates_json
-      * policy
-      * changed_at)
-  ;;
-
-  let table =
-    Table.make
-      ~primary_key:(Table.Primary_key.make [ Col.Def id ])
-      ~foreign_keys:
-        [ Table.Foreign_key.make
-            ~cols:[ Col.Def event_id ]
-            ~parent:
-              (Table.Foreign_key.Table (Source_events.table, [ Col.Def Source_events.id ]))
-            ()
-        ; Table.Foreign_key.make
-            ~cols:[ Col.Def previous_event_id ]
-            ~parent:
-              (Table.Foreign_key.Table (Source_events.table, [ Col.Def Source_events.id ]))
-            ()
-        ; Table.Foreign_key.make
-            ~cols:[ Col.Def row_id ]
-            ~parent:
-              (Table.Foreign_key.Table (Bunq_csv_rows.table, [ Col.Def Bunq_csv_rows.id ]))
-            ()
-        ]
-      "bunq_csv_match_changes"
-      row
-  ;;
-
-  let definition =
-    Sqlite_schema.table ~immutable:"Bunq matching history is append-only" table
-  ;;
+  let definition = Sqlite_schema.table ~immutable:"daily inventories are immutable" table
 end
 
 module Bank_import_attempts = struct
@@ -1588,19 +997,6 @@ module Bank_import_attempts = struct
       ~checks:
         Sqlite_schema.Check.
           [ one_of
-              format
-              [ "ofx"
-              ; "csv"
-              ; "qif"
-              ; "spreadsheet"
-              ; "unknown"
-              ; "camt053"
-              ; "wise_csv"
-              ; "bunq_mt940"
-              ; "bunq_csv"
-              ; "revolut_csv"
-              ]
-          ; one_of
               outcome
               [ "imported"; "unchanged"; "rejected"; "unsupported"; "unreadable" ]
           ; nonnegative inserted_count
@@ -1612,20 +1008,20 @@ module Bank_import_attempts = struct
   ;;
 end
 
-module Revolut_documents = struct
+module Document_contexts = struct
   type t =
     { document_id : int64
-    ; account_id : string
+    ; context_json : string
     }
 
   let document_id = Col.make "document_id" Type.int64 (fun (r : t) -> r.document_id)
-  let account_id = Col.make "account_id" Type.text (fun (r : t) -> r.account_id)
+  let context_json = Col.make "context_json" Type.text (fun (r : t) -> r.context_json)
 
   let row =
     Row.(
-      unit (fun document_id account_id -> { document_id; account_id })
+      unit (fun document_id context_json -> { document_id; context_json })
       * document_id
-      * account_id)
+      * context_json)
   ;;
 
   let table =
@@ -1639,59 +1035,11 @@ module Revolut_documents = struct
                  (Import_documents.table, [ Col.Def Import_documents.id ]))
             ()
         ]
-      "revolut_documents"
+      "document_contexts"
       row
   ;;
 
-  let definition =
-    Sqlite_schema.table ~immutable:"Revolut document context is immutable" table
-  ;;
-end
-
-module Revolut_day_inventories = struct
-  type t =
-    { source_account : string
-    ; booked_on : string
-    ; signature : string
-    ; document_id : int64
-    }
-
-  let source_account =
-    Col.make "source_account" Type.text (fun (r : t) -> r.source_account)
-  ;;
-
-  let booked_on = Col.make "booked_on" Type.text (fun (r : t) -> r.booked_on)
-  let signature = Col.make "signature" Type.text (fun (r : t) -> r.signature)
-  let document_id = Col.make "document_id" Type.int64 (fun (r : t) -> r.document_id)
-
-  let row =
-    Row.(
-      unit (fun source_account booked_on signature document_id ->
-        { source_account; booked_on; signature; document_id })
-      * source_account
-      * booked_on
-      * signature
-      * document_id)
-  ;;
-
-  let table =
-    Table.make
-      ~primary_key:(Table.Primary_key.make [ Col.Def source_account; Col.Def booked_on ])
-      ~foreign_keys:
-        [ Table.Foreign_key.make
-            ~cols:[ Col.Def document_id ]
-            ~parent:
-              (Table.Foreign_key.Table
-                 (Import_documents.table, [ Col.Def Import_documents.id ]))
-            ()
-        ]
-      "revolut_day_inventories"
-      row
-  ;;
-
-  let definition =
-    Sqlite_schema.table ~immutable:"Revolut day inventories are immutable" table
-  ;;
+  let definition = Sqlite_schema.table ~immutable:"document contexts are immutable" table
 end
 
 module Bank_transfer_decisions = struct
@@ -2092,24 +1440,16 @@ let definitions =
   ; Import_document_events.definition
   ; Bank_account_mappings.definition
   ; Bank_account_mapping_changes.definition
-  ; Bank_csv_rows.definition
-  ; Bank_csv_matches.definition
-  ; Bank_csv_match_changes.definition
-  ; Wise_statements.definition
-  ; Wise_statement_events.definition
-  ; Wise_csv_rows.definition
-  ; Wise_csv_matches.definition
-  ; Wise_csv_match_changes.definition
+  ; Statements.definition
+  ; Statement_events.definition
+  ; Companion_rows.definition
+  ; Companion_matches.definition
+  ; Companion_match_changes.definition
   ; Bank_categories.definition
   ; Bank_category_changes.definition
-  ; Bunq_day_inventories.definition
-  ; Bunq_statements.definition
-  ; Bunq_csv_rows.definition
-  ; Bunq_csv_matches.definition
-  ; Bunq_csv_match_changes.definition
+  ; Day_inventories.definition
   ; Bank_import_attempts.definition
-  ; Revolut_documents.definition
-  ; Revolut_day_inventories.definition
+  ; Document_contexts.definition
   ; Bank_transfer_decisions.definition
   ; Bank_transfer_memberships.definition
   ; Bank_transfer_changes.definition

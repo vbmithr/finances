@@ -68,13 +68,16 @@ let workflow () =
     accepted (import db "extensionless" (mt ()));
     check "matched all occurrences" 4 (ok (Store.match_bunq_csv db)).matched;
     check "generated movements" 4 (ok (Store.project_bank db)).inserted;
-    List.iter
-      (ok (Store.bunq_reconciliations db))
-      ~f:(fun r ->
-        Alcotest.(check bool)
-          "persisted statement reconciles"
-          true
-          (Quantity.is_zero r.Store.difference));
+    let statements = ok (Store.statement_reconciliations ~institution:"bunq" db) in
+    Alcotest.(check (list int))
+      "one statement listing every movement"
+      [ 4 ]
+      (List.map statements ~f:(fun r -> r.Store.entries));
+    List.iter statements ~f:(fun r ->
+      Alcotest.(check bool)
+        "persisted statement reconciles"
+        true
+        (Quantity.is_zero r.Store.difference));
     let journal = ok (Finances_hledger.export db) in
     Alcotest.(check bool)
       "CSV provenance"
@@ -136,7 +139,7 @@ let conflicts () =
     check
       "statement observations unchanged"
       1
-      (List.length (ok (Store.bunq_reconciliations db)));
+      (List.length (ok (Store.statement_reconciliations ~institution:"bunq" db)));
     rejected (import ~institution:"boursobank" db "wrong.mt940" (mt ()));
     rejected (import ~institution:"wise" db "wrong.csv" (csv ())))
 ;;

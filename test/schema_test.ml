@@ -44,10 +44,10 @@ let initialize () =
          check "fresh database empty" 0 (List.length (ok (Store.events db)));
          Ok ()));
     raw path (fun db ->
-      check "latest baseline" 10 (scalar db "PRAGMA user_version");
+      check "latest baseline" 11 (scalar db "PRAGMA user_version");
       check
         "all tables are strict"
-        32
+        24
         (scalar
            db
            "SELECT count(*) FROM pragma_table_list WHERE schema='main' AND name NOT LIKE \
@@ -55,7 +55,7 @@ let initialize () =
       List.iter
         [ "source_events"
         ; "bank_categories"
-        ; "bunq_statements"
+        ; "statements"
         ; "bank_transfer_decisions"
         ; "bank_account_identities"
         ; "bank_account_settlements"
@@ -105,16 +105,18 @@ let sqlite_constraints () =
         "INSERT INTO import_documents(institution,sha256,contents) VALUES \
          ('bank','digest',X'00')";
       rejected
-        "INSERT INTO wise_csv_rows(document_id,row_number,institution,fields_json) \
-         VALUES (1,0,'bank','{}')";
+        "INSERT INTO \
+         companion_rows(document_id,row_number,institution,format,fields_json) VALUES \
+         (1,0,'bank','csv','{}')";
       sql
         db
-        "INSERT INTO wise_csv_rows(document_id,row_number,institution,fields_json) \
-         VALUES (1,1,'bank','{}')";
+        "INSERT INTO \
+         companion_rows(document_id,row_number,institution,format,fields_json) VALUES \
+         (1,1,'bank','csv','{}')";
       let matching state event =
         Printf.sprintf
           "INSERT INTO \
-           wise_csv_matches(row_id,event_id,state,reason,candidates_json,policy) VALUES \
+           companion_matches(row_id,event_id,state,reason,candidates_json,policy) VALUES \
            (1,%s,'%s','test','[]','test')"
           event
           state
@@ -142,7 +144,8 @@ let sqlite_constraints () =
           outcome
           inserted
       in
-      rejected (attempt "invalid" "imported" "1" 0);
+      (* Formats belong to adapters, so the schema does not list them. *)
+      sql db (attempt "adapter-defined" "imported" "1" 0);
       rejected (attempt "csv" "invalid" "1" 0);
       rejected (attempt "csv" "imported" "NULL" 0);
       rejected (attempt "csv" "unreadable" "1" 0);
@@ -358,6 +361,34 @@ let persistent_state () =
             (Result.is_error (Rel_sqlite3.exec_sql db ("DELETE FROM " ^ table))))))
 ;;
 
+(* Banks have no tables or columns of their own: adding one never adds DDL. *)
+let no_bank_schema () =
+  workspace (fun path ->
+    ok (Store.with_open ~registry:Builtin.registry path (fun _ -> Ok ()));
+    raw path (fun db ->
+      let names =
+        Rel_sqlite3.fold
+          db
+          (Rel_sql.Stmt.v
+             "SELECT m.name || '.' || p.name AS value FROM sqlite_master m JOIN \
+              pragma_table_info(m.name) p WHERE m.type='table' UNION SELECT name FROM \
+              sqlite_master"
+             ~rev_args:[]
+             ~result:Row.(t1 (text "value")))
+          (fun name acc -> name :: acc)
+          []
+        |> Rel_sqlite3.string_error
+        |> Result.ok_or_failwith
+      in
+      Alcotest.(check bool) "schema listed" true (List.length names > 24);
+      let offending =
+        List.filter names ~f:(fun name ->
+          List.exists (Registry.institutions Builtin.registry) ~f:(fun institution ->
+            String.is_substring (String.lowercase name) ~substring:institution))
+      in
+      Alcotest.(check (list string)) "no institution-named table or column" [] offending))
+;;
+
 let () =
   Alcotest.run
     "Latest experimental schema"
@@ -370,6 +401,7 @@ let () =
           ; "reject old without alteration", rejects_old
           ; "atomic initialization rollback", initialization_rollback
           ; "reopen preserves reviewed state and audit", persistent_state
+          ; "no bank-specific tables or columns", no_bank_schema
           ]
           ~f:(fun (name, f) -> Alcotest.test_case name `Quick f) )
     ]

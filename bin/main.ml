@@ -648,28 +648,33 @@ let match_csv_cmd =
     Term.(const match_csv $ database)
 ;;
 
+let statement_json (s : Store.statement_reconciliation) =
+  `Assoc
+    [ "statement_id", `Intlit (Int64.to_string s.statement_id)
+    ; "document_id", `Intlit (Int64.to_string s.document_id)
+    ; "institution", `String s.institution
+    ; "source_account", `String s.source_account
+    ; "reference", Option.value_map s.reference ~default:`Null ~f:(fun r -> `String r)
+    ; "currency", `String s.currency
+    ; "period_start", `String s.period_start
+    ; "period_end", `String s.period_end
+    ; "opening", `String (Quantity.to_string s.opening)
+    ; "closing", `String (Quantity.to_string s.closing)
+    ; "movements", `String (Quantity.to_string s.movements)
+    ; "entries", `Int s.entries
+    ; "difference", `String (Quantity.to_string s.difference)
+    ; "reconciled", `Bool (Quantity.is_zero s.difference)
+    ]
+;;
+
 let wise_status database =
   with_database database (fun db ->
-    let%bind statements = Store.wise_reconciliations db in
+    let%bind statements = Store.statement_reconciliations ~institution:"wise" db in
     let%bind rows = Store.wise_csv_observations db in
     let string s = `String s in
     let json =
       `Assoc
-        [ ( "statements"
-          , `List
-              (List.map statements ~f:(fun (s : Store.wise_reconciliation) ->
-                 `Assoc
-                   [ "statement_id", `Intlit (Int64.to_string s.statement_id)
-                   ; "document_id", `Intlit (Int64.to_string s.document_id)
-                   ; "currency", string s.currency
-                   ; "source_account", string s.source_account
-                   ; "opening", string (Quantity.to_string s.opening)
-                   ; "closing", string (Quantity.to_string s.closing)
-                   ; "movements", string (Quantity.to_string s.movements)
-                   ; "entries", `Int s.entries
-                   ; "difference", string (Quantity.to_string s.difference)
-                   ; "reconciled", `Bool (Quantity.is_zero s.difference)
-                   ])) )
+        [ "statements", `List (List.map statements ~f:statement_json)
         ; ( "csv_rows"
           , `List
               (List.map rows ~f:(fun (r : Store.wise_csv_observation) ->
@@ -792,21 +797,11 @@ let category_history_cmd =
 
 let bunq_status database =
   with_database database (fun db ->
-    let%bind statements = Store.bunq_reconciliations db in
+    let%bind statements = Store.statement_reconciliations ~institution:"bunq" db in
     let%bind rows = Store.bunq_csv_observations db in
     let json =
       `Assoc
-        [ ( "statements"
-          , `List
-              (List.map statements ~f:(fun (s : Store.bunq_reconciliation) ->
-                 `Assoc
-                   [ "document_id", `Intlit (Int64.to_string s.document_id)
-                   ; "account_id", `String s.account_id
-                   ; "currency", `String s.currency
-                   ; "entries", `Int s.entries
-                   ; "difference", `String (Quantity.to_string s.difference)
-                   ; "reconciled", `Bool (Quantity.is_zero s.difference)
-                   ])) )
+        [ "statements", `List (List.map statements ~f:statement_json)
         ; ( "csv_rows"
           , `List
               (List.map rows ~f:(fun (r : Store.bunq_csv_observation) ->

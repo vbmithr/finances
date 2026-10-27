@@ -435,405 +435,135 @@ let accepted_document =
       (int64 @-> int64 @-> ret Row.(t1 (bool "accepted"))))
 ;;
 
-let insert_csv_row =
-  Rel_sql.Stmt.(
-    func
-      "INSERT INTO \
-       bank_csv_rows(document_id,row_number,institution,account_id,booked_on,value_on,amount,description,suggested_description,category,parent_category,comment,account_label,reported_balance,pointage,fields_json) \
-       VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?) ON CONFLICT(document_id,row_number) DO \
-       NOTHING"
-      (int64
-       @-> int
-       @-> text
-       @-> text
-       @-> text
-       @-> option text
-       @-> text
-       @-> text
-       @-> option text
-       @-> option text
-       @-> option text
-       @-> option text
-       @-> option text
-       @-> option text
-       @-> option text
-       @-> text
-       @-> unit))
+(* Companion observations keep their raw fields; the adapter's parser rebuilds
+   typed rows when matching. Replaying a document must find identical fields. *)
+let encode_fields fields =
+  Yojson.Safe.to_string (`List (List.map fields ~f:(fun s -> `String s)))
 ;;
 
-let existing_csv_row =
-  let open Db_schema.Bank_csv_rows in
-  select_by_pair table document_id row_number fields_json
+let decode_fields text =
+  Or_error.try_with (fun () ->
+    match Yojson.Safe.from_string text with
+    | `List fields ->
+      List.map fields ~f:(function
+        | `String s -> s
+        | _ -> failwith "invalid companion field")
+    | _ -> failwith "invalid stored companion row")
 ;;
 
-let import_csv_rows db ~institution ~contents rows =
+let store_companion_rows db ~institution ~format ~contents rows =
   let* document_id = archive_document db ~institution ~contents in
-  let rec insert inserted existing = function
-    | [] -> Ok (document_id, inserted, existing)
-    | (row : Bank_csv.row) :: rest ->
-      let fields =
-        Yojson.Safe.to_string (`List (List.map row.fields ~f:(fun s -> `String s)))
-      in
-      let* previous =
-        db_result (Db.first db.conn (existing_csv_row document_id row.row_number))
-      in
+  let find =
+    let open Db_schema.Companion_rows in
+    select_by_pair table document_id row_number fields_json
+  in
+  let insert =
+    let open Db_schema.Companion_rows in
+    let insert = Rel_sql.insert_into_cols Db.dialect table in
+    fun v_document_id v_row_number v_institution v_format v_fields ->
+      insert
+        Col.
+          [ Value (document_id, v_document_id)
+          ; Value (row_number, v_row_number)
+          ; Value (institution, v_institution)
+          ; Value (format, v_format)
+          ; Value (fields_json, v_fields)
+          ]
+  in
+  let rec store added reused = function
+    | [] -> Ok (document_id, added, reused)
+    | (row_number, fields) :: rest ->
+      let fields = encode_fields fields in
+      let* previous = db_result (Db.first db.conn (find document_id row_number)) in
       (match previous with
-       | Some previous ->
-         if String.equal fields previous
-         then insert inserted (existing + 1) rest
-         else Or_error.error_string "stored CSV observation differs from the archived row"
+       | Some previous when String.equal previous fields -> store added (reused + 1) rest
+       | Some _ ->
+         Or_error.error_string
+           "stored companion observation differs from the archived row"
        | None ->
          let* () =
            db_result
-             (Db.exec
-                db.conn
-                (insert_csv_row
-                   document_id
-                   row.row_number
-                   institution
-                   row.account_id
-                   (Date.to_string row.booked_on)
-                   (Option.map row.value_on ~f:Date.to_string)
-                   (Quantity.to_string row.amount)
-                   row.description
-                   row.suggested_description
-                   row.category
-                   row.parent_category
-                   row.comment
-                   row.account_label
-                   (Option.map row.reported_balance ~f:Quantity.to_string)
-                   row.pointage
-                   fields))
+             (Db.exec db.conn (insert document_id row_number institution format fields))
          in
-         insert (inserted + 1) existing rest)
+         store (added + 1) reused rest)
   in
-  insert 0 0 rows
+  store 0 0 rows
 ;;
 
-let import_wise db ~institution ~contents (document : Wise_camt.t) =
-  let* document_id = archive_document db ~institution ~contents in
-  let inserted = ref 0
-  and existing = ref 0 in
-  let* _ =
-    traverse
-      (fun (ordinal, (statement : Wise_camt.statement)) ->
-         let insert =
-           Rel_sql.Stmt.(
-             func
-               "INSERT INTO \
-                wise_statements(document_id,ordinal,institution,source_account,statement_reference,currency,period_start,period_end,opening_at,closing_at,opening,closing) \
-                VALUES (?,?,?,?,?,?,?,?,?,?,?,?) ON CONFLICT(document_id,ordinal) DO \
-                NOTHING"
-               (int64
-                @-> int
-                @-> text
-                @-> text
-                @-> text
-                @-> text
-                @-> text
-                @-> text
-                @-> text
-                @-> text
-                @-> text
-                @-> text
-                @-> unit))
-         in
-         let* () =
-           db_result
-             (Db.exec
-                db.conn
-                (insert
-                   document_id
-                   ordinal
-                   institution
-                   (Wise_camt.account_identity statement.account)
-                   statement.statement_id
-                   statement.account.currency
-                   statement.period_start
-                   statement.period_end
-                   statement.opening_at
-                   statement.closing_at
-                   (Quantity.to_string statement.opening)
-                   (Quantity.to_string statement.closing)))
-         in
-         let find =
-           let open Db_schema.Wise_statements in
-           select_by_pair table document_id ordinal id
-         in
-         let* statement_id = db_result (Db.first db.conn (find document_id ordinal)) in
-         let* statement_id =
-           Or_error.of_option
-             statement_id
-             ~error:(Error.of_string "missing Wise statement")
-         in
-         let* _ =
-           traverse
-             (fun (trn : Wise_camt.transaction) ->
-                let* event =
-                  Source_event.create
-                    ~venue:institution
-                    ~account:(Wise_camt.account_identity trn.account)
-                    ~kind:"wise-transaction"
-                    ~source_id:trn.source_id
-                    ~occurred_at_ms:trn.occurred_at_ms
-                    ~payload:trn.payload
-                in
-                let* result = ingest_in_transaction db event in
-                let id =
-                  match result with
-                  | Inserted id ->
-                    Int.incr inserted;
-                    id
-                  | Existing id ->
-                    Int.incr existing;
-                    id
-                in
-                let* () = db_result (Db.exec db.conn (link_document document_id id)) in
-                let link =
-                  Rel_sql.Stmt.(
-                    func
-                      "INSERT INTO wise_statement_events(statement_id,event_id) VALUES \
-                       (?,?) ON CONFLICT DO NOTHING"
-                      (int64 @-> int64 @-> unit))
-                in
-                db_result (Db.exec db.conn (link statement_id id)))
-             statement.transactions
-         in
-         Ok ())
-      (List.mapi document.statements ~f:(fun i x -> i, x))
-  in
-  Ok
-    { document_id
-    ; statements = List.length document.statements
-    ; inserted = !inserted
-    ; existing = !existing
-    }
-;;
+(* A bank-stated period and balances, in the bank's own date or timestamp text. *)
+type statement =
+  { institution : string
+  ; source_account : string
+  ; reference : string option
+  ; currency : string
+  ; period_start : string
+  ; period_end : string
+  ; opening_as_of : string
+  ; closing_as_of : string
+  ; opening : Quantity.t
+  ; closing : Quantity.t
+  }
 
-let import_wise_csv db ~institution ~contents rows =
-  let* document_id = archive_document db ~institution ~contents in
+let store_statement db ~document_id ~ordinal (s : statement) =
   let insert =
     Rel_sql.Stmt.(
       func
-        "INSERT INTO wise_csv_rows(document_id,row_number,institution,fields_json) \
-         VALUES (?,?,?,?) ON CONFLICT(document_id,row_number) DO NOTHING"
-        (int64 @-> int @-> text @-> text @-> unit))
-  in
-  let* _ =
-    traverse
-      (fun (row : Wise_csv.row) ->
-         db_result
-           (Db.exec
-              db.conn
-              (insert
-                 document_id
-                 row.row_number
-                 institution
-                 (Yojson.Safe.to_string
-                    (`List (List.map row.fields ~f:(fun x -> `String x)))))))
-      rows
-  in
-  Ok document_id
-;;
-
-let import_bunq db ~institution ~contents (document : Bunq_mt940.t) =
-  let* document_id = archive_document db ~institution ~contents in
-  let days = Hashtbl.create (module String) in
-  List.iter document.transactions ~f:(fun tx ->
-    Hashtbl.add_multi days ~key:(Date.to_string tx.Bunq_transaction.booked_on) ~data:tx);
-  let find =
-    let open Db_schema.Bunq_day_inventories in
-    select_by_pair table source_account booked_on signature
-  in
-  let insert_day =
-    let open Db_schema.Bunq_day_inventories in
-    let insert = Rel_sql.insert_into_cols Db.dialect table in
-    fun v_source_account v_booked_on v_signature v_document_id ->
-      insert
-        Col.
-          [ Value (source_account, v_source_account)
-          ; Value (booked_on, v_booked_on)
-          ; Value (signature, v_signature)
-          ; Value (document_id, v_document_id)
-          ]
-  in
-  let* _ =
-    traverse
-      (fun (day, transactions) ->
-         let account = Bunq_transaction.account_identity (List.hd_exn transactions) in
-         let payloads =
-           List.map transactions ~f:(fun tx -> tx.Bunq_transaction.payload)
-           |> List.sort ~compare:String.compare
-         in
-         let signature =
-           Yojson.Safe.to_string (`List (List.map payloads ~f:(fun s -> `String s)))
-           |> Digestif.SHA256.digest_string
-           |> Digestif.SHA256.to_hex
-         in
-         let* previous = db_result (Db.first db.conn (find account day)) in
-         match previous with
-         | Some old when not (String.equal old signature) ->
-           Or_error.errorf
-             "Bunq day %s differs from imported evidence; partial-day exports or \
-              corrections need review"
-             day
-         | Some _ -> Ok ()
-         | None ->
-           db_result (Db.exec db.conn (insert_day account day signature document_id)))
-      (Hashtbl.to_alist days)
-  in
-  let rec ingest inserted existing = function
-    | [] -> Ok { document_id; statements = 1; inserted; existing }
-    | tx :: rest ->
-      let* event =
-        Source_event.create_dated
-          ~venue:institution
-          ~account:(Bunq_transaction.account_identity tx)
-          ~kind:"bunq-transaction"
-          ~source_id:tx.source_id
-          ~occurred_on:tx.booked_on
-          ~payload:tx.payload
-      in
-      let* result = ingest_in_transaction db event in
-      let id, inserted, existing =
-        match result with
-        | Inserted id -> id, inserted + 1, existing
-        | Existing id -> id, inserted, existing + 1
-      in
-      let* () = db_result (Db.exec db.conn (link_document document_id id)) in
-      ingest inserted existing rest
-  in
-  let* result = ingest 0 0 document.transactions in
-  let stmt =
-    Rel_sql.Stmt.(
-      func
         "INSERT INTO \
-         bunq_statements(document_id,account_id,currency,opening_on,closing_on,opening,closing) \
-         VALUES (?,?,?,?,?,?,?) ON CONFLICT(document_id) DO NOTHING"
-        (int64 @-> text @-> text @-> text @-> text @-> text @-> text @-> unit))
+         statements(document_id,ordinal,institution,source_account,reference,currency,period_start,period_end,opening_as_of,closing_as_of,opening,closing) \
+         VALUES (?,?,?,?,?,?,?,?,?,?,?,?) ON CONFLICT(document_id,ordinal) DO NOTHING"
+        (int64
+         @-> int
+         @-> text
+         @-> text
+         @-> option text
+         @-> text
+         @-> text
+         @-> text
+         @-> text
+         @-> text
+         @-> text
+         @-> text
+         @-> unit))
   in
   let* () =
     db_result
       (Db.exec
          db.conn
-         (stmt
+         (insert
             document_id
-            document.account_id
-            document.currency
-            (Date.to_string document.opening_on)
-            (Date.to_string document.closing_on)
-            (Quantity.to_string document.opening)
-            (Quantity.to_string document.closing)))
+            ordinal
+            s.institution
+            s.source_account
+            s.reference
+            s.currency
+            s.period_start
+            s.period_end
+            s.opening_as_of
+            s.closing_as_of
+            (Quantity.to_string s.opening)
+            (Quantity.to_string s.closing)))
   in
-  Ok result
-;;
-
-let import_bunq_csv db ~institution ~contents rows =
-  let* document_id = archive_document db ~institution ~contents in
-  let insert =
-    Rel_sql.Stmt.(
-      func
-        "INSERT INTO bunq_csv_rows(document_id,row_number,institution,fields_json) \
-         VALUES (?,?,?,?) ON CONFLICT(document_id,row_number) DO NOTHING"
-        (int64 @-> int @-> text @-> text @-> unit))
-  in
-  let* _ =
-    traverse
-      (fun (row : Bunq_csv.row) ->
-         db_result
-           (Db.exec
-              db.conn
-              (insert
-                 document_id
-                 row.row_number
-                 institution
-                 (Yojson.Safe.to_string
-                    (`List (List.map row.fields ~f:(fun s -> `String s)))))))
-      rows
-  in
-  Ok document_id
-;;
-
-let import_revolut db ~institution ~account_id (document : Revolut_csv.t) =
-  let* document_id = archive_document db ~institution ~contents:document.contents in
-  let context =
-    let open Db_schema.Revolut_documents in
-    select_by_column table document_id account_id
-  in
-  let* previous = db_result (Db.first db.conn (context document_id)) in
-  let* () =
-    match previous with
-    | Some old when not (String.equal old account_id) ->
-      Or_error.error_string "Revolut document already belongs to a different account_id"
-    | Some _ -> Ok ()
-    | None ->
-      let insert =
-        let open Db_schema.Revolut_documents in
-        let insert = Rel_sql.insert_into_cols Db.dialect table in
-        fun v_document_id v_account_id ->
-          insert
-            Col.[ Value (document_id, v_document_id); Value (account_id, v_account_id) ]
-      in
-      db_result (Db.exec db.conn (insert document_id account_id))
-  in
-  let days = Hashtbl.Poly.create () in
-  List.iter document.transactions ~f:(fun tx ->
-    Hashtbl.add_multi
-      days
-      ~key:(Revolut_csv.account_identity tx, Date.to_string tx.booked_on)
-      ~data:tx);
   let find =
-    let open Db_schema.Revolut_day_inventories in
-    select_by_pair table source_account booked_on signature
+    let open Db_schema.Statements in
+    select_by_pair table document_id ordinal id
   in
-  let insert_day =
-    let open Db_schema.Revolut_day_inventories in
-    let insert = Rel_sql.insert_into_cols Db.dialect table in
-    fun v_source_account v_booked_on v_signature v_document_id ->
-      insert
-        Col.
-          [ Value (source_account, v_source_account)
-          ; Value (booked_on, v_booked_on)
-          ; Value (signature, v_signature)
-          ; Value (document_id, v_document_id)
-          ]
-  in
-  let* _ =
-    traverse
-      (fun ((account, day), transactions) ->
-         let payloads =
-           List.map transactions ~f:(fun tx -> tx.Revolut_csv.payload)
-           |> List.sort ~compare:String.compare
-         in
-         let signature =
-           Yojson.Safe.to_string (`List (List.map payloads ~f:(fun s -> `String s)))
-           |> Digestif.SHA256.digest_string
-           |> Digestif.SHA256.to_hex
-         in
-         let* previous = db_result (Db.first db.conn (find account day)) in
-         match previous with
-         | Some old when not (String.equal old signature) ->
-           Or_error.errorf
-             "Revolut day %s differs from imported evidence; partial-day exports or \
-              corrections need review"
-             day
-         | Some _ -> Ok ()
-         | None ->
-           db_result (Db.exec db.conn (insert_day account day signature document_id)))
-      (Hashtbl.to_alist days)
-  in
+  let* id = db_result (Db.first db.conn (find document_id ordinal)) in
+  Or_error.of_option id ~error:(Error.of_string "missing statement")
+;;
+
+let link_statement =
+  Rel_sql.Stmt.(
+    func
+      "INSERT INTO statement_events(statement_id,event_id) VALUES (?,?) ON CONFLICT DO \
+       NOTHING"
+      (int64 @-> int64 @-> unit))
+;;
+
+(* Ingest events from one document, linking each to it and to its statement. *)
+let ingest_linked ?statement_id db ~document_id events =
   let rec ingest inserted existing = function
-    | [] -> Ok { document_id; statements = 1; inserted; existing }
-    | tx :: rest ->
-      let* event =
-        Source_event.create_dated
-          ~venue:institution
-          ~account:(Revolut_csv.account_identity tx)
-          ~kind:"revolut-transaction"
-          ~source_id:tx.source_id
-          ~occurred_on:tx.booked_on
-          ~payload:tx.payload
-      in
+    | [] -> Ok (inserted, existing)
+    | event :: rest ->
       let* result = ingest_in_transaction db event in
       let id, inserted, existing =
         match result with
@@ -841,9 +571,251 @@ let import_revolut db ~institution ~account_id (document : Revolut_csv.t) =
         | Existing id -> id, inserted, existing + 1
       in
       let* () = db_result (Db.exec db.conn (link_document document_id id)) in
+      let* () =
+        match statement_id with
+        | None -> Ok ()
+        | Some statement_id ->
+          db_result (Db.exec db.conn (link_statement statement_id id))
+      in
       ingest inserted existing rest
   in
-  ingest 0 0 document.transactions
+  ingest 0 0 events
+;;
+
+(* Without bank IDs, a day's sorted movement payloads must agree across
+   documents; a partial or corrected day is refused for review. *)
+let day_groups ~account ~day ~payload transactions =
+  let groups = Hashtbl.Poly.create () in
+  List.iter transactions ~f:(fun tx ->
+    Hashtbl.add_multi groups ~key:(account tx, Date.to_string (day tx)) ~data:(payload tx));
+  Hashtbl.to_alist groups
+;;
+
+let check_day_inventories db ~institution ~document_id groups =
+  let find =
+    Rel_sql.Stmt.(
+      func
+        "SELECT signature FROM day_inventories WHERE institution=? AND source_account=? \
+         AND booked_on=?"
+        (text @-> text @-> text @-> ret Row.(t1 (text "signature"))))
+  in
+  let insert =
+    let open Db_schema.Day_inventories in
+    let insert = Rel_sql.insert_into_cols Db.dialect table in
+    fun v_institution v_source_account v_booked_on v_signature v_document_id ->
+      insert
+        Col.
+          [ Value (institution, v_institution)
+          ; Value (source_account, v_source_account)
+          ; Value (booked_on, v_booked_on)
+          ; Value (signature, v_signature)
+          ; Value (document_id, v_document_id)
+          ]
+  in
+  let* _ =
+    traverse
+      (fun ((account, day), payloads) ->
+         let signature =
+           encode_fields (List.sort payloads ~compare:String.compare)
+           |> Digestif.SHA256.digest_string
+           |> Digestif.SHA256.to_hex
+         in
+         let* previous = db_result (Db.first db.conn (find institution account day)) in
+         match previous with
+         | Some old when not (String.equal old signature) ->
+           Or_error.errorf
+             "%s day %s differs from imported evidence; partial-day exports or \
+              corrections need review"
+             institution
+             day
+         | Some _ -> Ok ()
+         | None ->
+           db_result
+             (Db.exec db.conn (insert institution account day signature document_id)))
+      groups
+  in
+  Ok ()
+;;
+
+(* Hints a document was imported with (Revolut's account label) are part of
+   its evidence: the same bytes cannot later mean another account. *)
+let bind_document_context db ~document_id context =
+  let find =
+    let open Db_schema.Document_contexts in
+    select_by_column table document_id context_json
+  in
+  let* previous = db_result (Db.first db.conn (find document_id)) in
+  match previous with
+  | Some old when not (String.equal old context) ->
+    Or_error.error_string "document was already imported with a different context"
+  | Some _ -> Ok ()
+  | None ->
+    let insert =
+      let open Db_schema.Document_contexts in
+      let insert = Rel_sql.insert_into_cols Db.dialect table in
+      fun v_document_id v_context ->
+        insert Col.[ Value (document_id, v_document_id); Value (context_json, v_context) ]
+    in
+    db_result (Db.exec db.conn (insert document_id context))
+;;
+
+let import_csv_rows db ~institution ~contents rows =
+  store_companion_rows
+    db
+    ~institution
+    ~format:(Bank_import.format_name Csv)
+    ~contents
+    (List.map rows ~f:(fun (row : Bank_csv.row) -> row.row_number, row.fields))
+;;
+
+let import_wise db ~institution ~contents (document : Wise_camt.t) =
+  let* document_id = archive_document db ~institution ~contents in
+  let* counts =
+    traverse
+      (fun (ordinal, (statement : Wise_camt.statement)) ->
+         let* statement_id =
+           store_statement
+             db
+             ~document_id
+             ~ordinal
+             { institution
+             ; source_account = Wise_camt.account_identity statement.account
+             ; reference = Some statement.statement_id
+             ; currency = statement.account.currency
+             ; period_start = statement.period_start
+             ; period_end = statement.period_end
+             ; opening_as_of = statement.opening_at
+             ; closing_as_of = statement.closing_at
+             ; opening = statement.opening
+             ; closing = statement.closing
+             }
+         in
+         let* events =
+           traverse
+             (fun (trn : Wise_camt.transaction) ->
+                Source_event.create
+                  ~venue:institution
+                  ~account:(Wise_camt.account_identity trn.account)
+                  ~kind:"wise-transaction"
+                  ~source_id:trn.source_id
+                  ~occurred_at_ms:trn.occurred_at_ms
+                  ~payload:trn.payload)
+             statement.transactions
+         in
+         ingest_linked db ~document_id ~statement_id events)
+      (List.mapi document.statements ~f:(fun i x -> i, x))
+  in
+  Ok
+    { document_id
+    ; statements = List.length document.statements
+    ; inserted = List.sum (module Int) counts ~f:fst
+    ; existing = List.sum (module Int) counts ~f:snd
+    }
+;;
+
+let import_wise_csv db ~institution ~contents rows =
+  store_companion_rows
+    db
+    ~institution
+    ~format:(Bank_import.format_name Wise_csv)
+    ~contents
+    (List.map rows ~f:(fun (row : Wise_csv.row) -> row.row_number, row.fields))
+;;
+
+let import_bunq db ~institution ~contents (document : Bunq_mt940.t) =
+  let* document_id = archive_document db ~institution ~contents in
+  let* () =
+    check_day_inventories
+      db
+      ~institution
+      ~document_id
+      (day_groups
+         ~account:Bunq_transaction.account_identity
+         ~day:(fun tx -> tx.Bunq_transaction.booked_on)
+         ~payload:(fun tx -> tx.Bunq_transaction.payload)
+         document.transactions)
+  in
+  let* statement_id =
+    store_statement
+      db
+      ~document_id
+      ~ordinal:0
+      { institution
+      ; source_account =
+          Yojson.Safe.to_string
+            (`List
+                [ `String "bunq"
+                ; `String document.account_id
+                ; `String ("current-" ^ document.currency)
+                ])
+      ; reference = None
+      ; currency = document.currency
+      ; period_start = Date.to_string document.opening_on
+      ; period_end = Date.to_string document.closing_on
+      ; opening_as_of = Date.to_string document.opening_on
+      ; closing_as_of = Date.to_string document.closing_on
+      ; opening = document.opening
+      ; closing = document.closing
+      }
+  in
+  let* events =
+    traverse
+      (fun (tx : Bunq_transaction.t) ->
+         Source_event.create_dated
+           ~venue:institution
+           ~account:(Bunq_transaction.account_identity tx)
+           ~kind:"bunq-transaction"
+           ~source_id:tx.source_id
+           ~occurred_on:tx.booked_on
+           ~payload:tx.payload)
+      document.transactions
+  in
+  let* inserted, existing = ingest_linked db ~document_id ~statement_id events in
+  Ok { document_id; statements = 1; inserted; existing }
+;;
+
+let import_bunq_csv db ~institution ~contents rows =
+  store_companion_rows
+    db
+    ~institution
+    ~format:(Bank_import.format_name Bunq_csv)
+    ~contents
+    (List.map rows ~f:(fun (row : Bunq_csv.row) -> row.row_number, row.fields))
+;;
+
+let import_revolut db ~institution ~account_id (document : Revolut_csv.t) =
+  let* document_id = archive_document db ~institution ~contents:document.contents in
+  let* () =
+    bind_document_context
+      db
+      ~document_id
+      (Yojson.Safe.to_string (`Assoc [ "account_id", `String account_id ]))
+  in
+  let* () =
+    check_day_inventories
+      db
+      ~institution
+      ~document_id
+      (day_groups
+         ~account:Revolut_csv.account_identity
+         ~day:(fun tx -> tx.Revolut_csv.booked_on)
+         ~payload:(fun tx -> tx.Revolut_csv.payload)
+         document.transactions)
+  in
+  let* events =
+    traverse
+      (fun (tx : Revolut_csv.transaction) ->
+         Source_event.create_dated
+           ~venue:institution
+           ~account:(Revolut_csv.account_identity tx)
+           ~kind:"revolut-transaction"
+           ~source_id:tx.source_id
+           ~occurred_on:tx.booked_on
+           ~payload:tx.payload)
+      document.transactions
+  in
+  let* inserted, existing = ingest_linked db ~document_id events in
+  Ok { document_id; statements = 1; inserted; existing }
 ;;
 
 let import_bank_file ?account_id db ~institution ~path ~contents =
@@ -1581,40 +1553,55 @@ let decode_csv_match (row_id, event_id, state, reason, candidates, policy) =
   Ok ({ Bank_csv_match.row_id; event_id; state; reason; candidates }, policy)
 ;;
 
-let read_csv_matches db =
+(* One table holds every bank's companion observations, told apart by format. *)
+let companion_rows db ~format =
   let* rows =
     collect
       db
-      (statement
-         "SELECT row_id,event_id,state,reason,candidates_json,policy FROM \
-          bank_csv_matches ORDER BY row_id"
-         Db_schema.Bank_csv_matches.(
-           csv_match_row row_id event_id state reason candidates_json policy))
+      (Rel_sql.Stmt.(
+         func
+           "SELECT id,document_id,institution,row_number,fields_json FROM companion_rows \
+            WHERE format=? ORDER BY document_id,row_number"
+           (text
+            @-> ret
+                  Db_schema.Companion_rows.(
+                    csv_row id document_id institution row_number fields_json)))
+         format)
+  in
+  traverse
+    (fun (row_id, document_id, institution, row_number, fields) ->
+       let* fields = decode_fields fields in
+       Ok (row_id, document_id, institution, row_number, fields))
+    rows
+;;
+
+let companion_matches db ~format =
+  let* rows =
+    collect
+      db
+      (Rel_sql.Stmt.(
+         func
+           "SELECT m.row_id,m.event_id,m.state,m.reason,m.candidates_json,m.policy FROM \
+            companion_matches m JOIN companion_rows r ON r.id=m.row_id WHERE r.format=? \
+            ORDER BY m.row_id"
+           (text
+            @-> ret
+                  Db_schema.Companion_matches.(
+                    csv_match_row row_id event_id state reason candidates_json policy)))
+         format)
   in
   traverse decode_csv_match rows
 ;;
 
+let csv_format = Bank_import.format_name Csv
+let wise_csv_format = Bank_import.format_name Wise_csv
+let bunq_csv_format = Bank_import.format_name Bunq_csv
+let read_csv_matches db = companion_matches db ~format:csv_format
+
 let read_csv_inputs db =
-  let* rows =
-    collect
-      db
-      (statement
-         "SELECT id,document_id,institution,row_number,fields_json FROM bank_csv_rows \
-          ORDER BY document_id,row_number"
-         Db_schema.Bank_csv_rows.(
-           csv_row id document_id institution row_number fields_json))
-  in
+  let* rows = companion_rows db ~format:csv_format in
   traverse
     (fun (row_id, document_id, institution, row_number, fields) ->
-       let* fields =
-         Or_error.try_with (fun () ->
-           match Yojson.Safe.from_string fields with
-           | `List fields ->
-             List.map fields ~f:(function
-               | `String s -> s
-               | _ -> failwith "invalid CSV field")
-           | _ -> failwith "invalid stored CSV row")
-       in
        let* row = Bank_csv.of_fields ~row_number fields in
        Ok { Bank_csv_match.row_id; document_id; institution; row })
     rows
@@ -1636,17 +1623,18 @@ let bank_csv_observations db =
        }))
 ;;
 
-let upsert_csv_match =
+let upsert_companion_match =
   Rel_sql.Stmt.(
     func
-      "INSERT INTO bank_csv_matches(row_id,event_id,state,reason,candidates_json,policy) \
-       VALUES (?,?,?,?,?,?) ON CONFLICT(row_id) DO UPDATE SET \
+      "INSERT INTO \
+       companion_matches(row_id,event_id,state,reason,candidates_json,policy) VALUES \
+       (?,?,?,?,?,?) ON CONFLICT(row_id) DO UPDATE SET \
        event_id=excluded.event_id,state=excluded.state,reason=excluded.reason,candidates_json=excluded.candidates_json,policy=excluded.policy,updated_at=strftime('%Y-%m-%dT%H:%M:%fZ','now')"
       (int64 @-> option int64 @-> text @-> text @-> text @-> text @-> unit))
 ;;
 
-let audit_csv_match =
-  let open Db_schema.Bank_csv_match_changes in
+let audit_companion_match =
+  let open Db_schema.Companion_match_changes in
   let insert = Rel_sql.insert_into_cols Db.dialect table in
   fun v_row_id
     v_previous_event_id
@@ -1672,8 +1660,6 @@ let audit_csv_match =
 let save_csv_results
       db
       ~matching_policy
-      ~upsert
-      ~audit
       (previous_rows : (Bank_csv_match.result * string) list)
       results
   =
@@ -1705,7 +1691,7 @@ let save_csv_results
           db_result
             (Db.exec
                db.conn
-               (upsert
+               (upsert_companion_match
                   result.row_id
                   result.event_id
                   state
@@ -1717,7 +1703,7 @@ let save_csv_results
           db_result
             (Db.exec
                db.conn
-               (audit
+               (audit_companion_match
                   result.row_id
                   (Option.bind old ~f:(fun (row, _) -> row.event_id))
                   result.event_id
@@ -1763,13 +1749,7 @@ let match_bank_csv db =
     in
     let results = Bank_csv_match.match_rows inputs candidates in
     let* previous_rows = read_csv_matches db in
-    save_csv_results
-      db
-      ~matching_policy:Bank_csv_match.policy
-      ~upsert:upsert_csv_match
-      ~audit:audit_csv_match
-      previous_rows
-      results)
+    save_csv_results db ~matching_policy:Bank_csv_match.policy previous_rows results)
 ;;
 
 let wise_transactions db =
@@ -1783,73 +1763,15 @@ let wise_transactions db =
 ;;
 
 let read_wise_inputs db =
-  let* rows =
-    collect
-      db
-      (statement
-         "SELECT id,document_id,institution,row_number,fields_json FROM wise_csv_rows \
-          ORDER BY document_id,row_number"
-         Db_schema.Wise_csv_rows.(
-           csv_row id document_id institution row_number fields_json))
-  in
+  let* rows = companion_rows db ~format:wise_csv_format in
   traverse
     (fun (row_id, document_id, _, row_number, fields) ->
-       let* fields =
-         Or_error.try_with (fun () ->
-           Yojson.Safe.from_string fields
-           |> Yojson.Safe.Util.to_list
-           |> List.map ~f:Yojson.Safe.Util.to_string)
-       in
        let* row = Wise_csv.of_fields ~row_number fields in
        Ok { Wise_csv.row_id; document_id; row })
     rows
 ;;
 
-let read_wise_matches db =
-  let* rows =
-    collect
-      db
-      (statement
-         "SELECT row_id,event_id,state,reason,candidates_json,policy FROM \
-          wise_csv_matches ORDER BY row_id"
-         Db_schema.Wise_csv_matches.(
-           csv_match_row row_id event_id state reason candidates_json policy))
-  in
-  traverse decode_csv_match rows
-;;
-
-let upsert_wise_match =
-  Rel_sql.Stmt.(
-    func
-      "INSERT INTO wise_csv_matches(row_id,event_id,state,reason,candidates_json,policy) \
-       VALUES (?,?,?,?,?,?) ON CONFLICT(row_id) DO UPDATE SET \
-       event_id=excluded.event_id,state=excluded.state,reason=excluded.reason,candidates_json=excluded.candidates_json,policy=excluded.policy,updated_at=strftime('%Y-%m-%dT%H:%M:%fZ','now')"
-      (int64 @-> option int64 @-> text @-> text @-> text @-> text @-> unit))
-;;
-
-let audit_wise_match =
-  let open Db_schema.Wise_csv_match_changes in
-  let insert = Rel_sql.insert_into_cols Db.dialect table in
-  fun v_row_id
-    v_previous_event_id
-    v_event_id
-    v_previous_state
-    v_state
-    v_reason
-    v_candidates_json
-    v_policy ->
-    insert
-      Col.
-        [ Value (row_id, v_row_id)
-        ; Value (previous_event_id, v_previous_event_id)
-        ; Value (event_id, v_event_id)
-        ; Value (previous_state, v_previous_state)
-        ; Value (state, v_state)
-        ; Value (reason, v_reason)
-        ; Value (candidates_json, v_candidates_json)
-        ; Value (policy, v_policy)
-        ]
-;;
+let read_wise_matches db = companion_matches db ~format:wise_csv_format
 
 let match_wise_csv db =
   transaction db (fun db ->
@@ -1857,13 +1779,7 @@ let match_wise_csv db =
     let* candidates = wise_transactions db in
     let results = Wise_csv.match_rows inputs candidates in
     let* previous_rows = read_wise_matches db in
-    save_csv_results
-      db
-      ~matching_policy:"wise-csv-v1"
-      ~upsert:upsert_wise_match
-      ~audit:audit_wise_match
-      previous_rows
-      results)
+    save_csv_results db ~matching_policy:"wise-csv-v1" previous_rows results)
 ;;
 
 type wise_csv_observation =
@@ -1887,11 +1803,15 @@ let wise_csv_observations db =
        }))
 ;;
 
-type wise_reconciliation =
+type statement_reconciliation =
   { statement_id : int64
   ; document_id : int64
+  ; institution : string
   ; source_account : string
+  ; reference : string option
   ; currency : string
+  ; period_start : string
+  ; period_end : string
   ; opening : Quantity.t
   ; closing : Quantity.t
   ; movements : Quantity.t
@@ -1899,40 +1819,82 @@ type wise_reconciliation =
   ; difference : Quantity.t
   }
 
-let wise_reconciliations db =
+let statement_reconciliations ?institution db =
   let row =
     Row.(
-      unit (fun id doc account currency opening closing ->
-        id, doc, account, currency, opening, closing)
-      * read_column Db_schema.Wise_statements.id
-      * read_column Db_schema.Wise_statements.document_id
-      * read_column Db_schema.Wise_statements.source_account
-      * read_column Db_schema.Wise_statements.currency
-      * read_column Db_schema.Wise_statements.opening
-      * read_column Db_schema.Wise_statements.closing)
+      unit
+        (fun
+            id
+             document_id
+             institution
+             source_account
+             reference
+             currency
+             period_start
+             period_end
+             opening
+             closing
+           ->
+           ( id
+           , document_id
+           , institution
+           , source_account
+           , reference
+           , currency
+           , period_start
+           , period_end
+           , opening
+           , closing ))
+      * read_column Db_schema.Statements.id
+      * read_column Db_schema.Statements.document_id
+      * read_column Db_schema.Statements.institution
+      * read_column Db_schema.Statements.source_account
+      * read_column Db_schema.Statements.reference
+      * read_column Db_schema.Statements.currency
+      * read_column Db_schema.Statements.period_start
+      * read_column Db_schema.Statements.period_end
+      * read_column Db_schema.Statements.opening
+      * read_column Db_schema.Statements.closing)
   in
   let* statements =
     collect
       db
       (statement
-         "SELECT id,document_id,source_account,currency,opening,closing FROM \
-          wise_statements ORDER BY id"
+         "SELECT \
+          id,document_id,institution,source_account,reference,currency,period_start,period_end,opening,closing \
+          FROM statements ORDER BY id"
          row)
   in
-  let* transactions = wise_transactions db in
+  let statements =
+    List.filter statements ~f:(fun (_, _, i, _, _, _, _, _, _, _) ->
+      Option.for_all institution ~f:(String.equal i))
+  in
+  let* movements = movements db in
+  let amounts = Hashtbl.create (module Int64) in
+  List.iter movements ~f:(fun (id, _, (m : Movement.t)) ->
+    Hashtbl.set amounts ~key:id ~data:m.amount);
   traverse
-    (fun (statement_id, document_id, source_account, currency, opening, closing) ->
+    (fun ( statement_id
+         , document_id
+         , institution
+         , source_account
+         , reference
+         , currency
+         , period_start
+         , period_end
+         , opening
+         , closing ) ->
        let find =
-         let open Db_schema.Wise_statement_events in
+         let open Db_schema.Statement_events in
          select_by_column table statement_id event_id
        in
        let* ids = collect db (find statement_id) in
        let* amounts =
          traverse
            (fun id ->
-              match List.Assoc.find transactions id ~equal:Int64.equal with
-              | None -> Or_error.error_string "missing Wise statement movement"
-              | Some trn -> Ok trn.Wise_camt.amount)
+              Or_error.of_option
+                (Hashtbl.find amounts id)
+                ~error:(Error.of_string "missing statement movement"))
            ids
        in
        let* opening, closing =
@@ -1940,17 +1902,20 @@ let wise_reconciliations db =
            Quantity.of_string opening, Quantity.of_string closing)
        in
        let movements = List.fold amounts ~init:Quantity.zero ~f:Quantity.( + ) in
-       let difference = Quantity.(opening + movements - closing) in
        Ok
          { statement_id
          ; document_id
+         ; institution
          ; source_account
+         ; reference
          ; currency
+         ; period_start
+         ; period_end
          ; opening
          ; closing
          ; movements
          ; entries = List.length ids
-         ; difference
+         ; difference = Quantity.(opening + movements - closing)
          })
     statements
 ;;
@@ -2115,73 +2080,15 @@ let bunq_transactions db =
 ;;
 
 let read_bunq_inputs db =
-  let* rows =
-    collect
-      db
-      (statement
-         "SELECT id,document_id,institution,row_number,fields_json FROM bunq_csv_rows \
-          ORDER BY document_id,row_number"
-         Db_schema.Bunq_csv_rows.(
-           csv_row id document_id institution row_number fields_json))
-  in
+  let* rows = companion_rows db ~format:bunq_csv_format in
   traverse
     (fun (row_id, document_id, _, row_number, fields) ->
-       let* fields =
-         Or_error.try_with (fun () ->
-           Yojson.Safe.from_string fields
-           |> Yojson.Safe.Util.to_list
-           |> List.map ~f:Yojson.Safe.Util.to_string)
-       in
        let* row = Bunq_csv.of_fields ~row_number fields in
        Ok { Bunq_csv.row_id; document_id; row })
     rows
 ;;
 
-let read_bunq_matches db =
-  let* rows =
-    collect
-      db
-      (statement
-         "SELECT row_id,event_id,state,reason,candidates_json,policy FROM \
-          bunq_csv_matches ORDER BY row_id"
-         Db_schema.Bunq_csv_matches.(
-           csv_match_row row_id event_id state reason candidates_json policy))
-  in
-  traverse decode_csv_match rows
-;;
-
-let upsert_bunq_match =
-  Rel_sql.Stmt.(
-    func
-      "INSERT INTO bunq_csv_matches(row_id,event_id,state,reason,candidates_json,policy) \
-       VALUES (?,?,?,?,?,?) ON CONFLICT(row_id) DO UPDATE SET \
-       event_id=excluded.event_id,state=excluded.state,reason=excluded.reason,candidates_json=excluded.candidates_json,policy=excluded.policy,updated_at=strftime('%Y-%m-%dT%H:%M:%fZ','now')"
-      (int64 @-> option int64 @-> text @-> text @-> text @-> text @-> unit))
-;;
-
-let audit_bunq_match =
-  let open Db_schema.Bunq_csv_match_changes in
-  let insert = Rel_sql.insert_into_cols Db.dialect table in
-  fun v_row_id
-    v_previous_event_id
-    v_event_id
-    v_previous_state
-    v_state
-    v_reason
-    v_candidates_json
-    v_policy ->
-    insert
-      Col.
-        [ Value (row_id, v_row_id)
-        ; Value (previous_event_id, v_previous_event_id)
-        ; Value (event_id, v_event_id)
-        ; Value (previous_state, v_previous_state)
-        ; Value (state, v_state)
-        ; Value (reason, v_reason)
-        ; Value (candidates_json, v_candidates_json)
-        ; Value (policy, v_policy)
-        ]
-;;
+let read_bunq_matches db = companion_matches db ~format:bunq_csv_format
 
 let match_bunq_csv db =
   transaction db (fun db ->
@@ -2189,13 +2096,7 @@ let match_bunq_csv db =
     let* candidates = bunq_transactions db in
     let results = Bunq_csv.match_rows inputs candidates in
     let* previous_rows = read_bunq_matches db in
-    save_csv_results
-      db
-      ~matching_policy:"bunq-csv-v1"
-      ~upsert:upsert_bunq_match
-      ~audit:audit_bunq_match
-      previous_rows
-      results)
+    save_csv_results db ~matching_policy:"bunq-csv-v1" previous_rows results)
 ;;
 
 type bunq_csv_observation =
@@ -2217,54 +2118,6 @@ let bunq_csv_observations db =
            List.find_map matches ~f:(fun (m, _) ->
              if Int64.equal m.row_id input.row_id then Some m else None)
        }))
-;;
-
-type bunq_reconciliation =
-  { document_id : int64
-  ; account_id : string
-  ; currency : string
-  ; entries : int
-  ; difference : Quantity.t
-  }
-
-let bunq_reconciliations db =
-  let* statements =
-    collect
-      db
-      (statement
-         "SELECT document_id,account_id,currency,opening,closing FROM bunq_statements \
-          ORDER BY document_id"
-         Row.(
-           t5
-             (int64 "document_id")
-             (text "account_id")
-             (text "currency")
-             (text "opening")
-             (text "closing")))
-  in
-  let* source = bunq_transactions db in
-  traverse
-    (fun (document_id, account_id, currency, opening, closing) ->
-       let find =
-         let open Db_schema.Import_document_events in
-         select_by_column table document_id event_id
-       in
-       let* ids = collect db (find document_id) in
-       let* amounts =
-         traverse
-           (fun id ->
-              match List.Assoc.find source id ~equal:Int64.equal with
-              | None -> Or_error.error_string "missing Bunq statement event"
-              | Some tx -> Ok tx.Bunq_transaction.amount)
-           ids
-       in
-       let* difference =
-         Or_error.try_with (fun () ->
-           Quantity.(
-             of_string opening + List.fold amounts ~init:zero ~f:( + ) - of_string closing))
-       in
-       Ok { document_id; account_id; currency; entries = List.length ids; difference })
-    statements
 ;;
 
 let find_account_iban =
