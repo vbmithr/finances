@@ -96,7 +96,7 @@ let review rows =
         (text tx.account.currency)
         (Quantity.to_string tx.fee)
         (text tx.account.currency);
-      let description = String.concat ~sep:" | " (List.filter_opt [ tx.name; tx.memo ]) in
+      let description = String.concat ~sep:" | " tx.descriptions in
       if not (String.is_empty description) then Stdio.printf "  %s\n" (text description);
       Stdio.printf "  Classification: %s\n" (text r.counter_account);
       Option.iter r.reason ~f:(fun reason -> Stdio.printf "  Reason: %s\n" (text reason));
@@ -108,7 +108,7 @@ let transfer (c : Store.transfer_candidate) =
     "%Ld <-> %Ld  principal %s %s  (%d days apart)\n"
     c.first_event_id
     c.second_event_id
-    (Quantity.to_string (Bank_transfer.principal c.first_transaction))
+    (Quantity.to_string (Movement.principal c.first_transaction))
     (text c.first_transaction.account.currency)
     c.days_apart;
   Stdio.printf
@@ -125,7 +125,7 @@ let transfer (c : Store.transfer_candidate) =
     (Quantity.to_string c.second_transaction.fee)
     (text c.first_transaction.account.currency);
   List.iter [ c.first_transaction; c.second_transaction ] ~f:(fun tx ->
-    let description = String.concat ~sep:" | " (List.filter_opt [ tx.name; tx.memo ]) in
+    let description = String.concat ~sep:" | " tx.descriptions in
     if not (String.is_empty description) then Stdio.printf "  %s\n" (text description));
   List.iter c.iban_evidence ~f:(fun evidence -> Stdio.printf "  %s\n" (text evidence))
 ;;

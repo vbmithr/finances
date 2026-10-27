@@ -119,6 +119,10 @@ fin bank sync ~/Statements/bunq --institution bunq
 fin bank sync ~/Statements/revolut --institution revolut --account-id main
 ```
 
+`--institution` must be one of the banks `fin` knows: `boursobank`, `bunq`,
+`revolut` or `wise` (listed in `fin bank sync --help`). Files synced under any
+other name are rejected and appear in `fin bank history`.
+
 For Revolut, choose a stable account label; use separate labels and inboxes for
 different accounts. Sync scans the folder recursively, archives the inputs,
 imports movements, projects accounting entries and publishes a combined

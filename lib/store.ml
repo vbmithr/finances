@@ -2,7 +2,10 @@ open Base
 open Rel
 module Db = Rel_sqlite3
 
-type t = Db.t
+type t =
+  { conn : Db.t
+  ; registry : Registry.t
+  }
 
 type ingest =
   | Inserted of int64
@@ -15,7 +18,7 @@ let db_result result =
 ;;
 
 let transaction db f =
-  match Db.with_transaction `Immediate db f with
+  match Db.with_transaction `Immediate db.conn (fun _ -> f db) with
   | Ok result -> result
   | Error e -> Error (Error.of_string (Db.Error.message e))
 ;;
@@ -25,9 +28,11 @@ let integer = Row.(t1 (int "value"))
 
 let initialize db =
   transaction db (fun db ->
-    let* version = db_result (Db.first db (statement "PRAGMA user_version" integer)) in
+    let* version =
+      db_result (Db.first db.conn (statement "PRAGMA user_version" integer))
+    in
     match version with
-    | Some 0 -> db_result (Db.exec_sql db Db_schema.create)
+    | Some 0 -> db_result (Db.exec_sql db.conn Db_schema.create)
     | Some version when version = Db_schema.version -> Ok ()
     | _ ->
       Or_error.errorf
@@ -36,19 +41,20 @@ let initialize db =
         Db_schema.version)
 ;;
 
-let with_open path f =
-  let* db = db_result (Db.open' ~foreign_keys:true ~mode:Read_write_create path) in
+let with_open ~registry path f =
+  let* conn = db_result (Db.open' ~foreign_keys:true ~mode:Read_write_create path) in
+  let db = { conn; registry } in
   let result =
     try
-      let* () = db_result (Db.busy_timeout_ms db 5000) in
+      let* () = db_result (Db.busy_timeout_ms conn 5000) in
       let* () = initialize db in
       f db
     with
     | exn ->
-      ignore (Db.close db);
+      ignore (Db.close conn);
       raise exn
   in
-  let closed = db_result (Db.close db) in
+  let closed = db_result (Db.close conn) in
   match result with
   | Error _ -> result
   | Ok _ ->
@@ -146,7 +152,7 @@ let occurrence_columns (e : Source_event.t) =
 let ingest_in_transaction db (e : Source_event.t) =
   let at, on = occurrence_columns e in
   let* existing =
-    db_result (Db.first db (find_source e.venue e.account e.kind e.source_id))
+    db_result (Db.first db.conn (find_source e.venue e.account e.kind e.source_id))
   in
   match existing with
   | Some previous ->
@@ -161,15 +167,17 @@ let ingest_in_transaction db (e : Source_event.t) =
   | None ->
     let* () =
       db_result
-        (Db.exec db (insert_source e.venue e.account e.kind e.source_id at on e.payload))
+        (Db.exec
+           db.conn
+           (insert_source e.venue e.account e.kind e.source_id at on e.payload))
     in
-    Ok (Inserted (Db.last_insert_rowid db))
+    Ok (Inserted (Db.last_insert_rowid db.conn))
 ;;
 
 let ingest db e = transaction db (fun db -> ingest_in_transaction db e)
 
 let collect db stmt =
-  let* rows = db_result (Db.fold db stmt (fun row rows -> row :: rows) []) in
+  let* rows = db_result (Db.fold db.conn stmt (fun row rows -> row :: rows) []) in
   Ok (List.rev rows)
 ;;
 
@@ -224,7 +232,7 @@ let link_document =
 let import_ofx_in_transaction db ~institution (document : Bank_ofx.t) =
   let* institution = Validation.text "institution" institution in
   let sha256 = Digestif.SHA256.(to_hex (digest_string document.contents)) in
-  let* archived = db_result (Db.first db (find_document institution sha256)) in
+  let* archived = db_result (Db.first db.conn (find_document institution sha256)) in
   let* document_id =
     match archived with
     | Some (id, contents) ->
@@ -233,9 +241,9 @@ let import_ofx_in_transaction db ~institution (document : Bank_ofx.t) =
       else Or_error.error_string "archive checksum collision or corrupt document"
     | None ->
       let* () =
-        db_result (Db.exec db (insert_document institution sha256 document.contents))
+        db_result (Db.exec db.conn (insert_document institution sha256 document.contents))
       in
-      Ok (Db.last_insert_rowid db)
+      Ok (Db.last_insert_rowid db.conn)
   in
   let rec import_transactions inserted existing = function
     | [] ->
@@ -256,7 +264,7 @@ let import_ofx_in_transaction db ~institution (document : Bank_ofx.t) =
         | Inserted id -> id, inserted + 1, existing
         | Existing id -> id, inserted, existing + 1
       in
-      let* () = db_result (Db.exec db (link_document document_id event_id)) in
+      let* () = db_result (Db.exec db.conn (link_document document_id event_id)) in
       import_transactions inserted existing rest
   in
   let transactions =
@@ -272,15 +280,15 @@ let import_ofx db ~institution document =
 
 let archive_document db ~institution ~contents =
   let sha256 = Digestif.SHA256.(to_hex (digest_string contents)) in
-  let* archived = db_result (Db.first db (find_document institution sha256)) in
+  let* archived = db_result (Db.first db.conn (find_document institution sha256)) in
   match archived with
   | Some (id, previous) ->
     if String.equal previous contents
     then Ok id
     else Or_error.error_string "archive checksum collision or corrupt document"
   | None ->
-    let* () = db_result (Db.exec db (insert_document institution sha256 contents)) in
-    Ok (Db.last_insert_rowid db)
+    let* () = db_result (Db.exec db.conn (insert_document institution sha256 contents)) in
+    Ok (Db.last_insert_rowid db.conn)
 ;;
 
 let attempt_row =
@@ -401,7 +409,7 @@ let record_attempt
   let* () =
     db_result
       (Db.exec
-         db
+         db.conn
          (insert_attempt
             institution
             path
@@ -412,7 +420,7 @@ let record_attempt
             existing
             message))
   in
-  let* row = db_result (Db.first db (read_attempt (Db.last_insert_rowid db))) in
+  let* row = db_result (Db.first db.conn (read_attempt (Db.last_insert_rowid db.conn))) in
   match row with
   | Some row -> decode_attempt row
   | None -> Or_error.error_string "import attempt was not recorded"
@@ -467,7 +475,7 @@ let import_csv_rows db ~institution ~contents rows =
         Yojson.Safe.to_string (`List (List.map row.fields ~f:(fun s -> `String s)))
       in
       let* previous =
-        db_result (Db.first db (existing_csv_row document_id row.row_number))
+        db_result (Db.first db.conn (existing_csv_row document_id row.row_number))
       in
       (match previous with
        | Some previous ->
@@ -478,7 +486,7 @@ let import_csv_rows db ~institution ~contents rows =
          let* () =
            db_result
              (Db.exec
-                db
+                db.conn
                 (insert_csv_row
                    document_id
                    row.row_number
@@ -533,7 +541,7 @@ let import_wise db ~institution ~contents (document : Wise_camt.t) =
          let* () =
            db_result
              (Db.exec
-                db
+                db.conn
                 (insert
                    document_id
                    ordinal
@@ -552,7 +560,7 @@ let import_wise db ~institution ~contents (document : Wise_camt.t) =
            let open Db_schema.Wise_statements in
            select_by_pair table document_id ordinal id
          in
-         let* statement_id = db_result (Db.first db (find document_id ordinal)) in
+         let* statement_id = db_result (Db.first db.conn (find document_id ordinal)) in
          let* statement_id =
            Or_error.of_option
              statement_id
@@ -580,7 +588,7 @@ let import_wise db ~institution ~contents (document : Wise_camt.t) =
                     Int.incr existing;
                     id
                 in
-                let* () = db_result (Db.exec db (link_document document_id id)) in
+                let* () = db_result (Db.exec db.conn (link_document document_id id)) in
                 let link =
                   Rel_sql.Stmt.(
                     func
@@ -588,7 +596,7 @@ let import_wise db ~institution ~contents (document : Wise_camt.t) =
                        (?,?) ON CONFLICT DO NOTHING"
                       (int64 @-> int64 @-> unit))
                 in
-                db_result (Db.exec db (link statement_id id)))
+                db_result (Db.exec db.conn (link statement_id id)))
              statement.transactions
          in
          Ok ())
@@ -616,7 +624,7 @@ let import_wise_csv db ~institution ~contents rows =
       (fun (row : Wise_csv.row) ->
          db_result
            (Db.exec
-              db
+              db.conn
               (insert
                  document_id
                  row.row_number
@@ -662,7 +670,7 @@ let import_bunq db ~institution ~contents (document : Bunq_mt940.t) =
            |> Digestif.SHA256.digest_string
            |> Digestif.SHA256.to_hex
          in
-         let* previous = db_result (Db.first db (find account day)) in
+         let* previous = db_result (Db.first db.conn (find account day)) in
          match previous with
          | Some old when not (String.equal old signature) ->
            Or_error.errorf
@@ -670,7 +678,8 @@ let import_bunq db ~institution ~contents (document : Bunq_mt940.t) =
               corrections need review"
              day
          | Some _ -> Ok ()
-         | None -> db_result (Db.exec db (insert_day account day signature document_id)))
+         | None ->
+           db_result (Db.exec db.conn (insert_day account day signature document_id)))
       (Hashtbl.to_alist days)
   in
   let rec ingest inserted existing = function
@@ -691,7 +700,7 @@ let import_bunq db ~institution ~contents (document : Bunq_mt940.t) =
         | Inserted id -> id, inserted + 1, existing
         | Existing id -> id, inserted, existing + 1
       in
-      let* () = db_result (Db.exec db (link_document document_id id)) in
+      let* () = db_result (Db.exec db.conn (link_document document_id id)) in
       ingest inserted existing rest
   in
   let* result = ingest 0 0 document.transactions in
@@ -706,7 +715,7 @@ let import_bunq db ~institution ~contents (document : Bunq_mt940.t) =
   let* () =
     db_result
       (Db.exec
-         db
+         db.conn
          (stmt
             document_id
             document.account_id
@@ -733,7 +742,7 @@ let import_bunq_csv db ~institution ~contents rows =
       (fun (row : Bunq_csv.row) ->
          db_result
            (Db.exec
-              db
+              db.conn
               (insert
                  document_id
                  row.row_number
@@ -751,7 +760,7 @@ let import_revolut db ~institution ~account_id (document : Revolut_csv.t) =
     let open Db_schema.Revolut_documents in
     select_by_column table document_id account_id
   in
-  let* previous = db_result (Db.first db (context document_id)) in
+  let* previous = db_result (Db.first db.conn (context document_id)) in
   let* () =
     match previous with
     | Some old when not (String.equal old account_id) ->
@@ -765,7 +774,7 @@ let import_revolut db ~institution ~account_id (document : Revolut_csv.t) =
           insert
             Col.[ Value (document_id, v_document_id); Value (account_id, v_account_id) ]
       in
-      db_result (Db.exec db (insert document_id account_id))
+      db_result (Db.exec db.conn (insert document_id account_id))
   in
   let days = Hashtbl.Poly.create () in
   List.iter document.transactions ~f:(fun tx ->
@@ -801,7 +810,7 @@ let import_revolut db ~institution ~account_id (document : Revolut_csv.t) =
            |> Digestif.SHA256.digest_string
            |> Digestif.SHA256.to_hex
          in
-         let* previous = db_result (Db.first db (find account day)) in
+         let* previous = db_result (Db.first db.conn (find account day)) in
          match previous with
          | Some old when not (String.equal old signature) ->
            Or_error.errorf
@@ -809,7 +818,8 @@ let import_revolut db ~institution ~account_id (document : Revolut_csv.t) =
               corrections need review"
              day
          | Some _ -> Ok ()
-         | None -> db_result (Db.exec db (insert_day account day signature document_id)))
+         | None ->
+           db_result (Db.exec db.conn (insert_day account day signature document_id)))
       (Hashtbl.to_alist days)
   in
   let rec ingest inserted existing = function
@@ -830,7 +840,7 @@ let import_revolut db ~institution ~account_id (document : Revolut_csv.t) =
         | Inserted id -> id, inserted + 1, existing
         | Existing id -> id, inserted, existing + 1
       in
-      let* () = db_result (Db.exec db (link_document document_id id)) in
+      let* () = db_result (Db.exec db.conn (link_document document_id id)) in
       ingest inserted existing rest
   in
   ingest 0 0 document.transactions
@@ -854,191 +864,203 @@ let import_bank_file ?account_id db ~institution ~path ~contents =
         ~existing:0
         ~message:(Some message))
   in
-  match format with
-  | Ofx ->
-    (match Bank_ofx.parse contents with
-     | Error e -> fail Rejected (Error.to_string_hum e)
-     | Ok document ->
-       let result =
-         transaction db (fun db ->
-           let sha256 = Digestif.SHA256.(to_hex (digest_string contents)) in
-           let* previous = db_result (Db.first db (find_document institution sha256)) in
-           let* known =
-             match previous with
-             | None -> Ok false
-             | Some (id, _) ->
-               let* result = db_result (Db.first db (accepted_document id id)) in
-               Ok (Option.value result ~default:false)
-           in
-           let* imported = import_ofx_in_transaction db ~institution document in
-           record_attempt
-             db
-             ~institution
-             ~path
-             ~document_id:(Some imported.document_id)
-             ~format
-             ~outcome:(if known then Unchanged else Imported)
-             ~inserted:imported.inserted
-             ~existing:imported.existing
-             ~message:None)
-       in
-       (match result with
-        | Ok report -> Ok report
-        | Error e -> fail Rejected (Error.to_string_hum e)))
-  | Revolut_csv ->
-    if not (String.equal institution "revolut")
-    then fail Rejected "Revolut exports require --institution revolut"
-    else (
-      match account_id with
-      | None -> fail Rejected "Revolut CSV has no account identifier; supply --account-id"
-      | Some account_id ->
+  if not (Registry.is_registered db.registry institution)
+  then
+    fail
+      Rejected
+      (Printf.sprintf
+         "no adapter is registered for institution %s; known institutions: %s"
+         institution
+         (String.concat ~sep:", " (Registry.institutions db.registry)))
+  else (
+    match format with
+    | Ofx ->
+      (match Bank_ofx.parse contents with
+       | Error e -> fail Rejected (Error.to_string_hum e)
+       | Ok document ->
+         let result =
+           transaction db (fun db ->
+             let sha256 = Digestif.SHA256.(to_hex (digest_string contents)) in
+             let* previous =
+               db_result (Db.first db.conn (find_document institution sha256))
+             in
+             let* known =
+               match previous with
+               | None -> Ok false
+               | Some (id, _) ->
+                 let* result = db_result (Db.first db.conn (accepted_document id id)) in
+                 Ok (Option.value result ~default:false)
+             in
+             let* imported = import_ofx_in_transaction db ~institution document in
+             record_attempt
+               db
+               ~institution
+               ~path
+               ~document_id:(Some imported.document_id)
+               ~format
+               ~outcome:(if known then Unchanged else Imported)
+               ~inserted:imported.inserted
+               ~existing:imported.existing
+               ~message:None)
+         in
+         (match result with
+          | Ok report -> Ok report
+          | Error e -> fail Rejected (Error.to_string_hum e)))
+    | Revolut_csv ->
+      if not (String.equal institution "revolut")
+      then fail Rejected "Revolut exports require --institution revolut"
+      else (
+        match account_id with
+        | None ->
+          fail Rejected "Revolut CSV has no account identifier; supply --account-id"
+        | Some account_id ->
+          let result =
+            transaction db (fun db ->
+              let* document_id = archive_document db ~institution ~contents in
+              let* accepted =
+                db_result (Db.first db.conn (accepted_document document_id document_id))
+              in
+              let* document = Revolut_csv.parse ~account_id contents in
+              let* imported = import_revolut db ~institution ~account_id document in
+              record_attempt
+                db
+                ~institution
+                ~path
+                ~document_id:(Some imported.document_id)
+                ~format
+                ~outcome:
+                  (if Option.value accepted ~default:false then Unchanged else Imported)
+                ~inserted:imported.inserted
+                ~existing:imported.existing
+                ~message:None)
+          in
+          (match result with
+           | Ok report -> Ok report
+           | Error e -> fail Rejected (Error.to_string_hum e)))
+    | Bunq_mt940 | Bunq_csv ->
+      if not (String.equal institution "bunq")
+      then fail Rejected "Bunq exports require --institution bunq"
+      else (
         let result =
           transaction db (fun db ->
             let* document_id = archive_document db ~institution ~contents in
             let* accepted =
-              db_result (Db.first db (accepted_document document_id document_id))
+              db_result (Db.first db.conn (accepted_document document_id document_id))
             in
-            let* document = Revolut_csv.parse ~account_id contents in
-            let* imported = import_revolut db ~institution ~account_id document in
+            let* inserted, existing, message =
+              match format with
+              | Bunq_mt940 ->
+                let* document = Bunq_mt940.parse contents in
+                let* imported = import_bunq db ~institution ~contents document in
+                Ok (imported.inserted, imported.existing, None)
+              | _ ->
+                let* rows = Bunq_csv.parse contents in
+                let* _ = import_bunq_csv db ~institution ~contents rows in
+                Ok
+                  ( 0
+                  , 0
+                  , Some
+                      (Printf.sprintf
+                         "Bunq CSV observations: %d; no transactions created"
+                         (List.length rows)) )
+            in
             record_attempt
               db
               ~institution
               ~path
-              ~document_id:(Some imported.document_id)
+              ~document_id:(Some document_id)
               ~format
               ~outcome:
                 (if Option.value accepted ~default:false then Unchanged else Imported)
-              ~inserted:imported.inserted
-              ~existing:imported.existing
-              ~message:None)
+              ~inserted
+              ~existing
+              ~message)
         in
-        (match result with
-         | Ok report -> Ok report
-         | Error e -> fail Rejected (Error.to_string_hum e)))
-  | Bunq_mt940 | Bunq_csv ->
-    if not (String.equal institution "bunq")
-    then fail Rejected "Bunq exports require --institution bunq"
-    else (
-      let result =
-        transaction db (fun db ->
-          let* document_id = archive_document db ~institution ~contents in
-          let* accepted =
-            db_result (Db.first db (accepted_document document_id document_id))
-          in
-          let* inserted, existing, message =
-            match format with
-            | Bunq_mt940 ->
-              let* document = Bunq_mt940.parse contents in
-              let* imported = import_bunq db ~institution ~contents document in
-              Ok (imported.inserted, imported.existing, None)
-            | _ ->
-              let* rows = Bunq_csv.parse contents in
-              let* _ = import_bunq_csv db ~institution ~contents rows in
-              Ok
-                ( 0
-                , 0
-                , Some
-                    (Printf.sprintf
-                       "Bunq CSV observations: %d; no transactions created"
-                       (List.length rows)) )
-          in
-          record_attempt
-            db
-            ~institution
-            ~path
-            ~document_id:(Some document_id)
-            ~format
-            ~outcome:
-              (if Option.value accepted ~default:false then Unchanged else Imported)
-            ~inserted
-            ~existing
-            ~message)
-      in
-      match result with
-      | Ok report -> Ok report
-      | Error e -> fail Rejected (Error.to_string_hum e))
-  | Camt053 | Wise_csv ->
-    if not (String.equal institution "wise")
-    then fail Rejected "Wise exports require --institution wise"
-    else (
-      let result =
-        transaction db (fun db ->
-          let* document_id = archive_document db ~institution ~contents in
-          let* accepted =
-            db_result (Db.first db (accepted_document document_id document_id))
-          in
-          let* inserted, existing, message =
-            match format with
-            | Camt053 ->
-              let* document = Wise_camt.parse contents in
-              let* result = import_wise db ~institution ~contents document in
-              Ok (result.inserted, result.existing, None)
-            | _ ->
-              let* rows = Wise_csv.parse contents in
-              let* _ = import_wise_csv db ~institution ~contents rows in
-              Ok
-                ( 0
-                , 0
-                , Some
-                    (Printf.sprintf
-                       "Wise CSV observations: %d; no transactions created"
-                       (List.length rows)) )
-          in
-          record_attempt
-            db
-            ~institution
-            ~path
-            ~document_id:(Some document_id)
-            ~format
-            ~outcome:
-              (if Option.value accepted ~default:false then Unchanged else Imported)
-            ~inserted
-            ~existing
-            ~message)
-      in
-      match result with
-      | Ok report -> Ok report
-      | Error e -> fail Rejected (Error.to_string_hum e))
-  | Csv when Bank_csv.recognizes contents ->
-    (match Bank_csv.parse contents with
-     | Error e -> fail Rejected (Error.to_string_hum e)
-     | Ok rows ->
-       let result =
-         transaction db (fun db ->
-           let* document_id, added, reused =
-             import_csv_rows db ~institution ~contents rows
-           in
-           let* accepted =
-             db_result (Db.first db (accepted_document document_id document_id))
-           in
-           record_attempt
-             db
-             ~institution
-             ~path
-             ~document_id:(Some document_id)
-             ~format
-             ~outcome:
-               (if added = 0 && Option.value accepted ~default:false
-                then Unchanged
-                else Imported)
-             ~inserted:0
-             ~existing:0
-             ~message:
-               (Some
-                  (Printf.sprintf
-                     "CSV observations: added=%d reused=%d; no transactions created"
-                     added
-                     reused)))
-       in
-       (match result with
+        match result with
         | Ok report -> Ok report
-        | Error e -> fail Rejected (Error.to_string_hum e)))
-  | Csv ->
-    fail
-      Unsupported
-      "CSV layout not supported; expected a supported BoursoBank, Wise or Bunq export"
-  | Qif | Spreadsheet | Unknown ->
-    fail Unsupported ("format not implemented: " ^ Bank_import.format_name format)
+        | Error e -> fail Rejected (Error.to_string_hum e))
+    | Camt053 | Wise_csv ->
+      if not (String.equal institution "wise")
+      then fail Rejected "Wise exports require --institution wise"
+      else (
+        let result =
+          transaction db (fun db ->
+            let* document_id = archive_document db ~institution ~contents in
+            let* accepted =
+              db_result (Db.first db.conn (accepted_document document_id document_id))
+            in
+            let* inserted, existing, message =
+              match format with
+              | Camt053 ->
+                let* document = Wise_camt.parse contents in
+                let* result = import_wise db ~institution ~contents document in
+                Ok (result.inserted, result.existing, None)
+              | _ ->
+                let* rows = Wise_csv.parse contents in
+                let* _ = import_wise_csv db ~institution ~contents rows in
+                Ok
+                  ( 0
+                  , 0
+                  , Some
+                      (Printf.sprintf
+                         "Wise CSV observations: %d; no transactions created"
+                         (List.length rows)) )
+            in
+            record_attempt
+              db
+              ~institution
+              ~path
+              ~document_id:(Some document_id)
+              ~format
+              ~outcome:
+                (if Option.value accepted ~default:false then Unchanged else Imported)
+              ~inserted
+              ~existing
+              ~message)
+        in
+        match result with
+        | Ok report -> Ok report
+        | Error e -> fail Rejected (Error.to_string_hum e))
+    | Csv when Bank_csv.recognizes contents ->
+      (match Bank_csv.parse contents with
+       | Error e -> fail Rejected (Error.to_string_hum e)
+       | Ok rows ->
+         let result =
+           transaction db (fun db ->
+             let* document_id, added, reused =
+               import_csv_rows db ~institution ~contents rows
+             in
+             let* accepted =
+               db_result (Db.first db.conn (accepted_document document_id document_id))
+             in
+             record_attempt
+               db
+               ~institution
+               ~path
+               ~document_id:(Some document_id)
+               ~format
+               ~outcome:
+                 (if added = 0 && Option.value accepted ~default:false
+                  then Unchanged
+                  else Imported)
+               ~inserted:0
+               ~existing:0
+               ~message:
+                 (Some
+                    (Printf.sprintf
+                       "CSV observations: added=%d reused=%d; no transactions created"
+                       added
+                       reused)))
+         in
+         (match result with
+          | Ok report -> Ok report
+          | Error e -> fail Rejected (Error.to_string_hum e)))
+    | Csv ->
+      fail
+        Unsupported
+        "CSV layout not supported; expected a supported BoursoBank, Wise or Bunq export"
+    | Qif | Spreadsheet | Unknown ->
+      fail Unsupported ("format not implemented: " ^ Bank_import.format_name format))
 ;;
 
 let record_bank_read_error db ~institution ~path ~message =
@@ -1196,7 +1218,7 @@ let same_entry (a : Accounting.entry) (b : Accounting.entry) =
 
 let record_entry_in_transaction db ~event_id ~key (entry : Accounting.entry) =
   let* key = Validation.text "projection key" key in
-  let* existing = db_result (Db.first db (find_entry event_id key)) in
+  let* existing = db_result (Db.first db.conn (find_entry event_id key)) in
   match existing with
   | Some (id, date, description) ->
     let* previous = read_entry db id date description in
@@ -1209,17 +1231,17 @@ let record_entry_in_transaction db ~event_id ~key (entry : Accounting.entry) =
     let* () =
       db_result
         (Db.exec
-           db
+           db.conn
            (insert_entry event_id key (Date.to_string entry.date) entry.description))
     in
-    let id = Db.last_insert_rowid db in
+    let id = Db.last_insert_rowid db.conn in
     let rec write ordinal = function
       | [] -> Ok (Inserted id)
       | (p : Accounting.posting) :: rest ->
         let* () =
           db_result
             (Db.exec
-               db
+               db.conn
                (insert_posting
                   id
                   ordinal
@@ -1264,10 +1286,12 @@ let find_linked_transfer =
                  (read_column Db_schema.Bank_transfer_decisions.reason))))
 ;;
 
-let linked_transfer db event_id = db_result (Db.first db (find_linked_transfer event_id))
+let linked_transfer db event_id =
+  db_result (Db.first db.conn (find_linked_transfer event_id))
+;;
 
 let category_account db event_id =
-  let* category = db_result (Db.first db (find_category event_id)) in
+  let* category = db_result (Db.first db.conn (find_category event_id)) in
   Ok (Option.map category ~f:fst)
 ;;
 
@@ -1279,9 +1303,12 @@ let counter_account db event_id =
 ;;
 
 let mapped_bank_entry db event_id (event : Source_event.t) =
-  let* bank_account = db_result (Db.first db (find_mapping event.venue event.account)) in
+  let* bank_account =
+    db_result (Db.first db.conn (find_mapping event.venue event.account))
+  in
   let* counter_account = counter_account db event_id in
-  Bank_projection.entry ?bank_account ?counter_account event
+  let* movement = Registry.movement db.registry event in
+  Bank_projection.entry ?bank_account ?counter_account ~institution:event.venue movement
 ;;
 
 let record_entry db ~event_id ~key entry =
@@ -1313,6 +1340,15 @@ let entries db =
     rows
 ;;
 
+let movements db =
+  let* source = events db in
+  traverse
+    (fun (id, event) ->
+       let* movement = Registry.movement db.registry event in
+       Ok (id, event, movement))
+    (List.filter source ~f:(fun (_, e) -> Registry.is_movement db.registry e))
+;;
+
 type projection_report =
   { inserted : int
   ; existing : int
@@ -1324,7 +1360,7 @@ let project_bank db =
     let rec project inserted existing = function
       | [] -> Ok { inserted; existing }
       | (event_id, (event : Source_event.t)) :: rest ->
-        if not (Bank_transaction.is_event event)
+        if not (Registry.is_movement db.registry event)
         then project inserted existing rest
         else
           let* entry = mapped_bank_entry db event_id event in
@@ -1342,7 +1378,7 @@ let bank_accounts db =
   let* source_events = events db in
   let bank_events =
     List.filter_map source_events ~f:(fun (_, event) ->
-      if Bank_transaction.is_event event then Some event else None)
+      if Registry.is_movement db.registry event then Some event else None)
     |> List.dedup_and_sort ~compare:(fun a b ->
       match String.compare a.Source_event.venue b.venue with
       | 0 -> String.compare a.account b.account
@@ -1350,13 +1386,15 @@ let bank_accounts db =
   in
   traverse
     (fun (event : Source_event.t) ->
-       let* transaction = Bank_transaction.of_event event in
+       let* transaction = Registry.movement db.registry event in
        let account = transaction.account in
-       let* mapped = db_result (Db.first db (find_mapping event.venue event.account)) in
+       let* mapped =
+         db_result (Db.first db.conn (find_mapping event.venue event.account))
+       in
        let* ledger_account =
          match mapped with
          | Some name -> Ok name
-         | None -> Bank_projection.ledger_account_for ~institution:event.venue account
+         | None -> Bank_projection.ledger_account ~institution:event.venue account
        in
        Bank_account_mapping.create
          ~institution:event.venue
@@ -1409,7 +1447,7 @@ let set_bank_account_mappings_in_transaction db mappings =
       let source_account = Bank_account_mapping.source_account mapping in
       let matching =
         List.filter source_events ~f:(fun (_, event) ->
-          Bank_transaction.is_event event
+          Registry.is_movement db.registry event
           && String.equal event.venue mapping.institution
           && String.equal event.account source_account)
       in
@@ -1419,7 +1457,7 @@ let set_bank_account_mappings_in_transaction db mappings =
           "mapping references an unknown source account; import its records first"
       else
         let* previous =
-          db_result (Db.first db (find_mapping mapping.institution source_account))
+          db_result (Db.first db.conn (find_mapping mapping.institution source_account))
         in
         if Option.equal String.equal previous (Some mapping.ledger_account)
         then apply changed rest
@@ -1428,38 +1466,44 @@ let set_bank_account_mappings_in_transaction db mappings =
             match previous with
             | Some name -> Ok name
             | None ->
-              let* transaction = Bank_transaction.of_event (snd (List.hd_exn matching)) in
+              let* transaction =
+                Registry.movement db.registry (snd (List.hd_exn matching))
+              in
               let account = transaction.account in
-              Bank_projection.ledger_account_for ~institution:mapping.institution account
+              Bank_projection.ledger_account ~institution:mapping.institution account
           in
           let* _ =
             traverse
               (fun (event_id, event) ->
                  let* existing =
-                   db_result (Db.first db (find_entry event_id Bank_projection.key))
+                   db_result (Db.first db.conn (find_entry event_id Bank_projection.key))
                  in
                  match existing with
                  | None -> Ok ()
                  | Some (id, date, description) ->
                    let* stored = read_entry db id date description in
                    let* counter_account = counter_account db event_id in
+                   let* movement = Registry.movement db.registry event in
                    let* expected =
                      Bank_projection.entry
                        ~bank_account:previous_name
                        ?counter_account
-                       event
+                       ~institution:event.venue
+                       movement
                    in
                    if not (same_entry stored expected)
                    then
                      Or_error.error_string
                        "account mapping conflicts with an existing bank projection"
-                   else db_result (Db.exec db (rename_posting mapping.ledger_account id)))
+                   else
+                     db_result
+                       (Db.exec db.conn (rename_posting mapping.ledger_account id)))
               matching
           in
           let* () =
             db_result
               (Db.exec
-                 db
+                 db.conn
                  (upsert_mapping
                     mapping.institution
                     source_account
@@ -1468,7 +1512,7 @@ let set_bank_account_mappings_in_transaction db mappings =
           let* () =
             db_result
               (Db.exec
-                 db
+                 db.conn
                  (audit_mapping
                     mapping.institution
                     source_account
@@ -1660,7 +1704,7 @@ let save_csv_results
         let* () =
           db_result
             (Db.exec
-               db
+               db.conn
                (upsert
                   result.row_id
                   result.event_id
@@ -1672,7 +1716,7 @@ let save_csv_results
         let* () =
           db_result
             (Db.exec
-               db
+               db.conn
                (audit
                   result.row_id
                   (Option.bind old ~f:(fun (row, _) -> row.event_id))
@@ -1939,16 +1983,16 @@ let set_bank_categories db decisions =
           then
             Or_error.error_string
               "reject the confirmed transfer before changing its category"
-          else if not (Bank_transaction.is_event event)
+          else if not (Registry.is_movement db.registry event)
           then Or_error.error_string "category decision requires a bank event"
           else
-            let* previous = db_result (Db.first db (find_category d.event_id)) in
+            let* previous = db_result (Db.first db.conn (find_category d.event_id)) in
             if
               Option.equal [%equal: string * string] previous (Some (d.account, d.reason))
             then apply changed rest
             else
               let* existing =
-                db_result (Db.first db (find_entry d.event_id Bank_projection.key))
+                db_result (Db.first db.conn (find_entry d.event_id Bank_projection.key))
               in
               let* () =
                 match existing with
@@ -1964,7 +2008,7 @@ let set_bank_categories db decisions =
                     let update =
                       fun account entry_id -> update_posting account entry_id 1
                     in
-                    db_result (Db.exec db (update d.account id)))
+                    db_result (Db.exec db.conn (update d.account id)))
               in
               let upsert =
                 Rel_sql.Stmt.(
@@ -1986,11 +2030,13 @@ let set_bank_categories db decisions =
                       ; Value (reason, v_reason)
                       ]
               in
-              let* () = db_result (Db.exec db (upsert d.event_id d.account d.reason)) in
+              let* () =
+                db_result (Db.exec db.conn (upsert d.event_id d.account d.reason))
+              in
               let* () =
                 db_result
                   (Db.exec
-                     db
+                     db.conn
                      (audit d.event_id (Option.map previous ~f:fst) d.account d.reason))
               in
               apply (changed + 1) rest
@@ -2030,7 +2076,7 @@ let bank_category_history db =
 type bank_review =
   { event_id : int64
   ; institution : string
-  ; transaction : Bank_transaction.t
+  ; transaction : Movement.t
   ; counter_account : string
   ; reason : string option
   }
@@ -2039,8 +2085,8 @@ let bank_review db =
   let* source = events db in
   traverse
     (fun (event_id, event) ->
-       let* transaction = Bank_transaction.of_event event in
-       let* category = db_result (Db.first db (find_category event_id)) in
+       let* transaction = Registry.movement db.registry event in
+       let* category = db_result (Db.first db.conn (find_category event_id)) in
        let* transfer = linked_transfer db event_id in
        Ok
          { event_id
@@ -2055,7 +2101,7 @@ let bank_review db =
               | Some (_, _, reason) -> Some reason
               | None -> Option.map category ~f:snd)
          })
-    (List.filter source ~f:(fun (_, e) -> Bank_transaction.is_event e))
+    (List.filter source ~f:(fun (_, e) -> Registry.is_movement db.registry e))
 ;;
 
 let bunq_transactions db =
@@ -2229,7 +2275,9 @@ let find_account_iban =
 (* IBANs are validated when written. A stored value that no longer parses (for
    example after a registry update) is reported, never silently ignored. *)
 let registered_iban db institution source_account =
-  let* stored = db_result (Db.first db (find_account_iban institution source_account)) in
+  let* stored =
+    db_result (Db.first db.conn (find_account_iban institution source_account))
+  in
   match stored with
   | None -> Ok None
   | Some text ->
@@ -2237,12 +2285,12 @@ let registered_iban db institution source_account =
     Ok (Some iban)
 ;;
 
-let account_iban db (event : Source_event.t) (tx : Bank_transaction.t) =
+let account_iban db (event : Source_event.t) (tx : Movement.t) =
   let* registered = registered_iban db event.venue event.account in
   let imported =
-    if String.equal tx.account.account_type "CREDITCRD"
-    then None
-    else Account_identity.inferred_iban tx.account.account_id
+    match tx.own_iban with
+    | Known iban -> Some iban
+    | Unknown | Not_applicable -> None
   in
   match imported, registered with
   | Some a, Some b when not (Iban.equal a b) ->
@@ -2252,31 +2300,39 @@ let account_iban db (event : Source_event.t) (tx : Bank_transaction.t) =
   | None, None ->
     Ok
       ( None
-      , if String.equal tx.account.account_type "CREDITCRD"
-        then "not_applicable"
-        else "missing" )
+      , match tx.own_iban with
+        | Not_applicable -> "not_applicable"
+        | Known _ | Unknown -> "missing" )
 ;;
 
-let counterparty_iban (event : Source_event.t) =
-  if String.equal event.kind "bunq-transaction"
-  then
-    let* tx = Bunq_transaction.source_transaction event in
-    Ok (Account_identity.inferred_iban tx.counterparty)
-  else Ok None
+(* Every movement of an account reports the same own-IBAN status; the first
+   one stands for the account. *)
+let own_iban db source (account : Bank_account_mapping.t) =
+  let identity = Bank_account_mapping.source_account account in
+  match
+    List.find source ~f:(fun (_, (e : Source_event.t)) ->
+      Registry.is_movement db.registry e
+      && String.equal e.venue account.institution
+      && String.equal e.account identity)
+  with
+  | None -> Or_error.error_string "account has no imported movements"
+  | Some (_, event) ->
+    let* movement = Registry.movement db.registry event in
+    Ok movement.Movement.own_iban
 ;;
 
 let transfer_iban_evidence db source a ta b tb =
   let* a_iban, _ = account_iban db a ta in
   let* b_iban, _ = account_iban db b tb in
-  let* a_counterparty = counterparty_iban a in
-  let* b_counterparty = counterparty_iban b in
+  let a_counterparty = ta.Movement.counterparty_iban
+  and b_counterparty = tb.Movement.counterparty_iban in
   let* known =
     traverse
       (fun (_, event) ->
-         let* tx = Bank_transaction.of_event event in
+         let* tx = Registry.movement db.registry event in
          let* iban, _ = account_iban db event tx in
          Ok (event, iban))
-      (List.filter source ~f:(fun (_, e) -> Bank_transaction.is_event e)
+      (List.filter source ~f:(fun (_, e) -> Registry.is_movement db.registry e)
        |> List.dedup_and_sort ~compare:(fun (_, a) (_, b) ->
          [%compare: string * string]
            (a.Source_event.venue, a.account)
@@ -2349,7 +2405,9 @@ let bank_transfer_decisions db =
 ;;
 
 let verify_bank_entry db event_id event =
-  let* existing = db_result (Db.first db (find_entry event_id Bank_projection.key)) in
+  let* existing =
+    db_result (Db.first db.conn (find_entry event_id Bank_projection.key))
+  in
   match existing with
   | None -> Ok None
   | Some (id, date, description) ->
@@ -2435,9 +2493,11 @@ let set_bank_transfers db decisions =
           and second = d.second_event_id in
           let* a = get first in
           let* b = get second in
-          let* ta = Bank_transaction.of_event a in
-          let* tb = Bank_transaction.of_event b in
-          let* previous = db_result (Db.first db (find_transfer_decision first second)) in
+          let* ta = Registry.movement db.registry a in
+          let* tb = Registry.movement db.registry b in
+          let* previous =
+            db_result (Db.first db.conn (find_transfer_decision first second))
+          in
           let state = Bank_transfer.state_name d.state in
           if
             Option.exists previous ~f:(fun (_, _, old, reason) ->
@@ -2498,17 +2558,17 @@ let set_bank_transfers db decisions =
                   [ first, a; second, b ]
               else Ok []
             in
-            let* () = db_result (Db.exec db (upsert first second state d.reason)) in
+            let* () = db_result (Db.exec db.conn (upsert first second state d.reason)) in
             let* () =
               if confirming
               then
                 let* _ =
                   traverse
-                    (fun id -> db_result (Db.exec db (add id first second)))
+                    (fun id -> db_result (Db.exec db.conn (add id first second)))
                     [ first; second ]
                 in
                 Ok ()
-              else db_result (Db.exec db (remove first second))
+              else db_result (Db.exec db.conn (remove first second))
             in
             let* _ =
               traverse
@@ -2519,7 +2579,7 @@ let set_bank_transfers db decisions =
                      let* account = counter_account db id in
                      db_result
                        (Db.exec
-                          db
+                          db.conn
                           (update
                              (Option.value account ~default:"equity:unclassified")
                              entry_id)))
@@ -2528,7 +2588,7 @@ let set_bank_transfers db decisions =
             let* () =
               db_result
                 (Db.exec
-                   db
+                   db.conn
                    (audit
                       first
                       second
@@ -2593,8 +2653,8 @@ type transfer_candidate =
   ; second_event_id : int64
   ; first : Source_event.t
   ; second : Source_event.t
-  ; first_transaction : Bank_transaction.t
-  ; second_transaction : Bank_transaction.t
+  ; first_transaction : Movement.t
+  ; second_transaction : Movement.t
   ; days_apart : int
   ; state : Bank_transfer.state option
   ; reason : string option
@@ -2609,10 +2669,10 @@ let transfer_candidates ?(include_reviewed = false) db =
   let* items =
     traverse
       (fun (id, e) ->
-         let* tx = Bank_transaction.of_event e in
+         let* tx = Registry.movement db.registry e in
          let* linked = linked_transfer db id in
          Ok (id, e, tx, Option.is_some linked))
-      (List.filter source ~f:(fun (_, e) -> Bank_transaction.is_event e))
+      (List.filter source ~f:(fun (_, e) -> Registry.is_movement db.registry e))
   in
   let* decisions = bank_transfer_decisions db in
   let indexed = Hashtbl.Poly.create () in
@@ -2702,17 +2762,17 @@ let bank_account_info db =
     (fun mapping ->
        let members =
          List.filter source ~f:(fun (_, e) ->
-           Bank_transaction.is_event e
+           Registry.is_movement db.registry e
            && String.equal e.Source_event.venue mapping.Bank_account_mapping.institution
            && String.equal e.account (Bank_account_mapping.source_account mapping))
        in
        let event = snd (List.hd_exn members) in
-       let* tx = Bank_transaction.of_event event in
+       let* tx = Registry.movement db.registry event in
        let* iban, iban_source = account_iban db event tx in
        let* settlement =
          db_result
            (Db.first
-              db
+              db.conn
               (find_settlement
                  mapping.institution
                  (Bank_account_mapping.source_account mapping)))
@@ -2728,7 +2788,7 @@ let bank_account_info db =
        let* dates =
          traverse
            (fun (_, e) ->
-              let* tx = Bank_transaction.of_event e in
+              let* tx = Registry.movement db.registry e in
               Ok tx.booked_on)
            members
        in
@@ -2800,22 +2860,19 @@ let set_bank_account_identities_in_transaction db identities =
             account
             ~error:(Error.of_string "unknown account identity; import the account first")
         in
+        let* own_iban = own_iban db source account in
         let* () =
-          if String.equal account.account_type "CREDITCRD"
-          then
+          match own_iban with
+          | Not_applicable ->
             Or_error.error_string
               "credit-card accounts have no IBAN; register the associated bank account \
                instead"
-          else Ok ()
-        in
-        let* () =
-          match Account_identity.inferred_iban account.account_id with
-          | Some old when not (Iban.equal old i.iban) ->
+          | Known old when not (Iban.equal old i.iban) ->
             Or_error.error_string "IBAN contradicts imported account identifier"
-          | _ -> Ok ()
+          | Known _ | Unknown -> Ok ()
         in
         let* previous =
-          db_result (Db.first db (find_account_iban i.institution identity))
+          db_result (Db.first db.conn (find_account_iban i.institution identity))
         in
         (* The previous value stays text, so an entry that today's rules reject
            can still be corrected and is audited exactly as stored. *)
@@ -2823,9 +2880,10 @@ let set_bank_account_identities_in_transaction db identities =
         if Option.equal String.equal previous (Some iban)
         then apply count rest
         else
-          let* () = db_result (Db.exec db (upsert i.institution identity iban)) in
+          let* () = db_result (Db.exec db.conn (upsert i.institution identity iban)) in
           let* () =
-            db_result (Db.exec db (audit i.institution identity previous (Some iban)))
+            db_result
+              (Db.exec db.conn (audit i.institution identity previous (Some iban)))
           in
           apply (count + 1) rest
     in
@@ -2844,8 +2902,8 @@ let set_bank_account_identities_in_transaction db identities =
              in
              let* a = get d.first_event_id in
              let* b = get d.second_event_id in
-             let* ta = Bank_transaction.of_event a in
-             let* tb = Bank_transaction.of_event b in
+             let* ta = Registry.movement db.registry a in
+             let* tb = Registry.movement db.registry b in
              let* compatible, _, _ = transfer_iban_evidence db source a ta b tb in
              if compatible
              then Ok ()
@@ -2935,7 +2993,9 @@ let apply_bank_accounts ?(dry_run = false) db config =
   let* config = Bank_account_config.of_json (Bank_account_config.to_json config) in
   transaction db (fun db ->
     let* () =
-      if dry_run then db_result (Db.exec_sql db "SAVEPOINT account_preview") else Ok ()
+      if dry_run
+      then db_result (Db.exec_sql db.conn "SAVEPOINT account_preview")
+      else Ok ()
     in
     let* before_history = bank_account_history db in
     let* info = bank_account_info db in
@@ -3013,22 +3073,25 @@ let apply_bank_accounts ?(dry_run = false) db config =
            | Keep | Set _ -> Ok 0
            | Clear ->
              let r = row.reference in
+             let* info = resolve r in
              let* () =
-               if
-                 (not (String.equal r.account_type "CREDITCRD"))
-                 && Option.is_some (Account_identity.inferred_iban r.account_id)
+               if String.equal info.iban_source "imported"
                then Or_error.error_string "an imported source IBAN cannot be cleared"
                else Ok ()
              in
              let source = Bank_account_config.source_account r in
              let* old =
-               db_result (Db.first db (find_account_iban r.institution source))
+               db_result (Db.first db.conn (find_account_iban r.institution source))
              in
              (match old with
               | None -> Ok 0
               | Some iban ->
-                let* () = db_result (Db.exec db (remove_iban r.institution source)) in
-                let* () = db_result (Db.exec db (audit_iban r.institution source iban)) in
+                let* () =
+                  db_result (Db.exec db.conn (remove_iban r.institution source))
+                in
+                let* () =
+                  db_result (Db.exec db.conn (audit_iban r.institution source iban))
+                in
                 Ok 1))
         config
     in
@@ -3105,8 +3168,8 @@ let apply_bank_accounts ?(dry_run = false) db config =
                | Set parent ->
                  let* parent_info = resolve parent in
                  if
-                   (not (String.equal r.account_type "CREDITCRD"))
-                   || String.equal parent.account_type "CREDITCRD"
+                   (not (String.equal child.iban_source "not_applicable"))
+                   || String.equal parent_info.iban_source "not_applicable"
                    || not (String.equal child.currency parent_info.currency)
                  then
                    Or_error.error_string
@@ -3119,18 +3182,19 @@ let apply_bank_accounts ?(dry_run = false) db config =
                            (Bank_account_config.reference_to_json parent)))
              in
              let* previous =
-               db_result (Db.first db (find_settlement r.institution source))
+               db_result (Db.first db.conn (find_settlement r.institution source))
              in
              if Option.equal String.equal previous value
              then Ok 0
              else
                let* () =
                  match value with
-                 | None -> db_result (Db.exec db (remove r.institution source))
-                 | Some value -> db_result (Db.exec db (set r.institution source value))
+                 | None -> db_result (Db.exec db.conn (remove r.institution source))
+                 | Some value ->
+                   db_result (Db.exec db.conn (set r.institution source value))
                in
                let* () =
-                 db_result (Db.exec db (audit r.institution source previous value))
+                 db_result (Db.exec db.conn (audit r.institution source previous value))
                in
                Ok 1)
         config
@@ -3152,8 +3216,11 @@ let apply_bank_accounts ?(dry_run = false) db config =
     let* () =
       if dry_run
       then
-        db_result (Db.exec_sql db "ROLLBACK TO account_preview; RELEASE account_preview")
+        db_result
+          (Db.exec_sql db.conn "ROLLBACK TO account_preview; RELEASE account_preview")
       else Ok ()
     in
     Ok result)
 ;;
+
+let registry t = t.registry

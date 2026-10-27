@@ -27,7 +27,7 @@ let ensure_database_parent path =
 
 let with_database path f =
   let%bind () = ensure_database_parent path in
-  Store.with_open path f
+  Store.with_open ~registry:Builtin.registry path f
 ;;
 
 let write_file path contents =
@@ -442,6 +442,7 @@ let sync_bank database directory institution journal accounts max_mib account_id
     in
     let%bind report =
       Finances_bank.Sync.run
+        ~registry:Builtin.registry
         ?account_id
         ?accounts
         ~max_file_bytes:Int64.(of_int max_mib * 1048576L)
@@ -524,7 +525,12 @@ let sync_bank_cmd =
       $ Arg.(
           value
           & opt string "boursobank"
-          & info [ "institution" ] ~doc:"Stable source institution identifier.")
+          & info
+              [ "institution" ]
+              ~doc:
+                ("Source institution: one of "
+                 ^ String.concat ~sep:", " (Registry.institutions Builtin.registry)
+                 ^ "."))
       $ Arg.(
           value
           & opt (some string) None
@@ -733,9 +739,7 @@ let bank_review database all json_output =
              ; "amount", `String (Quantity.to_string tx.amount)
              ; "fee", `String (Quantity.to_string tx.fee)
              ; "currency", `String tx.account.currency
-             ; ( "description"
-               , `String (String.concat ~sep:" | " (List.filter_opt [ tx.name; tx.memo ]))
-               )
+             ; "description", `String (String.concat ~sep:" | " tx.descriptions)
              ; "account", `String r.counter_account
              ; "reason", Option.value_map r.reason ~default:`Null ~f:(fun s -> `String s)
              ]))
@@ -831,7 +835,7 @@ let bunq_status_cmd =
     Term.(const bunq_status $ database)
 ;;
 
-let transfer_leg event_id (event : Source_event.t) (tx : Bank_transaction.t) =
+let transfer_leg event_id (event : Source_event.t) (tx : Movement.t) =
   `Assoc
     [ "event_id", `Intlit (Int64.to_string event_id)
     ; "institution", `String event.venue
@@ -839,10 +843,9 @@ let transfer_leg event_id (event : Source_event.t) (tx : Bank_transaction.t) =
     ; "booked_on", `String (Date.to_string tx.booked_on)
     ; "currency", `String tx.account.currency
     ; "bank_amount", `String (Quantity.to_string tx.amount)
-    ; "principal", `String (Quantity.to_string (Bank_transfer.principal tx))
+    ; "principal", `String (Quantity.to_string (Movement.principal tx))
     ; "fee", `String (Quantity.to_string tx.fee)
-    ; ( "description"
-      , `String (String.concat ~sep:" | " (List.filter_opt [ tx.name; tx.memo ])) )
+    ; "description", `String (String.concat ~sep:" | " tx.descriptions)
     ]
 ;;
 
@@ -955,7 +958,7 @@ let transfer_preview database json_output =
   with_database database (fun db ->
     let%bind candidates = Store.transfer_candidates db in
     let%bind all_candidates = Store.transfer_candidates ~include_reviewed:true db in
-    let%bind ranked = Transfer_ranking.analyze candidates in
+    let%bind ranked = Transfer_ranking.analyze (Store.registry db) candidates in
     let id x = `Intlit (Int64.to_string x) in
     let optional_int = Option.value_map ~default:`Null ~f:(fun x -> `Int x) in
     let json =

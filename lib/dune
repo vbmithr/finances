@@ -1,10 +1,17 @@
 (include_subdirs unqualified)
 
+; Store still names bank parsers for import and companion matching. That coupling
+; (and -open Finances_banks) goes away once import runs through the registry.
+
 (library
  (name finances)
  (public_name finances)
- (private_modules validation db_schema sqlite_schema)
+ (private_modules db_schema sqlite_schema)
+ (flags
+  (:standard -open Finances_core -open Finances_banks))
  (libraries
+  finances.core
+  finances.banks
   base
   stdio
   bos

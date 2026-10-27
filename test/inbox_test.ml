@@ -32,13 +32,14 @@ let workspace f =
 
 let with_store root f =
   ok
-    (Store.with_open (database root) (fun db ->
+    (Store.with_open ~registry:Builtin.registry (database root) (fun db ->
        f db;
        Ok ()))
 ;;
 
 let sync ?accounts root =
   Finances_bank.Sync.run
+    ~registry:Builtin.registry
     ?accounts
     ~database:(database root)
     ~institution:"boursobank"
@@ -242,7 +243,9 @@ let mappings_after_projection () =
   workspace (fun root ->
     write (join (inbox root) "bank.ofx") (fixture ());
     ignore (ok (sync root));
-    let initial = ok (Store.with_open (database root) Store.bank_accounts) in
+    let initial =
+      ok (Store.with_open ~registry:Builtin.registry (database root) Store.bank_accounts)
+    in
     let mappings =
       List.mapi initial ~f:(fun i mapping ->
         remap (Printf.sprintf "account-%d" i) mapping)
@@ -253,7 +256,9 @@ let mappings_after_projection () =
     Alcotest.(check int) "mappings persisted" 2 result.mapping_changes;
     Alcotest.(check int) "renamed entries replay" 0 result.projection.inserted;
     Alcotest.(check int) "all entries reused" 3 result.projection.existing;
-    let restored = ok (Store.with_open (database root) Store.bank_accounts) in
+    let restored =
+      ok (Store.with_open ~registry:Builtin.registry (database root) Store.bank_accounts)
+    in
     Alcotest.(check string)
       "mapping survives reopening"
       (Bank_account_mapping.to_json mappings)
@@ -295,7 +300,9 @@ let mapping_errors () =
   workspace (fun root ->
     write (join (inbox root) "bank.ofx") (fixture ());
     ignore (ok (sync root));
-    let mappings = ok (Store.with_open (database root) Store.bank_accounts) in
+    let mappings =
+      ok (Store.with_open ~registry:Builtin.registry (database root) Store.bank_accounts)
+    in
     let first = List.hd_exn mappings in
     error (Bank_account_mapping.of_json (Bank_account_mapping.to_json [ first; first ]));
     let unknown =
@@ -329,7 +336,7 @@ let mapping_conflict_preserves_journal () =
     ignore (ok (sync root));
     let before = In_channel.read_all (journal root) in
     let mappings =
-      ok (Store.with_open (database root) Store.bank_accounts)
+      ok (Store.with_open ~registry:Builtin.registry (database root) Store.bank_accounts)
       |> List.mapi ~f:(fun i m -> remap (Printf.sprintf "changed-%d" i) m)
     in
     let config = join root "accounts.json" in
@@ -365,7 +372,13 @@ let path_protection () =
   workspace (fun root ->
     write (join (inbox root) "bank.ofx") (fixture ());
     let run database directory journal =
-      Finances_bank.Sync.run ~database ~institution:"boursobank" ~directory ~journal ()
+      Finances_bank.Sync.run
+        ~registry:Builtin.registry
+        ~database
+        ~institution:"boursobank"
+        ~directory
+        ~journal
+        ()
     in
     error (run (database root) (inbox root) (database root));
     error (run (join (inbox root) "database.sqlite3") (inbox root) (journal root));

@@ -231,7 +231,9 @@ dune exec fin -- bank boursobank import /path/to/export.ofx
 ```
 
 The institution identifier defaults to `boursobank`; use `--institution NAME` for
-another institution. Keep this identifier consistent across imports. A successful
+another institution. It must name a registered bank (`boursobank`, `bunq`,
+`revolut` or `wise`); files imported under any other identifier are rejected,
+with the attempt recorded. Keep this identifier consistent across imports. A successful
 import prints statement, inserted transaction, existing transaction, and document
 counts/IDs. All accounts in the file are imported.
 

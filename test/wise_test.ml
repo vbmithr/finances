@@ -25,7 +25,7 @@ let rejected result =
 
 let memory f =
   ok
-    (Store.with_open ":memory:" (fun db ->
+    (Store.with_open ~registry:Builtin.registry ":memory:" (fun db ->
        f db;
        Ok ()))
 ;;

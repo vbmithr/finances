@@ -9,13 +9,20 @@ type ingest =
   | Inserted of int64
   | Existing of int64
 
-val with_open : string -> (t -> 'a Or_error.t) -> 'a Or_error.t
+(** The registry supplies every bank the store can decode; the store itself
+    names none. *)
+val with_open : registry:Registry.t -> string -> (t -> 'a Or_error.t) -> 'a Or_error.t
+
+val registry : t -> Registry.t
 
 (** Identical retries return [Existing]; changed evidence for the same identity
     returns an error rather than silently overwriting the original. *)
 val ingest : t -> Source_event.t -> ingest Or_error.t
 
 val events : t -> (int64 * Source_event.t) list Or_error.t
+
+(** Every bank event with its decoded movement, in event order. *)
+val movements : t -> (int64 * Source_event.t * Movement.t) list Or_error.t
 
 type bank_import =
   { document_id : int64
@@ -147,7 +154,7 @@ val bank_category_history : t -> category_change list Or_error.t
 type bank_review =
   { event_id : int64
   ; institution : string
-  ; transaction : Bank_transaction.t
+  ; transaction : Movement.t
   ; counter_account : string
   ; reason : string option
   }
@@ -200,8 +207,8 @@ type transfer_candidate =
   ; second_event_id : int64
   ; first : Source_event.t
   ; second : Source_event.t
-  ; first_transaction : Bank_transaction.t
-  ; second_transaction : Bank_transaction.t
+  ; first_transaction : Movement.t
+  ; second_transaction : Movement.t
   ; days_apart : int
   ; state : Bank_transfer.state option
   ; reason : string option

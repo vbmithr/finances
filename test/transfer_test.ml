@@ -49,7 +49,7 @@ let seed db =
 
 let memory f =
   ok
-    (Store.with_open ":memory:" (fun db ->
+    (Store.with_open ~registry:Builtin.registry ":memory:" (fun db ->
        seed db;
        f db;
        Ok ()))
@@ -331,7 +331,7 @@ let conflict_and_reopen () =
   workspace (fun path ->
     let d =
       ok
-        (Store.with_open path (fun db ->
+        (Store.with_open ~registry:Builtin.registry path (fun db ->
            seed db;
            project db;
            let d = decision (candidate db) in
@@ -339,7 +339,7 @@ let conflict_and_reopen () =
            Ok d))
     in
     ok
-      (Store.with_open path (fun db ->
+      (Store.with_open ~registry:Builtin.registry path (fun db ->
          project db;
          check
            "reopened decisions"
@@ -354,7 +354,7 @@ let conflict_and_reopen () =
             id FROM journal_entries WHERE event_id=%Ld)"
            d.second_event_id));
     ok
-      (Store.with_open path (fun db ->
+      (Store.with_open ~registry:Builtin.registry path (fun db ->
          let reject =
            ok
              (Bank_transfer.create

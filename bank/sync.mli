@@ -17,7 +17,8 @@ type report =
     Source imports survive a later mapping/projection/output failure; the previous
     journal is preserved. TMPDIR must share a filesystem with the destination. *)
 val run
-  :  ?account_id:string
+  :  registry:Finances_core.Registry.t
+  -> ?account_id:string
   -> ?accounts:string
   -> ?max_file_bytes:int64
   -> database:string

@@ -40,7 +40,7 @@ let scalar db s =
 let initialize () =
   workspace (fun path ->
     ok
-      (Store.with_open path (fun db ->
+      (Store.with_open ~registry:Builtin.registry path (fun db ->
          check "fresh database empty" 0 (List.length (ok (Store.events db)));
          Ok ()));
     raw path (fun db ->
@@ -73,7 +73,7 @@ let initialize () =
 
 let sqlite_constraints () =
   workspace (fun path ->
-    ok (Store.with_open path (fun _ -> Ok ()));
+    ok (Store.with_open ~registry:Builtin.registry path (fun _ -> Ok ()));
     raw path (fun db ->
       let rejected s =
         Alcotest.(check bool) s true (Result.is_error (Rel_sqlite3.exec_sql db s))
@@ -174,7 +174,7 @@ let generated_queries () =
       ]
     in
     ok
-      (Store.with_open path (fun db ->
+      (Store.with_open ~registry:Builtin.registry path (fun db ->
          let id =
            match ok (Store.ingest db first) with
            | Inserted id -> id
@@ -198,7 +198,7 @@ let generated_queries () =
 
 let large_rowid () =
   workspace (fun path ->
-    ok (Store.with_open path (fun _ -> Ok ()));
+    ok (Store.with_open ~registry:Builtin.registry path (fun _ -> Ok ()));
     raw path (fun db ->
       sql
         db
@@ -206,7 +206,7 @@ let large_rowid () =
          source_events(id,venue,account,kind,source_id,occurred_at_ms,payload) VALUES \
          (9223372036854775807,'bank','main','test','large-id',1,X'00')");
     ok
-      (Store.with_open path (fun db ->
+      (Store.with_open ~registry:Builtin.registry path (fun db ->
          let id, event = List.hd_exn (ok (Store.events db)) in
          Alcotest.(check int64) "full SQLite rowid range" Int64.max_value id;
          (match ok (Store.ingest db event) with
@@ -220,7 +220,7 @@ let rejects_old () =
   workspace (fun path ->
     raw path (fun db ->
       sql db "CREATE TABLE experimental_marker(value TEXT); PRAGMA user_version=9");
-    error (Store.with_open path (fun _ -> Ok ()));
+    error (Store.with_open ~registry:Builtin.registry path (fun _ -> Ok ()));
     raw path (fun db ->
       check "old version left intact" 9 (scalar db "PRAGMA user_version");
       check
@@ -232,7 +232,7 @@ let rejects_old () =
 let initialization_rollback () =
   workspace (fun path ->
     raw path (fun db -> sql db "CREATE TABLE bank_account_settlements(collision TEXT)");
-    error (Store.with_open path (fun _ -> Ok ()));
+    error (Store.with_open ~registry:Builtin.registry path (fun _ -> Ok ()));
     raw path (fun db ->
       check
         "failed initialization remains unversioned"
@@ -247,7 +247,7 @@ let initialization_rollback () =
 let persistent_state () =
   workspace (fun path ->
     ok
-      (Store.with_open path (fun db ->
+      (Store.with_open ~registry:Builtin.registry path (fun db ->
          let ofx =
            In_channel.read_all "fixtures/bank.ofx"
            |> fun s ->
@@ -320,7 +320,7 @@ let persistent_state () =
                  ]));
          Ok ()));
     ok
-      (Store.with_open path (fun db ->
+      (Store.with_open ~registry:Builtin.registry path (fun db ->
          check "source evidence retained" 11 (List.length (ok (Store.events db)));
          check "entries retained" 11 (List.length (ok (Store.entries db)));
          check "category retained" 1 (List.length (ok (Store.bank_category_history db)));

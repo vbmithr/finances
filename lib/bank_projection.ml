@@ -14,7 +14,7 @@ let account_component value =
        |> String.concat)
 ;;
 
-let ledger_account_for ~institution (account : Bank_transaction.account) =
+let ledger_account ~institution (account : Movement.account) =
   let name =
     String.concat
       ~sep:":"
@@ -24,16 +24,6 @@ let ledger_account_for ~institution (account : Bank_transaction.account) =
            ~f:account_component)
   in
   Validation.account name
-;;
-
-let ledger_account ~institution (account : Bank_ofx.account) =
-  ledger_account_for
-    ~institution
-    { Bank_transaction.bank_id = account.bank_id
-    ; account_id = account.account_id
-    ; account_type = account.account_type
-    ; currency = account.currency
-    }
 ;;
 
 let description_component text =
@@ -51,13 +41,13 @@ let description_component text =
   |> String.concat ~sep:" "
 ;;
 
-let entry ?bank_account ?(counter_account = "equity:unclassified") event =
+let entry ?bank_account ?(counter_account = "equity:unclassified") ~institution movement =
   let open Or_error.Let_syntax in
-  let%bind transaction = Bank_transaction.of_event event in
+  let transaction : Movement.t = movement in
   let account = transaction.account in
   let%bind bank_account =
     match bank_account with
-    | None -> ledger_account_for ~institution:event.venue account
+    | None -> ledger_account ~institution account
     | Some name -> Validation.account name
   in
   let%bind incoming =
@@ -73,7 +63,7 @@ let entry ?bank_account ?(counter_account = "equity:unclassified") event =
       (Quantity.neg Quantity.(transaction.amount + transaction.fee))
   in
   let descriptions =
-    List.filter_opt [ transaction.name; transaction.memo ]
+    transaction.descriptions
     |> List.map ~f:description_component
     |> List.filter ~f:(Fn.non String.is_empty)
   in

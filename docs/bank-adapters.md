@@ -273,9 +273,14 @@ companion match states, and the exported journal after reapplying decisions.
    matches, transfer candidates. Every later step diffs against it.
 2. **`iban` library.** Done: `Account_identity`, account configuration and Store
    use `Iban.t`; reports on the personal database are unchanged.
-3. **Kernel types and registry.** `Movement.t`, adapter signature, registry,
-   generic overlap and companion machinery. Switch projection, transfers,
-   ranking, IBAN evidence and journal export to `Movement.t`.
+3. **Kernel types and registry.** Done for reading: `finances.core` holds
+   `Movement.t`, `Adapter.S` and `Registry`; the banks are a separate library
+   without SQLite; projection, transfers, ranking, IBAN and card rules, and
+   journal value dates use `Movement.t` from the registry; imports under an
+   unregistered institution are rejected. The adapter signature has only the
+   read side (`decode`, `kinds`, `aliases`); `probe`/`parse`, overlap policy and
+   companions are added with steps 4 and 5. Reports and a full inbox replay on
+   the personal database are unchanged.
 4. **Schema v11 and migration.** The generic tables, with Store's per-bank code
    paths rewritten over them.
 5. **Adapters, one at a time:** Revolut (context and day inventory, no

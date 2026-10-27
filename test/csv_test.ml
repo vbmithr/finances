@@ -48,7 +48,7 @@ let database root = Stdlib.Filename.concat root "bank.sqlite3"
 
 let with_store root f =
   ok
-    (Store.with_open (database root) (fun db ->
+    (Store.with_open ~registry:Builtin.registry (database root) (fun db ->
        f db;
        Ok ()))
 ;;
@@ -56,20 +56,24 @@ let with_store root f =
 let import_ofx ?(institution = "boursobank") root contents =
   let document = ok (Bank_ofx.parse contents) in
   ok
-    (Store.with_open (database root) (fun db -> Store.import_ofx db ~institution document))
+    (Store.with_open ~registry:Builtin.registry (database root) (fun db ->
+       Store.import_ofx db ~institution document))
 ;;
 
 let import_csv root contents =
   ok
-    (Store.with_open (database root) (fun db ->
+    (Store.with_open ~registry:Builtin.registry (database root) (fun db ->
        Store.import_bank_file db ~institution:"boursobank" ~path:"export.csv" ~contents))
 ;;
 
-let match_csv root = ok (Store.with_open (database root) Store.match_bank_csv)
+let match_csv root =
+  ok (Store.with_open ~registry:Builtin.registry (database root) Store.match_bank_csv)
+;;
 
 let export root =
-  ignore (ok (Store.with_open (database root) Store.project_bank));
-  ok (Store.with_open (database root) Finances_hledger.export)
+  ignore
+    (ok (Store.with_open ~registry:Builtin.registry (database root) Store.project_bank));
+  ok (Store.with_open ~registry:Builtin.registry (database root) Finances_hledger.export)
 ;;
 
 let raw root f =
@@ -393,6 +397,7 @@ let folder_order () =
     let run () =
       ok
         (Finances_bank.Sync.run
+           ~registry:Builtin.registry
            ~database:(database root)
            ~institution:"boursobank"
            ~directory:inbox

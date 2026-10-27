@@ -37,4 +37,5 @@ val max_component_vertices : int
     components are explicitly not evaluated. Scores are not probabilities. *)
 val assignments : edge list -> assignment list Or_error.t
 
-val analyze : Store.transfer_candidate list -> ranked list Or_error.t
+(** Bank-name evidence uses the registry's institution aliases. *)
+val analyze : Registry.t -> Store.transfer_candidate list -> ranked list Or_error.t

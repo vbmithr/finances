@@ -10,7 +10,7 @@ let import db = ignore (ok (Store.import_ofx db ~institution:"boursobank" (docum
 
 let memory f =
   ok
-    (Store.with_open ":memory:" (fun db ->
+    (Store.with_open ~registry:Builtin.registry ":memory:" (fun db ->
        import db;
        f db;
        Ok ()))
@@ -165,13 +165,13 @@ let workspace f =
 let conflicts () =
   workspace (fun path ->
     ok
-      (Store.with_open path (fun db ->
+      (Store.with_open ~registry:Builtin.registry path (fun db ->
          import db;
          project db;
          Ok ()));
     with_raw path (fun db -> sql db "UPDATE postings SET quantity='123' WHERE ordinal=1");
     ok
-      (Store.with_open path (fun db ->
+      (Store.with_open ~registry:Builtin.registry path (fun db ->
          error (Store.set_bank_categories db [ decision (id db) "expenses:food" ]);
          check
            "no decision after conflict"

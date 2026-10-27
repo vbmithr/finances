@@ -143,16 +143,10 @@ let assignments edges =
            }))))
 ;;
 
-let description (tx : Bank_transaction.t) =
-  String.concat ~sep:" " (List.filter_opt [ tx.name; tx.memo ])
-;;
+let description (tx : Movement.t) = String.concat ~sep:" " tx.descriptions
 
-let bank_mentioned text bank =
-  let aliases =
-    match bank with
-    | "boursobank" -> [ "boursobank"; "boursorama" ]
-    | other -> [ other ]
-  in
+let bank_mentioned registry text bank =
+  let aliases = Registry.aliases registry bank in
   String.lowercase text
   |> String.split_on_chars ~on:[ ' '; '\t'; '\n'; ':'; ';'; ','; '.'; '/'; '-'; '('; ')' ]
   |> List.exists ~f:(fun word -> List.mem aliases word ~equal:String.equal)
@@ -174,7 +168,7 @@ let references text =
     else None)
 ;;
 
-let evidence (c : Store.transfer_candidate) =
+let evidence registry (c : Store.transfer_candidate) =
   let base =
     { code = "opposite_principal"
     ; points = 30
@@ -214,8 +208,8 @@ let evidence (c : Store.transfer_candidate) =
              }
          else None)
       ; (if
-           bank_mentioned (description c.first_transaction) c.second.venue
-           || bank_mentioned (description c.second_transaction) c.first.venue
+           bank_mentioned registry (description c.first_transaction) c.second.venue
+           || bank_mentioned registry (description c.second_transaction) c.first.venue
          then
            Some
              { code = "bank_name"
@@ -243,13 +237,13 @@ let evidence (c : Store.transfer_candidate) =
   base :: timing :: extra
 ;;
 
-let analyze candidates =
+let analyze registry candidates =
   let eligible =
     List.filter candidates ~f:(fun c -> c.Store.iban_compatible && Option.is_none c.state)
   in
   let scored =
     List.map eligible ~f:(fun candidate ->
-      let evidence = evidence candidate in
+      let evidence = evidence registry candidate in
       candidate, evidence, List.sum (module Int) evidence ~f:(fun e -> e.points))
   in
   let edges =

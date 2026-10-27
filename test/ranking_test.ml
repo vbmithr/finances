@@ -80,7 +80,7 @@ let seed db =
 
 let memory f =
   ok
-    (Store.with_open ":memory:" (fun db ->
+    (Store.with_open ~registry:Builtin.registry ":memory:" (fun db ->
        seed db;
        f db;
        Ok ()))
@@ -146,7 +146,9 @@ let registration () =
       "saved IBAN"
       counterpart_iban
       (Iban.to_string (Option.value_exn info.iban));
-    let ranked = ok (Transfer_ranking.analyze (ok (Store.transfer_candidates db))) in
+    let ranked =
+      ok (Transfer_ranking.analyze Builtin.registry (ok (Store.transfer_candidates db)))
+    in
     let r =
       List.find_exn ranked ~f:(fun r ->
         Int64.equal r.Transfer_ranking.candidate.first_event_id c.first_event_id

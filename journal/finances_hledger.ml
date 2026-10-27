@@ -76,17 +76,14 @@ let export db =
   let%bind entries = Store.entries db in
   let%bind observations = Store.bank_csv_observations db in
   let%bind wise = Store.wise_csv_observations db in
-  let%bind wise_transactions = Store.wise_transactions db in
   let%bind category_history = Store.bank_category_history db in
-  let%bind bunq_transactions = Store.bunq_transactions db in
+  let%bind movements = Store.movements db in
   let%bind bunq_observations = Store.bunq_csv_observations db in
   let%map transfer_decisions = Store.bank_transfer_decisions db in
   let secondary_dates = Hashtbl.create (module Int64) in
-  List.iter wise_transactions ~f:(fun (id, tx) ->
-    Option.iter tx.Wise_camt.value_on ~f:(fun date ->
+  List.iter movements ~f:(fun (id, _, movement) ->
+    Option.iter movement.Movement.value_on ~f:(fun date ->
       Hashtbl.set secondary_dates ~key:id ~data:date));
-  List.iter bunq_transactions ~f:(fun (id, tx) ->
-    Hashtbl.set secondary_dates ~key:id ~data:tx.Bunq_transaction.value_on);
   let extra_metadata = Hashtbl.create (module Int64) in
   List.iter wise ~f:(fun (observation : Store.wise_csv_observation) ->
     match observation.matching with

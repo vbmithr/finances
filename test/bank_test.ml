@@ -24,7 +24,7 @@ let with_database f =
 
 let with_store path f =
   ok
-    (Store.with_open path (fun db ->
+    (Store.with_open ~registry:Builtin.registry path (fun db ->
        f db;
        Ok ()))
 ;;
@@ -59,7 +59,9 @@ let check_counts path documents events links =
 
 let import path ?(institution = "boursobank") contents =
   let document = parse contents in
-  ok (Store.with_open path (fun db -> Store.import_ofx db ~institution document))
+  ok
+    (Store.with_open ~registry:Builtin.registry path (fun db ->
+       Store.import_ofx db ~institution document))
 ;;
 
 let multi_account_parser () =
@@ -205,7 +207,7 @@ let atomic_conflict () =
     in
     let document = parse changed in
     error
-      (Store.with_open path (fun db ->
+      (Store.with_open ~registry:Builtin.registry path (fun db ->
          Store.import_ofx db ~institution:"boursobank" document));
     check_counts path 1 3 3)
 ;;

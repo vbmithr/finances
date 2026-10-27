@@ -18,7 +18,7 @@ let with_database f =
 
 let with_store path f =
   ok
-    (Store.with_open path (fun db ->
+    (Store.with_open ~registry:Builtin.registry path (fun db ->
        f db;
        Ok ()))
 ;;
@@ -26,20 +26,26 @@ let with_store path f =
 let import path contents =
   let document = ok (Bank_ofx.parse contents) in
   ok
-    (Store.with_open path (fun db ->
+    (Store.with_open ~registry:Builtin.registry path (fun db ->
        Store.import_ofx db ~institution:"boursobank" document))
 ;;
 
 let journal_replay () =
   with_database (fun path ->
     ignore (import path (fixture ()));
-    let first = ok (Store.with_open path Store.project_bank) in
+    let first = ok (Store.with_open ~registry:Builtin.registry path Store.project_bank) in
     Alcotest.(check int) "all bank events projected" 3 first.inserted;
-    let journal = ok (Store.with_open path Finances_hledger.export) in
-    let second = ok (Store.with_open path Store.project_bank) in
+    let journal =
+      ok (Store.with_open ~registry:Builtin.registry path Finances_hledger.export)
+    in
+    let second =
+      ok (Store.with_open ~registry:Builtin.registry path Store.project_bank)
+    in
     Alcotest.(check int) "replay creates no postings" 0 second.inserted;
     Alcotest.(check int) "replay recognizes all entries" 3 second.existing;
-    let repeated = ok (Store.with_open path Finances_hledger.export) in
+    let repeated =
+      ok (Store.with_open ~registry:Builtin.registry path Finances_hledger.export)
+    in
     Alcotest.(check string) "byte-identical export" journal repeated;
     let transactions =
       Hledger.Parse.journal_exn journal |> Hledger.Journal.transactions
@@ -85,8 +91,10 @@ let descriptions () =
         ~with_:"(code) * ; note&#10;2026-01-01 | more"
     in
     ignore (import path contents);
-    ignore (ok (Store.with_open path Store.project_bank));
-    let journal = ok (Store.with_open path Finances_hledger.export) in
+    ignore (ok (Store.with_open ~registry:Builtin.registry path Store.project_bank));
+    let journal =
+      ok (Store.with_open ~registry:Builtin.registry path Finances_hledger.export)
+    in
     let transactions =
       Hledger.Parse.journal_exn journal |> Hledger.Journal.transactions
     in
@@ -137,7 +145,8 @@ let existing_conflict_rollback () =
     ignore (import path (fixture ()));
     with_store path (fun db ->
       let event_id, event = List.last_exn (ok (Store.events db)) in
-      let expected = ok (Bank_projection.entry event) in
+      let movement = ok (Registry.movement Builtin.registry event) in
+      let expected = ok (Bank_projection.entry ~institution:event.venue movement) in
       let wrong =
         ok
           (Accounting.entry
@@ -159,7 +168,15 @@ let masked_accounts () =
       String.substr_replace_all (fixture ()) ~pattern:"SAVINGS" ~with_:source_id
     in
     let statement = List.last_exn (ok (Bank_ofx.parse contents)).statements in
-    ok (Bank_projection.ledger_account ~institution:"boursobank" statement.account)
+    let a = statement.account in
+    ok
+      (Bank_projection.ledger_account
+         ~institution:"boursobank"
+         { bank_id = a.bank_id
+         ; account_id = a.account_id
+         ; account_type = a.account_type
+         ; currency = a.currency
+         })
   in
   let masked = account "****4321" in
   Alcotest.(check bool)

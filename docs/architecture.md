@@ -293,7 +293,6 @@ movements commit atomically. Rejected documents retain bytes and an import attem
 Wise statements retain their balance observations and links to every movement,
 including overlapping statement membership; balances never create postings.
 
-Bank_transaction provides the shared projection view over OFX and Wise payloads.
 Wise events use kind `wise-transaction`, a full-precision timestamp/reference/direction
 identity, and a payload containing booking clock, amount, account/currency and
 optional value date. The generic event stores UTC milliseconds; the identity and
@@ -313,12 +312,25 @@ FX postings. Real samples currently validate EUR movements with zero fees.
 
 ## Bank adapter layout
 
-Bank-specific adapters live in `lib/banks/boursobank/` (OFX parsing, BoursoBank CSV
-parsing and matching), `lib/banks/wise/` (CAMT parsing and Wise CSV parsing and
-matching), `lib/banks/bunq/` (MT940 parsing, movement identities and CSV matching),
-and `lib/banks/revolut/` (primary CSV movement parsing and fee evidence).
-Dune's `include_subdirs unqualified` builds these directories into the
-existing `finances` library, preserving its public module names.
+Three libraries separate the kernel from the banks:
+
+- `finances.core` (`core/`): quantities, dates, source events, `Movement`, the
+  `Adapter.S` signature and `Registry`. No database access.
+- `finances.banks` (`banks/`): one directory per bank with its parsers and an
+  adapter module (`Boursobank`, `Bunq`, `Revolut`, `Wise`); `Builtin` lists them.
+  The library cannot depend on Rel or SQLite.
+- `finances` (`lib/`): Store, projection, transfer review and account
+  configuration.
+
+`Store.with_open ~registry` receives the banks it may decode; the CLI passes
+`Builtin.registry`. Every kernel read of a bank event goes through
+`Registry.movement`, which dispatches by venue and kind to the adapter that
+produced the event. `Movement.t` carries what the kernel needs: account,
+own-IBAN status (known, unknown, or not applicable for cards), booking and value
+dates, net amount, separately posted fee, descriptions and counterparty IBAN.
+Import, statement storage and companion matching still call bank parsers from
+Store; they move behind the adapter interface in later steps
+(`docs/bank-adapters.md`).
 
 The adapters share `Bank_match` for matching states and results; Wise does not
 depend on the BoursoBank matcher. `Bank_csv_match` re-exports these types for
@@ -359,7 +371,7 @@ states; rendering must run again after applying decisions.
 plus movements equals closing balance. `Bunq_transaction` builds canonical payloads
 and identities including occurrence numbers, so identical repeated payments remain
 separate. Its generic source events use kind `bunq-transaction` and dated booking
-occurrences. `Bank_transaction` supplies the shared projection view.
+occurrences.
 
 The baseline includes immutable
 Bunq day inventories, statement balances, CSV rows and audited derived matches.

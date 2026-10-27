@@ -1,8 +1,12 @@
 (executable
  (name main)
  (public_name fin)
+ (flags
+  (:standard -open Finances_core -open Finances_banks))
  (libraries
   finances
+  finances.banks
+  finances.core
   finances.hledger
   finances.bank
   finances.iban

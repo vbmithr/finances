@@ -77,6 +77,7 @@ let write_journal ~path contents =
 ;;
 
 let run
+      ~registry
       ?account_id
       ?accounts
       ?max_file_bytes
@@ -119,7 +120,7 @@ let run
       let%bind contents = Or_error.try_with (fun () -> In_channel.read_all path) in
       Bank_account_config.of_json contents
   in
-  Store.with_open database (fun db ->
+  Store.with_open ~registry database (fun db ->
     let%bind () =
       match account_id with
       | None -> Ok ()

@@ -1,15 +1,31 @@
 (test
  (name kernel_test)
  (modules kernel_test)
- (libraries finances base stdio bos fpath alcotest rel rel.sqlite3))
+ (flags
+  (:standard -open Finances_core -open Finances_banks))
+ (libraries
+  finances
+  finances.banks
+  finances.core
+  base
+  stdio
+  bos
+  fpath
+  alcotest
+  rel
+  rel.sqlite3))
 
 (test
  (name csv_test)
  (modules csv_test)
  (deps
   (glob_files fixtures/*))
+ (flags
+  (:standard -open Finances_core -open Finances_banks))
  (libraries
   finances
+  finances.banks
+  finances.core
   finances.bank
   finances.hledger
   hledger
@@ -27,8 +43,12 @@
  (modules inbox_test)
  (deps
   (glob_files fixtures/*))
+ (flags
+  (:standard -open Finances_core -open Finances_banks))
  (libraries
   finances
+  finances.banks
+  finances.core
   finances.bank
   finances.hledger
   hledger
@@ -45,22 +65,50 @@
  (name journal_test)
  (modules journal_test)
  (deps fixtures/bank.ofx)
- (libraries finances finances.hledger hledger base stdio bos fpath alcotest))
+ (flags
+  (:standard -open Finances_core -open Finances_banks))
+ (libraries
+  finances
+  finances.banks
+  finances.core
+  finances.hledger
+  hledger
+  base
+  stdio
+  bos
+  fpath
+  alcotest))
 
 (test
  (name bank_test)
  (modules bank_test)
  (deps
   (glob_files fixtures/*))
- (libraries finances base stdio bos fpath alcotest rel rel.sqlite3))
+ (flags
+  (:standard -open Finances_core -open Finances_banks))
+ (libraries
+  finances
+  finances.banks
+  finances.core
+  base
+  stdio
+  bos
+  fpath
+  alcotest
+  rel
+  rel.sqlite3))
 
 (test
  (name wise_test)
  (modules wise_test)
  (deps
   (glob_files fixtures/*))
+ (flags
+  (:standard -open Finances_core -open Finances_banks))
  (libraries
   finances
+  finances.banks
+  finances.core
   finances.bank
   finances.hledger
   hledger
@@ -78,8 +126,12 @@
  (modules category_test)
  (deps
   (glob_files fixtures/*))
+ (flags
+  (:standard -open Finances_core -open Finances_banks))
  (libraries
   finances
+  finances.banks
+  finances.core
   finances.hledger
   base
   stdio
@@ -95,8 +147,12 @@
  (modules bunq_test)
  (deps
   (glob_files fixtures/*))
+ (flags
+  (:standard -open Finances_core -open Finances_banks))
  (libraries
   finances
+  finances.banks
+  finances.core
   finances.hledger
   base
   stdio
@@ -112,8 +168,12 @@
  (modules transfer_test)
  (deps
   (glob_files fixtures/*))
+ (flags
+  (:standard -open Finances_core -open Finances_banks))
  (libraries
   finances
+  finances.banks
+  finances.core
   finances.hledger
   base
   stdio
@@ -129,8 +189,12 @@
  (modules ranking_test)
  (deps
   (glob_files fixtures/*))
+ (flags
+  (:standard -open Finances_core -open Finances_banks))
  (libraries
   finances
+  finances.banks
+  finances.core
   finances.iban
   base
   stdio
@@ -146,8 +210,12 @@
  (modules accounts_test)
  (deps
   (glob_files fixtures/*))
+ (flags
+  (:standard -open Finances_core -open Finances_banks))
  (libraries
   finances
+  finances.banks
+  finances.core
   finances.iban
   base
   stdio
@@ -163,8 +231,12 @@
  (modules schema_test)
  (deps
   (glob_files fixtures/*))
+ (flags
+  (:standard -open Finances_core -open Finances_banks))
  (libraries
   finances
+  finances.banks
+  finances.core
   finances.iban
   base
   stdio
@@ -178,21 +250,61 @@
 (test
  (name paths_test)
  (modules paths_test)
- (libraries finances base stdio bos fpath alcotest))
+ (flags
+  (:standard -open Finances_core -open Finances_banks))
+ (libraries
+  finances
+  finances.banks
+  finances.core
+  base
+  stdio
+  bos
+  fpath
+  alcotest))
 
 (test
  (name status_test)
  (modules status_test)
  (deps
   (glob_files fixtures/*))
- (libraries finances finances.bank base stdio bos fpath alcotest))
+ (flags
+  (:standard -open Finances_core -open Finances_banks))
+ (libraries
+  finances
+  finances.banks
+  finances.core
+  finances.bank
+  base
+  stdio
+  bos
+  fpath
+  alcotest))
 
 (test
  (name quantity_test)
  (modules quantity_test)
- (libraries finances base decimal ptime zarith alcotest))
+ (flags
+  (:standard -open Finances_core -open Finances_banks))
+ (libraries
+  finances
+  finances.banks
+  finances.core
+  base
+  decimal
+  ptime
+  zarith
+  alcotest))
 
 (test
  (name iban_test)
  (modules iban_test)
  (libraries finances.iban base alcotest))
+
+(test
+ (name registry_test)
+ (modules registry_test)
+ (deps
+  (glob_files fixtures/*))
+ (flags
+  (:standard -open Finances_core -open Finances_banks))
+ (libraries finances finances.core finances.banks base stdio alcotest))
