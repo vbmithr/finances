@@ -11,7 +11,7 @@ let replace s a b = String.substr_replace_all s ~pattern:a ~with_:b
 
 let memory f =
   ok
-    (Store.with_open ~registry:Builtin.registry ":memory:" (fun db ->
+    (Store.with_open ~registry:Test_support.registry ":memory:" (fun db ->
        f db;
        Ok ()))
 ;;
@@ -64,9 +64,12 @@ let workflow () =
   memory (fun db ->
     accepted (import db "early.csv" (csv ()));
     check "CSV creates no events" 0 (List.length (ok (Store.events db)));
-    check "CSV pending" 4 (ok (Store.match_bunq_csv db)).unmatched;
+    check "CSV pending" 4 (ok (Store.match_companions ~institution:"bunq" db)).unmatched;
     accepted (import db "extensionless" (mt ()));
-    check "matched all occurrences" 4 (ok (Store.match_bunq_csv db)).matched;
+    check
+      "matched all occurrences"
+      4
+      (ok (Store.match_companions ~institution:"bunq" db)).matched;
     check "generated movements" 4 (ok (Store.project_bank db)).inserted;
     let statements = ok (Store.statement_reconciliations ~institution:"bunq" db) in
     Alcotest.(check (list int))
@@ -82,7 +85,7 @@ let workflow () =
     Alcotest.(check bool)
       "CSV provenance"
       true
-      (String.is_substring journal ~substring:"bunq-csv-row-id:");
+      (String.is_substring journal ~substring:"companion-row-ids:");
     Alcotest.(check bool)
       "value date available"
       true
@@ -96,12 +99,17 @@ let workflow () =
          "overlap.mt940"
          (replace (mt ()) "synthetic-statement" "overlapping-statement"));
     check "no duplicate projections" 0 (ok (Store.project_bank db)).inserted;
-    check "no match changes" 0 (ok (Store.match_bunq_csv db)).changed;
+    check
+      "no match changes"
+      0
+      (ok (Store.match_companions ~institution:"bunq" db)).changed;
     check "still four events" 4 (List.length (ok (Store.events db)));
     let category =
       ok
         (Bank_category.create
-           ~event_id:(fst (List.hd_exn (ok (Store.bunq_transactions db))))
+           ~event_id:
+             (let id, _, _ = List.hd_exn (ok (Store.movements db)) in
+              id)
            ~account:"expenses:food"
            ~reason:"Reviewed")
     in
@@ -153,7 +161,12 @@ let ambiguity () =
       |> List.mapi ~f:(fun i row ->
         { Bunq_csv.row_id = Int64.of_int (i + 1); document_id = 1L; row })
     in
-    let results = Bunq_csv.match_rows partial (ok (Store.bunq_transactions db)) in
+    let transactions =
+      List.map
+        (ok (Store.events db))
+        ~f:(fun (id, event) -> id, ok (Bunq_transaction.source_transaction event))
+    in
+    let results = Bunq_csv.match_rows partial transactions in
     check
       "partial identical group is ambiguous"
       1
@@ -161,12 +174,15 @@ let ambiguity () =
     let other = replace (mt ()) "SYNTHETICBUNQ" "SYNTHETICSECOND" in
     accepted (import db "other.mt940" other);
     accepted (import db "original.csv" (csv ()));
-    check "account matching isolates movements" 4 (ok (Store.match_bunq_csv db)).matched;
+    check
+      "account matching isolates movements"
+      4
+      (ok (Store.match_companions ~institution:"bunq" db)).matched;
     accepted (import db "usd.mt940" (replace (mt ()) "EUR" "USD"));
     check
       "currency-free CSV cannot guess currency"
       4
-      (ok (Store.match_bunq_csv db)).ambiguous)
+      (ok (Store.match_companions ~institution:"bunq" db)).ambiguous)
 ;;
 
 let multibank () =

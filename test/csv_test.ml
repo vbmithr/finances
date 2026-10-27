@@ -48,32 +48,43 @@ let database root = Stdlib.Filename.concat root "bank.sqlite3"
 
 let with_store root f =
   ok
-    (Store.with_open ~registry:Builtin.registry (database root) (fun db ->
+    (Store.with_open ~registry:Test_support.registry (database root) (fun db ->
        f db;
        Ok ()))
 ;;
 
 let import_ofx ?(institution = "boursobank") root contents =
-  let document = ok (Bank_ofx.parse contents) in
   ok
-    (Store.with_open ~registry:Builtin.registry (database root) (fun db ->
-       Store.import_ofx db ~institution document))
+    (Store.with_open ~registry:Test_support.registry (database root) (fun db ->
+       Test_support.import_ofx db ~institution contents))
 ;;
 
 let import_csv root contents =
   ok
-    (Store.with_open ~registry:Builtin.registry (database root) (fun db ->
+    (Store.with_open ~registry:Test_support.registry (database root) (fun db ->
        Store.import_bank_file db ~institution:"boursobank" ~path:"export.csv" ~contents))
 ;;
 
 let match_csv root =
-  ok (Store.with_open ~registry:Builtin.registry (database root) Store.match_bank_csv)
+  ok
+    (Store.with_open
+       ~registry:Test_support.registry
+       (database root)
+       (Store.match_companions ~institution:"boursobank"))
 ;;
 
 let export root =
   ignore
-    (ok (Store.with_open ~registry:Builtin.registry (database root) Store.project_bank));
-  ok (Store.with_open ~registry:Builtin.registry (database root) Finances_hledger.export)
+    (ok
+       (Store.with_open
+          ~registry:Test_support.registry
+          (database root)
+          Store.project_bank));
+  ok
+    (Store.with_open
+       ~registry:Test_support.registry
+       (database root)
+       Finances_hledger.export)
 ;;
 
 let raw root f =
@@ -339,7 +350,7 @@ let overlap_and_scope () =
     Alcotest.(check int) "balance observations do not conflict" 0 report.conflicts;
     with_store root (fun db ->
       List.iter
-        (ok (Store.bank_csv_observations db))
+        (ok (Store.companion_observations ~institution:"boursobank" db))
         ~f:(fun row ->
           let matching = Option.value_exn row.matching in
           Alcotest.(check bool)
@@ -405,10 +416,13 @@ let folder_order () =
            ())
     in
     let first = run () in
-    Alcotest.(check int) "CSV before OFX in one sync still matches" 3 first.csv.matched;
+    Alcotest.(check int)
+      "CSV before OFX in one sync still matches"
+      3
+      first.companions.matched;
     Alcotest.(check int) "only OFX creates entries" 3 first.projection.inserted;
     let second = run () in
-    Alcotest.(check int) "sync replay stable" 0 second.csv.changed;
+    Alcotest.(check int) "sync replay stable" 0 second.companions.changed;
     Alcotest.(check int) "no new entries" 0 second.projection.inserted)
 ;;
 

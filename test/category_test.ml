@@ -5,12 +5,19 @@ open Finances
 let ok = Or_error.ok_exn
 let check = Alcotest.(check int)
 let error r = Alcotest.(check bool) "rejected" true (Result.is_error r)
-let document () = ok (Bank_ofx.parse (In_channel.read_all "fixtures/bank.ofx"))
-let import db = ignore (ok (Store.import_ofx db ~institution:"boursobank" (document ())))
+
+let import db =
+  ignore
+    (ok
+       (Test_support.import_ofx
+          db
+          ~institution:"boursobank"
+          (In_channel.read_all "fixtures/bank.ofx")))
+;;
 
 let memory f =
   ok
-    (Store.with_open ~registry:Builtin.registry ":memory:" (fun db ->
+    (Store.with_open ~registry:Test_support.registry ":memory:" (fun db ->
        import db;
        f db;
        Ok ()))
@@ -82,7 +89,11 @@ let after_projection () =
     let wise = In_channel.read_all "fixtures/wise.xml" in
     ignore
       (ok (Store.import_bank_file db ~institution:"wise" ~path:"wise.xml" ~contents:wise));
-    let wise_id, _ = List.hd_exn (ok (Store.wise_transactions db)) in
+    let wise_id, _, _ =
+      List.find_exn
+        (ok (Store.movements db))
+        ~f:(fun (_, e, _) -> String.equal e.Source_event.venue "wise")
+    in
     ignore (classify db [ decision wise_id "expenses:travel" ]);
     project db;
     Alcotest.(check string) "Wise classified" "expenses:travel" (account db wise_id);
@@ -165,13 +176,13 @@ let workspace f =
 let conflicts () =
   workspace (fun path ->
     ok
-      (Store.with_open ~registry:Builtin.registry path (fun db ->
+      (Store.with_open ~registry:Test_support.registry path (fun db ->
          import db;
          project db;
          Ok ()));
     with_raw path (fun db -> sql db "UPDATE postings SET quantity='123' WHERE ordinal=1");
     ok
-      (Store.with_open ~registry:Builtin.registry path (fun db ->
+      (Store.with_open ~registry:Test_support.registry path (fun db ->
          error (Store.set_bank_categories db [ decision (id db) "expenses:food" ]);
          check
            "no decision after conflict"

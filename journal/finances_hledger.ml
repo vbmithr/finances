@@ -26,40 +26,35 @@ let transaction
         posting.account
         ~amount:(Hledger.Amount.create ~commodity:posting.commodity posting.quantity))
   in
+  (* Matched companion rows, in row order: the first value date wins, and each
+     tag comes from the first row that provides it. *)
   let observations = Option.value (Hashtbl.find metadata event_id) ~default:[] in
-  let first field = List.find_map observations ~f:(fun (_, row) -> field row) in
   let date2 =
     Option.first_some
-      (first (fun (row : Bank_csv.row) -> row.value_on))
+      (List.find_map observations ~f:(fun (_, (a : Companion.annotation)) -> a.value_on))
       (Hashtbl.find secondary_dates event_id)
   in
-  let wise_extra = Option.value (Hashtbl.find extra_metadata event_id) ~default:[] in
-  let extra =
-    List.filter_opt
-      [ Option.map
-          (first (fun row -> row.Bank_csv.category))
-          ~f:(fun s -> "bank-category: " ^ tag_text s)
-      ; Option.map
-          (first (fun row -> row.Bank_csv.parent_category))
-          ~f:(fun s -> "bank-parent-category: " ^ tag_text s)
-      ; Option.map
-          (first (fun row -> row.Bank_csv.suggested_description))
-          ~f:(fun s -> "bank-suggested-description: " ^ tag_text s)
-      ]
+  let tags =
+    List.fold observations ~init:[] ~f:(fun tags (_, (a : Companion.annotation)) ->
+      tags
+      @ List.filter a.tags ~f:(fun (name, _) ->
+        not (List.Assoc.mem tags name ~equal:String.equal)))
+    |> List.map ~f:(fun (name, value) -> name ^ ": " ^ tag_text value)
   in
   let provenance =
     if List.is_empty observations
     then []
     else
-      [ "csv-row-ids: "
+      [ "companion-row-ids: "
         ^ String.concat
             ~sep:" "
             (List.map observations ~f:(fun (id, _) -> Int64.to_string id))
       ]
   in
+  let review = Option.value (Hashtbl.find extra_metadata event_id) ~default:[] in
   let comment : Hledger.Journal.comment =
     { same_line = Some (Printf.sprintf "source-event-id: %Ld" event_id)
-    ; lines = [ "projection-key: " ^ key ] @ extra @ provenance @ wise_extra
+    ; lines = [ "projection-key: " ^ key ] @ tags @ provenance @ review
     }
   in
   Hledger.Journal.transaction
@@ -74,46 +69,38 @@ let transaction
 let export db =
   let open Or_error.Let_syntax in
   let%bind entries = Store.entries db in
-  let%bind observations = Store.bank_csv_observations db in
-  let%bind wise = Store.wise_csv_observations db in
+  let%bind observations = Store.companion_observations db in
   let%bind category_history = Store.bank_category_history db in
   let%bind movements = Store.movements db in
-  let%bind bunq_observations = Store.bunq_csv_observations db in
-  let%map transfer_decisions = Store.bank_transfer_decisions db in
+  let%bind transfer_decisions = Store.bank_transfer_decisions db in
+  let companions =
+    List.map
+      (Registry.companions (Store.registry db))
+      ~f:(fun (owner, c) -> (owner, c.Companion.format), c)
+  in
+  let%map annotated =
+    List.filter_map observations ~f:(fun (o : Store.companion_observation) ->
+      match o.matching with
+      | Some { state = Matched; event_id = Some event_id; _ } -> Some (event_id, o.row)
+      | _ -> None)
+    |> List.map ~f:(fun (event_id, (row : Companion.row)) ->
+      let%bind (companion : Companion.t) =
+        Or_error.of_option
+          (List.Assoc.find
+             companions
+             (row.institution, row.format)
+             ~equal:[%equal: string * string])
+          ~error:(Error.of_string "companion row of an unregistered format")
+      in
+      let%map annotation = companion.annotate row in
+      event_id, (row.row_id, annotation))
+    |> Or_error.combine_errors
+  in
   let secondary_dates = Hashtbl.create (module Int64) in
   List.iter movements ~f:(fun (id, _, movement) ->
     Option.iter movement.Movement.value_on ~f:(fun date ->
       Hashtbl.set secondary_dates ~key:id ~data:date));
   let extra_metadata = Hashtbl.create (module Int64) in
-  List.iter wise ~f:(fun (observation : Store.wise_csv_observation) ->
-    match observation.matching with
-    | Some { state = Matched; event_id = Some id; _ } ->
-      let row = observation.row in
-      let tags =
-        [ Some ("wise-csv-row-id: " ^ Int64.to_string observation.row_id)
-        ; Some ("wise-reported-fees: " ^ tag_text (Quantity.to_string row.fees))
-        ; Option.map row.merchant ~f:(fun s -> "wise-merchant: " ^ tag_text s)
-        ; Option.map row.payment_reference ~f:(fun s ->
-            "wise-payment-reference: " ^ tag_text s)
-        ]
-        |> List.filter_opt
-      in
-      if not (Hashtbl.mem extra_metadata id)
-      then Hashtbl.set extra_metadata ~key:id ~data:tags
-    | _ -> ());
-  List.iter bunq_observations ~f:(fun (observation : Store.bunq_csv_observation) ->
-    match observation.matching with
-    | Some { state = Matched; event_id = Some id; _ } ->
-      let tags =
-        [ "bunq-csv-row-id: " ^ Int64.to_string observation.row_id ]
-        @
-        if String.is_empty observation.row.counterparty
-        then []
-        else [ "bunq-counterparty: " ^ tag_text observation.row.counterparty ]
-      in
-      if not (Hashtbl.mem extra_metadata id)
-      then Hashtbl.set extra_metadata ~key:id ~data:tags
-    | _ -> ());
   List.iter transfer_decisions ~f:(fun (decision : Bank_transfer.decision) ->
     if Poly.equal decision.state Confirmed
     then
@@ -140,18 +127,15 @@ let export db =
     Hashtbl.update extra_metadata event_id ~f:(fun existing ->
       Option.value existing ~default:[] @ tags));
   let metadata = Hashtbl.create (module Int64) in
-  List.iter observations ~f:(fun observation ->
-    match observation.Store.matching with
-    | Some { state = Matched; event_id = Some event_id; _ } ->
-      Hashtbl.add_multi metadata ~key:event_id ~data:(observation.row_id, observation.row)
-    | _ -> ());
+  List.iter annotated ~f:(fun (event_id, annotation) ->
+    Hashtbl.add_multi metadata ~key:event_id ~data:annotation);
   Hashtbl.map_inplace metadata ~f:(fun rows ->
     List.sort rows ~compare:(fun (a, _) (b, _) -> Int64.compare a b));
   let review_rows =
     List.count observations ~f:(fun row ->
       not
         (Option.exists row.Store.matching ~f:(fun result ->
-           Poly.equal result.state Bank_csv_match.Matched)))
+           Poly.equal result.state Bank_match.Matched)))
   in
   let postings = List.concat_map entries ~f:(fun (_, _, entry) -> entry.postings) in
   let accounts =
@@ -194,8 +178,8 @@ let export db =
        else
          [ Hledger.Journal.Comment_line
              (Printf.sprintf
-                "; CSV enrichment: matched_events=%d review_rows=%d. Bank categories are \
-                 source suggestions."
+                "; Companion enrichment: matched_events=%d review_rows=%d. Bank \
+                 categories are source suggestions."
                 (Hashtbl.length metadata)
                 review_rows)
          ])

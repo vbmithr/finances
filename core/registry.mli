@@ -4,7 +4,8 @@ open Base
     learns about bank events comes through a registry. *)
 type t
 
-(** Rejects invalid or duplicate institutions and adapters without kinds. *)
+(** Rejects invalid or duplicate institutions, adapters without kinds, repeated
+    formats and companions for formats the adapter does not declare. *)
 val create : (module Adapter.S) list -> t Or_error.t
 
 (** Sorted. *)
@@ -23,3 +24,11 @@ val is_movement : t -> Source_event.t -> bool
 (** Decodes a movement with the adapter registered for the event's venue. A
     bank kind under a venue no adapter claims is an error, never skipped. *)
 val movement : t -> Source_event.t -> Movement.t Or_error.t
+
+val find : t -> string -> (module Adapter.S) option
+
+(** Every registered (institution, format) that recognizes the file. *)
+val probe : t -> filename:string -> string -> (string * string) list
+
+(** Every companion format, with the institution that owns it. *)
+val companions : t -> (string * Companion.t) list

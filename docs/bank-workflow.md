@@ -194,7 +194,7 @@ record can invalidate a formerly unique automatic link without rewriting evidenc
 Uncontested CSV value dates and bank suggestions are available in journal secondary
 dates and tags. They do not change booking dates, amounts, account classifications,
 or clearing status. The journal includes coverage counts, and inspection is exposed
-through bank boursobank csv list with an optional --review flag. Manual approval of links
+through `bank companions --institution boursobank` with an optional `--review` flag. Manual approval of links
 and conflicting metadata remains a later review-workflow feature.
 
 ## Decisions, transfers, and corrections
@@ -261,7 +261,7 @@ with conservative ambiguity and conflict handling. Reimport and overlap reuse ev
 
 Use separate inboxes with explicit `--institution wise` and
 `--institution boursobank`, sharing the same database and journal output.
-`bank wise status DATABASE` reports statement differences and CSV matching decisions.
+`bank statements --institution wise` reports statement differences and `bank companions --institution wise` the CSV matching decisions.
 The combined journal includes every institution already stored. Opening balance
 postings, fee postings, and FX accounting are not inferred. Real FX and nonzero-fee
 cases need additional coverage; synthetic tests exercise fee metadata conflicts,
@@ -272,7 +272,7 @@ currency separation, reversals, and multi-bank replay.
 The Bunq adapter accepts the observed MT940 export and its seven-column CSV
 companion from `personal/bunq/inbox/` with `--institution bunq`. MT940 supplies
 movements and reconciled account/currency balances; CSV observations add corroborating
-row provenance, never extra movements. `bank bunq status` reports persisted reconciliation
+row provenance, never extra movements. `bank statements` reports persisted reconciliation
 and CSV matching states.
 
 Because upstream references are `NONREF`, identities include canonical movement

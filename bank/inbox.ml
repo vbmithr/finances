@@ -127,7 +127,12 @@ let scan
            | Error error -> record_error path error
            | Ok contents ->
              let%map report =
-               Store.import_bank_file ?account_id db ~institution ~path ~contents
+               Store.import_bank_file
+                 ?account_label:account_id
+                 db
+                 ~institution
+                 ~path
+                 ~contents
              in
              files := report :: !files)
         | S_LNK ->

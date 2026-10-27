@@ -5,6 +5,7 @@
   (:standard -open Finances_core -open Finances_banks))
  (libraries
   finances
+  test_support
   finances.banks
   finances.core
   base
@@ -24,6 +25,7 @@
   (:standard -open Finances_core -open Finances_banks))
  (libraries
   finances
+  test_support
   finances.banks
   finances.core
   finances.bank
@@ -47,6 +49,7 @@
   (:standard -open Finances_core -open Finances_banks))
  (libraries
   finances
+  test_support
   finances.banks
   finances.core
   finances.bank
@@ -69,6 +72,7 @@
   (:standard -open Finances_core -open Finances_banks))
  (libraries
   finances
+  test_support
   finances.banks
   finances.core
   finances.hledger
@@ -88,6 +92,7 @@
   (:standard -open Finances_core -open Finances_banks))
  (libraries
   finances
+  test_support
   finances.banks
   finances.core
   base
@@ -107,6 +112,7 @@
   (:standard -open Finances_core -open Finances_banks))
  (libraries
   finances
+  test_support
   finances.banks
   finances.core
   finances.bank
@@ -130,6 +136,7 @@
   (:standard -open Finances_core -open Finances_banks))
  (libraries
   finances
+  test_support
   finances.banks
   finances.core
   finances.hledger
@@ -151,6 +158,7 @@
   (:standard -open Finances_core -open Finances_banks))
  (libraries
   finances
+  test_support
   finances.banks
   finances.core
   finances.hledger
@@ -172,6 +180,7 @@
   (:standard -open Finances_core -open Finances_banks))
  (libraries
   finances
+  test_support
   finances.banks
   finances.core
   finances.hledger
@@ -193,6 +202,7 @@
   (:standard -open Finances_core -open Finances_banks))
  (libraries
   finances
+  test_support
   finances.banks
   finances.core
   finances.iban
@@ -214,6 +224,7 @@
   (:standard -open Finances_core -open Finances_banks))
  (libraries
   finances
+  test_support
   finances.banks
   finances.core
   finances.iban
@@ -235,6 +246,7 @@
   (:standard -open Finances_core -open Finances_banks))
  (libraries
   finances
+  test_support
   finances.banks
   finances.core
   finances.iban
@@ -254,6 +266,7 @@
   (:standard -open Finances_core -open Finances_banks))
  (libraries
   finances
+  test_support
   finances.banks
   finances.core
   base
@@ -271,6 +284,7 @@
   (:standard -open Finances_core -open Finances_banks))
  (libraries
   finances
+  test_support
   finances.banks
   finances.core
   finances.bank
@@ -287,6 +301,7 @@
   (:standard -open Finances_core -open Finances_banks))
  (libraries
   finances
+  test_support
   finances.banks
   finances.core
   base
@@ -307,7 +322,14 @@
   (glob_files fixtures/*))
  (flags
   (:standard -open Finances_core -open Finances_banks))
- (libraries finances finances.core finances.banks base stdio alcotest))
+ (libraries
+  finances
+  test_support
+  finances.core
+  finances.banks
+  base
+  stdio
+  alcotest))
 
 (test
  (name ofx_test)

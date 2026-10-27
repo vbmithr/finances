@@ -1,17 +1,16 @@
 (include_subdirs unqualified)
 
-; Store still names bank parsers for import and companion matching. That coupling
-; (and -open Finances_banks) goes away once import runs through the registry.
+; The kernel names no bank: it reaches them only through the registry it is
+; given, so it does not depend on finances.banks.
 
 (library
  (name finances)
  (public_name finances)
  (private_modules db_schema sqlite_schema)
  (flags
-  (:standard -open Finances_core -open Finances_banks))
+  (:standard -open Finances_core))
  (libraries
   finances.core
-  finances.banks
   base
   stdio
   bos

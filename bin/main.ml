@@ -198,30 +198,6 @@ let ingest_cmd =
           & info [] ~docv:"PAYLOAD" ~doc:"File containing the unmodified source payload."))
 ;;
 
-let import_ofx database institution path =
-  let%bind contents = read_file path in
-  let%bind document = Bank_ofx.parse contents in
-  with_database database (fun db ->
-    let%bind report = Store.import_ofx db ~institution document in
-    printf
-      "statements=%d inserted=%d existing=%d document=%Ld\n"
-      report.statements
-      report.inserted
-      report.existing
-      report.document_id;
-    Ok ())
-;;
-
-let import_ofx_cmd =
-  command
-    "import"
-    "Import BoursoBank OFX statements."
-    Term.(
-      const (fun database path -> import_ofx database "boursobank" path)
-      $ database
-      $ Arg.(required & pos 0 (some string) None & info [] ~docv:"OFX_FILE"))
-;;
-
 let project_bank database =
   with_database database (fun db ->
     let%bind report = Store.project_bank db in
@@ -401,7 +377,7 @@ let import_history database limit json_output =
              [ "attempt_id", `Intlit (Int64.to_string row.attempt_id)
              ; "institution", `String row.institution
              ; "path", `String row.path
-             ; "format", `String (Bank_import.format_name row.format)
+             ; "format", `String row.format
              ; "outcome", `String (Bank_import.outcome_name row.outcome)
              ; ( "document_id"
                , optional (fun id -> `Intlit (Int64.to_string id)) row.document_id )
@@ -484,28 +460,13 @@ let sync_bank database directory institution journal accounts max_mib account_id
       report.identity_changes
       report.settlement_changes;
     printf
-      "csv_matched=%d csv_unmatched=%d csv_ambiguous=%d csv_conflicts=%d csv_changes=%d\n"
-      report.csv.matched
-      report.csv.unmatched
-      report.csv.ambiguous
-      report.csv.conflicts
-      report.csv.changed;
-    printf
-      "wise_csv_matched=%d wise_csv_unmatched=%d wise_csv_ambiguous=%d \
-       wise_csv_conflicts=%d wise_csv_changes=%d\n"
-      report.wise_csv.matched
-      report.wise_csv.unmatched
-      report.wise_csv.ambiguous
-      report.wise_csv.conflicts
-      report.wise_csv.changed;
-    printf
-      "bunq_csv_matched=%d bunq_csv_unmatched=%d bunq_csv_ambiguous=%d \
-       bunq_csv_conflicts=%d bunq_csv_changes=%d\n"
-      report.bunq_csv.matched
-      report.bunq_csv.unmatched
-      report.bunq_csv.ambiguous
-      report.bunq_csv.conflicts
-      report.bunq_csv.changed;
+      "companions_matched=%d companions_unmatched=%d companions_ambiguous=%d \
+       companions_conflicts=%d companions_changes=%d\n"
+      report.companions.matched
+      report.companions.unmatched
+      report.companions.ambiguous
+      report.companions.conflicts
+      report.companions.changed;
     if count Rejected + count Unreadable > 0
     then
       Or_error.error_string
@@ -555,99 +516,6 @@ let sync_bank_cmd =
               ~doc:"Stable Revolut account label, required for its account-free CSV."))
 ;;
 
-let csv_enrichments database review =
-  with_database database (fun db ->
-    let%bind observations = Store.bank_csv_observations db in
-    let optional f value = Option.value_map value ~default:`Null ~f in
-    let string s = `String s in
-    let id n = `Intlit (Int64.to_string n) in
-    let observations =
-      if not review
-      then observations
-      else
-        List.filter observations ~f:(fun row ->
-          not
-            (Option.exists row.Store.matching ~f:(fun matching ->
-               Poly.equal matching.state Bank_csv_match.Matched)))
-    in
-    let rows =
-      List.map observations ~f:(fun observation ->
-        let row = observation.Store.row in
-        `Assoc
-          [ "row_id", id observation.row_id
-          ; "document_id", id observation.document_id
-          ; "row_number", `Int row.row_number
-          ; "institution", string observation.institution
-          ; "account_id", string row.account_id
-          ; "booked_on", string (Date.to_string row.booked_on)
-          ; "value_on", optional (fun date -> string (Date.to_string date)) row.value_on
-          ; "amount", string (Quantity.to_string row.amount)
-          ; "description", string row.description
-          ; "suggested_description", optional string row.suggested_description
-          ; "category", optional string row.category
-          ; "parent_category", optional string row.parent_category
-          ; "comment", optional string row.comment
-          ; "account_label", optional string row.account_label
-          ; ( "reported_balance"
-            , optional
-                (fun amount -> string (Quantity.to_string amount))
-                row.reported_balance )
-          ; "pointage", optional string row.pointage
-          ; ( "event_id"
-            , optional id (Option.bind observation.matching ~f:(fun m -> m.event_id)) )
-          ; ( "state"
-            , string
-                (Option.value_map observation.matching ~default:"pending" ~f:(fun m ->
-                   Bank_csv_match.state_name m.state)) )
-          ; ( "reason"
-            , optional string (Option.map observation.matching ~f:(fun m -> m.reason)) )
-          ; ( "candidate_event_ids"
-            , `List
-                (List.map
-                   (Option.value_map observation.matching ~default:[] ~f:(fun m ->
-                      m.candidates))
-                   ~f:id) )
-          ])
-    in
-    Out_channel.print_endline (Yojson.Safe.pretty_to_string (`List rows));
-    Ok ())
-;;
-
-let csv_enrichments_cmd =
-  command
-    "list"
-    "List CSV observations, enrichment links, and unresolved matches as JSON."
-    Term.(
-      const csv_enrichments
-      $ database
-      $ Arg.(
-          value
-          & flag
-          & info
-              [ "review" ]
-              ~doc:"Only unmatched, ambiguous, conflicting or pending observations."))
-;;
-
-let match_csv database =
-  with_database database (fun db ->
-    let%bind result = Store.match_bank_csv db in
-    printf
-      "matched=%d unmatched=%d ambiguous=%d conflicts=%d changed=%d\n"
-      result.matched
-      result.unmatched
-      result.ambiguous
-      result.conflicts
-      result.changed;
-    Ok ())
-;;
-
-let match_csv_cmd =
-  command
-    "match"
-    "Recompute and audit CSV enrichment matches against stored OFX evidence."
-    Term.(const match_csv $ database)
-;;
-
 let statement_json (s : Store.statement_reconciliation) =
   `Assoc
     [ "statement_id", `Intlit (Int64.to_string s.statement_id)
@@ -667,40 +535,124 @@ let statement_json (s : Store.statement_reconciliation) =
     ]
 ;;
 
-let wise_status database =
+let institution_filter =
+  Arg.(
+    value
+    & opt (some string) None
+    & info
+        [ "institution" ]
+        ~docv:"INSTITUTION"
+        ~doc:"Only this institution; all registered institutions by default.")
+;;
+
+let statements database institution =
   with_database database (fun db ->
-    let%bind statements = Store.statement_reconciliations ~institution:"wise" db in
-    let%bind rows = Store.wise_csv_observations db in
-    let string s = `String s in
-    let json =
-      `Assoc
-        [ "statements", `List (List.map statements ~f:statement_json)
-        ; ( "csv_rows"
-          , `List
-              (List.map rows ~f:(fun (r : Store.wise_csv_observation) ->
-                 `Assoc
-                   [ "row_id", `Intlit (Int64.to_string r.row_id)
-                   ; "document_id", `Intlit (Int64.to_string r.document_id)
-                   ; "reference", string r.row.reference
-                   ; ( "state"
-                     , string
-                         (Option.value_map r.matching ~default:"pending" ~f:(fun m ->
-                            Bank_csv_match.state_name m.state)) )
-                   ; ( "reason"
-                     , Option.value_map r.matching ~default:`Null ~f:(fun m ->
-                         string m.reason) )
-                   ])) )
-        ]
-    in
-    print_endline (Yojson.Safe.pretty_to_string json);
+    let%bind statements = Store.statement_reconciliations ?institution db in
+    print_endline
+      (Yojson.Safe.pretty_to_string
+         (`Assoc [ "statements", `List (List.map statements ~f:statement_json) ]));
     Ok ())
 ;;
 
-let wise_status_cmd =
+let statements_cmd =
   command
-    "status"
-    "Inspect Wise statement reconciliation and CSV matching as JSON."
-    Term.(const wise_status $ database)
+    "statements"
+    "Show bank-stated balances against the movements each statement lists, as JSON."
+    Term.(const statements $ database $ institution_filter)
+;;
+
+let companions database institution review =
+  with_database database (fun db ->
+    let%bind observations = Store.companion_observations ?institution db in
+    let observations =
+      if not review
+      then observations
+      else
+        List.filter observations ~f:(fun o ->
+          not
+            (Option.exists o.Store.matching ~f:(fun m ->
+               Poly.equal m.state Bank_match.Matched)))
+    in
+    let describers = Registry.companions (Store.registry db) in
+    let id n = `Intlit (Int64.to_string n) in
+    let optional f value = Option.value_map value ~default:`Null ~f in
+    let%map rows =
+      List.map observations ~f:(fun (o : Store.companion_observation) ->
+        let row = o.row in
+        let%bind (companion : Companion.t) =
+          Or_error.of_option
+            (List.find_map describers ~f:(fun (owner, c) ->
+               Option.some_if
+                 (String.equal owner row.institution
+                  && String.equal c.Companion.format row.format)
+                 c))
+            ~error:(Error.of_string "companion row of an unregistered format")
+        in
+        let%map fields = companion.describe row in
+        `Assoc
+          ([ "row_id", id row.row_id
+           ; "document_id", id row.document_id
+           ; "row_number", `Int row.row_number
+           ; "institution", `String row.institution
+           ; "format", `String row.format
+           ]
+           @ List.map fields ~f:(fun (name, value) ->
+             name, optional (fun s -> `String s) value)
+           @ [ "event_id", optional id (Option.bind o.matching ~f:(fun m -> m.event_id))
+             ; ( "state"
+               , `String
+                   (Option.value_map o.matching ~default:"pending" ~f:(fun m ->
+                      Bank_match.state_name m.state)) )
+             ; ( "reason"
+               , optional
+                   (fun s -> `String s)
+                   (Option.map o.matching ~f:(fun m -> m.reason)) )
+             ; ( "candidate_event_ids"
+               , `List
+                   (List.map
+                      (Option.value_map o.matching ~default:[] ~f:(fun m -> m.candidates))
+                      ~f:id) )
+             ]))
+      |> Or_error.combine_errors
+    in
+    Out_channel.print_endline (Yojson.Safe.pretty_to_string (`List rows)))
+;;
+
+let companions_cmd =
+  command
+    "companions"
+    "List companion observations (CSV enrichment exports), their fields and matches, as \
+     JSON."
+    Term.(
+      const companions
+      $ database
+      $ institution_filter
+      $ Arg.(
+          value
+          & flag
+          & info
+              [ "review" ]
+              ~doc:"Only unmatched, ambiguous, conflicting or pending observations."))
+;;
+
+let match_companions database institution =
+  with_database database (fun db ->
+    let%bind result = Store.match_companions ?institution db in
+    printf
+      "matched=%d unmatched=%d ambiguous=%d conflicts=%d changed=%d\n"
+      result.matched
+      result.unmatched
+      result.ambiguous
+      result.conflicts
+      result.changed;
+    Ok ())
+;;
+
+let match_companions_cmd =
+  command
+    "match"
+    "Recompute and audit companion matches against stored movements."
+    Term.(const match_companions $ database $ institution_filter)
 ;;
 
 let categorize_bank database path =
@@ -793,41 +745,6 @@ let category_history_cmd =
     "history"
     "List the append-only history of reviewed bank categories."
     Term.(const category_history $ database)
-;;
-
-let bunq_status database =
-  with_database database (fun db ->
-    let%bind statements = Store.statement_reconciliations ~institution:"bunq" db in
-    let%bind rows = Store.bunq_csv_observations db in
-    let json =
-      `Assoc
-        [ "statements", `List (List.map statements ~f:statement_json)
-        ; ( "csv_rows"
-          , `List
-              (List.map rows ~f:(fun (r : Store.bunq_csv_observation) ->
-                 `Assoc
-                   [ "row_id", `Intlit (Int64.to_string r.row_id)
-                   ; "document_id", `Intlit (Int64.to_string r.document_id)
-                   ; "row_number", `Int r.row.row_number
-                   ; ( "state"
-                     , `String
-                         (Option.value_map r.matching ~default:"pending" ~f:(fun m ->
-                            Bank_match.state_name m.state)) )
-                   ; ( "reason"
-                     , Option.value_map r.matching ~default:`Null ~f:(fun m ->
-                         `String m.reason) )
-                   ])) )
-        ]
-    in
-    print_endline (Yojson.Safe.pretty_to_string json);
-    Ok ())
-;;
-
-let bunq_status_cmd =
-  command
-    "status"
-    "Inspect Bunq statement reconciliation and companion CSV matches as JSON."
-    Term.(const bunq_status $ database)
 ;;
 
 let transfer_leg event_id (event : Source_event.t) (tx : Movement.t) =
@@ -1249,17 +1166,9 @@ let () =
                   "categories"
                   "Manage reviewed bank categories."
                   [ categorize_bank_cmd; category_history_cmd ]
-              ; group
-                  "boursobank"
-                  "BoursoBank import and companion observations."
-                  [ import_ofx_cmd
-                  ; group
-                      "csv"
-                      "Inspect and match BoursoBank CSV observations."
-                      [ csv_enrichments_cmd; match_csv_cmd ]
-                  ]
-              ; group "wise" "Inspect Wise statement data." [ wise_status_cmd ]
-              ; group "bunq" "Inspect Bunq statement data." [ bunq_status_cmd ]
+              ; companions_cmd
+              ; match_companions_cmd
+              ; statements_cmd
               ]
           ; group
               "transfers"

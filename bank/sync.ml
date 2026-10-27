@@ -8,9 +8,7 @@ type report =
   ; identity_changes : int
   ; settlement_changes : int
   ; projection : Store.projection_report
-  ; csv : Store.csv_report
-  ; bunq_csv : Finances.Store.csv_report
-  ; wise_csv : Store.csv_report
+  ; companions : Store.companion_report
   ; journal : string
   }
 
@@ -124,8 +122,18 @@ let run
     let%bind () =
       match account_id with
       | None -> Ok ()
-      | Some _ when String.equal institution "revolut" -> Ok ()
-      | Some _ -> Or_error.error_string "--account-id is only supported for Revolut"
+      | Some _ ->
+        (match Registry.find registry institution with
+         | Some (module A : Adapter.S) when A.takes_account_label -> Ok ()
+         | _ ->
+           Or_error.errorf
+             "--account-id is only accepted for banks whose exports do not identify \
+              their account (%s)"
+             (List.filter (Registry.institutions registry) ~f:(fun i ->
+                match Registry.find registry i with
+                | Some (module A : Adapter.S) -> A.takes_account_label
+                | None -> false)
+              |> String.concat ~sep:", "))
     in
     let%bind inbox =
       Inbox.scan
@@ -140,9 +148,7 @@ let run
     let mapping_changes = account_changes.mapping_changes
     and identity_changes = account_changes.identity_changes
     and settlement_changes = account_changes.settlement_changes in
-    let%bind csv = Store.match_bank_csv db in
-    let%bind wise_csv = Store.match_wise_csv db in
-    let%bind bunq_csv = Store.match_bunq_csv db in
+    let%bind companions = Store.match_companions db in
     let%bind projection = Store.project_bank db in
     let%bind contents = Finances_hledger.export db in
     let%map () = write_journal ~path:journal contents in
@@ -151,9 +157,7 @@ let run
     ; identity_changes
     ; settlement_changes
     ; projection
-    ; csv
-    ; wise_csv
-    ; bunq_csv
+    ; companions
     ; journal
     })
 ;;

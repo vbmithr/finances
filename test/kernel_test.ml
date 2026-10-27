@@ -18,7 +18,7 @@ let with_database f =
 
 let with_store path f =
   ok
-    (Store.with_open ~registry:Builtin.registry path (fun db ->
+    (Store.with_open ~registry:Test_support.registry path (fun db ->
        f db;
        Ok ()))
 ;;
@@ -82,7 +82,7 @@ let replay () =
     let original = event ~payload:"raw\000payload\n" "deposit-1" in
     let id =
       ok
-        (Store.with_open ~registry:Builtin.registry path (fun db ->
+        (Store.with_open ~registry:Test_support.registry path (fun db ->
            Store.ingest db original))
       |> inserted
     in
@@ -148,14 +148,14 @@ let journal_replay () =
   with_database (fun path ->
     let event_id =
       ok
-        (Store.with_open ~registry:Builtin.registry path (fun db ->
+        (Store.with_open ~registry:Test_support.registry path (fun db ->
            Store.ingest db (event "deposit")))
       |> inserted
     in
     let original = entry () in
     let entry_id =
       ok
-        (Store.with_open ~registry:Builtin.registry path (fun db ->
+        (Store.with_open ~registry:Test_support.registry path (fun db ->
            Store.record_entry db ~event_id ~key:"collateral:v1" original))
       |> inserted
     in
@@ -190,7 +190,7 @@ let rollback () =
   with_database (fun path ->
     let event_id =
       ok
-        (Store.with_open ~registry:Builtin.registry path (fun db ->
+        (Store.with_open ~registry:Test_support.registry path (fun db ->
            Store.ingest db (event "deposit")))
       |> inserted
     in
@@ -227,7 +227,7 @@ let future_schema () =
   with_database (fun path ->
     with_store path ignore;
     raw path (fun db -> sql db "PRAGMA user_version=99");
-    error (Store.with_open ~registry:Builtin.registry path (fun _ -> Ok ())))
+    error (Store.with_open ~registry:Test_support.registry path (fun _ -> Ok ())))
 ;;
 
 let linear_perpetual () =

@@ -18,33 +18,34 @@ let with_database f =
 
 let with_store path f =
   ok
-    (Store.with_open ~registry:Builtin.registry path (fun db ->
+    (Store.with_open ~registry:Test_support.registry path (fun db ->
        f db;
        Ok ()))
 ;;
 
 let import path contents =
-  let document = ok (Bank_ofx.parse contents) in
   ok
-    (Store.with_open ~registry:Builtin.registry path (fun db ->
-       Store.import_ofx db ~institution:"boursobank" document))
+    (Store.with_open ~registry:Test_support.registry path (fun db ->
+       Test_support.import_ofx db ~institution:"boursobank" contents))
 ;;
 
 let journal_replay () =
   with_database (fun path ->
     ignore (import path (fixture ()));
-    let first = ok (Store.with_open ~registry:Builtin.registry path Store.project_bank) in
+    let first =
+      ok (Store.with_open ~registry:Test_support.registry path Store.project_bank)
+    in
     Alcotest.(check int) "all bank events projected" 3 first.inserted;
     let journal =
-      ok (Store.with_open ~registry:Builtin.registry path Finances_hledger.export)
+      ok (Store.with_open ~registry:Test_support.registry path Finances_hledger.export)
     in
     let second =
-      ok (Store.with_open ~registry:Builtin.registry path Store.project_bank)
+      ok (Store.with_open ~registry:Test_support.registry path Store.project_bank)
     in
     Alcotest.(check int) "replay creates no postings" 0 second.inserted;
     Alcotest.(check int) "replay recognizes all entries" 3 second.existing;
     let repeated =
-      ok (Store.with_open ~registry:Builtin.registry path Finances_hledger.export)
+      ok (Store.with_open ~registry:Test_support.registry path Finances_hledger.export)
     in
     Alcotest.(check string) "byte-identical export" journal repeated;
     let transactions =
@@ -91,9 +92,9 @@ let descriptions () =
         ~with_:"(code) * ; note&#10;2026-01-01 | more"
     in
     ignore (import path contents);
-    ignore (ok (Store.with_open ~registry:Builtin.registry path Store.project_bank));
+    ignore (ok (Store.with_open ~registry:Test_support.registry path Store.project_bank));
     let journal =
-      ok (Store.with_open ~registry:Builtin.registry path Finances_hledger.export)
+      ok (Store.with_open ~registry:Test_support.registry path Finances_hledger.export)
     in
     let transactions =
       Hledger.Parse.journal_exn journal |> Hledger.Journal.transactions

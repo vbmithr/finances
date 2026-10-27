@@ -65,7 +65,14 @@ let other_iban = "DE89370400440532013000"
 let replace s a b = String.substr_replace_all s ~pattern:a ~with_:b
 
 let import db institution path contents =
-  ignore (ok (Store.import_bank_file ~account_id:"main" db ~institution ~path ~contents))
+  ignore
+    (ok
+       (Store.import_bank_file
+          ?account_label:(Option.some_if (String.equal institution "revolut") "main")
+          db
+          ~institution
+          ~path
+          ~contents))
 ;;
 
 let seed db =
@@ -80,7 +87,7 @@ let seed db =
 
 let memory f =
   ok
-    (Store.with_open ~registry:Builtin.registry ":memory:" (fun db ->
+    (Store.with_open ~registry:Test_support.registry ":memory:" (fun db ->
        seed db;
        f db;
        Ok ()))

@@ -150,10 +150,16 @@ and history when sync reports an error:
 
 ```sh
 fin bank history
-fin bank wise status
-fin bank bunq status
-fin bank boursobank csv list --review
+fin bank statements
+fin bank companions --review
 ```
+
+`fin bank statements` compares each bank statement's stated balances with the
+movements it lists. `fin bank companions` lists the enrichment exports (the
+BoursoBank, Wise and Bunq CSV files) with their fields and match state;
+`--review` keeps the rows that still need attention. Both accept
+`--institution` to show one bank. `fin bank match` recomputes the matches;
+`fin bank sync` already does this.
 
 `fin bank history` is a log of file import attempts, not a list of transactions.
 It shows the bank, timestamp, filename, outcome, new/existing movement counts and

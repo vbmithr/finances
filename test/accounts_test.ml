@@ -16,13 +16,13 @@ let seed db =
       "<ACCTID>SAVINGS</ACCTID>"
       "<ACCTID>BE68539007547034</ACCTID>"
   in
-  ignore (ok (Store.import_ofx db ~institution:"boursobank" (ok (Bank_ofx.parse ofx))));
+  ignore (ok (Test_support.import_ofx db ~institution:"boursobank" ofx));
   ignore (ok (Store.project_bank db))
 ;;
 
 let memory f =
   ok
-    (Store.with_open ~registry:Builtin.registry ":memory:" (fun db ->
+    (Store.with_open ~registry:Test_support.registry ":memory:" (fun db ->
        seed db;
        f db;
        Ok ()))

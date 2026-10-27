@@ -156,53 +156,46 @@ separator, exact header match, decimal comma and validated UTF-8.
 
 ## Adapter contract
 
+The signature lives in `core/adapter.ml`:
+
 ```ocaml
 module type S = sig
-  (** Must equal the [venue] of every event the adapter produced. *)
-  val institution : string
-
-  (** Format identifiers, scoped by institution. Built-in adapters keep their
-      stored values (ofx, csv, camt053, wise_csv, bunq_mt940, bunq_csv,
-      revolut_csv), so import history is not rewritten. *)
-  val formats : Format.t list
-
-  (** Event kinds this adapter decodes. The registry rejects two adapters
-      claiming the same (institution, kind). *)
-  val kinds : string list
-
-  val probe : filename:string -> contents:string -> Probe.t
-  val parse : context:Context.t -> Format.t -> string -> Document.t Or_error.t
+  val institution : string          (* the venue of every event it produced *)
+  val aliases : string list         (* names in other banks' descriptions *)
+  val kinds : string list           (* event kinds it decodes *)
   val decode : Source_event.t -> Movement.t Or_error.t
-
-  (** How repeated observations are reconciled without bank IDs. *)
-  val overlap : Overlap.t
-
-  val companion : Companion.t option
+  val formats : string list         (* recorded in import history *)
+  val probe : filename:string -> string -> string option
+  val takes_account_label : bool    (* exports that do not name their account *)
+  val parse : context:context -> format:string -> string -> Document.t Or_error.t
+  val overlap : overlap             (* Source_ids | Day_inventory *)
+  val companions : Companion.t list
 end
 ```
 
-- `Probe.t` is `Recognized of Format.t | Malformed of Format.t * Error.t |
-  No_match`. The registry probes only the requested institution's adapter.
-  This replaces today's global, order-dependent detection, which runs before
-  the institution is considered. More than one match is an error.
-- `Context.t` carries explicit user hints (Revolut's account label). The kernel
-  persists it per document, so replay is deterministic.
-- `Document.t` contains source events with their movements, statements and
-  companion rows, built through validating constructors. It never contains
-  ledger accounts or categories.
-- `Overlap.t` is `Source_ids` (the bank supplies stable IDs: OFX FITID, Wise
-  references) or `Day_inventory` (Bunq, Revolut: per account and day, sorted
-  payload signatures must agree across documents). The kernel implements both.
-- `Companion.t` packs a row type with `of_fields`, a pure
-  `match_rows : row list -> (event_id * Movement.t) list -> Match.result list`,
-  a policy name, and `tags : row -> (string * string) list` for journal
-  metadata. Matching rules differ per bank and stay in the adapter; storage,
-  audit and journal emission do not.
+- The kernel probes every registered adapter. A file is parsed by the requested
+  institution's adapter when exactly one of its formats recognizes it; a file
+  only another bank recognizes is rejected with that institution's name; a file
+  no bank recognizes is unsupported. A recognizable but malformed file is still
+  recognized, so parsing explains what is wrong.
+- `context` carries explicit user hints (Revolut's account label). An adapter
+  returns the hints that are part of the evidence in `Document.context`; the
+  kernel stores them per document, so the same bytes cannot later mean another
+  account.
+- `Document.t` holds statements with the events they list, other events,
+  companion rows (row number and raw fields) and context. It never contains
+  ledger accounts or categories. The kernel checks that every event carries the
+  adapter's institution and one of its kinds.
+- `overlap` selects the kernel's duplicate policy: `Source_ids` (OFX FITID,
+  Wise references) or `Day_inventory` (Bunq, Revolut: per account and day,
+  sorted payloads must agree across documents).
+- A `Companion.t` matches rows of one format against the institution's own
+  events, annotates matched rows for the journal (a value date and named tags)
+  and describes rows for `fin bank companions`. Storage, audit, journal emission
+  and listing are the kernel's.
 
-A generic OFX adapter is a functor `Ofx_adapter.Make (struct let institution =
-… end)`. BoursoBank is that plus `DTUSER` tolerance and its CSV companion. This
-keeps today's behaviour (OFX accepted under any institution) explicit: an OFX
-institution exists only if it is registered.
+`Ofx_bank.Make (struct let institution = … let aliases = … end)` is a complete
+adapter for any OFX bank. BoursoBank is that plus its CSV companion.
 
 ### Normalized movement
 
@@ -283,13 +276,16 @@ rebuilt with the previous build against one rebuilt with the new build.
    for every bank. Rebuilding the personal database gives the same events,
    journal entries, reconciliations and match states; only companion row IDs in
    journal tags are renumbered.
-5. **Adapters, one at a time:** Revolut (context and day inventory, no
-   standard format), BoursoBank (with `ofx`), Bunq (with `mt940`), then Wise
-   (with `camt`). Each step replays the baseline unchanged.
-6. **Remove the closed variants:** `Bank_import.format`, the
-   `Bank_transaction` kind list, per-bank sync report fields and per-bank
-   status commands (replaced by `fin bank status --institution`). Update the
-   manual and help text in the same change.
+5. **Import behind the adapters.** Done: probing, parsing, overlap policy and
+   companions are adapter members; Store, the journal exporter and the CLI name
+   no bank, and the kernel library does not depend on `finances.banks`. The
+   per-bank commands became `fin bank statements`, `fin bank companions` and
+   `fin bank match`; `Bank_import.format` is the adapter's format text. A
+   rebuild from the personal inboxes gives the same events, entries, match
+   states and reconciliations; journal provenance is one `companion-row-ids`
+   tag.
+6. **Format libraries for the remaining banks:** `mt940` under Bunq and `camt`
+   under Wise, like `ofx` under BoursoBank.
 7. **External adapter example and conformance suite,** written against the
    finished interface.
 

@@ -312,7 +312,7 @@ tables keep BoursoBank's account/date/description matching policy independent.
 Both adapters share matching-state persistence and append-only decision history.
 The folder workflow recomputes both match sets before generic bank projection.
 
-`bank wise status` recomputes statement reconciliation from stored event memberships
+`bank statements` recomputes statement reconciliation from stored event memberships
 using exact decimal quantities and exposes every Wise CSV row's match state. The journal adds
 uncontested merchant, payment reference and reported-fee metadata, without fee or
 FX postings. Real samples currently validate EUR movements with zero fees.
@@ -339,9 +339,11 @@ nothing about banks or accounting: `finances.iban` (ISO 13616) and
 produced the event. `Movement.t` carries what the kernel needs: account,
 own-IBAN status (known, unknown, or not applicable for cards), booking and value
 dates, net amount, separately posted fee, descriptions and counterparty IBAN.
-Import, statement storage and companion matching still call bank parsers from
-Store; they move behind the adapter interface in later steps
-(`docs/bank-adapters.md`).
+Imports go through the same registry: adapters recognize and parse files into a
+bank-neutral `Document.t`, and companion formats are matched, annotated and
+described by their adapter, while the kernel stores everything in its generic
+tables (`docs/bank-adapters.md`). The kernel library does not depend on
+`finances.banks`.
 
 The adapters share `Bank_match` for matching states and results; Wise does not
 depend on the BoursoBank matcher. `Bank_csv_match` re-exports these types for

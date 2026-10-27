@@ -70,7 +70,7 @@ let import_history attempts =
       Stdio.printf "  File: %s\n" (text a.path);
       Stdio.printf
         "  Format: %s; new movements: %d; existing movements: %d\n"
-        (Bank_import.format_name a.format)
+        a.format
         a.inserted
         a.existing;
       Option.iter a.message ~f:(fun message ->

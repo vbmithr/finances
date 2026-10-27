@@ -24,24 +24,13 @@ val events : t -> (int64 * Source_event.t) list Or_error.t
 (** Every bank event with its decoded movement, in event order. *)
 val movements : t -> (int64 * Source_event.t * Movement.t) list Or_error.t
 
-type bank_import =
-  { document_id : int64
-  ; statements : int
-  ; inserted : int
-  ; existing : int
-  }
-
-(** Archives the original OFX bytes, imports every statement's transactions, and
-    links evidence to the document in one transaction. Overlapping exports reuse
-    transaction IDs scoped by institution and bank account. Conflicts roll back
-    the complete import, including the document archive. No postings are created. *)
-val import_ofx : t -> institution:string -> Bank_ofx.t -> bank_import Or_error.t
-
-(** Import one readable inbox snapshot and record its outcome. Unsupported and
-    rejected bytes are archived, too. Successful evidence and its attempt commit
-    together; a source conflict rolls back before a separate rejection is saved. *)
+(** Import one readable inbox snapshot and record its outcome. The institution's
+    adapter recognizes and parses the file; a file another bank recognizes is
+    rejected with a pointer to that institution. Unsupported and rejected bytes
+    are archived, too. Successful evidence and its attempt commit together; a
+    source conflict rolls back before a separate rejection is saved. *)
 val import_bank_file
-  :  ?account_id:string
+  :  ?account_label:string
   -> t
   -> institution:string
   -> path:string
@@ -57,15 +46,12 @@ val record_bank_read_error
 
 val bank_import_history : ?limit:int -> t -> Bank_import.file_report list Or_error.t
 
-type csv_observation =
-  { row_id : int64
-  ; document_id : int64
-  ; institution : string
-  ; row : Bank_csv.row
-  ; matching : Bank_csv_match.result option
+type companion_observation =
+  { row : Companion.row
+  ; matching : Bank_match.result option
   }
 
-type csv_report =
+type companion_report =
   { matched : int
   ; unmatched : int
   ; ambiguous : int
@@ -73,12 +59,17 @@ type csv_report =
   ; changed : int
   }
 
-(** CSV observations enrich existing OFX movements; they never create events or
-    postings. Matching is derived, repeatable, and audited, including rows that
-    become ambiguous when additional OFX evidence arrives. *)
-val match_bank_csv : t -> csv_report Or_error.t
+(** Companion observations enrich existing movements; they never create events
+    or postings. Each format is matched by its adapter; results are derived,
+    repeatable and audited, including rows that become ambiguous when more
+    evidence arrives. *)
+val match_companions : ?institution:string -> t -> companion_report Or_error.t
 
-val bank_csv_observations : t -> csv_observation list Or_error.t
+val companion_observations
+  :  ?institution:string
+  -> t
+  -> companion_observation list Or_error.t
+
 val bank_accounts : t -> Bank_account_mapping.t list Or_error.t
 
 (** Store mappings and audit changes, renaming only verified existing bank
@@ -108,18 +99,6 @@ type projection_report =
     Source documents are not needed again. Repeating this operation is harmless;
     a conflict or invalid event rolls back the complete projection batch. *)
 val project_bank : t -> projection_report Or_error.t
-
-val wise_transactions : t -> (int64 * Wise_camt.transaction) list Or_error.t
-val match_wise_csv : t -> csv_report Or_error.t
-
-type wise_csv_observation =
-  { row_id : int64
-  ; document_id : int64
-  ; row : Wise_csv.row
-  ; matching : Bank_csv_match.result option
-  }
-
-val wise_csv_observations : t -> wise_csv_observation list Or_error.t
 
 (** A statement's stated balances against the movements it lists. Period and
     balance dates are the bank's text: a date or a timestamp with offset. *)
@@ -169,17 +148,6 @@ type bank_review =
   }
 
 val bank_review : t -> bank_review list Or_error.t
-val bunq_transactions : t -> (int64 * Bunq_transaction.t) list Or_error.t
-val match_bunq_csv : t -> csv_report Or_error.t
-
-type bunq_csv_observation =
-  { row_id : int64
-  ; document_id : int64
-  ; row : Bunq_csv.row
-  ; matching : Bank_csv_match.result option
-  }
-
-val bunq_csv_observations : t -> bunq_csv_observation list Or_error.t
 
 (** Explicit same-currency transfer decisions; a confirmation asserts ownership
     of both accounts. Each movement can have at most one confirmed counterpart.

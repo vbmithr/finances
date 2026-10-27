@@ -32,7 +32,7 @@ let workspace f =
 
 let with_store root f =
   ok
-    (Store.with_open ~registry:Builtin.registry (database root) (fun db ->
+    (Store.with_open ~registry:Test_support.registry (database root) (fun db ->
        f db;
        Ok ()))
 ;;
@@ -244,7 +244,11 @@ let mappings_after_projection () =
     write (join (inbox root) "bank.ofx") (fixture ());
     ignore (ok (sync root));
     let initial =
-      ok (Store.with_open ~registry:Builtin.registry (database root) Store.bank_accounts)
+      ok
+        (Store.with_open
+           ~registry:Test_support.registry
+           (database root)
+           Store.bank_accounts)
     in
     let mappings =
       List.mapi initial ~f:(fun i mapping ->
@@ -257,7 +261,11 @@ let mappings_after_projection () =
     Alcotest.(check int) "renamed entries replay" 0 result.projection.inserted;
     Alcotest.(check int) "all entries reused" 3 result.projection.existing;
     let restored =
-      ok (Store.with_open ~registry:Builtin.registry (database root) Store.bank_accounts)
+      ok
+        (Store.with_open
+           ~registry:Test_support.registry
+           (database root)
+           Store.bank_accounts)
     in
     Alcotest.(check string)
       "mapping survives reopening"
@@ -301,7 +309,11 @@ let mapping_errors () =
     write (join (inbox root) "bank.ofx") (fixture ());
     ignore (ok (sync root));
     let mappings =
-      ok (Store.with_open ~registry:Builtin.registry (database root) Store.bank_accounts)
+      ok
+        (Store.with_open
+           ~registry:Test_support.registry
+           (database root)
+           Store.bank_accounts)
     in
     let first = List.hd_exn mappings in
     error (Bank_account_mapping.of_json (Bank_account_mapping.to_json [ first; first ]));
@@ -336,7 +348,11 @@ let mapping_conflict_preserves_journal () =
     ignore (ok (sync root));
     let before = In_channel.read_all (journal root) in
     let mappings =
-      ok (Store.with_open ~registry:Builtin.registry (database root) Store.bank_accounts)
+      ok
+        (Store.with_open
+           ~registry:Test_support.registry
+           (database root)
+           Store.bank_accounts)
       |> List.mapi ~f:(fun i m -> remap (Printf.sprintf "changed-%d" i) m)
     in
     let config = join root "accounts.json" in

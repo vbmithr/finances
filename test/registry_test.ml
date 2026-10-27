@@ -10,6 +10,12 @@ module Example = struct
   let institution = "example"
   let aliases = [ "examplebank" ]
   let kinds = [ "example-transaction"; "bank-transaction" ]
+  let formats = [ "example" ]
+  let probe ~filename:_ _ = None
+  let takes_account_label = false
+  let parse ~context:_ ~format:_ _ = Ok Document.empty
+  let overlap = Adapter.Source_ids
+  let companions = []
 
   let decode (event : Source_event.t) =
     Movement.create

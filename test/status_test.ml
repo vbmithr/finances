@@ -8,7 +8,7 @@ let check = Alcotest.(check int)
 
 let memory f =
   ok
-    (Store.with_open ~registry:Builtin.registry ":memory:" (fun db ->
+    (Store.with_open ~registry:Test_support.registry ":memory:" (fun db ->
        f db;
        Ok ()))
 ;;
@@ -27,7 +27,7 @@ let import db institution path =
   ignore
     (ok
        (Store.import_bank_file
-          ~account_id:"main"
+          ?account_label:(Option.some_if (String.equal institution "revolut") "main")
           db
           ~institution
           ~path

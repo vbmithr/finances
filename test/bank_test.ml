@@ -24,7 +24,7 @@ let with_database f =
 
 let with_store path f =
   ok
-    (Store.with_open ~registry:Builtin.registry path (fun db ->
+    (Store.with_open ~registry:Test_support.registry path (fun db ->
        f db;
        Ok ()))
 ;;
@@ -58,10 +58,9 @@ let check_counts path documents events links =
 ;;
 
 let import path ?(institution = "boursobank") contents =
-  let document = parse contents in
   ok
-    (Store.with_open ~registry:Builtin.registry path (fun db ->
-       Store.import_ofx db ~institution document))
+    (Store.with_open ~registry:Test_support.registry path (fun db ->
+       Test_support.import_ofx db ~institution contents))
 ;;
 
 let multi_account_parser () =
@@ -144,7 +143,10 @@ let replay_and_archive () =
     let second = import path contents in
     Alcotest.(check int) "repeat adds nothing" 0 second.inserted;
     Alcotest.(check int) "repeat reuses all records" 3 second.existing;
-    Alcotest.(check int64) "same archived document" first.document_id second.document_id;
+    Alcotest.(check (option int64))
+      "same archived document"
+      first.document_id
+      second.document_id;
     with_store path (fun db ->
       let events = ok (Store.events db) in
       List.iter events ~f:(fun (_, e) ->
@@ -205,11 +207,12 @@ let atomic_conflict () =
         "<STMTTRN><DTPOSTED>20260102</DTPOSTED><TRNTYPE>CREDIT</TRNTYPE><TRNAMT>5.00</TRNAMT><FITID>new-record</FITID></STMTTRN><STMTTRN>"
       |> fun s -> replace s "<TRNAMT>-0.10</TRNAMT>" "<TRNAMT>-0.11</TRNAMT>"
     in
-    let document = parse changed in
     error
-      (Store.with_open ~registry:Builtin.registry path (fun db ->
-         Store.import_ofx db ~institution:"boursobank" document));
-    check_counts path 1 3 3)
+      (Store.with_open ~registry:Test_support.registry path (fun db ->
+         Test_support.import_ofx db ~institution:"boursobank" changed));
+    (* The rejected file is archived with its attempt; no event or link from
+       it survives. *)
+    check_counts path 2 3 3)
 ;;
 
 let institution_scoping () =

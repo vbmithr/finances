@@ -1,17 +1,5 @@
 open Base
 
-type format =
-  | Ofx
-  | Camt053
-  | Wise_csv
-  | Bunq_mt940
-  | Bunq_csv
-  | Revolut_csv
-  | Csv
-  | Qif
-  | Spreadsheet
-  | Unknown
-
 type outcome =
   | Imported
   | Unchanged
@@ -23,7 +11,7 @@ type file_report =
   { attempt_id : int64
   ; institution : string
   ; path : string
-  ; format : format
+  ; format : string
   ; outcome : outcome
   ; document_id : int64 option
   ; sha256 : string option
@@ -33,39 +21,12 @@ type file_report =
   ; attempted_at : string
   }
 
-let format_name = function
-  | Ofx -> "ofx"
-  | Camt053 -> "camt053"
-  | Wise_csv -> "wise_csv"
-  | Bunq_mt940 -> "bunq_mt940"
-  | Bunq_csv -> "bunq_csv"
-  | Revolut_csv -> "revolut_csv"
-  | Csv -> "csv"
-  | Qif -> "qif"
-  | Spreadsheet -> "spreadsheet"
-  | Unknown -> "unknown"
-;;
-
 let outcome_name = function
   | Imported -> "imported"
   | Unchanged -> "unchanged"
   | Rejected -> "rejected"
   | Unsupported -> "unsupported"
   | Unreadable -> "unreadable"
-;;
-
-let format_of_string = function
-  | "ofx" -> Ok Ofx
-  | "camt053" -> Ok Camt053
-  | "wise_csv" -> Ok Wise_csv
-  | "bunq_mt940" -> Ok Bunq_mt940
-  | "bunq_csv" -> Ok Bunq_csv
-  | "revolut_csv" -> Ok Revolut_csv
-  | "csv" -> Ok Csv
-  | "qif" -> Ok Qif
-  | "spreadsheet" -> Ok Spreadsheet
-  | "unknown" -> Ok Unknown
-  | _ -> Or_error.error_string "invalid stored bank import format"
 ;;
 
 let outcome_of_string = function
@@ -77,40 +38,5 @@ let outcome_of_string = function
   | _ -> Or_error.error_string "invalid stored bank import outcome"
 ;;
 
-let detect_format ~path contents =
-  let prefix = String.prefix contents 4096 |> String.strip in
-  if
-    String.is_substring prefix ~substring:"<OFX"
-    || String.is_prefix prefix ~prefix:"OFXHEADER:"
-  then Ofx
-  else if String.is_substring prefix ~substring:"camt.053"
-  then Camt053
-  else if
-    String.is_substring prefix ~substring:"TransferWise ID"
-    && String.is_substring prefix ~substring:"Date Time"
-  then Wise_csv
-  else if Bunq_mt940.recognizes contents
-  then Bunq_mt940
-  else if Revolut_csv.recognizes contents
-  then Revolut_csv
-  else if Bunq_csv.recognizes contents
-  then Bunq_csv
-  else if String.is_prefix prefix ~prefix:"!Type:"
-  then Qif
-  else if
-    String.is_prefix contents ~prefix:"PK\003\004"
-    || String.is_prefix contents ~prefix:"\208\207\017\224"
-  then Spreadsheet
-  else if
-    String.is_substring prefix ~substring:"Date Opération"
-    && String.is_substring prefix ~substring:"Numéro Compte"
-  then Csv
-  else (
-    match String.lowercase (Stdlib.Filename.extension path) with
-    | ".ofx" -> Ofx
-    | ".csv" -> Csv
-    | ".qif" -> Qif
-    | ".mt940" -> Bunq_mt940
-    | ".xls" | ".xlsx" -> Spreadsheet
-    | _ -> Unknown)
-;;
+(** Recorded when no registered bank recognizes a file. *)
+let unknown_format = "unknown"

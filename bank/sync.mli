@@ -6,9 +6,7 @@ type report =
   ; identity_changes : int
   ; settlement_changes : int
   ; projection : Finances.Store.projection_report
-  ; csv : Finances.Store.csv_report
-  ; bunq_csv : Finances.Store.csv_report
-  ; wise_csv : Finances.Store.csv_report
+  ; companions : Finances.Store.companion_report
   ; journal : string
   }
 

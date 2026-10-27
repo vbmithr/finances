@@ -2,15 +2,7 @@
  (name finances_hledger)
  (public_name finances.hledger)
  (flags
-  (:standard -open Finances_core -open Finances_banks))
- (libraries
-  finances
-  finances.core
-  finances.banks
-  hledger
-  base
-  stdio
-  bos
-  fpath)
+  (:standard -open Finances_core))
+ (libraries finances finances.core hledger base stdio bos fpath)
  (preprocess
   (pps ppx_sexp_conv ppx_compare ppx_let)))

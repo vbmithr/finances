@@ -25,7 +25,7 @@ let rejected result =
 
 let memory f =
   ok
-    (Store.with_open ~registry:Builtin.registry ":memory:" (fun db ->
+    (Store.with_open ~registry:Test_support.registry ":memory:" (fun db ->
        f db;
        Ok ()))
 ;;
@@ -64,7 +64,7 @@ let multi_bank () =
   memory (fun db ->
     accepted (import db "wise.csv" (csv ()));
     check "CSV creates no movements" 0 (List.length (ok (Store.events db)));
-    check "CSV waiting" 3 (ok (Store.match_wise_csv db)).unmatched;
+    check "CSV waiting" 3 (ok (Store.match_companions ~institution:"wise" db)).unmatched;
     accepted
       (import
          db
@@ -73,7 +73,10 @@ let multi_bank () =
          (In_channel.read_all "fixtures/bank.ofx"));
     accepted (import db "wise.xml" (xml ()));
     check "both institutions" 6 (List.length (ok (Store.events db)));
-    check "all Wise rows matched" 3 (ok (Store.match_wise_csv db)).matched;
+    check
+      "all Wise rows matched"
+      3
+      (ok (Store.match_companions ~institution:"wise" db)).matched;
     check "all projected" 6 (ok (Store.project_bank db)).inserted;
     let accounts = ok (Store.bank_accounts db) in
     Alcotest.(check bool)
@@ -106,7 +109,10 @@ let multi_bank () =
     accepted (import db "replay.xml" (xml ()));
     accepted (import db "overlap.xml" (replace (xml ()) "statement-a" "statement-b"));
     check "overlap no new projections" 0 (ok (Store.project_bank db)).inserted;
-    check "repeated matching stable" 0 (ok (Store.match_wise_csv db)).changed;
+    check
+      "repeated matching stable"
+      0
+      (ok (Store.match_companions ~institution:"wise" db)).changed;
     check "replay source count" 6 (List.length (ok (Store.events db)));
     let wise_account =
       List.find_exn accounts ~f:(fun a ->
@@ -145,9 +151,12 @@ let currencies () =
     accepted (import db "usd.xml" (replace (xml ()) "EUR" "USD"));
     check "currencies independent" 6 (List.length (ok (Store.events db)));
     accepted (import db "eur.csv" (csv ()));
-    check "currency match" 3 (ok (Store.match_wise_csv db)).matched;
+    check "currency match" 3 (ok (Store.match_companions ~institution:"wise" db)).matched;
     accepted (import db "fees.csv" (replace (csv ()) "0.50" "0.75"));
-    check "fee conflict audit" 2 (ok (Store.match_wise_csv db)).conflicts;
+    check
+      "fee conflict audit"
+      2
+      (ok (Store.match_companions ~institution:"wise" db)).conflicts;
     check "postings only movements" 6 (ok (Store.project_bank db)).inserted)
 ;;
 
@@ -156,7 +165,10 @@ let duplicate_rows () =
     accepted (import db "wise.xml" (xml ()));
     let lines = String.split_lines (csv ()) in
     accepted (import db "dup.csv" (csv () ^ List.nth_exn lines 1 ^ "\n"));
-    check "ambiguous duplicates" 2 (ok (Store.match_wise_csv db)).ambiguous)
+    check
+      "ambiguous duplicates"
+      2
+      (ok (Store.match_companions ~institution:"wise" db)).ambiguous)
 ;;
 
 let () =

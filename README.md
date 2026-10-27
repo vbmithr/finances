@@ -48,7 +48,7 @@ fin init
 fin status
 fin paths
 fin accounts list
-fin bank bunq status
+fin bank statements --institution bunq
 fin transfers preview
 ```
 
@@ -108,7 +108,7 @@ make package OPAM_SWITCH=5.5.0
 sudo pacman -U dist/arch/finances-0.1.0-5-x86_64.pkg.tar.zst
 fin --version
 fin accounts list
-fin bank bunq status
+fin bank statements --institution bunq
 ```
 
 `make package` generates `dist/arch/PKGBUILD` from
@@ -182,7 +182,7 @@ such as `csv`, check that installation and execution use the same switch:
 ```sh
 opam switch show
 opam install --switch=5.5.0 . --deps-only --with-test
-opam exec --switch=5.5.0 -- dune exec fin -- bank bunq status
+opam exec --switch=5.5.0 -- dune exec fin -- bank statements --institution bunq
 ```
 
 Replace `5.5.0` with your chosen switch. To use plain `dune` commands in your shell,
@@ -227,15 +227,17 @@ to whitespace. `events` prints metadata as JSON without printing source payloads
 ## Bank imports
 
 ```sh
-dune exec fin -- bank boursobank import /path/to/export.ofx
+dune exec fin -- bank sync /path/to/inbox --institution boursobank
 ```
 
-The institution identifier defaults to `boursobank`; use `--institution NAME` for
-another institution. It must name a registered bank (`boursobank`, `bunq`,
-`revolut` or `wise`); files imported under any other identifier are rejected,
-with the attempt recorded. Keep this identifier consistent across imports. A successful
-import prints statement, inserted transaction, existing transaction, and document
-counts/IDs. All accounts in the file are imported.
+Every import goes through `bank sync`. The institution identifier defaults to
+`boursobank`; use `--institution NAME` for another institution. It must name a
+registered bank (`boursobank`, `bunq`, `revolut` or `wise`); files imported under
+any other identifier are rejected, with the attempt recorded. The institution's
+adapter recognizes each file's format; a file another bank recognizes is rejected
+with the institution to use instead. Keep this identifier consistent across
+imports. Each file's outcome lists inserted and existing movements; all accounts
+in a file are imported.
 
 Original document bytes are archived in `import_documents` with a SHA-256 digest.
 Each transaction becomes a dated source event identified by institution, bank
@@ -285,7 +287,7 @@ financial data, not scratch files.
 
 ```sh
 mkdir -p personal
-dune exec fin -- bank boursobank import /path/to/export.ofx
+dune exec fin -- bank sync /path/to/inbox --institution boursobank
 dune exec fin -- bank project
 dune exec fin -- journal export > personal/bank.journal
 hledger --no-conf -f personal/bank.journal check --strict
@@ -546,7 +548,7 @@ fin bank sync personal/boursobank/inbox \
   --institution boursobank --journal personal/bank.journal
 fin bank sync personal/wise/inbox \
   --institution wise --journal personal/bank.journal
-fin bank wise status
+fin bank statements --institution wise
 hledger -f personal/bank.journal --strict check
 hledger -f personal/bank.journal register assets:bank:wise
 ```
@@ -565,7 +567,7 @@ existing identity rejects the whole import. Indistinguishable duplicate movement
 within a statement are rejected rather than collapsed. Original bytes remain archived.
 
 The parser requires booked entries and exact reconciliation of opening balance
-plus signed movements with closing balance. `bank wise status` independently computes
+plus signed movements with closing balance. `bank statements` independently computes
 that difference from stored statement/event links and lists CSV matching states.
 Statement balances are observations; the journal contains movements without
 inferred opening-balance entries.
@@ -575,7 +577,7 @@ amount, and currency to agree uniquely in both directions within a document. CSV
 has no timezone or reliable balance-account identity, so ambiguity remains visible.
 Fees and FX metadata disagreements across exports are audited as conflicts.
 Uncontested matches add `wise-merchant`, `wise-payment-reference`,
-`wise-reported-fees`, and `wise-csv-row-id` journal tags where available. Fees remain
+`wise-reported-fees`, and `companion-row-ids` journal tags where available. Fees remain
 metadata: no extra fee posting or currency conversion is inferred. The supplied
 samples cover EUR with zero fees; synthetic tests cover fee metadata and currency
 isolation, but real FX and nonzero-fee exports need further validation.
@@ -588,7 +590,7 @@ optional seven-column CSV into `personal/bunq/inbox/`:
 ```sh
 fin bank sync personal/bunq/inbox \
   --institution bunq --journal personal/bank.journal
-fin bank bunq status
+fin bank statements --institution bunq
 ```
 
 The MT940 reader supports the observed Bunq layout: a BUNQ header, account/currency,
@@ -597,7 +599,7 @@ entries with `NONREF`, and IBAN/name/remittance metadata. It reads exact comma
 decimals, handles multiline descriptions, preserves booking and interest dates,
 and rejects unsupported fields, date ranges, currencies or unbalanced statements.
 Amounts never pass through floating point. Interest dates become journal secondary
-dates. `bank bunq status` independently reconciles persisted statement/event links.
+dates. `bank statements` independently reconciles persisted statement/event links.
 
 Bunq supplies no movement IDs in these exports. Identity uses normalized account,
 currency, booking/interest dates, signed amount, counterparty, name and description,
@@ -774,10 +776,10 @@ conversion. CSV-only observations wait for OFX.
 
 ~~~sh
 # Recompute automatically during sync, or explicitly after other imports:
-dune exec fin -- bank boursobank csv match
+dune exec fin -- bank match
 # Inspect all observations or just those still needing review:
-dune exec fin -- bank boursobank csv list
-dune exec fin -- bank boursobank csv list --review
+dune exec fin -- bank companions --institution boursobank
+dune exec fin -- bank companions --institution boursobank --review
 ~~~
 
 Matching states and their changes are saved in SQLite. Overlapping CSV files can
