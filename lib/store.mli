@@ -207,6 +207,12 @@ type bank_account_info =
 
 val bank_account_info : t -> bank_account_info list Or_error.t
 
+(** Account information, review rows and candidates sharing one movement read.
+    The data is scoped to this call, so later edits are immediately visible. *)
+val bank_overview
+  :  t
+  -> (bank_account_info list * bank_review list * transfer_candidate list) Or_error.t
+
 (** Audited registration; rejects contradictions with imported identifiers or
     confirmed transfers. Null template rows are ignored by Account_identity. *)
 val set_bank_account_identities : t -> Account_identity.t list -> int Or_error.t

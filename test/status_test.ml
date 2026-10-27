@@ -103,7 +103,27 @@ let transfers () =
     Alcotest.(check bool)
       "confirmed pair leaves candidates"
       true
-      (after.transfer_candidate_pairs < before.transfer_candidate_pairs))
+      (after.transfer_candidate_pairs < before.transfer_candidate_pairs);
+    ignore
+      (ok
+         (Store.set_bank_transfers
+            db
+            [ ok
+                (Bank_transfer.create
+                   ~first_event_id:candidate.first_event_id
+                   ~second_event_id:candidate.second_event_id
+                   ~state:Rejected
+                   ~reason:"Corrected review")
+            ]));
+    let rejected = ok (Status.read db) in
+    check
+      "rejected transfer restores category review"
+      before.unclassified_movements
+      rejected.unclassified_movements;
+    Alcotest.(check bool)
+      "rejected pair stays reviewed"
+      true
+      (rejected.transfer_candidate_pairs < before.transfer_candidate_pairs))
 ;;
 
 let () =

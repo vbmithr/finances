@@ -10,6 +10,11 @@ short line of their own.
 
 ### 2026-10-27
 
+- Speed up `fin status` by sharing loaded movements, batching review metadata
+  queries and preparing known-account IBAN evidence once per candidate search.
+  Review and transfer candidate listings also use batched metadata. Output and
+  schema are unchanged; no database rebuild is needed.
+
 - Wise CSV `booked_at` is now `Ptime.t` under a UTC assumption, replacing
   `booked_local`. Matching still uses the source-local CAMT clock and milliseconds;
   inspection displays the assumed-UTC time as canonical RFC 3339. Raw fields stay

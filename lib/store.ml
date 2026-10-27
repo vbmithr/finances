@@ -1875,14 +1875,50 @@ type bank_review =
   ; reason : string option
   }
 
-let bank_review db =
-  let* source = events db in
-  let* table = movement_table db in
+(* Read review metadata once, rather than issuing two queries per movement. *)
+let review_metadata db =
+  let* categories =
+    collect
+      db
+      (statement
+         "SELECT event_id,account,reason FROM bank_categories"
+         Row.(
+           t3
+             (read_column Db_schema.Bank_categories.event_id)
+             (read_column Db_schema.Bank_categories.account)
+             (read_column Db_schema.Bank_categories.reason)))
+  in
+  let* transfers =
+    collect
+      db
+      (statement
+         "SELECT m.event_id,m.first_event_id,m.second_event_id,d.reason FROM \
+          bank_transfer_memberships m JOIN bank_transfer_decisions d ON \
+          d.first_event_id=m.first_event_id AND d.second_event_id=m.second_event_id \
+          WHERE d.state='confirmed'"
+         Row.(
+           t4
+             (read_column Db_schema.Bank_transfer_memberships.event_id)
+             (read_column Db_schema.Bank_transfer_memberships.first_event_id)
+             (read_column Db_schema.Bank_transfer_memberships.second_event_id)
+             (read_column Db_schema.Bank_transfer_decisions.reason)))
+  in
+  Ok
+    ( Hashtbl.of_alist_exn
+        (module Int64)
+        (List.map categories ~f:(fun (id, account, reason) -> id, (account, reason)))
+    , Hashtbl.of_alist_exn
+        (module Int64)
+        (List.map transfers ~f:(fun (id, first, second, reason) ->
+           id, (first, second, reason))) )
+;;
+
+let bank_review_from source table (categories, transfers) =
   traverse
     (fun (event_id, (event : Source_event.t)) ->
        let* transaction = stored table event_id in
-       let* category = db_result (Db.first db.conn (find_category event_id)) in
-       let* transfer = linked_transfer db event_id in
+       let category = Hashtbl.find categories event_id in
+       let transfer = Hashtbl.find transfers event_id in
        Ok
          { event_id
          ; institution = event.venue
@@ -1896,7 +1932,19 @@ let bank_review db =
               | Some (_, _, reason) -> Some reason
               | None -> Option.map category ~f:snd)
          })
-    (List.filter source ~f:(fun (_, e) -> Registry.is_movement db.registry e))
+    source
+;;
+
+let movement_source db =
+  let* source = events db in
+  Ok (List.filter source ~f:(fun (_, e) -> Registry.is_movement db.registry e))
+;;
+
+let bank_review db =
+  let* source = movement_source db in
+  let* table = movement_table db in
+  let* metadata = review_metadata db in
+  bank_review_from source table metadata
 ;;
 
 let find_account_iban =
@@ -1953,23 +2001,21 @@ let own_iban db source (account : Bank_account_mapping.t) =
     Ok movement.Movement.own_iban
 ;;
 
-let transfer_iban_evidence db source a ta b tb =
-  let* a_iban, _ = account_iban db a ta in
-  let* b_iban, _ = account_iban db b tb in
+let known_account_ibans db source ~movement =
+  traverse
+    (fun (event_id, event) ->
+       let* tx = movement event_id in
+       let* iban, _ = account_iban db event tx in
+       Ok (event, tx.Movement.account, iban))
+    (List.dedup_and_sort source ~compare:(fun (_, a) (_, b) ->
+       [%compare: string * string]
+         (a.Source_event.venue, a.account)
+         (b.Source_event.venue, b.account)))
+;;
+
+let transfer_iban_evidence_with known ~a_iban ~b_iban a ta b tb =
   let a_counterparty = ta.Movement.counterparty_iban
   and b_counterparty = tb.Movement.counterparty_iban in
-  let* known =
-    traverse
-      (fun (event_id, event) ->
-         let* tx = movement db event_id in
-         let* iban, _ = account_iban db event tx in
-         Ok (event, tx.Movement.account, iban))
-      (List.filter source ~f:(fun (_, e) -> Registry.is_movement db.registry e)
-       |> List.dedup_and_sort ~compare:(fun (_, a) (_, b) ->
-         [%compare: string * string]
-           (a.Source_event.venue, a.account)
-           (b.Source_event.venue, b.account)))
-  in
   let assess counterparty target target_account target_iban =
     match counterparty, target_iban with
     | None, _ -> None
@@ -2004,6 +2050,14 @@ let transfer_iban_evidence db source a ta b tb =
       if matches then None else Some detail)
   in
   Ok (List.is_empty conflicts, List.exists evidence ~f:fst, List.map evidence ~f:snd)
+;;
+
+let transfer_iban_evidence db source a ta b tb =
+  let* a_iban, _ = account_iban db a ta in
+  let* b_iban, _ = account_iban db b tb in
+  let source = List.filter source ~f:(fun (_, e) -> Registry.is_movement db.registry e) in
+  let* known = known_account_ibans db source ~movement:(movement db) in
+  transfer_iban_evidence_with known ~a_iban ~b_iban a ta b tb
 ;;
 
 let transfer_decision_row =
@@ -2321,16 +2375,14 @@ let transfer_pairs =
         (Col.make "second" Type.int64 Col.no_proj))
 ;;
 
-let transfer_candidates ?(include_reviewed = false) db =
-  let* source = events db in
-  let* table = movement_table db in
+let transfer_candidates_from ?(include_reviewed = false) db source table transfers =
+  let* known = known_account_ibans db source ~movement:(stored table) in
   let* items =
     traverse
       (fun (id, e) ->
          let* tx = stored table id in
-         let* linked = linked_transfer db id in
-         Ok (id, (id, e, tx, Option.is_some linked)))
-      (List.filter source ~f:(fun (_, e) -> Registry.is_movement db.registry e))
+         Ok (id, (id, e, tx, Hashtbl.mem transfers id)))
+      source
   in
   let items = Hashtbl.of_alist_exn (module Int64) items in
   let* decisions = bank_transfer_decisions db in
@@ -2342,8 +2394,10 @@ let transfer_candidates ?(include_reviewed = false) db =
       if Int64.(id < other) then id, a, ta, other, b, tb else other, b, tb, id, a, ta
     in
     let decision = Hashtbl.find indexed (id, other) in
+    let* a_iban, _ = account_iban db a ta in
+    let* b_iban, _ = account_iban db b tb in
     let* iban_compatible, iban_match, iban_evidence =
-      transfer_iban_evidence db source a ta b tb
+      transfer_iban_evidence_with known ~a_iban ~b_iban a ta b tb
     in
     if
       (not include_reviewed)
@@ -2402,6 +2456,13 @@ let transfer_candidates ?(include_reviewed = false) db =
          (b.first_event_id, b.second_event_id)))
 ;;
 
+let transfer_candidates ?include_reviewed db =
+  let* source = movement_source db in
+  let* table = movement_table db in
+  let* _, transfers = review_metadata db in
+  transfer_candidates_from ?include_reviewed db source table transfers
+;;
+
 let find_settlement =
   let open Db_schema.Bank_account_settlements in
   select_by_pair table institution source_account settlement_account
@@ -2418,10 +2479,8 @@ type bank_account_info =
   ; settlement_account : Bank_account_config.reference option
   }
 
-let bank_account_info db =
+let bank_account_info_from db source table =
   let* mappings = bank_accounts db in
-  let* source = events db in
-  let* table = movement_table db in
   traverse
     (fun mapping ->
        let members =
@@ -2467,6 +2526,22 @@ let bank_account_info db =
          ; settlement_account
          })
     mappings
+;;
+
+let bank_account_info db =
+  let* source = movement_source db in
+  let* table = movement_table db in
+  bank_account_info_from db source table
+;;
+
+let bank_overview db =
+  let* source = movement_source db in
+  let* table = movement_table db in
+  let* metadata = review_metadata db in
+  let* accounts = bank_account_info_from db source table in
+  let* review = bank_review_from source table metadata in
+  let* candidates = transfer_candidates_from db source table (snd metadata) in
+  Ok (accounts, review, candidates)
 ;;
 
 let set_bank_account_identities_in_transaction db identities =

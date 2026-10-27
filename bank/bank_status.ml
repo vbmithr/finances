@@ -11,9 +11,7 @@ type t =
   }
 
 let read db =
-  let%bind accounts = Store.bank_account_info db in
-  let%bind movements = Store.bank_review db in
-  let%bind candidates = Store.transfer_candidates db in
+  let%bind accounts, movements, candidates = Store.bank_overview db in
   let%bind attempts = Store.bank_import_history ~limit:1 db in
   Ok
     { accounts
