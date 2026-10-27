@@ -1220,8 +1220,7 @@ let project_bank db =
     project 0 0 source_events)
 ;;
 
-let bank_accounts db =
-  let* source_events = events db in
+let bank_accounts_from db source_events ~movement =
   let bank_events =
     List.filter source_events ~f:(fun (_, event) ->
       Registry.is_movement db.registry event)
@@ -1232,8 +1231,8 @@ let bank_accounts db =
   in
   traverse
     (fun (event_id, (event : Source_event.t)) ->
-       let* transaction = movement db event_id in
-       let account = transaction.account in
+       let* transaction = movement event_id in
+       let account = transaction.Movement.account in
        let* mapped =
          db_result (Db.first db.conn (find_mapping event.venue event.account))
        in
@@ -1249,6 +1248,11 @@ let bank_accounts db =
          ~account_type:account.account_type
          ~ledger_account)
     bank_events
+;;
+
+let bank_accounts db =
+  let* source = events db in
+  bank_accounts_from db source ~movement:(movement db)
 ;;
 
 let upsert_mapping =
@@ -2375,14 +2379,14 @@ let transfer_pairs =
         (Col.make "second" Type.int64 Col.no_proj))
 ;;
 
-let transfer_candidates_from ?(include_reviewed = false) db source table transfers =
+let transfer_candidates_from ?pairs ?(include_reviewed = false) db source table transfers =
   let* known = known_account_ibans db source ~movement:(stored table) in
   let* items =
     traverse
       (fun (id, e) ->
          let* tx = stored table id in
          Ok (id, (id, e, tx, Hashtbl.mem transfers id)))
-      source
+      (List.filter source ~f:(fun (id, _) -> Hashtbl.mem table id))
   in
   let items = Hashtbl.of_alist_exn (module Int64) items in
   let* decisions = bank_transfer_decisions db in
@@ -2421,7 +2425,11 @@ let transfer_candidates_from ?(include_reviewed = false) db source table transfe
            ; iban_evidence
            })
   in
-  let* pairs = collect db transfer_pairs in
+  let* pairs =
+    match pairs with
+    | Some pairs -> Ok pairs
+    | None -> collect db transfer_pairs
+  in
   let* found =
     traverse
       (fun (first, second) ->
@@ -2479,8 +2487,8 @@ type bank_account_info =
   ; settlement_account : Bank_account_config.reference option
   }
 
-let bank_account_info_from db source table =
-  let* mappings = bank_accounts db in
+let bank_account_info_from ~summaries db source table =
+  let* mappings = bank_accounts_from db source ~movement:(stored table) in
   traverse
     (fun mapping ->
        let members =
@@ -2508,40 +2516,122 @@ let bank_account_info_from db source table =
            let* reference = Bank_account_config.reference_of_json json in
            Ok (Some reference)
        in
-       let* dates =
-         traverse
-           (fun (event_id, _) ->
-              let* tx = stored table event_id in
-              Ok tx.booked_on)
-           members
+       let* count, first_on, last_on =
+         Or_error.of_option
+           (Hashtbl.Poly.find
+              summaries
+              (mapping.institution, Bank_account_mapping.source_account mapping))
+           ~error:(Error.of_string "missing account summary")
        in
        Ok
          { mapping
          ; iban
          ; iban_source
          ; currency = tx.account.currency
-         ; movements = List.length members
-         ; first_on = List.min_elt dates ~compare:Date.compare |> Option.value_exn
-         ; last_on = List.max_elt dates ~compare:Date.compare |> Option.value_exn
+         ; movements = count
+         ; first_on
+         ; last_on
          ; settlement_account
          })
     mappings
 ;;
 
+(* Aggregate separately by event kind so an unregistered adapter's rows do not
+   enter status counts. The registry check below uses a representative event. *)
+let status_summaries db source =
+  let recognized = Hash_set.create (module Int64) in
+  List.iter source ~f:(fun (id, _) -> Hash_set.add recognized id);
+  let* rows =
+    collect
+      db
+      (statement
+         "SELECT \
+          min(m.event_id),m.venue,m.account,count(*),min(m.booked_on),max(m.booked_on),sum(CASE \
+          WHEN t.event_id IS NULL AND \
+          coalesce(c.account,'equity:unclassified')='equity:unclassified' THEN 1 ELSE 0 \
+          END) FROM movements m JOIN source_events e ON e.id=m.event_id LEFT JOIN \
+          bank_categories c ON c.event_id=m.event_id LEFT JOIN (SELECT t.event_id FROM \
+          bank_transfer_memberships t JOIN bank_transfer_decisions d ON \
+          d.first_event_id=t.first_event_id AND d.second_event_id=t.second_event_id \
+          WHERE d.state='confirmed') t ON t.event_id=m.event_id GROUP BY \
+          m.venue,m.account,e.kind"
+         Row.(
+           unit (fun id venue account count first last unclassified ->
+             id, venue, account, count, first, last, unclassified)
+           * int64 "event_id"
+           * text "venue"
+           * text "account"
+           * int "count"
+           * text "first"
+           * text "last"
+           * int "unclassified"))
+  in
+  let summaries = Hashtbl.Poly.create () in
+  let* counts =
+    traverse
+      (fun (id, venue, account, count, first, last, unclassified) ->
+         if not (Hash_set.mem recognized id)
+         then Ok (0, 0)
+         else
+           let* first = Or_error.try_with (fun () -> Date.of_string first) in
+           let* last = Or_error.try_with (fun () -> Date.of_string last) in
+           Hashtbl.update summaries (venue, account) ~f:(function
+             | None -> count, first, last
+             | Some (n, a, b) ->
+               ( n + count
+               , (if Date.compare a first < 0 then a else first)
+               , if Date.compare b last > 0 then b else last ));
+           Ok (count, unclassified))
+      rows
+  in
+  Ok (summaries, List.sum (module Int) counts ~f:fst, List.sum (module Int) counts ~f:snd)
+;;
+
+(* Include both the chronological first row used for account inspection and
+   the representative chosen by account discovery and IBAN evidence. *)
+let account_representatives source =
+  let needed = Hash_set.create (module Int64) in
+  let accounts = Hashtbl.Poly.create () in
+  List.iter source ~f:(fun (id, e) ->
+    Hashtbl.add accounts ~key:(e.Source_event.venue, e.account) ~data:id |> ignore);
+  Hashtbl.iter accounts ~f:(Hash_set.add needed);
+  List.dedup_and_sort source ~compare:(fun (_, a) (_, b) ->
+    [%compare: string * string]
+      (a.Source_event.venue, a.account)
+      (b.Source_event.venue, b.account))
+  |> List.iter ~f:(fun (id, _) -> Hash_set.add needed id);
+  needed
+;;
+
+let selected_movements db needed =
+  (* Only database-generated int64 IDs are rendered here, never input text. *)
+  let ids =
+    Hash_set.to_list needed |> List.map ~f:Int64.to_string |> String.concat ~sep:","
+  in
+  let* rows = movement_rows db (" WHERE event_id IN (" ^ ids ^ ")") in
+  Ok (Hashtbl.of_alist_exn (module Int64) rows)
+;;
+
 let bank_account_info db =
   let* source = movement_source db in
-  let* table = movement_table db in
-  bank_account_info_from db source table
+  let* summaries, _, _ = status_summaries db source in
+  let* table = selected_movements db (account_representatives source) in
+  bank_account_info_from ~summaries db source table
 ;;
 
 let bank_overview db =
   let* source = movement_source db in
-  let* table = movement_table db in
+  let* pairs = collect db transfer_pairs in
+  let needed = account_representatives source in
+  List.iter pairs ~f:(fun (a, b) ->
+    Hash_set.add needed a;
+    Hash_set.add needed b);
+  let* table = selected_movements db needed in
   let* metadata = review_metadata db in
-  let* accounts = bank_account_info_from db source table in
-  let* review = bank_review_from source table metadata in
-  let* candidates = transfer_candidates_from db source table (snd metadata) in
-  Ok (accounts, review, candidates)
+  let* summaries, movements, unclassified = status_summaries db source in
+  let* accounts = bank_account_info_from ~summaries db source table in
+  let* candidates = transfer_candidates_from ~pairs db source table (snd metadata) in
+  Ok (accounts, movements, unclassified, List.length candidates)
 ;;
 
 let set_bank_account_identities_in_transaction db identities =

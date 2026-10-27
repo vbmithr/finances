@@ -10,6 +10,12 @@ short line of their own.
 
 ### 2026-10-27
 
+- Status and account listings now ask SQLite for movement counts and per-account
+  date ranges; status also queries the unclassified count. Only candidate legs
+  and representative account movements are decoded. Account discovery reuses
+  the existing source read. No schema
+  change or database rebuild is needed.
+
 - Speed up `fin status` by sharing loaded movements, batching review metadata
   queries and preparing known-account IBAN evidence once per candidate search.
   Review and transfer candidate listings also use batched metadata. Output and

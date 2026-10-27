@@ -11,15 +11,15 @@ type t =
   }
 
 let read db =
-  let%bind accounts, movements, candidates = Store.bank_overview db in
+  let%bind accounts, movements, unclassified_movements, transfer_candidate_pairs =
+    Store.bank_overview db
+  in
   let%bind attempts = Store.bank_import_history ~limit:1 db in
   Ok
     { accounts
-    ; movements = List.length movements
-    ; unclassified_movements =
-        List.count movements ~f:(fun r ->
-          String.equal r.Store.counter_account "equity:unclassified")
-    ; transfer_candidate_pairs = List.length candidates
+    ; movements
+    ; unclassified_movements
+    ; transfer_candidate_pairs
     ; latest_import = List.hd attempts
     }
 ;;

@@ -25,8 +25,10 @@ Last updated: 2026-10-27.
   Wise CSV clocks assume UTC and retain source-local CAMT matching; OFX balance
   instants use the format's timezone defaults. Only raw source evidence and invalid
   DTUSER placeholders remain textual.
-- Status shares one movement read across its reports. Review metadata is loaded
-  in batches; candidate searches prepare known-account IBAN evidence once.
+- Status uses SQL counts and account date ranges, decoding only candidate legs
+  and representative account movements. Account discovery reuses source rows.
+  Review metadata is loaded in batches; candidate searches prepare known-account
+  IBAN evidence once.
   No data is cached across commands or later account/review edits.
 - IBANs and currencies are validated types (`Iban.t`, `Iso4217.t`).
 - Movements project to balanced entries against `equity:unclassified`, unless a
