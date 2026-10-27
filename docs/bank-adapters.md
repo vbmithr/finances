@@ -252,7 +252,7 @@ Notes:
 
 Schema changes bump the version; `Store` refuses any other version without
 touching the file, and the database is rebuilt by syncing the archived inboxes
-and applying the account configuration again. Schema 11 replaced the 18
+and importing the account settings snapshot again. Schema 11 replaced the 18
 bank-specific tables this way. Verification compares reports from a database
 rebuilt with the previous build against one rebuilt with the new build.
 
@@ -261,7 +261,7 @@ rebuilt with the previous build against one rebuilt with the new build.
 1. **Baseline.** Snapshot the personal database (21 OFX, 154 Bunq, 35
    Revolut, 538 Wise events): event set, journal, reconciliations, companion
    matches, transfer candidates. Every later step diffs against it.
-2. **`iban` library.** Done: `Account_identity`, account configuration and Store
+2. **`iban` library.** Done: `Account_identity`, account snapshots and Store
    use `Iban.t`; reports on the personal database are unchanged.
 3. **Kernel types and registry.** Done for reading: `finances.core` holds
    `Movement.t`, `Adapter.S` and `Registry`; the banks are a separate library

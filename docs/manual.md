@@ -22,8 +22,7 @@ fin init
 that creates one: every other command, imports included, fails with "fin is not
 initialized" until you have run it, so a mistyped `--database` path cannot start
 a second, empty database. Repeating `fin init` preserves existing records and
-account configuration. It does not create a config file or ask you to enter
-accounts. Accounts are discovered from imported records. `fin db init` provides
+account settings in SQLite. It does not ask you to enter accounts. Accounts are discovered from imported records. `fin db init` provides
 quiet initialization for scripts, and `fin paths` shows where everything lives.
 
 ## Checking progress
@@ -59,24 +58,21 @@ fin transfers preview --json > transfer-preview.json
 The existing JSON layouts of the four inspection commands are unchanged; scripts
 that previously parsed their default output now need `--json`. Bank import
 history is readable too, with `--json` retaining its existing JSON layout. Other
-history and provider reconciliation commands still output JSON. Configuration export remains
+history and provider reconciliation commands still output JSON. Account snapshot export remains
 JSON, and journal export remains hledger text.
 
 ## Storage and backups
 
-The default database is `~/.local/share/fin/fin.sqlite3`; the optional account
-configuration is `~/.config/fin/accounts.json`. `XDG_DATA_HOME` and
-`XDG_CONFIG_HOME` override those base directories when set to absolute paths.
-`fin paths` shows the resolved locations.
+The default database is `~/.local/share/fin/fin.sqlite3`. `XDG_DATA_HOME`
+overrides the base directory when set to an absolute path. `fin paths` reports
+only `data_dir` and `database`. There is no fin configuration directory or
+implicit account settings file.
 
-fin keeps two things, and you never need their paths for normal use:
-
-- The database, `fin.sqlite3`: everything fin knows. It holds a copy of every
-  statement file you imported, the movements and accounting entries, account
-  settings and review history.
-- The account configuration, `accounts.json`: optional and yours to edit.
-  `fin accounts apply` reads it; fin writes it only when you run
-  `fin accounts export`.
+SQLite holds everything fin knows: the original statement contents, movements,
+accounting entries, account names, registered IBANs, card settlement links and
+review history. `fin accounts edit` and sync's IBAN prompts update that database.
+JSON account snapshots are optional exports to a filename you choose; they are
+read only when you explicitly run `fin accounts import FILE`.
 
 `bank.journal`, beside the database, is not state: every `fin bank sync` rewrites
 it from the database for hledger. Statement folders can live anywhere you
@@ -99,21 +95,24 @@ fin delete
 
 `fin backup [DIR]` creates `fin-backup-YYYYMMDDTHHMMSSZ` in `DIR` (default: the
 current directory), readable only by you, holding a consistent copy of the
-database (safe even while `fin` is running) and `accounts.json` if you have one.
-To restore, run `fin delete`, then copy those files back to the paths it prints.
+database (safe even while `fin` is running), including all account settings.
+To restore, run `fin delete`, then copy the backup's `fin.sqlite3` to the database
+path it prints.
 Keep your original bank exports too.
 
-`fin delete` lists everything it will delete, the database, its `bank.journal`
-and the account configuration, and asks you to type `yes`. Your statement folders
-are never touched. In a script, `fin delete --yes` skips the question; without a
-terminal and without `--yes` it refuses. With `--database FILE` it deletes that
-database and keeps the account configuration, which belongs to the default one.
+`fin delete` lists the database, SQLite sidecars, generated journal and any pending
+account edit draft, then asks you to type `yes`. Your statement folders and
+exported account snapshots are never touched. In a script, `fin delete --yes`
+skips the question; without a terminal and without `--yes` it refuses.
+`--database FILE` selects which database and associated files to delete.
 
 This experimental release accepts schema version 12; it does not migrate older
 experimental databases, and refuses them without changing the file. After
-installing a release with a new schema, back up, delete and rebuild:
+installing a release with a new schema, save an account snapshot as well as a
+full backup, then delete and rebuild:
 
 ```sh
+fin accounts export -o ~/fin-accounts.json
 fin backup ~/fin-backups
 fin delete
 fin init
@@ -123,10 +122,11 @@ fin bank sync bunq ~/Statements/bunq
 fin bank sync revolut ~/Statements/revolut --account-id main
 ```
 
-If you keep an account configuration, copy `accounts.json` from the backup back to
-`~/.config/fin/accounts.json` and run `fin accounts apply` after every bank is
-synced: it refers to accounts from all banks. Without one, accounts keep the names
-fin gives them.
+After syncing all banks, restore account settings with
+`fin accounts import ~/fin-accounts.json`. The snapshot refers to already
+discovered source accounts; it cannot create them. A full SQLite backup is for
+restoring a database of the same schema version; an account snapshot is for
+restoring settings into a rebuilt database.
 Review decisions contain database-specific event IDs, so inspect new IDs before
 reapplying decisions to a rebuilt database.
 
@@ -215,10 +215,8 @@ the same bank and account identifier, and registers the answer on all missing
 accounts in that group. Invalid IBANs are explained and can be entered again.
 Enter skips; syncing those accounts again does not repeat the question. Use
 `fin accounts edit` to fill it later. Cards never prompt, and scripts never prompt
-for IBANs. Answers are audited in SQLite. If an account configuration file already
-exists (`--accounts`, or the default config for the default database), its affected
-IBANs are updated too, so applying the file later preserves your answer. Sync does
-not create a configuration file just for this question.
+for IBANs. Answers are audited in SQLite. Sync reads and updates account settings
+only in the database. Exported snapshots are never read or rewritten during sync.
 
 You can add more exports and repeat the command. Unchanged documents and known
 transactions are recognized. Conflicting evidence is reported for review.
@@ -248,7 +246,7 @@ Use `fin bank review --all` to browse individual movements instead.
 See [Bank import and review reference](../README.md#folder-workflow) for
 additional detail, or use `fin bank sync --help` for current options.
 
-## Accounts and configuration
+## Account settings and snapshots
 
 ```sh
 fin accounts list
@@ -258,11 +256,11 @@ fin accounts edit
 `fin accounts edit` opens your accounts in your editor (`$VISUAL`, then `$EDITOR`,
 then `vi`) as JSON: set ledger account names, register IBANs and associate a credit
 card with its settlement account, then save and quit. The edits are applied at
-once, atomically and audited, and saved as `accounts.json` in the config directory
-(see `fin paths`) so that a rebuilt database can get them back with
-`fin accounts apply`. If something is invalid, such as an IBAN with wrong check
+once, atomically and audited, in SQLite. No settings file is maintained.
+If something is invalid, such as an IBAN with wrong check
 digits, nothing is applied: in a terminal you can edit again, otherwise the draft
-is kept and the next `fin accounts edit` continues from it.
+is kept beside the database as `fin.sqlite3.edit`, and the next `fin accounts edit`
+continues from it. A successfully applied or unchanged draft is removed.
 
 Statements from Wise and Bunq include the account's IBAN; for BoursoBank and
 Revolut, supply it when sync asks or register it with `fin accounts edit`. A
@@ -271,31 +269,30 @@ length and structure and the check digits, and refuses invalid ones. Keep the
 account identity fields unchanged so settings refer to the correct imported
 account.
 
-To manage the file yourself instead, export it, edit it and apply it:
+To save or restore account settings separately from a full database backup:
 
 ```sh
-fin accounts export -o "${XDG_CONFIG_HOME:-$HOME/.config}/fin/accounts.json"
-```
-
-Export writes a new snapshot to the chosen file; keep existing edits before
-exporting over it.
-
-Preview and apply your edits:
-
-```sh
-fin accounts apply --dry-run
-fin accounts apply
+fin accounts export -o ~/fin-accounts.json
+fin accounts import ~/fin-accounts.json --dry-run
+fin accounts import ~/fin-accounts.json
 fin accounts history
 ```
 
-These commands use the default config path; provide a positional JSON filename
-to apply another file. Configuration is applied explicitly. Later imports use
-settings already saved in SQLite; editing JSON alone does not update the database.
-Apply is atomic and audited. Omitted settings are kept; explicit `null` clears
-supported optional settings. IBANs inferred from primary records cannot be
-overridden or cleared. See the
-[account configuration reference](../README.md#manage-bank-accounts) for the
+Export writes a version 1 JSON snapshot to the chosen file, or standard output
+when `-o` is omitted. Import requires an explicit filename and applies the settings
+atomically with an audit trail; `--dry-run` previews without saving changes.
+Editing or importing a snapshot never makes it an active configuration file.
+Later bank imports use only the settings saved in SQLite.
+
+Omitted accounts and settings are kept; explicit `null` clears supported optional
+settings. IBANs inferred from primary records cannot be overridden or cleared.
+See the [account settings reference](../README.md#manage-bank-accounts) for the
 JSON field definitions.
+
+Existing version 1 account JSON files still import with `fin accounts import FILE`.
+The old `accounts apply` command, optional `accounts edit CONFIG` argument and
+`bank sync --accounts` option have been removed. Old files are left untouched;
+there is no default account JSON path.
 
 ## Reviewing transactions and transfers
 
@@ -372,7 +369,7 @@ private configuration permissions remain in place.
 | `fin bank --help` | Imports, reconciliation and category review |
 | `fin transfers --help` | Candidates, preview and explicit decisions |
 | `fin journal --help` | hledger journal export |
-| `fin backup` | Copy the database and account configuration |
+| `fin backup` | Copy the database, including account settings |
 | `fin delete` | Delete all fin state, after confirmation |
 | `fin db --help` | Lower-level database and source-event commands |
 

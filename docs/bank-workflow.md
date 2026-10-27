@@ -20,8 +20,6 @@ are never moved or modified by ingestion.
 ~/.local/share/fin/
   fin.sqlite3            evidence, decisions, and accounting
   bank.journal           generated output
-~/.config/fin/
-  accounts.json          editable account configuration input
 personal/
   boursobank/inbox/      original exports
   wise/inbox/
@@ -31,8 +29,8 @@ personal/
   reports/               generated reports
 ```
 
-The DB and account-config paths honor XDG_DATA_HOME and XDG_CONFIG_HOME. `fin paths`
-shows resolved locations; `--database` selects another experiment. Statement folders
+The database path honors XDG_DATA_HOME. `fin paths`
+shows the data directory and database; `--database` selects another experiment. Statement folders
 and reports remain user-selected. Repository-local `personal/` is ignored by Git.
 Task scratch files and test databases belong in disk-backed scratch storage.
 
@@ -107,17 +105,17 @@ Discover bank accounts from imported evidence and expose their complete source
 identity and current ledger name:
 
 ```sh
-fin accounts export -o "${XDG_CONFIG_HOME:-$HOME/.config}/fin/accounts.json"
+fin accounts export -o ~/fin-accounts.json
 ```
 
 Each mapping contains `institution`, `bank_id`, `account_id`, `account_type`, and
 `ledger_account`. Users can replace the generated ledger name with a readable
-`assets:bank:...` name, then apply the file explicitly or during sync:
+`assets:bank:...` name, then import the file explicitly:
 
 ```sh
-fin accounts apply
+fin accounts import ~/fin-accounts.json
 fin bank sync boursobank personal/boursobank/inbox \
-  --accounts ~/.config/fin/accounts.json --journal personal/bank.journal
+  --journal personal/bank.journal
 ```
 
 Mappings are validated, persisted in SQLite, and audited. The JSON file is an input
@@ -302,12 +300,13 @@ future work. Rebuild the journal after decisions; sync also preserves them.
 
 ## Account management and identity-backed transfer review
 
-Use one private version 1 account configuration exported by `accounts export`,
-with `accounts list`, `accounts apply --dry-run`, `accounts apply` and
-`accounts history`. It manages ledger names, registered IBANs and card settlement
-relationships atomically. SQLite is authoritative; the config is an editable input,
-not a watched database. Sync accepts the same file through `--accounts`. Only grouped commands and the versioned account configuration are supported. Explicit null in the versioned
-format clears curated metadata; omitted properties preserve it.
+Use `accounts edit` for everyday settings changes in SQLite. Optional version 1
+snapshots are written by `accounts export -o FILE` and restored by `accounts import
+FILE`, with `--dry-run` to preview. Account history remains audited. There is no
+config directory, default account file or sync settings-file option. A snapshot
+manages ledger names, registered IBANs and card settlement relationships
+atomically; explicit null clears curated metadata and omitted properties preserve
+it. Full database backups already include all settings.
 
 IBAN contradictions exclude pairs even when amount and booking date agree.
 `transfers preview` adds documented evidence points and globally consistent

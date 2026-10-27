@@ -4,9 +4,7 @@ open Finances
 
 type report =
   { inbox : Inbox.report
-  ; mapping_changes : int
   ; identity_changes : int
-  ; settlement_changes : int
   ; projection : Store.projection_report
   ; companions : Store.companion_report
   ; journal : string
@@ -78,7 +76,6 @@ let run
       ~registry
       ?account_id
       ?(configure_new_accounts = fun _ _ -> Ok 0)
-      ?accounts
       ?max_file_bytes
       ~database
       ~institution
@@ -87,7 +84,7 @@ let run
       ()
   =
   let open Or_error.Let_syntax in
-  let%bind database, paths, journal, accounts =
+  let%bind database, paths, journal =
     Or_error.try_with (fun () ->
       if List.is_empty paths then failwith "no file or directory to sync";
       let roots =
@@ -100,33 +97,21 @@ let run
       in
       let database = canonical database
       and journal = canonical journal in
-      let accounts = Option.map accounts ~f:canonical in
       if
-        List.exists (database :: journal :: Option.to_list accounts) ~f:(fun control ->
+        List.exists [ database; journal ] ~f:(fun control ->
           List.exists roots ~f:(function
             | `Directory directory -> within ~directory control
             | `File file -> same_file file control))
       then
         failwith
-          "database, journal and account configuration must not be synced, nor be inside \
-           a synced directory";
-      if
-        same_file database journal
-        || Option.exists accounts ~f:(fun config ->
-          same_file journal config || same_file database config)
-      then failwith "database, journal and account configuration must be distinct files";
+          "database and journal must not be synced, nor be inside a synced directory";
+      if same_file database journal
+      then failwith "database and journal must be distinct files";
       (match Or_error.try_with (fun () -> Unix.LargeFile.stat journal) with
        | Ok stat when Poly.(stat.st_kind <> Unix.S_REG) ->
          failwith "journal destination must be a regular file"
        | _ -> ());
-      database, paths, journal, accounts)
-  in
-  let%bind account_config =
-    match accounts with
-    | None -> Ok []
-    | Some path ->
-      let%bind contents = Or_error.try_with (fun () -> In_channel.read_all path) in
-      Bank_account_config.of_json contents
+      database, paths, journal)
   in
   Store.with_open ~registry database (fun db ->
     let%bind () =
@@ -150,15 +135,11 @@ let run
       Inbox.scan
         ?account_id
         ?max_file_bytes
-        ~exclude:(database :: journal :: Option.to_list accounts)
+        ~exclude:[ database; journal ]
         db
         ~institution
         ~paths
     in
-    let%bind account_changes = Store.apply_bank_accounts db account_config in
-    let mapping_changes = account_changes.mapping_changes
-    and identity_changes = account_changes.identity_changes
-    and settlement_changes = account_changes.settlement_changes in
     let%bind current = Store.bank_account_info db in
     let fresh =
       List.filter current ~f:(fun info ->
@@ -171,18 +152,10 @@ let run
                   (Bank_account_mapping.source_account previous)
                   (Bank_account_mapping.source_account info.mapping))))
     in
-    let%bind registered_identities = configure_new_accounts db fresh in
-    let identity_changes = identity_changes + registered_identities in
+    let%bind identity_changes = configure_new_accounts db fresh in
     let%bind companions = Store.match_companions db in
     let%bind projection = Store.project_bank db in
     let%bind contents = Finances_hledger.export db in
     let%map () = write_journal ~path:journal contents in
-    { inbox
-    ; mapping_changes
-    ; identity_changes
-    ; settlement_changes
-    ; projection
-    ; companions
-    ; journal
-    })
+    { inbox; identity_changes; projection; companions; journal })
 ;;

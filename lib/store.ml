@@ -2679,7 +2679,7 @@ let apply_bank_accounts ?(dry_run = false) db config =
           (Error.of_string
              (Printf.sprintf
                 "%s has no imported statements; sync them with fin bank sync %s FOLDER \
-                 before applying the configuration"
+                 before importing the account settings"
                 (describe r)
                 r.institution))
     in
@@ -2692,8 +2692,8 @@ let apply_bank_accounts ?(dry_run = false) db config =
       | missing ->
         Or_error.errorf
           "%d configured account%s ha%s no imported statements: %s. Sync each one's \
-           statement folder with fin bank sync BANK PATH, then apply the configuration \
-           again."
+           statement folder with fin bank sync BANK PATH, then import the account \
+           settings again."
           (List.length missing)
           (if List.length missing = 1 then "" else "s")
           (if List.length missing = 1 then "s" else "ve")

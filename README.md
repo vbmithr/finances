@@ -57,10 +57,10 @@ fin transfers preview
 
 Running `fin` without arguments shows a welcome and useful first steps, exits
 successfully, and creates no files. `fin init` creates the database and prints its
-location, the optional account-config location, and an import example. It is the
+location and an import example. It is the
 only command that creates a database; the others fail with "fin is not
 initialized" until it has run. It is safe to repeat and preserves existing data and
-configuration. Use `fin init --database FILE` to initialize a different database.
+account settings. Use `fin init --database FILE` to initialize a different database.
 No account questionnaire is needed: accounts appear from imported statements.
 The lower-level `fin db init` remains available for quiet database initialization.
 
@@ -80,27 +80,27 @@ provides the base paths. Defaults are:
 | Purpose | Default | Override |
 | --- | --- | --- |
 | Database | `~/.local/share/fin/fin.sqlite3` | `$XDG_DATA_HOME/fin/fin.sqlite3` |
-| Account config | `~/.config/fin/accounts.json` | `$XDG_CONFIG_HOME/fin/accounts.json` |
 
-Empty or relative XDG environment values are ignored. `fin paths` prints expanded
-locations. First use creates database parent directories with mode 0700 where
-needed. Existing directory permissions are retained. Configuration export writes
-atomically with mode 0600. SQLite is authoritative; configuration remains an input.
-Sync uses saved account settings unless `--accounts FILE` is explicitly supplied.
+Empty or relative XDG data values are ignored. `fin paths` prints only the data
+directory and database path. There is no configuration directory or implicit
+account JSON file. SQLite is the sole store for account settings. First use
+creates database parent directories with mode 0700 where needed; existing
+permissions are retained. Account exports are optional private snapshots written
+atomically with mode 0600 to a path you choose.
 
 ```sh
-fin accounts list --database /path/to/experiment.sqlite3
-fin accounts export -o "${XDG_CONFIG_HOME:-$HOME/.config}/fin/accounts.json"
-fin accounts apply --dry-run  # reads the default XDG account config
-fin accounts apply           # persist those edits
-fin accounts apply /path/to/other-accounts.json --database /path/to/experiment.sqlite3
+fin accounts list
+fin accounts edit
+fin accounts export -o ~/fin-accounts.json
+fin accounts import ~/fin-accounts.json --dry-run
+fin accounts import ~/fin-accounts.json
 ```
 
 `--database` (or `-d`) is an option on commands that access SQLite. Input files and
 inbox directories are positional; the old positional database argument is removed.
 Use `dune exec fin -- ...` when running from the checkout. Journals default to
 `bank.journal` beside the selected database when syncing. Original statement inboxes
-are ordinary user-chosen directories, independent of the DB/config defaults.
+are ordinary user-chosen directories, independent of the database location.
 
 Bank sync accepts ZIP exports directly, including Wise CAMT.053 downloads. It
 reads members in memory with Zipc, preserves per-member import history and replay
@@ -277,7 +277,7 @@ Wise records retain an instant and project using the local booking date.
 This experimental build supports only the current schema baseline (11). Fresh
 files initialize it atomically; other schema versions are rejected without changes.
 There are no historical migrations or schema fixtures. Reimport original statements
-and reapply saved account configuration when resetting an experiment. Category and
+and import exported account settings when resetting an experiment. Category and
 transfer review files use internal event IDs: inspect the new records before
 recreating those decisions instead of blindly reusing old numeric IDs.
 Banks have no tables of their own: statements, companion observations, daily
@@ -394,21 +394,18 @@ how many recent attempts to display (100 by default).
 To give bank accounts readable ledger names:
 
 ~~~sh
-dune exec fin -- accounts export \
-  -o "${XDG_CONFIG_HOME:-$HOME/.config}/fin/accounts.json"
-# Edit ledger_account fields, retaining each account's source identity.
-dune exec fin -- accounts apply
+dune exec fin -- accounts edit
 dune exec fin -- bank sync boursobank personal/boursobank/inbox \
-  --accounts ~/.config/fin/accounts.json --journal personal/bank.journal
+  --journal personal/bank.journal
 ~~~
 
-The version 1 configuration manages ledger names, IBANs and card settlement links
+The version 1 account snapshot manages ledger names, IBANs and card settlement links
 as described below. Source identifiers remain immutable. Names stay below
 `assets:bank:` and renames verify existing projections before changing postings.
-Keep the database, mapping config, and journal outside the inbox. Sync rejects
+Keep the database and journal outside the inbox. Sync rejects
 paths that would ingest its own outputs or overwrite a control file, and skips
 hard links to its control files. Journal publication uses an atomic rename after
-all accounting work succeeds; mapping,
+all accounting work succeeds; account,
 projection, or output failures leave the old journal intact. Previously accepted
 source files remain in SQLite for retry. The staging directory is TMPDIR (or the
 journal directory when unset) and must share the journal's filesystem.
@@ -420,20 +417,21 @@ relationships. Configure accounts already discovered from imported statements:
 
 ```sh
 fin accounts list
-fin accounts export -o "${XDG_CONFIG_HOME:-$HOME/.config}/fin/accounts.json"
-# Edit the exported file, then preview and apply:
-fin accounts apply --dry-run
-fin accounts apply
+fin accounts edit
+# Optional settings snapshot for restoration or batch edits:
+fin accounts export -o ~/fin-accounts.json
+fin accounts import ~/fin-accounts.json --dry-run
+fin accounts import ~/fin-accounts.json
 fin accounts history
 ```
 
-`list` returns JSON with source identifiers, ledger account, IBAN and its provenance,
+`list` displays source identifiers, ledger account, IBAN and its provenance,
 currency, movement count, first/last imported movement dates, and settlement links.
 These dates describe observed records, not proof of complete statement coverage.
 IBAN provenance is `imported`, `registered`, `missing`, or `not_applicable` for a
-credit-card account.
+credit-card account. Add `--json` for machine-readable output.
 
-The canonical private configuration has a version and an accounts array. This
+An exported settings snapshot has a version and an accounts array. This
 example is illustrative; keep the source identifiers from your actual export:
 
 ```json
@@ -468,21 +466,20 @@ and `account_type`. Settlement targets must be known non-card accounts in the sa
 currency. This is an informational relationship: it does not copy the parent's IBAN
 onto the card, create postings, or infer deferred-debit settlement transfers.
 
-Omitted accounts and optional properties keep their current settings. In version 1
-configuration, `iban: null` clears a manually registered IBAN and
+Omitted accounts and optional properties keep their current settings. In a version 1
+snapshot, `iban: null` clears a manually registered IBAN and
 `settlement_account: null` removes a link. Clearing and updates are audited.
 `--dry-run` returns the planned changes and counts without persisting data or audit
 rows. A failure anywhere rolls back all account edits and posting renames together.
 Identity edits that contradict confirmed transfers are rejected for review first.
 
-The file is an input, not a second database or watched source of truth. Re-export
-from SQLite when creating a fresh editable snapshot. Keep it in the XDG config directory, outside version control. To apply this same configuration during folder sync, use
-`--accounts ~/.config/fin/accounts.json`; source imports happen first, then
-the account configuration applies atomically before projection and journal output.
-Import every referenced source account before applying a complete multi-bank file.
+Snapshots are optional, explicit export/import files. There is no default file,
+XDG config directory or automatic loading during sync. `accounts edit` and sync's
+IBAN prompts update SQLite only. `fin backup` copies the entire database, including
+settings; exported snapshots are user files and `fin delete` leaves them alone.
+Import every referenced source account before restoring a multi-bank snapshot.
+Existing version 1 JSON exports remain accepted by `fin accounts import FILE`.
 
-Only the versioned format and grouped commands are supported. Old experimental
-flat commands and mapping-array inputs have been removed.
 
 ## Review and categorize bank movements
 

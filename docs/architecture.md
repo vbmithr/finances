@@ -122,10 +122,10 @@ derived CSV matches, and append-only match change history. Decimal posting
 quantities use text; no financial amount uses SQLite REAL.
 
 Schema initialization runs inside an immediate transaction. `PRAGMA user_version`
-must be 0 (a fresh database) or 10 (the supported baseline). Other experiments are
+must be 0 (a fresh database) or 12 (the supported baseline). Other experiments are
 rejected without alteration. There is no historical migration chain. Initializer
-failures roll back all partial DDL. Original records and account configuration can
-be reimported when resetting a database. Transaction decisions require renewed
+failures roll back all partial DDL. Original records and exported account settings
+can be reimported when resetting a database. Transaction decisions require renewed
 review because internal event IDs can change after reimport.
 Foreign keys are enabled on every connection and a five-second busy timeout is
 configured. The initial concurrency model uses a single writer and SQLite's
@@ -470,13 +470,13 @@ Omitted properties retain state; explicit null clears optional curated metadata.
 Imported IBANs cannot be changed. Settlement links connect a card source account
 to a known non-card account in the same currency and never create accounting entries.
 
-`accounts export/list/apply/history` exposes this single workflow. Applying a
-configuration validates source references, composes ledger/identity/relationship
+`accounts export/list/import/edit/history` exposes this single workflow. Importing a
+snapshot validates source references, composes ledger/identity/relationship
 mutations inside one transaction, and checks existing projections and confirmed
 transfers. A dry run uses a savepoint and rolls back every update and audit row,
-while returning concrete planned changes. Sync accepts the same versioned file
-through `--accounts`. SQLite remains authoritative; configuration is an optional
-explicit input. Only versioned configuration and grouped CLI commands are supported.
+while returning concrete planned changes. Account editing and sync's new-account
+IBAN prompts update only SQLite. Snapshots are optional explicit exports and
+imports, with no default path and no automatic loading or rewriting.
 
 ## Explainable transfer ranking
 
@@ -508,16 +508,19 @@ No system installation or opam switch mutation occurs during packaging.
 ## CLI identity and XDG paths
 
 The public executable and Cmdliner root name are `fin`; OCaml libraries and the
-Arch package retain the `finances` name. `App_paths` resolves absolute XDG data and
-config overrides with HOME fallbacks. The database defaults to `fin/fin.sqlite3`
-under XDG_DATA_HOME, and account configuration to `fin/accounts.json` under
-XDG_CONFIG_HOME. Invalid relative overrides are ignored. With HOME unavailable,
-the CLI falls back to the user's passwd home directory.
+Arch package retain the `finances` name. `App_paths` resolves the absolute XDG data
+override with a HOME fallback. The database defaults to `fin/fin.sqlite3` under
+XDG_DATA_HOME. Relative overrides are ignored. With HOME unavailable, the CLI
+falls back to the user's passwd home directory. There is no configuration
+directory or default account JSON file.
 
 Commands take an optional `--database/-d` rather than a positional database.
-`accounts apply` accepts an optional config filename, defaulting to the XDG config.
-`accounts export --output FILE` atomically writes a private configuration and
-rejects output paths referring to its own database. Missing database parents are
-created with private permissions; library callers still pass explicit database
-paths. `fin paths` reports defaults without opening the database. Statement inboxes
-remain caller-selected, and sync does not silently apply a config file.
+`accounts import FILE` requires an explicit snapshot filename; `accounts export
+--output FILE` atomically writes a private snapshot and rejects output paths
+referring to the database. `accounts edit` uses a recoverable private draft beside
+the database and removes it on success, applying changes only to SQLite. Missing
+database parents are created with private permissions; library callers still pass
+explicit database paths. `fin paths` reports only data and database paths without
+opening SQLite. `fin backup` saves the complete database, including settings;
+`fin delete` removes its journal and draft as well, leaving exported snapshots
+alone. Statement inboxes remain caller-selected.

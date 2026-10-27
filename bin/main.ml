@@ -148,12 +148,6 @@ let stamp () =
   Printf.sprintf "%04d%02d%02dT%02d%02d%02dZ" y m d hh mm ss
 ;;
 
-(* The account configuration belongs to the default database; another database
-   given with --database leaves it alone. *)
-let config_of database =
-  Option.some_if (String.equal database paths.database) paths.accounts_config
-;;
-
 let backup database directory =
   with_database database (fun db ->
     let target = Stdlib.Filename.concat directory ("fin-backup-" ^ stamp ()) in
@@ -166,27 +160,15 @@ let backup database directory =
     in
     let copy = Stdlib.Filename.concat target in
     let%bind () = Store.backup db (copy "fin.sqlite3") in
-    let%bind config =
-      match config_of database with
-      | Some config when Stdlib.Sys.file_exists config ->
-        let%bind contents = read_file config in
-        let%map () = write_file (copy "accounts.json") contents in
-        Some config
-      | _ -> Ok None
-    in
     let%map () = Or_error.try_with (fun () -> Unix.chmod (copy "fin.sqlite3") 0o600) in
     printf "Backed up to %s:\n  fin.sqlite3    from %s\n" target database;
-    Option.iter config ~f:(fun config -> printf "  accounts.json  from %s\n" config);
-    printf
-      "To restore, run fin delete, then copy %s back to %s.\n"
-      (if Option.is_some config then "these files" else "fin.sqlite3")
-      (if Option.is_some config then "those paths" else database))
+    printf "To restore, run fin delete, then copy fin.sqlite3 back to %s.\n" database)
 ;;
 
 let backup_cmd =
   command
     "backup"
-    "Copy the database and account configuration into a new dated folder."
+    "Copy the database, including account settings, into a new dated folder."
     Term.(
       const backup
       $ database
@@ -202,7 +184,7 @@ let backup_cmd =
 ;;
 
 let delete database yes =
-  let%bind files = Fin_state.files ~database ~config:(config_of database) in
+  let%bind files = Fin_state.files ~database in
   match files with
   | [] ->
     print_endline "fin has no state to delete.";
@@ -242,7 +224,7 @@ let delete database yes =
 let delete_cmd =
   command
     "delete"
-    "Delete all fin state: the database, its journal and the account configuration."
+    "Delete fin state: the database, its journal and any pending account edit draft."
     Term.(
       const delete
       $ database
@@ -261,7 +243,7 @@ let welcome () =
      \032 fin bank review         Review imported transactions\n\
      \032 fin journal export      Produce an hledger journal\n\n\
      More:\n\
-     \032 fin paths               Show data and config locations\n\
+     \032 fin paths               Show database and data locations\n\
      \032 fin backup              Save a copy of your data\n\
      \032 fin delete              Delete all fin data, after confirmation\n\
      \032 fin --help              Explore all commands"
@@ -277,16 +259,15 @@ let setup database =
   Stdio.printf
     "fin is ready.\n\n\
      Database: %s\n\
-     Account config (optional): %s\n\n\
+     Account settings are stored in the database.\n\n\
      Import your first statements, for example:\n\
      \032 fin bank sync boursobank ~/Statements/boursobank%s\n\n\
      Accounts appear when you import statements. Then explore:\n\
      \032 fin accounts list%s\n\
      \032 fin bank review%s\n\n\
      See fin bank sync --help for import options.\n\
-     You can repeat fin init safely; existing data and config are preserved.\n"
+     You can repeat fin init safely; existing data and account settings are preserved.\n"
     database
-    paths.accounts_config
     database_option
     database_option
     database_option;
@@ -556,7 +537,7 @@ let sync_account_label institution account_id =
   | _ -> Ok account_id
 ;;
 
-let configure_new_accounts config db fresh =
+let configure_new_accounts db fresh =
   let same_group (a : Bank_account_mapping.t) (b : Bank_account_mapping.t) =
     String.equal a.institution b.institution
     && String.equal a.bank_id b.bank_id
@@ -624,39 +605,6 @@ let configure_new_accounts config db fresh =
                  then Some { row with iban = Set iban }
                  else None)
              in
-             (* Validate before touching either state, and preserve unrelated rows
-               in an existing config (including accounts not imported yet). *)
-             let%bind _ = Store.apply_bank_accounts ~dry_run:true db updates in
-             let%bind () =
-               match config with
-               | Some path when Stdlib.Sys.file_exists path ->
-                 let%bind contents = read_file path in
-                 let%bind existing = Bank_account_config.of_json contents in
-                 let changed row =
-                   List.exists updates ~f:(fun update ->
-                     String.equal
-                       row.Bank_account_config.reference.institution
-                       update.Bank_account_config.reference.institution
-                     && String.equal
-                          (Bank_account_config.source_account row.reference)
-                          (Bank_account_config.source_account update.reference))
-                 in
-                 let merged =
-                   List.map existing ~f:(fun row ->
-                     if changed row then { row with iban = Set iban } else row)
-                   @ List.filter updates ~f:(fun update ->
-                     not
-                       (List.exists existing ~f:(fun row ->
-                          String.equal
-                            row.Bank_account_config.reference.institution
-                            update.Bank_account_config.reference.institution
-                          && String.equal
-                               (Bank_account_config.source_account row.reference)
-                               (Bank_account_config.source_account update.reference))))
-                 in
-                 write_file path (Bank_account_config.to_json merged ^ "\n")
-               | _ -> Ok ()
-             in
              let%map result = Store.apply_bank_accounts db updates in
              result.identity_changes)
       in
@@ -666,7 +614,7 @@ let configure_new_accounts config db fresh =
   if Unix.isatty Unix.stdin then groups fresh else Ok 0
 ;;
 
-let sync_bank database institution paths journal accounts max_mib account_id =
+let sync_bank database institution paths journal max_mib account_id =
   if max_mib < 1 || max_mib > 1024
   then Or_error.error_string "max-file-mib must be between 1 and 1024"
   else (
@@ -681,13 +629,8 @@ let sync_bank database institution paths journal accounts max_mib account_id =
     let%bind report =
       Finances_bank.Sync.run
         ~registry:Builtin.registry
-        ~configure_new_accounts:
-          (configure_new_accounts
-             (match accounts with
-              | Some _ -> accounts
-              | None -> config_of database))
+        ~configure_new_accounts
         ?account_id
-        ?accounts
         ~max_file_bytes:Int64.(of_int max_mib * 1048576L)
         ~database
         ~institution
@@ -717,15 +660,11 @@ let sync_bank database institution paths journal accounts max_mib account_id =
       (count Unreadable)
       (List.length report.inbox.ignored);
     printf
-      "mapping_changes=%d entries_inserted=%d entries_existing=%d\njournal=%s\n"
-      report.mapping_changes
+      "entries_inserted=%d entries_existing=%d\njournal=%s\n"
       report.projection.inserted
       report.projection.existing
       report.journal;
-    printf
-      "identity_changes=%d settlement_changes=%d\n"
-      report.identity_changes
-      report.settlement_changes;
+    printf "identity_changes=%d\n" report.identity_changes;
     printf
       "companions_matched=%d companions_unmatched=%d companions_ambiguous=%d \
        companions_conflicts=%d companions_changes=%d\n"
@@ -792,10 +731,6 @@ let sync_bank_cmd =
           & info
               [ "journal" ]
               ~doc:"Output path (default bank.journal beside the database).")
-      $ Arg.(
-          value
-          & opt (some string) None
-          & info [ "accounts" ] ~doc:"Version 1 bank account configuration JSON input.")
       $ Arg.(
           value
           & opt int 64
@@ -1288,7 +1223,8 @@ let accounts_export database output =
             a.st_dev = b.st_dev && a.st_ino = b.st_ino)
         in
         if Result.ok same |> Option.value ~default:false
-        then Or_error.error_string "configuration output must not overwrite the database"
+        then
+          Or_error.error_string "account snapshot output must not overwrite the database"
         else Ok ()
     in
     let%bind config = Store.export_bank_accounts db in
@@ -1318,18 +1254,7 @@ let account_change_json (r : Store.account_change) =
     ]
 ;;
 
-let accounts_apply database path dry_run =
-  let%bind () =
-    if Stdlib.Sys.file_exists path
-    then Ok ()
-    else
-      Or_error.errorf
-        "no account configuration at %s. It is optional: without one, accounts keep the \
-         names fin gives them. To create one, run fin accounts export -o %s, edit it, \
-         then run fin accounts apply again."
-        path
-        (Stdlib.Filename.quote path)
-  in
+let accounts_import database path dry_run =
   let%bind contents = read_file path in
   let%bind config = Bank_account_config.of_json contents in
   with_database database (fun db ->
@@ -1363,15 +1288,12 @@ let ask question =
      | _ -> false)
 ;;
 
-(* Opens the current account configuration in the user's editor and applies it on
-   save, keeping it as the configuration file so that a rebuilt database can get it
-   back with fin accounts apply. *)
-let accounts_edit database config =
-  let config = Option.first_some config (config_of database) in
+(* The edit draft is recoverable, but SQLite is the sole persistent settings store. *)
+let accounts_edit database =
   with_database database (fun db ->
     let%bind current = Store.export_bank_accounts db in
     let original = Bank_account_config.to_json current ^ "\n" in
-    let draft = Option.value config ~default:database ^ ".edit" in
+    let draft = database ^ ".edit" in
     let%bind () =
       if Stdlib.Sys.file_exists draft
       then (
@@ -1400,11 +1322,6 @@ let accounts_edit database config =
               Store.apply_bank_accounts db edited)
           with
           | Ok result ->
-            let%map () =
-              match config with
-              | None -> Ok ()
-              | Some path -> write_file path contents
-            in
             discard ();
             printf
               "Applied %d change%s.\n"
@@ -1418,7 +1335,7 @@ let accounts_edit database config =
                 c.kind
                 (Option.value c.previous_value ~default:"none")
                 (Option.value c.value ~default:"none"));
-            Option.iter config ~f:(printf "Saved as %s.\n")
+            Ok ()
           | Error error ->
             eprintf "fin: %s\n" (Error.to_string_hum error);
             Out_channel.flush stderr;
@@ -1441,14 +1358,14 @@ let accounts_cmd =
   Cmd.group
     (Cmd.info
        "accounts"
-       ~doc:"Manage discovered bank accounts through SQLite and versioned configuration.")
+       ~doc:"Manage bank account settings stored in SQLite; export and import snapshots.")
     [ command
         "list"
         "List account details, IBAN provenance, coverage and card settlement links."
         Term.(const list_bank_accounts $ database $ json_output)
     ; command
         "export"
-        "Export version 1 account configuration for editing."
+        "Export an account settings snapshot as version 1 JSON."
         Term.(
           const accounts_export
           $ database
@@ -1459,38 +1376,28 @@ let accounts_cmd =
                   [ "o"; "output" ]
                   ~docv:"FILE"
                   ~doc:
-                    "Write configuration atomically to FILE instead of standard output."))
+                    "Write a private snapshot atomically to FILE instead of standard \
+                     output."))
     ; command
         "edit"
         "Edit account names, IBANs and card settlement links in your editor, and apply \
          them on save."
+        Term.(const accounts_edit $ database)
+    ; command
+        "import"
+        "Restore an explicit account settings snapshot atomically, or preview with \
+         --dry-run."
         Term.(
-          const accounts_edit
+          const accounts_import
           $ database
           $ Arg.(
-              value
+              required
               & pos 0 (some string) None
               & info
                   []
-                  ~docv:"CONFIG"
+                  ~docv:"FILE"
                   ~doc:
-                    "Where to save the applied configuration (default: the XDG config \
-                     file for the default database; see fin paths)."))
-    ; command
-        "apply"
-        "Apply the whole account configuration atomically, or preview it with --dry-run."
-        Term.(
-          const accounts_apply
-          $ database
-          $ Arg.(
-              value
-              & pos 0 string paths.accounts_config
-              & info
-                  []
-                  ~docv:"CONFIG"
-                  ~doc:
-                    "Account configuration (default: XDG config directory; see fin \
-                     paths).")
+                    "Account settings JSON snapshot to import; there is no default file.")
           $ Arg.(
               value
               & flag
@@ -1509,16 +1416,14 @@ let accounts_cmd =
 let paths_cmd =
   command
     "paths"
-    "Display resolved XDG data and configuration locations."
+    "Display resolved data directory and authoritative SQLite database path."
     Term.(
       const (fun () ->
         print_endline
           (Yojson.Safe.pretty_to_string
              (`Assoc
                  [ "data_dir", `String paths.data_dir
-                 ; "config_dir", `String paths.config_dir
                  ; "database", `String paths.database
-                 ; "accounts_config", `String paths.accounts_config
                  ]));
         Ok ())
       $ const ())

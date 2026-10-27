@@ -9,17 +9,14 @@ let touch path = Out_channel.write_all path ~data:"x"
 
 let files () =
   let root = Fpath.to_string (bos (Bos.OS.Dir.tmp "fin-state-%s")) in
-  let data = join root "data"
-  and config_dir = join root "config" in
-  List.iter [ data; config_dir ] ~f:(fun d -> Unix.mkdir d 0o700);
-  let database = join data "fin.sqlite3"
-  and config = join config_dir "accounts.json" in
-  Alcotest.(check (list string))
-    "nothing yet"
-    []
-    (ok (Fin_state.files ~database ~config:(Some config)));
+  let data = join root "data" in
+  Unix.mkdir data 0o700;
+  let database = join data "fin.sqlite3" in
+  let snapshot = join data "accounts.json" in
+  Alcotest.(check (list string)) "nothing yet" [] (ok (Fin_state.files ~database));
   List.iter
     [ "fin.sqlite3"
+    ; "fin.sqlite3.edit"
     ; "fin.sqlite3-wal"
     ; "bank.journal"
     ; "fin.sqlite3.20261027T172203Z.old"
@@ -28,8 +25,8 @@ let files () =
     ; "notes.txt"
     ]
     ~f:(fun name -> touch (join data name));
-  touch config;
-  let state = ok (Fin_state.files ~database ~config:(Some config)) in
+  touch snapshot;
+  let state = ok (Fin_state.files ~database) in
   Alcotest.(check (list string))
     "fin's files only"
     (List.map
@@ -38,24 +35,17 @@ let files () =
        ; "fin.sqlite3"
        ; "fin.sqlite3-wal"
        ; "fin.sqlite3.20261027T172203Z.old"
+       ; "fin.sqlite3.edit"
        ]
-       ~f:(join data)
-     @ [ config ])
+       ~f:(join data))
     state;
-  Alcotest.(check int)
-    "configuration only when given"
-    5
-    (List.length (ok (Fin_state.files ~database ~config:None)));
   ok (Fin_state.delete state);
   Alcotest.(check bool)
     "other files kept"
     true
     (Stdlib.Sys.file_exists (join data "notes.txt"));
   Alcotest.(check bool) "non-empty directory kept" true (Stdlib.Sys.file_exists data);
-  Alcotest.(check bool)
-    "empty directory removed"
-    false
-    (Stdlib.Sys.file_exists config_dir)
+  Alcotest.(check bool) "exported snapshot kept" true (Stdlib.Sys.file_exists snapshot)
 ;;
 
 let backup () =

@@ -21,12 +21,12 @@ Last updated: 2026-10-27.
 - Movements project to balanced entries against `equity:unclassified`, unless a
   reviewed category or confirmed transfer says otherwise. `fin journal export`
   writes a reproducible hledger journal.
-- 126 tests (118 OCaml cases and 8 CLI cases). Each change is verified
+- 127 tests (117 OCaml cases and 10 CLI cases). Each change is verified
   by rebuilding the personal database from its inboxes with the previous and the
   new build and diffing every report.
 - Issue #1 is implemented locally and awaits publication.
 - The installed Arch package is `finances 0.1.0-16` (schema 12); the tree is at
-  package revision 18 (schema 12).
+  package revision 19 (schema 12).
 
 ### Personal data
 
@@ -90,27 +90,31 @@ The import side is done; turning movements into accounting is not.
 
 ### 3. Smaller gaps
 
+- [x] SQLite is the only account settings store. No config directory or implicit
+  file remains; snapshot export/import is explicit, editor drafts are temporary,
+  and backup includes all settings in the database.
+
 - [x] ZIP statement exports import directly through Zipc, with per-member history,
   idempotent replay, bounded expansion and no filesystem extraction.
 
 - [x] Issue #1: shared-IBAN currency siblings do not contradict transfers; sync
-  asks for missing labels and new account IBANs on a terminal and keeps an
-  existing configuration in step.
+  asks for missing labels and new account IBANs on a terminal and saves answers
+  in SQLite.
 
 - [x] `fin accounts edit` sets IBANs, names and card links without handling the
   configuration file by hand.
 - [x] `fin backup` and `fin delete` save and remove all fin state without
   knowing where it lives; only `fin init` creates a database.
 - [ ] `bank.journal` is rewritten only by `fin bank sync`, so it is stale after
-  `fin accounts apply` or a review decision until the next sync. Every command
+  `fin accounts import FILE` or a review decision until the next sync. Every command
   that changes accounting should rewrite it, or the file should go in favour of
   `fin journal export`.
-- [x] `fin accounts apply` names the configured accounts that have no imported
+- [x] `fin accounts import FILE` names the configured accounts that have no imported
   statements, instead of repeating "unknown source account".
 - [x] `fin bank sync BANK PATH...`: the bank is a required argument, and the paths
   are any number of files or directories, described in `--help`.
-- [x] `fin accounts apply` without a configuration file says that none exists,
-  that it is optional, and how to create one with `fin accounts export -o`.
+- [x] `fin accounts import FILE` requires a snapshot filename and offers a dry run;
+  there is no default file to confuse with active settings.
 - [ ] `fin paths` prints only JSON, like `bank statements` and `bank companions`.
 - [ ] `fin bank statements` and `fin bank companions` print only JSON, unlike the
   other commands, which print text and take `--json`.

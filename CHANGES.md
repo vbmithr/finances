@@ -10,6 +10,21 @@ short line of their own.
 
 ### 2026-10-27
 
+**Action required:** use `fin accounts import FILE` instead of `accounts apply`;
+there is no default account file. Existing version 1 JSON files still import.
+`accounts edit CONFIG` and `bank sync --accounts FILE` have been removed: edit
+settings in SQLite or explicitly import a snapshot after discovering the accounts.
+
+- SQLite is the only account settings store. `fin paths` reports only `data_dir`
+  and `database`; `config_dir` and `accounts_config` are gone. Init no longer
+  advertises a config path. Edits and sync IBAN answers update only SQLite.
+- Account exports are optional snapshots at a path you choose. They are never
+  loaded or rewritten automatically. Backup copies the complete SQLite database,
+  including account settings; delete removes database state and pending editor
+  drafts, leaving exported snapshots and any old config files untouched.
+- Sync no longer reports mapping or settlement changes, since it imports no
+  account settings file. Schema 12 and the version 1 snapshot format are unchanged.
+
 - `fin bank sync` imports ZIP exports automatically using Zipc, including Wise
   CAMT.053 downloads. Members appear in history as `archive.zip/member`; nothing
   is extracted onto disk. The read limit also bounds total expanded bytes, and

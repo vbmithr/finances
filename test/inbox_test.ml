@@ -37,10 +37,9 @@ let with_store root f =
        Ok ()))
 ;;
 
-let sync ?accounts root =
+let sync root =
   Finances_bank.Sync.run
     ~registry:Builtin.registry
-    ?accounts
     ~database:(database root)
     ~institution:"boursobank"
     ~paths:[ inbox root ]
@@ -239,6 +238,12 @@ let config_json mappings =
        }))
 ;;
 
+let import_settings root contents =
+  Result.bind (Bank_account_config.of_json contents) ~f:(fun rows ->
+    Store.with_open ~registry:Test_support.registry (database root) (fun db ->
+      Store.apply_bank_accounts db rows))
+;;
+
 let mappings_after_projection () =
   workspace (fun root ->
     write (join (inbox root) "bank.ofx") (fixture ());
@@ -254,10 +259,9 @@ let mappings_after_projection () =
       List.mapi initial ~f:(fun i mapping ->
         remap (Printf.sprintf "account-%d" i) mapping)
     in
-    let config = join root "accounts.json" in
-    write config (config_json mappings);
-    let result = ok (sync ~accounts:config root) in
-    Alcotest.(check int) "mappings persisted" 2 result.mapping_changes;
+    let changes = ok (import_settings root (config_json mappings)) in
+    let result = ok (sync root) in
+    Alcotest.(check int) "mappings persisted" 2 changes.mapping_changes;
     Alcotest.(check int) "renamed entries replay" 0 result.projection.inserted;
     Alcotest.(check int) "all entries reused" 3 result.projection.existing;
     let restored =
@@ -277,7 +281,7 @@ let mappings_after_projection () =
       (String.is_substring
          (In_channel.read_all (journal root))
          ~substring:"assets:bank:account-0");
-    let repeated = ok (sync ~accounts:config root) in
+    let repeated = ok (import_settings root (config_json mappings)) in
     Alcotest.(check int) "mapping replay is harmless" 0 repeated.mapping_changes;
     raw (database root) (fun db ->
       Alcotest.(check int)
@@ -355,14 +359,12 @@ let mapping_conflict_preserves_journal () =
            Store.bank_accounts)
       |> List.mapi ~f:(fun i m -> remap (Printf.sprintf "changed-%d" i) m)
     in
-    let config = join root "accounts.json" in
-    write config (config_json mappings);
     raw (database root) (fun db ->
       sql
         db
         "UPDATE journal_entries SET description='manual change' WHERE id=(SELECT max(id) \
          FROM journal_entries)");
-    error (sync ~accounts:config root);
+    error (import_settings root (config_json mappings));
     Alcotest.(check string)
       "previous journal intact"
       before
@@ -415,23 +417,6 @@ let path_protection () =
     Unix.symlink (inbox root) symlink;
     error (run (database root) symlink (journal root));
     source_count root 3)
-;;
-
-let invalid_config_before_import () =
-  workspace (fun root ->
-    write (join (inbox root) "bank.ofx") (fixture ());
-    write (journal root) "previous journal";
-    let config = join root "accounts.json" in
-    write config "not JSON";
-    error (sync ~accounts:config root);
-    Alcotest.(check bool)
-      "no import before validating config"
-      false
-      (Stdlib.Sys.file_exists (database root));
-    Alcotest.(check string)
-      "existing output preserved"
-      "previous journal"
-      (In_channel.read_all (journal root)))
 ;;
 
 let output_failure () =
@@ -508,7 +493,6 @@ let () =
           ; "mapping conflict preserves output", mapping_conflict_preserves_journal
           ; "control path protection", path_protection
           ; "explicit files and directories", explicit_paths
-          ; "invalid configuration before import", invalid_config_before_import
           ; "publication failure and retry", output_failure
           ]
           ~f:(fun (name, f) -> Alcotest.test_case name `Quick f) )

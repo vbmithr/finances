@@ -1,4 +1,4 @@
-"""Exercise terminal-only sync onboarding against a disposable database."""
+"""Exercise sync onboarding and account settings against a disposable database."""
 import json
 import os
 from pathlib import Path
@@ -107,36 +107,79 @@ class SyncOnboarding(unittest.TestCase):
         self.assertNotIn('IBAN (Enter to skip):', replay)
         self.assertIsNone(self.accounts()[0]['iban'])
 
-    def test_existing_config_keeps_answer_on_reapply(self):
+    def test_snapshot_import_is_explicit_and_supports_dry_run(self):
         self.terminal(['bank', 'sync', 'revolut', self.csv, '--account-id', 'main'],
                       [('IBAN (Enter to skip):', '')])
-        self.config.parent.mkdir(parents=True, exist_ok=True)
-        self.config.write_text(self.run_fin('accounts', 'export').stdout)
-        # Rebuild with an existing configuration whose explicit null must be
-        # replaced. The USD account is new and is absent from the config.
-        (self.root / 'data/fin/fin.sqlite3').unlink()
-        self.run_fin('init')
-        self.terminal(['bank', 'sync', 'revolut', self.csv, self.usd,
-                       '--account-id', 'main'], [('IBAN (Enter to skip):', IBAN)])
-        saved = json.loads(self.config.read_text())['accounts']
-        self.assertEqual(len(saved), 2)
-        self.assertTrue(all(row['iban'] == IBAN for row in saved))
-        self.run_fin('accounts', 'apply')
-        self.assertTrue(all(row['iban'] == IBAN for row in self.accounts()))
+        snapshot = self.root / 'saved-accounts.json'
+        self.run_fin('accounts', 'export', '-o', snapshot)
+        rows = json.loads(snapshot.read_text())
+        rows['accounts'][0]['iban'] = IBAN
+        snapshot.write_text(json.dumps(rows))
+        self.run_fin('accounts', 'import', snapshot, '--dry-run')
+        self.assertIsNone(self.accounts()[0]['iban'])
+        self.run_fin('accounts', 'import', snapshot)
+        self.assertEqual(self.accounts()[0]['iban'], IBAN)
+        self.assertNotEqual(self.run_fin('accounts', 'import', check=False).returncode, 0)
+        before = snapshot.read_bytes()
+        self.terminal(['bank', 'sync', 'revolut', self.usd, '--account-id', 'main'],
+                      [('IBAN (Enter to skip):', IBAN)])
+        self.assertEqual(snapshot.read_bytes(), before)
+        self.assertFalse(self.config.exists())
 
-    def test_explicit_config_preserves_unrelated_settings(self):
+    def test_legacy_config_is_not_used_or_changed(self):
+        self.config.parent.mkdir(parents=True)
+        self.config.write_text('Not a settings input')
         self.terminal(['bank', 'sync', 'revolut', self.csv, '--account-id', 'main'],
-                      [('IBAN (Enter to skip):', '')])
-        config = self.root / 'explicit.json'
-        config.write_text(self.run_fin('accounts', 'export').stdout)
-        previous = json.loads(config.read_text())['accounts'][0]
-        self.terminal(['bank', 'sync', 'revolut', self.usd, '--account-id', 'main',
-                       '--accounts', config], [('IBAN (Enter to skip):', IBAN)])
-        saved = json.loads(config.read_text())['accounts']
-        self.assertEqual(saved[0], previous)
-        self.assertEqual(saved[1]['iban'], IBAN)
-        self.run_fin('accounts', 'apply', config)
-        self.assertTrue(any(row['iban'] == IBAN for row in self.accounts()))
+                      [('IBAN (Enter to skip):', IBAN)])
+        self.assertEqual(self.config.read_text(), 'Not a settings input')
+        self.assertEqual(self.accounts()[0]['iban'], IBAN)
+        paths = json.loads(self.run_fin('paths').stdout)
+        self.assertEqual(set(paths), {'data_dir', 'database'})
+        self.assertNotEqual(self.run_fin('bank', 'sync', 'revolut', self.csv,
+                                        '--account-id', 'main', '--accounts', self.config,
+                                        check=False).returncode, 0)
+
+    def test_editor_saves_only_to_database_and_recovers_draft(self):
+        self.run_fin('bank', 'sync', 'revolut', self.csv, '--account-id', 'main')
+        draft = self.root / 'data/fin/fin.sqlite3.edit'
+        self.env['VISUAL'] = 'false'
+        self.assertNotEqual(self.run_fin('accounts', 'edit', check=False).returncode, 0)
+        self.assertTrue(draft.exists())
+        edited = json.loads(draft.read_text())
+        edited['accounts'][0]['iban'] = 'invalid'
+        draft.write_text(json.dumps(edited))
+        self.env['VISUAL'] = 'true'
+        self.assertNotEqual(self.run_fin('accounts', 'edit', check=False).returncode, 0)
+        self.assertIsNone(self.accounts()[0]['iban'])
+        edited['accounts'][0]['iban'] = IBAN
+        draft.write_text(json.dumps(edited))
+        result = self.run_fin('accounts', 'edit')
+        self.assertIn('Continuing the draft', result.stdout)
+        self.assertEqual(self.accounts()[0]['iban'], IBAN)
+        self.assertFalse(draft.exists())
+        self.assertFalse(self.config.exists())
+        self.run_fin('accounts', 'edit')
+        self.assertFalse(draft.exists())
+
+    def test_backup_and_delete_preserve_exported_snapshots(self):
+        self.terminal(['bank', 'sync', 'revolut', self.csv, '--account-id', 'main'],
+                      [('IBAN (Enter to skip):', IBAN)])
+        snapshot = self.root / 'data/fin/accounts.json'
+        self.run_fin('accounts', 'export', '-o', snapshot)
+        original = snapshot.read_bytes()
+        self.run_fin('backup', self.root)
+        backup = next(self.root.glob('fin-backup-*'))
+        self.assertEqual([p.name for p in backup.iterdir()], ['fin.sqlite3'])
+        restored = json.loads(self.run_fin('accounts', 'export', '--database',
+                                         backup / 'fin.sqlite3').stdout)
+        self.assertEqual(restored['accounts'][0]['iban'], IBAN)
+        # Only a pending draft is disposable app state; a user-exported snapshot
+        # beside the database remains the user's file.
+        self.env['VISUAL'] = 'false'
+        self.run_fin('accounts', 'edit', check=False)
+        self.run_fin('delete', '--yes')
+        self.assertEqual(snapshot.read_bytes(), original)
+        self.assertFalse((self.root / 'data/fin/fin.sqlite3.edit').exists())
         self.assertFalse(self.config.exists())
 
     def test_checking_prompts_but_associated_card_does_not(self):

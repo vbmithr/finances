@@ -78,7 +78,7 @@ let of_json contents =
                 (List.map fields ~f:fst |> List.sort ~compare:String.compare)
                 [ "accounts"; "version" ]))
           || not (Poly.equal (member "version" json) (`Int 1))
-        then failwith "account configuration requires version 1 and accounts";
+        then failwith "account settings snapshot requires version 1 and accounts";
         member "accounts" json
         |> to_list
         |> List.map ~f:(fun json ->
@@ -93,7 +93,7 @@ let of_json contents =
                      List.mem names k ~equal:String.equal)))
             || List.exists names ~f:(fun k ->
               not (List.mem allowed k ~equal:String.equal))
-          then failwith "unknown, missing or duplicated account configuration field";
+          then failwith "unknown, missing or duplicated account settings field";
           let r =
             reference_of_json
               (`Assoc
@@ -128,7 +128,7 @@ let of_json contents =
               update "settlement_account" (fun v ->
                 reference_of_json v |> Or_error.ok_exn)
           })
-      | _ -> failwith "expected versioned account configuration"
+      | _ -> failwith "expected a versioned account settings snapshot"
     in
     if
       List.contains_dup
