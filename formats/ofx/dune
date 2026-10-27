@@ -1,0 +1,4 @@
+(library
+ (name ofx)
+ (public_name finances.ofx)
+ (libraries base ptime re xmlm))

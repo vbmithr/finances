@@ -308,3 +308,10 @@
  (flags
   (:standard -open Finances_core -open Finances_banks))
  (libraries finances finances.core finances.banks base stdio alcotest))
+
+(test
+ (name ofx_test)
+ (modules ofx_test)
+ (deps
+  (glob_files fixtures/*))
+ (libraries finances.ofx base stdio alcotest))

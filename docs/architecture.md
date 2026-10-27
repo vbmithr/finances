@@ -322,6 +322,10 @@ Three libraries separate the kernel from the banks:
 - `finances` (`lib/`): Store, projection, transfer review and account
   configuration.
 
+Standard file formats are independent libraries under `formats/` that know
+nothing about banks or accounting: `finances.iban` (ISO 13616) and
+`finances.ofx` (OFX 2.x). Adapters build on them and add their bank's rules.
+
 `Store.with_open ~registry` receives the banks it may decode; the CLI passes
 `Builtin.registry`. Every kernel read of a bank event goes through
 `Registry.movement`, which dispatches by venue and kind to the adapter that

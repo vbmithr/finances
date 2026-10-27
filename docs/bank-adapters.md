@@ -127,7 +127,16 @@ plus optional parsers for common structured layouts (`/TAG/value` sequences,
 `?nn` subfields). Bunq's `/IBAN/…/NAME/…/REMI/…` decoding, the `NONREF`
 handling and the `BUNQ` header check stay in the Bunq adapter.
 
-### `ofx`: OFX 2.x
+### `ofx`: OFX 2.x (implemented)
+
+`formats/ofx`, public name `finances.ofx`, depending on Base, Ptime, Re and
+xmlm. It returns statements, accounts, balances and transactions with values as
+written and each STMTTRN tree; `calendar_date` reads OFX dates without moving
+them across time zones. BoursoBank's `Bank_ofx` keeps the bank's rules on top:
+exact quantities, the `DTUSER` exclusion, correction refusal and the canonical
+payload, whose bytes are unchanged (an inbox replay re-imports every stored
+movement as existing).
+
 
 XML OFX 2.x bank statement message sets: STMTRS, STMTTRN, LEDGERBAL/AVAILBAL,
 status codes and the date syntax with optional time and timezone. Correction
