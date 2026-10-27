@@ -1,108 +1,319 @@
-# Bank adapter interface proposal
+# Bank adapters and format libraries
 
-This is a proposed extension interface, not a feature of the current CLI. Today,
-bank parsers have their own types and Store dispatches explicitly to the built-in
-banks. An external package cannot yet register another bank with `fin`.
+Status: design, not implemented. Today Store dispatches explicitly to four
+built-in banks, and 18 SQLite tables are specific to one bank. This document
+fixes the target: banks become adapters behind one interface, standard file
+formats become independent libraries, and the schema has no bank-specific
+tables.
 
-## Direction
+## Rules
 
-Use an OCaml module signature for pure bank parsers and an explicit registry for
-discovery. The kernel owns file access, archiving, validation, transactions,
-duplicate detection, review decisions and accounting projection. A plugin should
-not need SQLite access or permission to decide accounting categories.
+These are invariants, not goals. Tests enforce them (see Enforcement).
 
-Start with plugins linked into a custom `fin` executable at build time. This lets
-external authors publish ordinary OCaml libraries and gives us compiler-checked
-interfaces without an OCaml runtime loading/ABI protocol. Dynamic loading can be
-considered separately if installing plugins without rebuilding becomes necessary.
+1. **No bank-specific schema.** Adding, changing or removing a bank never adds
+   DDL. Every bank uses the same kernel tables; facts that do not fit go into
+   the source event payload or the companion row fields, never into a new table
+   or column.
+2. **Adapters never touch SQLite.** An adapter is pure: bytes and an explicit
+   context in, a normalized document out; stored events in, normalized
+   movements out. The kernel owns archiving, transactions, duplicate detection,
+   overlap policy, reconciliation arithmetic, review decisions and projection.
+3. **Formats are not institutions.** OFX, CAMT and MT940 are standards with
+   their own libraries. An adapter is an institution that combines one or more
+   format parsers with that bank's quirks and identity rules.
+4. **Stored identities are frozen.** Venue, account, kind, source ID and payload
+   bytes of existing events never change. A new parser or library version must
+   produce identical values for the same input, or use a new event kind.
+5. **Adapters decode their own events.** There is no generic payload codec for
+   existing banks. Dispatch is by `(venue, kind)`, because one kind
+   (`bank-transaction`, OFX) is shared by every OFX institution.
 
-## Shared document model
+## Layers
 
-A common signature only helps if its output is common too. Define validated
-builders for an import document containing:
+```
+format libraries     iban   camt   mt940   ofx         (no finances dependency)
+        |
+bank adapters        boursobank  wise  bunq  revolut    (no Rel/SQLite dependency)
+        |
+kernel               Adapter types, Registry, Store, projection, review
+        |
+CLI                  builds the registry, passes it to Store and sync
+```
 
-- Source accounts: bank identifiers, account identifiers, type and currency.
-- Primary movements: stable source ID, booking date, optional timestamp/value
-  date, signed net amount, separately recorded fees, description and raw evidence.
-- Optional statement facts: opening and closing balances, currency, the bank's
-  stated period and links to the movements included in that statement.
-- Companion observations: metadata, suggested categories and matching references
-  that enrich primary movements without creating a second transaction stream.
+Dune dependencies enforce the arrows. Store receives a registry value and does
+not name any adapter. Only the CLI (or a custom `fin` built with external
+adapters) lists which adapters are linked.
 
-Quantities use Decimal values with the kernel's exact arithmetic policy. Calendar
-dates use Ptime dates and remain distinct from instants. Raw document bytes are
-archived independently of the normalized document. Completeness is never inferred
-from the earliest and latest movement alone.
+## Format libraries
 
-The kernel needs a common, versioned source-event codec for new adapters.
-`Bank_transaction.of_event` currently recognizes specific built-in payloads;
-adding a registry alone would leave an external bank's records unreadable by
-review, transfer matching and accounting. Existing built-in IDs, account selectors
-and payload encodings must remain stable during conversion.
+Each library is a faithful, typed reader for one standard. It knows the
+standard, not banks and not accounting.
 
-## Parser contract
+- Depends only on Base, decimal, Ptime, xmlm or re as needed. It must not depend
+  on `finances`, so it can be extracted into its own repository like
+  `ocaml-hledger` once stable.
+- Is lossless where the standard is loose: it keeps raw strings for fields
+  banks commonly abuse (OFX `DTUSER`, MT940 `:86:`), and exposes typed views
+  beside them. It never repairs data silently.
+- Rejects what is not in the standard, with precise errors. Bank-specific
+  tolerance lives in the adapter, applied to the raw field.
+- Uses exact decimals and calendar dates distinct from instants.
+- Produces no identities, ledger accounts or source IDs.
+- Is tested against real captured files (anonymized fixtures) as well as the
+  specification, since bank exports diverge from it.
 
-The intended signature is conceptually:
+Start in this repository under `formats/` as separate dune libraries, each with
+its own public name. Extract once an interface has survived two banks. Check
+names against opam before publishing.
+
+### `iban`: ISO 13616
+
+ISO 13616-1:2020 defines the IBAN structure. Check digits use ISO/IEC 7064
+MOD 97-10. SWIFT, as registration authority under ISO 13616-2, publishes the
+IBAN Registry with each country's length and BBAN layout.
+
+`Account_identity.normalize_iban` already implements the generic part: the
+length bounds, the `CCdd` prefix and MOD 97-10. The library adds:
+
+- An abstract `Iban.t` that can only be built validated; electronic and
+  printed (groups of four) renderings.
+- Per-country length and BBAN structure from a table generated from the SWIFT
+  registry file, with the registry release recorded in the source. Unknown
+  country codes are rejected.
+- Rejection of check digits `00`, `01` and `99`. They can pass MOD 97-10 but
+  are never issued.
+- Country code, check digits and BBAN accessors, plus, where the registry
+  defines them, the bank and branch identifiers.
+- Optionally `Bic.t` (ISO 9362) beside it, since CAMT carries both.
+
+This also tightens `inferred_iban`. Today any checksum-valid 15–34 character
+account identifier counts as IBAN evidence; with the registry, the country
+length must match too.
+
+### `camt`: ISO 20022 cash management
+
+A reader for `camt.053` (statement), later `camt.052` (intraday report) and
+`camt.054` (notification), across their namespace versions (`.001.02` to
+current). Wise's parser accepts only `camt.053.001.10` today.
+
+Typed model of the subset banks use: `Stmt` (Id, ElctrncSeqNb, FrToDt, Acct
+with IBAN/Othr, Ccy, Svcr), `Bal` (type codes OPBD/CLBD/ITBD/CLAV…, amount,
+CdtDbtInd, date or datetime), `Ntry` (Amt, CdtDbtInd, RvslInd, Sts, BookgDt,
+ValDt, AcctSvcrRef, BkTxCd domain and proprietary, AddtlNtryInf, Chrgs) and
+`NtryDtls/TxDtls` (Refs including EndToEndId, RltdPties debtor/creditor names
+and accounts, RmtInf structured and unstructured). Reconciliation checks
+(opening + entries = closing, entry counts) are offered as functions, not
+forced during parsing.
+
+Wise keeps in its adapter: the servicer check, which field is its reference
+(`BkTxCd/Prtry/Cd`), cashback reference normalization and identity rules.
+Counterparty IBANs and charges become available to the movement model.
+
+### `mt940`: SWIFT MT940/MT942
+
+The field grammar: `:20:`, `:21:`, `:25:`, `:28C:`, `:60F:/:60M:`, `:61:`,
+`:86:`, `:62F:/:62M:`, `:64:`, `:65:`; and the `:61:` subfields (value date,
+optional entry date, D/C/RC/RD, funds code, amount, type code, customer
+reference, `//` bank reference, supplementary details). Entry-date year
+inference is a library function with the rule documented.
+
+`:86:` is free text whose structure varies by bank. The library returns it raw,
+plus optional parsers for common structured layouts (`/TAG/value` sequences,
+`?nn` subfields). Bunq's `/IBAN/…/NAME/…/REMI/…` decoding, the `NONREF`
+handling and the `BUNQ` header check stay in the Bunq adapter.
+
+### `ofx`: OFX 2.x
+
+XML OFX 2.x bank statement message sets: STMTRS, STMTTRN, LEDGERBAL/AVAILBAL,
+status codes and the date syntax with optional time and timezone. Correction
+records (CORRECTFITID, CORRECTACTION) are parsed and surfaced, not rejected by
+the library; the adapter decides. Credit-card statements (CCSTMTRS) and OFX 1.x
+SGML can follow. The canonical transaction rendering used for BoursoBank
+payloads stays byte-identical (rule 4); it moves to the adapter if the library's
+tree differs.
+
+### CSV is not a format library
+
+Bank CSV exports share no standard. Each CSV layout stays in its adapter. The
+kernel's adapter toolkit offers helpers for the common mechanics: BOM handling,
+separator, exact header match, decimal comma and validated UTF-8.
+
+## Adapter contract
 
 ```ocaml
 module type S = sig
+  (** Must equal the [venue] of every event the adapter produced. *)
   val institution : string
-  val parser_version : string
+
+  (** Format identifiers, scoped by institution. Built-in adapters keep their
+      stored values (ofx, csv, camt053, wise_csv, bunq_mt940, bunq_csv,
+      revolut_csv), so import history is not rewritten. *)
   val formats : Format.t list
 
-  val probe : filename:string -> contents:string -> Probe.t
+  (** Event kinds this adapter decodes. The registry rejects two adapters
+      claiming the same (institution, kind). *)
+  val kinds : string list
 
-  val parse
-    :  context:Context.t
-    -> format:Format.t
-    -> filename:string
-    -> contents:string
-    -> Document.t Base.Or_error.t
+  val probe : filename:string -> contents:string -> Probe.t
+  val parse : context:Context.t -> Format.t -> string -> Document.t Or_error.t
+  val decode : Source_event.t -> Movement.t Or_error.t
+
+  (** How repeated observations are reconciled without bank IDs. *)
+  val overlap : Overlap.t
+
+  val companion : Companion.t option
 end
 ```
 
-`Format`, `Probe`, `Context` and `Document` above are proposed shared types. Format
-identifiers should be namespaced strings or an abstract extensible identifier,
-rather than another closed variant listing every bank. `Context` carries explicit
-user-supplied hints such as Revolut's account label; it does not expose the DB.
+- `Probe.t` is `Recognized of Format.t | Malformed of Format.t * Error.t |
+  No_match`. The registry probes only the requested institution's adapter.
+  This replaces today's global, order-dependent detection, which runs before
+  the institution is considered. More than one match is an error.
+- `Context.t` carries explicit user hints (Revolut's account label). The kernel
+  persists it per document, so replay is deterministic.
+- `Document.t` contains source events with their movements, statements and
+  companion rows, built through validating constructors. It never contains
+  ledger accounts or categories.
+- `Overlap.t` is `Source_ids` (the bank supplies stable IDs: OFX FITID, Wise
+  references) or `Day_inventory` (Bunq, Revolut: per account and day, sorted
+  payload signatures must agree across documents). The kernel implements both.
+- `Companion.t` packs a row type with `of_fields`, a pure
+  `match_rows : row list -> (event_id * Movement.t) list -> Match.result list`,
+  a policy name, and `tags : row -> (string * string) list` for journal
+  metadata. Matching rules differ per bank and stay in the adapter; storage,
+  audit and journal emission do not.
 
-`probe` recognizes formats, including recognizable but malformed inputs that
-should produce a useful parse error. It must not infer account ownership or
-silently choose among ambiguous formats. The registry validates unique bank and
-format identifiers, selects within the explicitly requested institution, and
-rejects ambiguous matches with diagnostics. Parsing must be deterministic for
-the same input and context.
+A generic OFX adapter is a functor `Ofx_adapter.Make (struct let institution =
+… end)`. BoursoBank is that plus `DTUSER` tolerance and its CSV companion. This
+keeps today's behaviour (OFX accepted under any institution) explicit: an OFX
+institution exists only if it is registered.
 
-Parser versions describe implementation changes; they must not automatically
-become part of transaction identity. A parser update must not turn an existing
-movement into a new payment. Filenames and absolute inbox paths are not stable
-movement identifiers either. When bank-provided IDs are absent, the adapter must
-document its overlap and duplicate-occurrence policy.
+### Normalized movement
 
-## Registration and capabilities
+`Movement.t` replaces `Bank_transaction.t` everywhere in the kernel:
+projection, transfers, ranking, IBAN evidence and the journal. It carries
+enough for the kernel never to inspect a payload:
 
-Provide an explicit `Registry.register (module Adapter : S)` API and a constructor
-for a CLI using a chosen registry. Built-in registration should be visible in one
-place, rather than relying on module initialization order. A later bank/format
-listing command can use the same registry and format descriptions.
+- `account`: bank ID, account ID, account type, currency.
+- `own_iban`: `Iban.t option`, plus whether an IBAN is applicable at all.
+  This replaces the `CREDITCRD` special case in Store.
+- `booked_on`, `value_on` (date2 in the journal; today only Wise and Bunq).
+- `amount` (signed, net change of the account) and `fee`, non-negative and
+  posted separately. The projection invariant stays: bank `+amount`, counter
+  `-(amount + fee)`, fees `+fee`.
+- `counterparty`: optional name and `Iban.t`. This replaces the Bunq-only
+  `counterparty_iban`.
+- `reference`: optional bank or end-to-end reference, used for transfer ranking.
+- `descriptions`: ordered free texts.
+- `aliases`: institution names as they appear in other banks' descriptions.
+  This replaces the BoursoBank/Boursorama case in `Transfer_ranking`.
 
-Represent statement reconciliation and companion enrichment as optional data or
-capabilities. Do not require no-op reconciliation functions from banks whose
-exports provide no balances. Keep bank-specific normalization inside adapters;
-keep reconciliation arithmetic and storage rules in the kernel.
+## Generic schema
+
+The kernel tables stay as they are: source events, import documents and their
+links, import attempts, journal entries and postings, account mappings,
+identities and settlements, categories, transfer decisions, and their histories.
+Bank-specific tables are replaced by:
+
+| Table | Purpose | Replaces |
+| --- | --- | --- |
+| `document_contexts(document_id PK, context_json)` | Hints an import used, immutable | `revolut_documents` |
+| `statements(id, document_id, ordinal, institution, source_account, currency, reference?, period_start, period_end, opening, opening_as_of, closing, closing_as_of)` | Bank-stated balances and period, immutable | `wise_statements`, `bunq_statements` |
+| `statement_events(statement_id, event_id)` | Movements a statement includes | `wise_statement_events`; Bunq's implicit document links |
+| `day_inventories(institution, source_account, booked_on, signature, document_id)` | Overlap policy `Day_inventory` | `bunq_day_inventories`, `revolut_day_inventories` |
+| `companion_rows(id, document_id, row_number, institution, format, fields_json)` | Raw companion observations, immutable | `bank_csv_rows`, `wise_csv_rows`, `bunq_csv_rows` |
+| `companion_matches(row_id PK, event_id?, state, reason, candidates_json, policy)` | Current match | three `*_csv_matches` |
+| `companion_match_changes(...)` | Append-only match audit | three `*_csv_match_changes` |
+
+Notes:
+
+- Statement period and balance dates use the source-event convention: each
+  instant is either a calendar date or Unix milliseconds, with exactly one
+  present (`*_on` / `*_at_ms` column pairs and a CHECK). Bunq states dates;
+  Wise states instants.
+- `bank_import_attempts.format` loses its CHECK list. The format is validated
+  against the registry when written. Stored values are kept.
+- `companion_rows` stores fields only. BoursoBank's typed columns (category,
+  balance, pointage…) are recomputed by the adapter's `of_fields`, as Wise and
+  Bunq already do. On replay, differing stored fields are an error for every
+  bank; today only BoursoBank checks.
+- Bunq statements gain explicit `statement_events`, so reconciliation is one
+  kernel function: opening + sum of linked movements − closing.
+
+## Migration
+
+There is no migration machinery today: `Store.initialize` accepts only
+`user_version = 10`. Add one ordered step, v10 → v11, applied in one
+transaction:
+
+1. Create the generic tables.
+2. `INSERT … SELECT` from each bank table, keeping row IDs where they are keys
+   of audit rows (companion row IDs, statement IDs). Bunq statement membership
+   comes from `import_document_events`; the institution for Bunq inventories is
+   `'bunq'`.
+3. Drop the bank tables and their triggers; recreate `bank_import_attempts`
+   without the format CHECK.
+4. Set `user_version = 11`.
+
+In-place migration keeps event IDs, retrieval times and every audit history.
+Rebuilding from archives would lose them. Verify the migration by also
+replaying all archived documents into a fresh v11 database and comparing:
+`(venue, account, kind, source_id, payload)` sets, statement reconciliations,
+companion match states, and the exported journal after reapplying decisions.
 
 ## Implementation sequence
 
-- Define the shared document builders and generic source-event codec first.
-- Add the module signature, registry and an external-adapter example.
-- Exercise the example through normal import, review, transfers and journal
-  export; testing the parser alone is insufficient.
-- Move built-in banks behind the interface one at a time. Preserve their source
-  identities and compare replayed archives and journals with existing baselines.
-- Standardize statement and companion persistence after accounting for their
-  different coverage and matching rules. Specify any schema change explicitly.
+1. **Baseline.** Snapshot the personal database (21 OFX, 154 Bunq, 35
+   Revolut, 538 Wise events): event set, journal, reconciliations, companion
+   matches, transfer candidates. Every later step diffs against it.
+2. **`iban` library.** Small and independent; switch `Account_identity` to it.
+3. **Kernel types and registry.** `Movement.t`, adapter signature, registry,
+   generic overlap and companion machinery. Switch projection, transfers,
+   ranking, IBAN evidence and journal export to `Movement.t`.
+4. **Schema v11 and migration.** The generic tables, with Store's per-bank code
+   paths rewritten over them.
+5. **Adapters, one at a time:** Revolut (context and day inventory, no
+   standard format), BoursoBank (with `ofx`), Bunq (with `mt940`), then Wise
+   (with `camt`). Each step replays the baseline unchanged.
+6. **Remove the closed variants:** `Bank_import.format`, the
+   `Bank_transaction` kind list, per-bank sync report fields and per-bank
+   status commands (replaced by `fin bank status --institution`). Update the
+   manual and help text in the same change.
+7. **External adapter example and conformance suite,** written against the
+   finished interface.
 
-A conformance suite should check deterministic parsing, exact amounts and fees,
-dates and timezone boundaries, overlapping exports, repeated identical payments,
-malformed inputs, replay without duplicate movements, and stable journal output.
-External adapter packages should be able to run it against synthetic fixtures.
+## Enforcement
+
+- `schema_test`: the set of tables equals the kernel list. No table or column
+  name contains a registered institution or format name.
+- Dune: format libraries cannot depend on `finances`; adapters cannot depend on
+  `rel` or `rel.sqlite3`; the store library does not depend on adapters.
+- Registry construction fails on duplicate institutions, duplicate
+  `(institution, kind)` or duplicate `(institution, format)`.
+- Conformance suite run by every adapter: deterministic parsing, exact amounts
+  and fees, date and timezone boundaries, overlapping exports, repeated
+  identical payments, malformed inputs, replay without new events, decode of
+  every produced event, and a stable journal.
+
+## Frozen legacy rules
+
+Recorded here so no refactor "fixes" them:
+
+- Revolut source IDs hash a JSON object that includes `"format":"revolut-v1"`.
+  The tag is therefore part of identity; a new Revolut payload format needs a
+  new event kind.
+- OFX events of every institution share kind `bank-transaction` and store
+  account identity, currency and canonical STMTTRN XML; `DTUSER` is omitted.
+- Bunq identity is the SHA-256 of currency plus the normalized movement key,
+  plus an occurrence ordinal. Wise identity is reference, nanosecond instant and
+  direction.
+
+## Open questions
+
+- Partial days: an export that covers its own export date blocks every later
+  export of that day under `Day_inventory`. Options are excluding the export
+  day, or a correction workflow that supersedes an inventory with an audit row.
+- Statement continuity: whether consecutive statements of one account should
+  chain (closing = next opening) as a kernel check.
+- Wise fees: the observed CAMT has no `Chrgs`. Whether the CSV fee column should
+  ever become a posted fee, or stay a journal tag.
