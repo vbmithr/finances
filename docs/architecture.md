@@ -61,6 +61,14 @@ not yet calculate average entry price from fills or model inverse contracts.
 
 ## Persistence and replay
 
+`Finances_bank.Bank_status` summarizes imported accounts and observed date ranges,
+unclassified movement counts, unreviewed compatible transfer candidate pairs and
+the most recent inbox import attempt through Store APIs. The CLI renders this
+progress without interpreting observed ranges as complete statement coverage or
+computing monetary balances. Account, movement and transfer inspection commands
+offer readable text and explicit `--json` output; their existing JSON layouts are
+preserved. Financial aggregation and reporting remain hledger's responsibility.
+
 `Db_schema` defines the 32 persistent row records, their typed Rel columns, rows,
 tables, keys, defaults and indexes. These definitions drive table creation and
 Store's inserts and read projections, so column types are shared rather than

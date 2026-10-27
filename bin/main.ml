@@ -101,6 +101,11 @@ let database =
 
 let required name doc = Arg.(required & opt (some string) None & info [ name ] ~doc)
 
+let json_output =
+  Arg.(
+    value & flag & info [ "json" ] ~doc:"Write JSON for scripts instead of readable text.")
+;;
+
 let command name doc term =
   Cmd.v
     (Cmd.info name ~doc)
@@ -116,6 +121,55 @@ let init =
     "init"
     "Initialize the latest experimental database schema."
     Term.(const (fun path -> with_database path (fun _ -> Ok ())) $ database)
+;;
+
+let welcome () =
+  print_endline
+    "fin - your personal finances\n\n\
+     Get started:\n\
+     \032 fin init                Set up your database (optional)\n\
+     \032 fin bank sync --help    Learn how to import bank statements\n\n\
+     Explore your finances:\n\
+     \032 fin status              See import coverage and review progress\n\
+     \032 fin accounts list       See your bank accounts\n\
+     \032 fin bank review         Review imported transactions\n\
+     \032 fin journal export      Produce an hledger journal\n\n\
+     More:\n\
+     \032 fin paths               Show data and config locations\n\
+     \032 fin --help              Explore all commands"
+;;
+
+let setup database =
+  let%bind () = with_database database (fun _ -> Ok ()) in
+  let database_option =
+    if String.equal database paths.database
+    then ""
+    else " --database " ^ Filename.quote database
+  in
+  Printf.printf
+    "fin is ready.\n\n\
+     Database: %s\n\
+     Account config (optional): %s\n\n\
+     Import your first statements, for example:\n\
+     \032 fin bank sync ~/Statements/boursobank --institution boursobank%s\n\n\
+     Accounts appear when you import statements. Then explore:\n\
+     \032 fin accounts list%s\n\
+     \032 fin bank review%s\n\n\
+     See fin bank sync --help for import options.\n\
+     You can repeat fin init safely; existing data and config are preserved.\n"
+    database
+    paths.accounts_config
+    database_option
+    database_option
+    database_option;
+  Ok ()
+;;
+
+let setup_cmd =
+  command
+    "init"
+    "Set up the database and show how to import your first statements."
+    Term.(const setup $ database)
 ;;
 
 let events =
@@ -205,29 +259,132 @@ let account_info_json (info : Store.bank_account_info) =
   ]
 ;;
 
-let list_bank_accounts database =
+let account_details_json info =
+  `Assoc
+    (account_info_json info
+     @ [ "iban_source", `String info.Store.iban_source
+       ; "ledger_account", `String info.mapping.ledger_account
+       ; "currency", `String info.currency
+       ; "movements", `Int info.movements
+       ; "first_on", `String (Date.to_string info.first_on)
+       ; "last_on", `String (Date.to_string info.last_on)
+       ; ( "settlement_account"
+         , Option.value_map
+             info.settlement_account
+             ~default:`Null
+             ~f:Bank_account_config.reference_to_json )
+       ])
+;;
+
+let list_bank_accounts database json_output =
   with_database database (fun db ->
     let%bind accounts = Store.bank_account_info db in
-    let json =
-      `List
-        (List.map accounts ~f:(fun info ->
-           `Assoc
-             (account_info_json info
-              @ [ "iban_source", `String info.Store.iban_source
-                ; "ledger_account", `String info.mapping.ledger_account
-                ; "currency", `String info.currency
-                ; "movements", `Int info.movements
-                ; "first_on", `String (Date.to_string info.first_on)
-                ; "last_on", `String (Date.to_string info.last_on)
-                ; ( "settlement_account"
-                  , Option.value_map
-                      info.settlement_account
-                      ~default:`Null
-                      ~f:Bank_account_config.reference_to_json )
-                ])))
-    in
-    print_endline (Yojson.Safe.pretty_to_string json);
+    let json = `List (List.map accounts ~f:account_details_json) in
+    if json_output
+    then print_endline (Yojson.Safe.pretty_to_string json)
+    else if List.is_empty accounts
+    then
+      print_endline
+        "No bank accounts yet. Import statements with fin bank sync; see fin bank sync \
+         --help."
+    else List.iter accounts ~f:Terminal.account;
     Ok ())
+;;
+
+let status database json_output =
+  let module Status = Finances_bank.Bank_status in
+  let initialized = String.equal database ":memory:" || Stdlib.Sys.file_exists database in
+  let%bind report =
+    if initialized then with_database database Status.read else Ok Status.empty
+  in
+  let banks =
+    List.map report.accounts ~f:(fun a -> a.Store.mapping.institution)
+    |> List.dedup_and_sort ~compare:String.compare
+    |> List.length
+  in
+  if json_output
+  then
+    print_endline
+      (Yojson.Safe.pretty_to_string
+         (`Assoc
+             [ "database", `String database
+             ; "initialized", `Bool initialized
+             ; "banks", `Int banks
+             ; "accounts", `List (List.map report.accounts ~f:account_details_json)
+             ; "movements", `Int report.movements
+             ; "unclassified_movements", `Int report.unclassified_movements
+             ; "transfer_candidate_pairs", `Int report.transfer_candidate_pairs
+             ; ( "latest_import"
+               , Option.value_map report.latest_import ~default:`Null ~f:(fun a ->
+                   `Assoc
+                     [ "attempted_at", `String a.attempted_at
+                     ; "institution", `String a.institution
+                     ; "path", `String a.path
+                     ; "outcome", `String (Bank_import.outcome_name a.outcome)
+                     ; ( "message"
+                       , Option.value_map a.message ~default:`Null ~f:(fun s -> `String s)
+                       )
+                     ]) )
+             ]))
+  else (
+    printf "Database: %s\n\n" (Terminal.text database);
+    if not initialized
+    then
+      print_endline
+        "No database yet. Run fin init, or import statements with fin bank sync."
+    else (
+      printf
+        "%d banks, %d accounts, %d imported movements\n\n"
+        banks
+        (List.length report.accounts)
+        report.movements;
+      if List.is_empty report.accounts
+      then print_endline "No bank records yet. See fin bank sync --help."
+      else
+        Terminal.table
+          [ "Bank"
+          ; "Account"
+          ; "Currency"
+          ; "Movements"
+          ; "First observed"
+          ; "Last observed"
+          ]
+          (List.map report.accounts ~f:(fun a ->
+             [ a.Store.mapping.institution
+             ; a.mapping.ledger_account
+             ; a.currency
+             ; Int.to_string a.movements
+             ; Date.to_string a.first_on
+             ; Date.to_string a.last_on
+             ]));
+      printf
+        "\nReview: %d unclassified movements; %d unreviewed transfer candidate pairs\n"
+        report.unclassified_movements
+        report.transfer_candidate_pairs;
+      (match report.latest_import with
+       | None -> print_endline "Latest inbox import: none recorded."
+       | Some a ->
+         printf
+           "Latest inbox import: %s  %s  %s\n  %s\n"
+           a.attempted_at
+           (Terminal.text a.institution)
+           (Bank_import.outcome_name a.outcome)
+           (Terminal.text a.path);
+         Option.iter a.message ~f:(fun message -> printf "  %s\n" (Terminal.text message)));
+      print_endline
+        "\n\
+         Date ranges show observed records, not complete statement coverage. Financial \
+         reports: fin journal export, then query with hledger.";
+      print_endline "Next: fin bank review; fin transfers preview; fin bank history."));
+  Ok ()
+;;
+
+let status_cmd =
+  command
+    "status"
+    "Show observed account coverage, import history and review progress; no balances are \
+     inferred."
+    Term.(const status $ database $ json_output)
 ;;
 
 let import_history database limit =
@@ -550,7 +707,7 @@ let categorize_bank_cmd =
           & info [] ~docv:"DECISIONS" ~doc:"JSON decisions: event_id, account, reason."))
 ;;
 
-let bank_review database all =
+let bank_review database all json_output =
   with_database database (fun db ->
     let%bind rows = Store.bank_review db in
     let rows =
@@ -576,19 +733,22 @@ let bank_review database all =
              ; "reason", Option.value_map r.reason ~default:`Null ~f:(fun s -> `String s)
              ]))
     in
-    print_endline (Yojson.Safe.pretty_to_string json);
+    if json_output
+    then print_endline (Yojson.Safe.pretty_to_string json)
+    else Terminal.review rows;
     Ok ())
 ;;
 
 let bank_review_cmd =
   command
     "review"
-    "List unclassified bank movements as JSON for review."
+    "List unclassified bank movements for review; use --json for scripts."
     Term.(
       const bank_review
       $ database
       $ Arg.(
-          value & flag & info [ "all" ] ~doc:"Include movements with reviewed categories."))
+          value & flag & info [ "all" ] ~doc:"Include movements with reviewed categories.")
+      $ json_output)
 ;;
 
 let category_history database =
@@ -672,14 +832,14 @@ let transfer_leg event_id (event : Source_event.t) (tx : Bank_transaction.t) =
     ; "booked_on", `String (Date.to_string tx.booked_on)
     ; "currency", `String tx.account.currency
     ; "bank_amount", `String (Bigdecimal.to_string_no_sn tx.amount)
-    ; "principal", `String (Bigdecimal.to_string_no_sn Bigdecimal.(tx.amount + tx.fee))
+    ; "principal", `String (Bigdecimal.to_string_no_sn (Bank_transfer.principal tx))
     ; "fee", `String (Bigdecimal.to_string_no_sn tx.fee)
     ; ( "description"
       , `String (String.concat ~sep:" | " (List.filter_opt [ tx.name; tx.memo ])) )
     ]
 ;;
 
-let transfer_candidates database all =
+let transfer_candidates database all json_output =
   with_database database (fun db ->
     let%bind rows = Store.transfer_candidates ~include_reviewed:all db in
     let json =
@@ -699,7 +859,19 @@ let transfer_candidates database all =
              ; "reason", Option.value_map r.reason ~default:`Null ~f:(fun s -> `String s)
              ]))
     in
-    print_endline (Yojson.Safe.pretty_to_string json);
+    if json_output
+    then print_endline (Yojson.Safe.pretty_to_string json)
+    else if List.is_empty rows
+    then print_endline "No transfer candidates."
+    else
+      List.iter rows ~f:(fun r ->
+        Terminal.transfer r;
+        printf
+          "  State: %s%s\n\n"
+          (Option.value_map r.state ~default:"unreviewed" ~f:Bank_transfer.state_name)
+          (if r.iban_compatible then "" else " (excluded: conflicting IBAN evidence)");
+        Option.iter r.reason ~f:(fun reason ->
+          printf "  Reason: %s\n" (Terminal.text reason)));
     Ok ())
 ;;
 
@@ -716,7 +888,8 @@ let transfer_candidates_cmd =
           & flag
           & info
               [ "all" ]
-              ~doc:"Include reviewed pairs and movements already assigned to transfers."))
+              ~doc:"Include reviewed pairs and movements already assigned to transfers.")
+      $ json_output)
 ;;
 
 let review_transfers database path =
@@ -771,7 +944,7 @@ let transfer_history_cmd =
     Term.(const transfer_history $ database)
 ;;
 
-let transfer_preview database =
+let transfer_preview database json_output =
   with_database database (fun db ->
     let%bind candidates = Store.transfer_candidates db in
     let%bind all_candidates = Store.transfer_candidates ~include_reviewed:true db in
@@ -842,7 +1015,33 @@ let transfer_preview database =
                    ])) )
         ]
     in
-    print_endline (Yojson.Safe.pretty_to_string json);
+    if json_output
+    then print_endline (Yojson.Safe.pretty_to_string json)
+    else (
+      print_endline
+        "Transfer preview - evidence scores, not probabilities. Nothing is confirmed \
+         automatically.\n";
+      if List.is_empty ranked
+      then print_endline "No compatible unreviewed transfer candidates."
+      else
+        List.iter ranked ~f:(fun r ->
+          Terminal.transfer r.Transfer_ranking.candidate;
+          printf
+            "  Score: %d; confidence: %s; assignment: %s\n"
+            r.score
+            r.confidence
+            r.assignment.status;
+          List.iter r.evidence ~f:(fun e ->
+            printf "  %s (%+d)\n" (Terminal.text e.Transfer_ranking.detail) e.points);
+          print_endline "");
+      let excluded =
+        List.count all_candidates ~f:(fun c -> not c.Store.iban_compatible)
+      in
+      if excluded > 0
+      then
+        printf
+          "%d pairs excluded by IBAN evidence; inspect fin transfers candidates --all.\n"
+          excluded);
     Ok ())
 ;;
 
@@ -851,7 +1050,7 @@ let transfer_preview_cmd =
     "preview"
     "Rank compatible transfer candidates and preview globally consistent pairs; scores \
      are not probabilities."
-    Term.(const transfer_preview $ database)
+    Term.(const transfer_preview $ database $ json_output)
 ;;
 
 let accounts_export database output =
@@ -930,7 +1129,7 @@ let accounts_cmd =
     [ command
         "list"
         "List account details, IBAN provenance, coverage and card settlement links."
-        Term.(const list_bank_accounts $ database)
+        Term.(const list_bank_accounts $ database $ json_output)
     ; command
         "export"
         "Export version 1 account configuration for editing."
@@ -999,11 +1198,36 @@ let () =
   exit
     (Cmd.eval
        (Cmd.group
+          ~default:Term.(const welcome $ const ())
           (Cmd.info
              "fin"
              ~version:"0.1.0"
-             ~doc:"Personal finance accounting and position tracking.")
-          [ paths_cmd
+             ~doc:"Personal finance accounting and position tracking."
+             ~man:
+               [ `S Manpage.s_description
+               ; `P
+                   "Import bank statements into a local database, review accounts and \
+                    transactions, and export an hledger journal. Run $(b,fin) without \
+                    arguments for a short welcome."
+               ; `P
+                   "Setup is optional: $(b,fin init) initializes the database and shows \
+                    how to import statements. The first import can also initialize it. \
+                    Accounts are discovered from imported records."
+               ; `S Manpage.s_examples
+               ; `Pre
+                   "fin init\n\
+                    fin bank sync ~/Statements/boursobank --institution boursobank\n\
+                    fin status\n\
+                    fin accounts list\n\
+                    fin bank review\n\
+                    fin journal export > my-finances.journal"
+               ; `P
+                   "Use $(b,fin paths) to inspect storage locations, or append \
+                    $(b,--help) to any subcommand for its options."
+               ])
+          [ setup_cmd
+          ; status_cmd
+          ; paths_cmd
           ; accounts_cmd
           ; group
               "db"

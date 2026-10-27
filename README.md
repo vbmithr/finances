@@ -36,15 +36,39 @@ infer opening balances. Those operations can be added around the core APIs.
 
 ## CLI and XDG storage
 
+Start with the [user manual](docs/manual.md) for setup, bank imports, account
+configuration, review and hledger queries.
+
 The executable is `fin`; the OCaml libraries and Arch package remain named
 `finances`. No database argument is needed for normal use:
 
 ```sh
+fin
+fin init
+fin status
 fin paths
 fin accounts list
 fin bank bunq status
 fin transfers preview
 ```
+
+Running `fin` without arguments shows a welcome and useful first steps, exits
+successfully, and creates no files. `fin init` optionally creates the database
+and prints its location, the optional account-config location, and an import
+example. It is safe to repeat and preserves existing data and configuration.
+Use `fin init --database FILE` to initialize a different database. No account
+questionnaire is needed: accounts appear from imported statements. You can also
+skip initialization and import directly; the first import creates the database.
+The lower-level `fin db init` remains available for quiet database initialization.
+
+`fin status` summarizes observed account date ranges, imported movements,
+unclassified movements, unreviewed transfer candidate pairs and the latest inbox
+attempt. It creates no database when none exists. Date ranges are observations,
+not proof of complete coverage; financial reports come from the exported hledger
+journal. `accounts list`, `bank review`, `transfers candidates` and
+`transfers preview` now display readable text by default. Add `--json` to those
+commands or `status` for scripts; the existing inspection JSON shapes are retained.
+History and provider reconciliation commands continue to emit JSON.
 
 The [XDG Base Directory specification](https://specifications.freedesktop.org/basedir/latest/)
 provides the base paths. Defaults are:
@@ -80,7 +104,7 @@ Build the current checkout using a prepared opam switch:
 
 ```sh
 make package OPAM_SWITCH=5.5.0
-sudo pacman -U dist/arch/finances-0.1.0-2-x86_64.pkg.tar.zst
+sudo pacman -U dist/arch/finances-0.1.0-3-x86_64.pkg.tar.zst
 fin --version
 fin accounts list
 fin bank bunq status
@@ -113,7 +137,8 @@ and SQLite; opam and OCaml are not needed at runtime. The hledger CLI is optiona
 for querying rendered journals. No personal records or configuration enter the package.
 Installation is explicit; the helper never runs sudo or installs the package.
 
-The grouped CLI uses `db`, `accounts`, `bank`, `transfers`, and `journal`:
+The CLI provides `init`, `status` and `paths`, with grouped commands under `db`,
+`accounts`, `bank`, `transfers`, and `journal`:
 
 ```sh
 fin db init
@@ -440,7 +465,7 @@ flat commands and mapping-array inputs have been removed.
 List movements that still use `equity:unclassified`:
 
 ```sh
-fin bank review > personal/reports/bank-review.json
+fin bank review --json > personal/reports/bank-review.json
 fin bank review --all
 ```
 
@@ -619,7 +644,7 @@ reuse movements, including identical repeated payments.
 List candidate pairs with both movements, fees, dates, currencies and descriptions:
 
 ```sh
-fin transfers candidates > personal/reports/transfer-candidates.json
+fin transfers candidates --json > personal/reports/transfer-candidates.json
 fin transfers candidates --all
 ```
 
@@ -668,7 +693,7 @@ outside the seven-day window need a future explicit policy.
 ## Transfer evidence and assignment preview
 
 ```sh
-fin transfers preview > personal/reports/transfer-preview.json
+fin transfers preview --json > personal/reports/transfer-preview.json
 fin transfers candidates --all
 ```
 

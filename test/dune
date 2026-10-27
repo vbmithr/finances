@@ -158,3 +158,10 @@
  (name paths_test)
  (modules paths_test)
  (libraries finances core alcotest))
+
+(test
+ (name status_test)
+ (modules status_test)
+ (deps
+  (glob_files fixtures/*))
+ (libraries finances finances.bank core alcotest))

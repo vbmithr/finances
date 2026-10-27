@@ -76,13 +76,14 @@ let account first second =
     (Int64.max first second)
 ;;
 
+let principal tx = Bigdecimal.(tx.Bank_transaction.amount + tx.fee)
+
 let eligible
       (a : Source_event.t)
       (ta : Bank_transaction.t)
       (b : Source_event.t)
       (tb : Bank_transaction.t)
   =
-  let principal tx = Bigdecimal.(tx.Bank_transaction.amount + tx.fee) in
   (not (String.equal a.venue b.venue && String.equal a.account b.account))
   && String.equal ta.account.currency tb.account.currency
   && (not (Bigdecimal.is_zero (principal ta)))

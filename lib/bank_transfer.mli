@@ -24,6 +24,9 @@ val create
 val of_json : string -> decision list Or_error.t
 val account : int64 -> int64 -> string
 
+(** Transfer amount excluding separately recorded fees. *)
+val principal : Bank_transaction.t -> Bigdecimal.t
+
 val eligible
   :  Source_event.t
   -> Bank_transaction.t
