@@ -1,4 +1,4 @@
-open Core
+open Base
 
 type t =
   { institution : string
@@ -31,8 +31,8 @@ let normalize_iban value =
     let remainder =
       String.fold rotated ~init:0 ~f:(fun remainder c ->
         if Char.is_digit c
-        then ((remainder * 10) + Char.to_int c - Char.to_int '0') mod 97
-        else ((remainder * 100) + Char.to_int c - Char.to_int 'A' + 10) mod 97)
+        then ((remainder * 10) + Char.to_int c - Char.to_int '0') % 97
+        else ((remainder * 100) + Char.to_int c - Char.to_int 'A' + 10) % 97)
     in
     if remainder <> 1 then Or_error.error_string "IBAN checksum is invalid" else Ok value)
 ;;
@@ -89,7 +89,7 @@ let of_json contents =
     if
       List.contains_dup
         (List.map rows ~f:(fun r -> r.institution, source_account r))
-        ~compare:(Tuple2.compare ~cmp1:String.compare ~cmp2:String.compare)
+        ~compare:[%compare: string * string]
     then failwith "duplicate account identity";
     rows)
 ;;

@@ -1,4 +1,5 @@
-open Core
+open Base
+open Stdio
 open Rel
 open Finances
 
@@ -8,9 +9,12 @@ let error r = Alcotest.(check bool) "rejected" true (Result.is_error r)
 
 let workspace f =
   let path =
-    Filename_unix.temp_file ~in_dir:(Sys.getenv_exn "TMPDIR") "schema-baseline" ".sqlite3"
+    Stdlib.Filename.temp_file
+      ~temp_dir:(Sys.getenv_exn "TMPDIR")
+      "schema-baseline"
+      ".sqlite3"
   in
-  Exn.protect ~finally:(fun () -> Core_unix.unlink path) ~f:(fun () -> f path)
+  Exn.protect ~finally:(fun () -> Unix.unlink path) ~f:(fun () -> f path)
 ;;
 
 let raw path f =

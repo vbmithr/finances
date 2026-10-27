@@ -1,4 +1,5 @@
-open Core
+open Base
+open Stdio
 open Rel
 open Finances
 
@@ -74,14 +75,14 @@ let multi_account_parser () =
   Alcotest.(check bool)
     "exact debit"
     true
-    (Bigdecimal.equal debit.amount (Bigdecimal.of_string "-0.10"));
+    (Quantity.equal debit.amount (Quantity.of_string "-0.10"));
   let credit = List.nth_exn first.transactions 1 in
   Alcotest.(check bool)
     "all decimal digits"
     true
-    (Bigdecimal.equal
+    (Quantity.equal
        credit.amount
-       (Bigdecimal.of_string "12345678901234567890.1234567890123456789"));
+       (Quantity.of_string "12345678901234567890.1234567890123456789"));
   Alcotest.(check string)
     "opaque invalid DTUSER retained"
     "00009999"

@@ -1,4 +1,4 @@
-open Core
+open Base
 
 (** OFX 2.x XML bank statements. Amounts are exact and dates retain calendar
     semantics. OFX 1.x SGML and credit-card/investment message sets are rejected. *)
@@ -17,7 +17,7 @@ type transaction = private
   { fitid : string
   ; booked_on : Date.t
   ; user_date : string option
-  ; amount : Bigdecimal.t
+  ; amount : Quantity.t
   ; transaction_type : string
   ; name : string option
   ; memo : string option
@@ -25,7 +25,7 @@ type transaction = private
   }
 
 type balance = private
-  { amount : Bigdecimal.t
+  { amount : Quantity.t
   ; as_of : string
   }
 

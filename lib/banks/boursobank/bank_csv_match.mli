@@ -1,4 +1,4 @@
-open Core
+open Base
 
 type state = Bank_match.state =
   | Matched
@@ -18,7 +18,7 @@ type candidate =
   ; institution : string
   ; account_id : string
   ; booked_on : Date.t
-  ; amount : Bigdecimal.t
+  ; amount : Quantity.t
   ; descriptions : string list
   }
 

@@ -1,11 +1,11 @@
-open Core
+open Base
 
 type row = private
   { row_number : int
   ; account_id : string
   ; booked_on : Date.t
   ; value_on : Date.t
-  ; amount : Bigdecimal.t
+  ; amount : Quantity.t
   ; counterparty : string
   ; name : string
   ; description : string

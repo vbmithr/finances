@@ -1,6 +1,6 @@
 # finances
 
-Personal finance kernel in OCaml, using Jane Street Core, Bigdecimal, and SQLite
+Personal finance kernel in OCaml, using Jane Street Base, decimal, Ptime, Bos, and SQLite
 through Rel. SQLite is the source of truth.
 
 ## Current scope
@@ -105,7 +105,7 @@ Build the current checkout using a prepared opam switch:
 
 ```sh
 make package OPAM_SWITCH=5.5.0
-sudo pacman -U dist/arch/finances-0.1.0-4-x86_64.pkg.tar.zst
+sudo pacman -U dist/arch/finances-0.1.0-5-x86_64.pkg.tar.zst
 fin --version
 fin accounts list
 fin bank bunq status
@@ -133,7 +133,7 @@ files use disk-backed cache storage and are removed afterward. `dist/arch/` hold
 the package, a checksummed binary payload and a concrete PKGBUILD for repackaging.
 This is a local experimental binary package, not an AUR source-build recipe.
 It requires makepkg/fakeroot, Python, zstd and the prepared opam build dependencies.
-The installed executable requires only glibc, GMP (used through Zarith/Bigdecimal),
+The installed executable requires only glibc, GMP (used through Zarith/decimal),
 and SQLite; opam and OCaml are not needed at runtime. The hledger CLI is optional
 for querying rendered journals. No personal records or configuration enter the package.
 Installation is explicit; the helper never runs sudo or installs the package.
@@ -156,7 +156,7 @@ Use an opam switch with OCaml 5.1 or later and SQLite development headers
 [dbuenzli/rel](https://github.com/dbuenzli/rel). This is an immutable Git revision,
 not a branch pin. `conf-sqlite3` is required so Rel builds its SQLite backend.
 The OCaml `hledger` binding is also pinned to upstream commit
-`8ae0e0e48652af83549f857be6eee3d79f54db07` of
+`cad809fa47876142cfdf361bde2a2e506ebdadad` of
 [ocaml-hledger](https://github.com/vbmithr/ocaml-hledger). This opam package is
 distinct from the hledger command-line program, which is used to query journals.
 
@@ -168,7 +168,7 @@ export TMPDIR="$HOME/.cache/codex/scratch/finances"
 opam pin add --no-action rel \
   'git+https://github.com/dbuenzli/rel.git#f196804c51031870327ecc482d0b97f052941081'
 opam pin add --no-action hledger \
-  'git+https://github.com/vbmithr/ocaml-hledger.git#8ae0e0e48652af83549f857be6eee3d79f54db07'
+  'git+https://github.com/vbmithr/ocaml-hledger.git#cad809fa47876142cfdf361bde2a2e506ebdadad'
 opam install . --deps-only --with-test
 opam exec -- dune build
 opam exec -- dune runtest
@@ -803,18 +803,18 @@ date for those entries. Do not treat a partial match as complete value-date cove
 ## Library
 
 ```ocaml
-open Core
+open Base
 open Finances
 
 let collateral_transfer =
   let open Or_error.Let_syntax in
-  let amount = Bigdecimal.of_string "1000.00000001" in
+  let amount = Quantity.of_string "1000.00000001" in
   let%bind incoming =
     Accounting.posting ~account:"assets:paradex:collateral" ~commodity:"USDC" amount
   in
   let%bind outgoing =
     Accounting.posting ~account:"assets:wallet" ~commodity:"USDC"
-      (Bigdecimal.neg amount)
+      (Quantity.neg amount)
   in
   Accounting.entry ~date:(Date.of_string "2026-10-25")
     ~description:"Collateral transfer" [ incoming; outgoing ]
@@ -827,9 +827,15 @@ and all its postings. The key identifies one accounting projection of one source
 event, for example `collateral:v1`. The same entry can be replayed without creating
 duplicates; a different entry under that key is rejected.
 
-Amounts use `Bigdecimal.t` directly and are stored with
-`Bigdecimal.to_string_no_sn` in SQLite `TEXT` columns. Do monetary arithmetic in
-OCaml: SQLite numeric casts and `SUM` on these strings would lose exactness.
+Amounts use `Quantity.t`, an alias of `Decimal.t` from the `decimal` library,
+and are stored as canonical plain decimal strings through `Quantity.to_string`
+in SQLite `TEXT` columns. `Quantity` delegates arithmetic to decimal with local
+operand-sized contexts and traps inexact results, preserving exact sums and
+products independently of `Decimal.Context.default`. Dates use `Ptime.date`
+through the small ISO/calendar-day helpers in `Date`. Base supplies general
+utilities, and Bos handles high-level filesystem operations. Core, Core_unix,
+Bigdecimal and `ppx_jane` are not dependencies. Do monetary arithmetic in OCaml:
+SQLite numeric casts and `SUM` on these strings would lose exactness.
 Account names are nonempty colon-separated tokens, and commodities are nonempty
 tokens; tokens allow letters, digits, underscores, and hyphens.
 

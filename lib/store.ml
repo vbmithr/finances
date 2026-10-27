@@ -1,4 +1,4 @@
-open Core
+open Base
 open Rel
 module Db = Rel_sqlite3
 
@@ -486,14 +486,14 @@ let import_csv_rows db ~institution ~contents rows =
                    row.account_id
                    (Date.to_string row.booked_on)
                    (Option.map row.value_on ~f:Date.to_string)
-                   (Bigdecimal.to_string_no_sn row.amount)
+                   (Quantity.to_string row.amount)
                    row.description
                    row.suggested_description
                    row.category
                    row.parent_category
                    row.comment
                    row.account_label
-                   (Option.map row.reported_balance ~f:Bigdecimal.to_string_no_sn)
+                   (Option.map row.reported_balance ~f:Quantity.to_string)
                    row.pointage
                    fields))
          in
@@ -545,8 +545,8 @@ let import_wise db ~institution ~contents (document : Wise_camt.t) =
                    statement.period_end
                    statement.opening_at
                    statement.closing_at
-                   (Bigdecimal.to_string_no_sn statement.opening)
-                   (Bigdecimal.to_string_no_sn statement.closing)))
+                   (Quantity.to_string statement.opening)
+                   (Quantity.to_string statement.closing)))
          in
          let find =
            let open Db_schema.Wise_statements in
@@ -574,10 +574,10 @@ let import_wise db ~institution ~contents (document : Wise_camt.t) =
                 let id =
                   match result with
                   | Inserted id ->
-                    incr inserted;
+                    Int.incr inserted;
                     id
                   | Existing id ->
-                    incr existing;
+                    Int.incr existing;
                     id
                 in
                 let* () = db_result (Db.exec db (link_document document_id id)) in
@@ -630,7 +630,7 @@ let import_wise_csv db ~institution ~contents rows =
 
 let import_bunq db ~institution ~contents (document : Bunq_mt940.t) =
   let* document_id = archive_document db ~institution ~contents in
-  let days = String.Table.create () in
+  let days = Hashtbl.create (module String) in
   List.iter document.transactions ~f:(fun tx ->
     Hashtbl.add_multi days ~key:(Date.to_string tx.Bunq_transaction.booked_on) ~data:tx);
   let find =
@@ -713,8 +713,8 @@ let import_bunq db ~institution ~contents (document : Bunq_mt940.t) =
             document.currency
             (Date.to_string document.opening_on)
             (Date.to_string document.closing_on)
-            (Bigdecimal.to_string_no_sn document.opening)
-            (Bigdecimal.to_string_no_sn document.closing)))
+            (Quantity.to_string document.opening)
+            (Quantity.to_string document.closing)))
   in
   Ok result
 ;;
@@ -938,7 +938,7 @@ let import_bank_file ?account_id db ~institution ~path ~contents =
                 ( 0
                 , 0
                 , Some
-                    (sprintf
+                    (Printf.sprintf
                        "Bunq CSV observations: %d; no transactions created"
                        (List.length rows)) )
           in
@@ -980,7 +980,7 @@ let import_bank_file ?account_id db ~institution ~path ~contents =
                 ( 0
                 , 0
                 , Some
-                    (sprintf
+                    (Printf.sprintf
                        "Wise CSV observations: %d; no transactions created"
                        (List.length rows)) )
           in
@@ -1025,7 +1025,7 @@ let import_bank_file ?account_id db ~institution ~path ~contents =
              ~existing:0
              ~message:
                (Some
-                  (sprintf
+                  (Printf.sprintf
                      "CSV observations: added=%d reused=%d; no transactions created"
                      added
                      reused)))
@@ -1131,7 +1131,7 @@ let read_entry db id date description =
   let* postings =
     traverse
       (fun (account, commodity, text) ->
-         let* quantity = Or_error.try_with (fun () -> Bigdecimal.of_string text) in
+         let* quantity = Or_error.try_with (fun () -> Quantity.of_string text) in
          Accounting.posting ~account ~commodity quantity)
       rows
   in
@@ -1191,7 +1191,7 @@ let same_entry (a : Accounting.entry) (b : Accounting.entry) =
        ~f:(fun (a : Accounting.posting) (b : Accounting.posting) ->
          String.equal a.account b.account
          && String.equal a.commodity b.commodity
-         && Bigdecimal.equal a.quantity b.quantity)
+         && Quantity.equal a.quantity b.quantity)
 ;;
 
 let record_entry_in_transaction db ~event_id ~key (entry : Accounting.entry) =
@@ -1225,7 +1225,7 @@ let record_entry_in_transaction db ~event_id ~key (entry : Accounting.entry) =
                   ordinal
                   p.account
                   p.commodity
-                  (Bigdecimal.to_string_no_sn p.quantity)))
+                  (Quantity.to_string p.quantity)))
         in
         write (ordinal + 1) rest
     in
@@ -1579,7 +1579,7 @@ let read_csv_inputs db =
 let bank_csv_observations db =
   let* inputs = read_csv_inputs db in
   let* matches = read_csv_matches db in
-  let matching = Int64.Table.create () in
+  let matching = Hashtbl.create (module Int64) in
   List.iter matches ~f:(fun (result, _) ->
     Hashtbl.set matching ~key:result.row_id ~data:result);
   Ok
@@ -1633,7 +1633,7 @@ let save_csv_results
       (previous_rows : (Bank_csv_match.result * string) list)
       results
   =
-  let previous = Int64.Table.create () in
+  let previous = Hashtbl.create (module Int64) in
   List.iter previous_rows ~f:(fun (result, policy) ->
     Hashtbl.set previous ~key:result.row_id ~data:(result, policy));
   let equal (a : Bank_csv_match.result) (b : Bank_csv_match.result) =
@@ -1848,11 +1848,11 @@ type wise_reconciliation =
   ; document_id : int64
   ; source_account : string
   ; currency : string
-  ; opening : Bigdecimal.t
-  ; closing : Bigdecimal.t
-  ; movements : Bigdecimal.t
+  ; opening : Quantity.t
+  ; closing : Quantity.t
+  ; movements : Quantity.t
   ; entries : int
-  ; difference : Bigdecimal.t
+  ; difference : Quantity.t
   }
 
 let wise_reconciliations db =
@@ -1893,10 +1893,10 @@ let wise_reconciliations db =
        in
        let* opening, closing =
          Or_error.try_with (fun () ->
-           Bigdecimal.of_string opening, Bigdecimal.of_string closing)
+           Quantity.of_string opening, Quantity.of_string closing)
        in
-       let movements = List.fold amounts ~init:Bigdecimal.zero ~f:Bigdecimal.( + ) in
-       let difference = Bigdecimal.(opening + movements - closing) in
+       let movements = List.fold amounts ~init:Quantity.zero ~f:Quantity.( + ) in
+       let difference = Quantity.(opening + movements - closing) in
        Ok
          { statement_id
          ; document_id
@@ -1944,10 +1944,7 @@ let set_bank_categories db decisions =
           else
             let* previous = db_result (Db.first db (find_category d.event_id)) in
             if
-              Option.equal
-                (Tuple2.equal ~eq1:String.equal ~eq2:String.equal)
-                previous
-                (Some (d.account, d.reason))
+              Option.equal [%equal: string * string] previous (Some (d.account, d.reason))
             then apply changed rest
             else
               let* existing =
@@ -2181,7 +2178,7 @@ type bunq_reconciliation =
   ; account_id : string
   ; currency : string
   ; entries : int
-  ; difference : Bigdecimal.t
+  ; difference : Quantity.t
   }
 
 let bunq_reconciliations db =
@@ -2217,7 +2214,7 @@ let bunq_reconciliations db =
        in
        let* difference =
          Or_error.try_with (fun () ->
-           Bigdecimal.(
+           Quantity.(
              of_string opening + List.fold amounts ~init:zero ~f:( + ) - of_string closing))
        in
        Ok { document_id; account_id; currency; entries = List.length ids; difference })
@@ -2272,9 +2269,7 @@ let transfer_iban_evidence db source a ta b tb =
          Ok (event, iban))
       (List.filter source ~f:(fun (_, e) -> Bank_transaction.is_event e)
        |> List.dedup_and_sort ~compare:(fun (_, a) (_, b) ->
-         Tuple2.compare
-           ~cmp1:String.compare
-           ~cmp2:String.compare
+         [%compare: string * string]
            (a.Source_event.venue, a.account)
            (b.Source_event.venue, b.account)))
   in
@@ -2371,7 +2366,7 @@ let set_bank_transfers db decisions =
   if
     List.contains_dup
       (List.map decisions ~f:(fun d -> d.Bank_transfer.first_event_id, d.second_event_id))
-      ~compare:(Tuple2.compare ~cmp1:Int64.compare ~cmp2:Int64.compare)
+      ~compare:[%compare: int64 * int64]
   then Or_error.error_string "duplicate transfer pair in batch"
   else
     transaction db (fun db ->
@@ -2658,7 +2653,7 @@ let transfer_candidates ?(include_reviewed = false) db =
       pairs (List.filter_opt next @ acc) rest
   in
   let* candidates = pairs [] items in
-  let claims = Int64.Table.create () in
+  let claims = Hashtbl.create (module Int64) in
   List.iter candidates ~f:(fun c ->
     Hashtbl.incr claims c.first_event_id;
     Hashtbl.incr claims c.second_event_id);
@@ -2670,9 +2665,7 @@ let transfer_candidates ?(include_reviewed = false) db =
            && Hashtbl.find_exn claims c.second_event_id = 1
        })
      |> List.sort ~compare:(fun a b ->
-       Tuple2.compare
-         ~cmp1:Int64.compare
-         ~cmp2:Int64.compare
+       [%compare: int64 * int64]
          (a.first_event_id, a.second_event_id)
          (b.first_event_id, b.second_event_id)))
 ;;
@@ -2759,7 +2752,7 @@ let set_bank_account_identities_in_transaction db identities =
     List.contains_dup
       (List.map identities ~f:(fun i ->
          i.Account_identity.institution, Account_identity.source_account i))
-      ~compare:(Tuple2.compare ~cmp1:String.compare ~cmp2:String.compare)
+      ~compare:[%compare: string * string]
   then Or_error.error_string "duplicate account identity"
   else
     let* accounts = bank_accounts db in

@@ -1,4 +1,5 @@
-open Core
+open Base
+open Stdio
 open Finances
 
 type report =
@@ -14,12 +15,17 @@ type report =
   }
 
 let canonical path =
+  let realpath path =
+    match Bos.OS.Path.realpath (Fpath.v path) with
+    | Ok path -> Fpath.to_string path
+    | Error (`Msg message) -> failwith message
+  in
   if Stdlib.Sys.file_exists path
-  then Filename_unix.realpath path
+  then realpath path
   else
-    Filename.concat
-      (Filename_unix.realpath (Filename.dirname path))
-      (Filename.basename path)
+    Stdlib.Filename.concat
+      (realpath (Stdlib.Filename.dirname path))
+      (Stdlib.Filename.basename path)
 ;;
 
 let within ~directory path =
@@ -32,30 +38,38 @@ let within ~directory path =
 let same_file a b =
   String.equal a b
   ||
-  match Or_error.try_with (fun () -> Core_unix.stat a, Core_unix.stat b) with
+  match Or_error.try_with (fun () -> Unix.LargeFile.stat a, Unix.LargeFile.stat b) with
   | Error _ -> false
   | Ok (a, b) -> a.st_dev = b.st_dev && a.st_ino = b.st_ino
 ;;
 
 let write_journal ~path contents =
-  Or_error.try_with (fun () ->
-    let staging = Option.value (Sys.getenv "TMPDIR") ~default:(Filename.dirname path) in
-    let temporary, output =
-      Filename_unix.open_temp_file
-        ~in_dir:staging
-        ~perm:0o600
-        "finances-journal"
-        ".journal"
-    in
-    Exn.protect
-      ~finally:(fun () ->
-        (try Out_channel.close output with
-         | _ -> ());
-        if Stdlib.Sys.file_exists temporary then Core_unix.unlink temporary)
-      ~f:(fun () ->
-        Out_channel.output_string output contents;
-        Out_channel.close output;
-        Core_unix.rename ~src:temporary ~dst:path))
+  let bos_result result =
+    Result.map_error result ~f:(fun (`Msg message) -> Error.of_string message)
+  in
+  let open Or_error.Let_syntax in
+  (let%bind staging, destination =
+     Or_error.try_with (fun () ->
+       ( Fpath.v
+           (Option.value (Sys.getenv "TMPDIR") ~default:(Stdlib.Filename.dirname path))
+       , Fpath.v path ))
+   in
+   let%bind published =
+     bos_result
+       (Bos.OS.File.with_tmp_oc
+          ~mode:0o600
+          ~dir:staging
+          "finances-journal-%s.journal"
+          (fun temporary output () ->
+             let%bind () =
+               Or_error.try_with (fun () ->
+                 Out_channel.output_string output contents;
+                 Out_channel.flush output)
+             in
+             bos_result (Bos.OS.Path.move ~force:true temporary destination))
+          ())
+   in
+   published)
   |> fun result ->
   Or_error.tag
     result
@@ -75,9 +89,9 @@ let run
   let open Or_error.Let_syntax in
   let%bind database, directory, journal, accounts =
     Or_error.try_with (fun () ->
-      if Poly.((Core_unix.lstat directory).st_kind <> Core_unix.S_DIR)
+      if Poly.((Unix.LargeFile.lstat directory).st_kind <> Unix.S_DIR)
       then failwith "inbox must be a directory, not a symbolic link";
-      let directory = Filename_unix.realpath directory in
+      let directory = canonical directory in
       let database = canonical database
       and journal = canonical journal in
       let accounts = Option.map accounts ~f:canonical in
@@ -92,8 +106,8 @@ let run
         || Option.exists accounts ~f:(fun config ->
           same_file journal config || same_file database config)
       then failwith "database, journal and account configuration must be distinct files";
-      (match Or_error.try_with (fun () -> Core_unix.stat journal) with
-       | Ok stat when Poly.(stat.st_kind <> Core_unix.S_REG) ->
+      (match Or_error.try_with (fun () -> Unix.LargeFile.stat journal) with
+       | Ok stat when Poly.(stat.st_kind <> Unix.S_REG) ->
          failwith "journal destination must be a regular file"
        | _ -> ());
       database, directory, journal, accounts)

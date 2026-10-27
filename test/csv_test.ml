@@ -1,4 +1,5 @@
-open Core
+open Base
+open Stdio
 open Rel
 open Finances
 
@@ -28,20 +29,22 @@ let encode rows =
 ;;
 
 let rec remove path =
-  match (Core_unix.lstat path).st_kind with
+  match (Unix.LargeFile.lstat path).st_kind with
   | S_DIR ->
     Array.iter (Stdlib.Sys.readdir path) ~f:(fun name ->
-      remove (Filename.concat path name));
-    Core_unix.rmdir path
-  | _ -> Core_unix.unlink path
+      remove (Stdlib.Filename.concat path name));
+    Unix.rmdir path
+  | _ -> Unix.unlink path
 ;;
 
 let workspace f =
-  let root = Filename_unix.temp_dir ~in_dir:(Sys.getenv_exn "TMPDIR") "finances-csv" "" in
+  let root =
+    Stdlib.Filename.temp_dir ~temp_dir:(Sys.getenv_exn "TMPDIR") "finances-csv" ""
+  in
   Exn.protect ~finally:(fun () -> remove root) ~f:(fun () -> f root)
 ;;
 
-let database root = Filename.concat root "bank.sqlite3"
+let database root = Stdlib.Filename.concat root "bank.sqlite3"
 
 let with_store root f =
   ok
@@ -107,13 +110,11 @@ let parser () =
   Alcotest.(check bool)
     "first Solde is amount"
     true
-    (Bigdecimal.equal row.amount (Bigdecimal.of_string "-0.10"));
+    (Quantity.equal row.amount (Quantity.of_string "-0.10"));
   Alcotest.(check bool)
     "second Solde is balance"
     true
-    (Bigdecimal.equal
-       (Option.value_exn row.reported_balance)
-       (Bigdecimal.of_string "100.01"));
+    (Quantity.equal (Option.value_exn row.reported_balance) (Quantity.of_string "100.01"));
   Alcotest.(check string)
     "value date"
     "2026-01-04"
@@ -126,9 +127,9 @@ let parser () =
   Alcotest.(check bool)
     "all amount digits preserved"
     true
-    (Bigdecimal.equal
+    (Quantity.equal
        large.amount
-       (Bigdecimal.of_string "12345678901234567890.1234567890123456789"));
+       (Quantity.of_string "12345678901234567890.1234567890123456789"));
   let grouped =
     fields ()
     |> List.mapi ~f:(fun i r -> if i = 0 then set r 6 "-1\226\128\175234,56" else r)
@@ -139,7 +140,7 @@ let parser () =
   Alcotest.(check bool)
     "French digit grouping"
     true
-    (Bigdecimal.equal (List.hd_exn grouped).amount (Bigdecimal.of_string "-1234.56"))
+    (Quantity.equal (List.hd_exn grouped).amount (Quantity.of_string "-1234.56"))
 ;;
 
 let malformed () =
@@ -385,17 +386,17 @@ let malformed_file_atomic () =
 
 let folder_order () =
   workspace (fun root ->
-    let inbox = Filename.concat root "inbox" in
-    Core_unix.mkdir inbox;
-    Out_channel.write_all (Filename.concat inbox "a.csv") ~data:(csv ());
-    Out_channel.write_all (Filename.concat inbox "z.ofx") ~data:(ofx ());
+    let inbox = Stdlib.Filename.concat root "inbox" in
+    Unix.mkdir inbox 0o755;
+    Out_channel.write_all (Stdlib.Filename.concat inbox "a.csv") ~data:(csv ());
+    Out_channel.write_all (Stdlib.Filename.concat inbox "z.ofx") ~data:(ofx ());
     let run () =
       ok
         (Finances_bank.Sync.run
            ~database:(database root)
            ~institution:"boursobank"
            ~directory:inbox
-           ~journal:(Filename.concat root "bank.journal")
+           ~journal:(Stdlib.Filename.concat root "bank.journal")
            ())
     in
     let first = run () in

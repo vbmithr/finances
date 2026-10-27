@@ -38,8 +38,23 @@ timestamp. SQLite assigns the internal ID and retrieval timestamp. Payload bytes
 are stored as a BLOB, including any embedded NUL characters.
 
 `Accounting` describes postings and balanced entries. Quantities are
-`Bigdecimal.t`, dates are `Core.Date.t`, and fallible APIs return `Or_error.t`.
+`Quantity.t` (an alias of `Decimal.t`), dates are `Ptime.date` tuples exposed
+through `Date.t`, and fallible APIs return `Base.Or_error.t`.
 Private record types ensure callers construct values through validation functions.
+`Quantity` uses decimal's arithmetic with a local context sized from the operand
+coefficients and exponents. Inexact results are trapped; no default or global
+context is changed. Canonical plain decimal rendering preserves existing SQLite
+text, source identities and journal precision. Non-finite decimals are rejected
+at construction. `Date` delegates validation and day differences to Ptime, while
+`Timestamp` parses RFC 3339 and converts to integer nanoseconds without floating
+point. The supplied local booking date remains separate from the UTC instant.
+
+Bos provides directory creation, file reads and atomic config writes, path
+resolution, and temporary journal creation and atomic publication. Standard Unix
+file-descriptor and inode checks retain inbox race detection and control-file
+protection. General collections and errors come from Base; no Core compatibility
+layer is maintained. Targeted sexp, comparison and binding PPXs replace ppx_jane.
+
 Every entry has at least two postings and sums to exactly zero per commodity.
 Cross-commodity trades therefore need explicit conversion postings or another
 future accounting policy; a USD amount and a EUR amount cannot cancel each other.
@@ -137,7 +152,7 @@ for reliable fill replay.
 
 ## Bank source ingestion
 
-`Bank_ofx` parses XML using Xmlm and uses `Bigdecimal.of_string` directly on source
+`Bank_ofx` parses XML using Xmlm and uses `Quantity.of_string` directly on source
 amounts. It handles multiple statements under one response, as seen in the
 BoursoBank export, and keeps account identities, booking dates, names/memos, raw
 `DTUSER`, and optional available/ledger balance observations distinct. Unsupported
@@ -292,7 +307,7 @@ Both adapters share matching-state persistence and append-only decision history.
 The folder workflow recomputes both match sets before generic bank projection.
 
 `bank wise status` recomputes statement reconciliation from stored event memberships
-using Bigdecimal and exposes every Wise CSV row's match state. The journal adds
+using exact decimal quantities and exposes every Wise CSV row's match state. The journal adds
 uncontested merchant, payment reference and reported-fee metadata, without fee or
 FX postings. Real samples currently validate EUR movements with zero fees.
 

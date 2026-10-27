@@ -1,4 +1,4 @@
-open Core
+open Base
 
 (** SQLite is authoritative. One connection must not be shared between threads.
     Opening initializes the latest experimental schema atomically and rejects
@@ -119,11 +119,11 @@ type wise_reconciliation =
   ; document_id : int64
   ; source_account : string
   ; currency : string
-  ; opening : Bigdecimal.t
-  ; closing : Bigdecimal.t
-  ; movements : Bigdecimal.t
+  ; opening : Quantity.t
+  ; closing : Quantity.t
+  ; movements : Quantity.t
   ; entries : int
-  ; difference : Bigdecimal.t
+  ; difference : Quantity.t
   }
 
 val wise_reconciliations : t -> wise_reconciliation list Or_error.t
@@ -170,7 +170,7 @@ type bunq_reconciliation =
   ; account_id : string
   ; currency : string
   ; entries : int
-  ; difference : Bigdecimal.t
+  ; difference : Quantity.t
   }
 
 val bunq_reconciliations : t -> bunq_reconciliation list Or_error.t

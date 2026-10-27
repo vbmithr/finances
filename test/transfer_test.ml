@@ -1,4 +1,5 @@
-open Core
+open Base
+open Stdio
 open Finances
 
 let ok = Or_error.ok_exn
@@ -91,7 +92,7 @@ let parser () =
   Alcotest.(check bool)
     "bank debit includes fee"
     true
-    (Bigdecimal.equal tx.amount (Bigdecimal.of_string "-100.50"));
+    (Quantity.equal tx.amount (Quantity.of_string "-100.50"));
   error (Revolut_csv.parse ~account_id:"main" (replace (csv ()) "69.50" "70.00"));
   error (Revolut_csv.parse ~account_id:"main" (replace (csv ()) "COMPLETED" "PENDING"));
   error (Revolut_csv.parse ~account_id:"main" (replace (csv ()) "0.50" "-0.50"));
@@ -126,7 +127,7 @@ let import_and_fees () =
     project db;
     let c = candidate db in
     let fee_leg =
-      if Bigdecimal.(c.first_transaction.fee > zero)
+      if Quantity.(c.first_transaction.fee > zero)
       then c.first_event_id
       else c.second_event_id
     in
@@ -136,7 +137,7 @@ let import_and_fees () =
     Alcotest.(check bool)
       "fee quantity exact"
       true
-      (Bigdecimal.equal (List.nth_exn ps 2).quantity (Bigdecimal.of_string "0.50")))
+      (Quantity.equal (List.nth_exn ps 2).quantity (Quantity.of_string "0.50")))
 ;;
 
 let candidates () =
@@ -169,14 +170,14 @@ let confirm_and_reject () =
     let sum =
       List.fold
         [ c.first_event_id; c.second_event_id ]
-        ~init:Bigdecimal.zero
+        ~init:Quantity.zero
         ~f:(fun total id ->
-          Bigdecimal.(total + (List.nth_exn (entries db id).postings 1).quantity))
+          Quantity.(total + (List.nth_exn (entries db id).postings 1).quantity))
     in
     Alcotest.(check bool)
       "transfer clears exactly despite fee"
       true
-      (Bigdecimal.is_zero sum);
+      (Quantity.is_zero sum);
     check "no duplicate projection" 0 (ok (Store.project_bank db)).inserted;
     let journal = ok (Finances_hledger.export db) in
     Alcotest.(check bool)
@@ -318,9 +319,12 @@ let sql db s =
 
 let workspace f =
   let path =
-    Filename_unix.temp_file ~in_dir:(Sys.getenv_exn "TMPDIR") "transfer-tests" ".sqlite3"
+    Stdlib.Filename.temp_file
+      ~temp_dir:(Sys.getenv_exn "TMPDIR")
+      "transfer-tests"
+      ".sqlite3"
   in
-  Exn.protect ~finally:(fun () -> Core_unix.unlink path) ~f:(fun () -> f path)
+  Exn.protect ~finally:(fun () -> Unix.unlink path) ~f:(fun () -> f path)
 ;;
 
 let conflict_and_reopen () =
@@ -345,7 +349,7 @@ let conflict_and_reopen () =
     raw path (fun db ->
       sql
         db
-        (sprintf
+        (Printf.sprintf
            "UPDATE postings SET quantity='999' WHERE ordinal=1 AND entry_id IN (SELECT \
             id FROM journal_entries WHERE event_id=%Ld)"
            d.second_event_id));

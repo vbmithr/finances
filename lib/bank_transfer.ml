@@ -1,4 +1,4 @@
-open Core
+open Base
 
 type state =
   | Confirmed
@@ -70,13 +70,13 @@ let of_json contents =
 ;;
 
 let account first second =
-  sprintf
+  Printf.sprintf
     "assets:transfers:pair-%Ld-%Ld"
     (Int64.min first second)
     (Int64.max first second)
 ;;
 
-let principal tx = Bigdecimal.(tx.Bank_transaction.amount + tx.fee)
+let principal tx = Quantity.(tx.Bank_transaction.amount + tx.fee)
 
 let eligible
       (a : Source_event.t)
@@ -86,7 +86,7 @@ let eligible
   =
   (not (String.equal a.venue b.venue && String.equal a.account b.account))
   && String.equal ta.account.currency tb.account.currency
-  && (not (Bigdecimal.is_zero (principal ta)))
-  && Bigdecimal.(principal ta + principal tb = zero)
+  && (not (Quantity.is_zero (principal ta)))
+  && Quantity.(principal ta + principal tb = zero)
   && Int.abs (Date.diff ta.booked_on tb.booked_on) <= 7
 ;;

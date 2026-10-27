@@ -1,4 +1,4 @@
-open Core
+open Base
 
 type account =
   { bank_id : string
@@ -15,7 +15,7 @@ type transaction =
   ; occurred_at_ms : int64
   ; booked_on : Date.t
   ; value_on : Date.t option
-  ; amount : Bigdecimal.t
+  ; amount : Quantity.t
   ; credit : bool
   ; description : string
   ; source_id : string
@@ -29,8 +29,8 @@ type statement =
   ; period_end : string
   ; opening_at : string
   ; closing_at : string
-  ; opening : Bigdecimal.t
-  ; closing : Bigdecimal.t
+  ; opening : Quantity.t
+  ; closing : Quantity.t
   ; transactions : transaction list
   }
 
@@ -56,7 +56,7 @@ let children tag = function
 let required tag node =
   match children tag node with
   | [ value ] -> value
-  | _ -> failwithf "expected exactly one %s" tag ()
+  | _ -> Printf.failwithf "expected exactly one %s" tag ()
 ;;
 
 let rec at node = function
@@ -116,8 +116,8 @@ let normalize_reference ~description reference =
 ;;
 
 let timestamp value =
-  let time = Time_ns.of_string_with_utc_offset value in
-  let ns = Time_ns.to_int63_ns_since_epoch time |> Int63.to_int64 in
+  let time = Timestamp.of_rfc3339_exn value in
+  let ns = Timestamp.nanoseconds_since_epoch_exn time in
   if Int64.(ns < 0L) then failwith "Wise timestamp is before the supported epoch";
   ns
 ;;
@@ -137,7 +137,7 @@ let local_millisecond text =
 ;;
 
 let make_transaction account ~reference ~booked_at ~value_on ~amount ~credit ~description =
-  if (credit && Bigdecimal.(amount < zero)) || ((not credit) && Bigdecimal.(amount > zero))
+  if (credit && Quantity.(amount < zero)) || ((not credit) && Quantity.(amount > zero))
   then failwith "Wise amount sign disagrees with direction";
   let ns = timestamp booked_at in
   let instant_ns = Int64.to_string ns in
@@ -164,7 +164,7 @@ let make_transaction account ~reference ~booked_at ~value_on ~amount ~credit ~de
           ; ( "value_on"
             , Option.value_map value_on ~default:`Null ~f:(fun date ->
                 `String (Date.to_string date)) )
-          ; "amount", `String (Bigdecimal.to_string_no_sn amount)
+          ; "amount", `String (Quantity.to_string amount)
           ; "credit", `Bool credit
           ; "description", `String description
           ])
@@ -201,10 +201,10 @@ let signed_amount currency node =
   in
   if not (String.equal currency declared)
   then failwith "CAMT entry currency differs from balance account currency";
-  let amount = Bigdecimal.of_string (text amount) in
-  if Bigdecimal.(amount < zero)
+  let amount = Quantity.of_string (text amount) in
+  if Quantity.(amount < zero)
   then failwith "CAMT amount must be unsigned before applying credit/debit indicator";
-  if direction node then amount else Bigdecimal.neg amount
+  if direction node then amount else Quantity.neg amount
 ;;
 
 let parse_statement node =
@@ -240,7 +240,8 @@ let parse_statement node =
       let at = value balance [ "Dt"; "DtTm" ] in
       ignore (timestamp at : int64);
       signed_amount currency balance, at
-    | _ -> failwithf "Wise statement requires exactly one %s booked balance" code ()
+    | _ ->
+      Printf.failwithf "Wise statement requires exactly one %s booked balance" code ()
   in
   let opening, opening_at = balance "OPBD"
   and closing, closing_at = balance "CLBD" in
@@ -283,10 +284,10 @@ let parse_statement node =
     if Int.of_string count <> List.length transactions
     then failwith "Wise statement entry count mismatch");
   let movements =
-    List.fold transactions ~init:Bigdecimal.zero ~f:(fun sum tx ->
-      Bigdecimal.(sum + tx.amount))
+    List.fold transactions ~init:Quantity.zero ~f:(fun sum tx ->
+      Quantity.(sum + tx.amount))
   in
-  if not Bigdecimal.(opening + movements = closing)
+  if not Quantity.(opening + movements = closing)
   then failwith "Wise booked balances do not reconcile with statement movements";
   { account
   ; statement_id
@@ -368,7 +369,7 @@ let source_transaction (event : Source_event.t) =
            | `Null -> None
            | `String s -> Some (Date.of_string s)
            | _ -> failwith "invalid Wise value date")
-        ~amount:(Bigdecimal.of_string (string "amount"))
+        ~amount:(Quantity.of_string (string "amount"))
         ~credit:
           (match field "credit" with
            | `Bool b -> b

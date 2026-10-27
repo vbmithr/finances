@@ -1,4 +1,5 @@
-open Core
+open Base
+open Stdio
 open Finances
 
 type ignored =
@@ -13,18 +14,18 @@ type report =
 
 let snapshot ~max_file_bytes path =
   Or_error.try_with (fun () ->
-    let before = Core_unix.lstat path in
-    if Poly.(before.st_kind <> Core_unix.S_REG) then failwith "not a regular file";
+    let before = Unix.LargeFile.lstat path in
+    if Poly.(before.st_kind <> Unix.S_REG) then failwith "not a regular file";
     if Int64.(before.st_size > max_file_bytes)
     then failwith "file exceeds configured read limit";
-    let fd = Core_unix.openfile ~mode:[ O_RDONLY; O_NONBLOCK; O_CLOEXEC ] path in
-    let input = Core_unix.in_channel_of_descr fd in
+    let fd = Unix.openfile path [ O_RDONLY; O_NONBLOCK; O_CLOEXEC ] 0 in
+    let input = Unix.in_channel_of_descr fd in
     Exn.protect
       ~finally:(fun () -> In_channel.close input)
       ~f:(fun () ->
-        let opened = Core_unix.fstat fd in
+        let opened = Unix.LargeFile.fstat fd in
         if
-          Poly.(opened.st_kind <> Core_unix.S_REG)
+          Poly.(opened.st_kind <> Unix.S_REG)
           || before.st_dev <> opened.st_dev
           || before.st_ino <> opened.st_ino
         then failwith "file changed before reading; retry after copying completes";
@@ -34,9 +35,9 @@ let snapshot ~max_file_bytes path =
              input
              buffer
              ~len:(Int64.to_int_exn before.st_size + 1));
-        let after = Core_unix.fstat fd in
-        let final = Core_unix.lstat path in
-        let unchanged (a : Core_unix.stats) (b : Core_unix.stats) =
+        let after = Unix.LargeFile.fstat fd in
+        let final = Unix.LargeFile.lstat path in
+        let unchanged (a : Unix.LargeFile.stats) (b : Unix.LargeFile.stats) =
           a.st_dev = b.st_dev
           && a.st_ino = b.st_ino
           && Int64.equal a.st_size b.st_size
@@ -44,7 +45,7 @@ let snapshot ~max_file_bytes path =
           && Float.equal a.st_ctime b.st_ctime
         in
         if
-          Poly.(final.st_kind <> Core_unix.S_REG)
+          Poly.(final.st_kind <> Unix.S_REG)
           || (not (unchanged before after && unchanged after final))
           || Int64.(of_int (Buffer.length buffer) <> before.st_size)
         then failwith "file changed during reading; retry after copying completes";
@@ -64,12 +65,12 @@ let scan
     Or_error.try_with (fun () ->
       if Int64.(max_file_bytes <= 0L || max_file_bytes >= of_int Int.max_value)
       then failwith "file read limit must be positive and fit in memory";
-      if Poly.((Core_unix.lstat directory).st_kind <> Core_unix.S_DIR)
+      if Poly.((Unix.LargeFile.lstat directory).st_kind <> Unix.S_DIR)
       then failwith "inbox must be a directory, not a symbolic link")
   in
   let excluded =
     List.filter_map exclude ~f:(fun path ->
-      match Or_error.try_with (fun () -> Core_unix.stat path) with
+      match Or_error.try_with (fun () -> Unix.LargeFile.stat path) with
       | Error _ -> None
       | Ok stat -> Some (stat.st_dev, stat.st_ino))
   in
@@ -86,10 +87,10 @@ let scan
     files := report :: !files
   in
   let rec walk path =
-    match Or_error.try_with (fun () -> Core_unix.lstat path) with
+    match Or_error.try_with (fun () -> Unix.LargeFile.lstat path) with
     | Error error -> record_error path error
     | Ok stat ->
-      let name = Filename.basename path in
+      let name = Stdlib.Filename.basename path in
       if
         List.exists excluded ~f:(fun (device, inode) ->
           device = stat.st_dev && inode = stat.st_ino)
@@ -117,7 +118,7 @@ let scan
              let rec visit = function
                | [] -> Ok ()
                | name :: rest ->
-                 let%bind () = walk (Filename.concat path name) in
+                 let%bind () = walk (Stdlib.Filename.concat path name) in
                  visit rest
              in
              visit names)
@@ -144,7 +145,7 @@ let scan
   let rec visit = function
     | [] -> Ok ()
     | name :: rest ->
-      let%bind () = walk (Filename.concat directory name) in
+      let%bind () = walk (Stdlib.Filename.concat directory name) in
       visit rest
   in
   let%map () = visit names in

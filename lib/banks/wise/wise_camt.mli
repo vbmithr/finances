@@ -1,4 +1,4 @@
-open Core
+open Base
 
 type account =
   { bank_id : string
@@ -15,7 +15,7 @@ type transaction = private
   ; occurred_at_ms : int64
   ; booked_on : Date.t
   ; value_on : Date.t option
-  ; amount : Bigdecimal.t
+  ; amount : Quantity.t
   ; credit : bool
   ; description : string
   ; source_id : string
@@ -29,8 +29,8 @@ type statement = private
   ; period_end : string
   ; opening_at : string
   ; closing_at : string
-  ; opening : Bigdecimal.t
-  ; closing : Bigdecimal.t
+  ; opening : Quantity.t
+  ; closing : Quantity.t
   ; transactions : transaction list
   }
 

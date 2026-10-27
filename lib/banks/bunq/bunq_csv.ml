@@ -1,11 +1,11 @@
-open Core
+open Base
 
 type row =
   { row_number : int
   ; account_id : string
   ; booked_on : Date.t
   ; value_on : Date.t
-  ; amount : Bigdecimal.t
+  ; amount : Quantity.t
   ; counterparty : string
   ; name : string
   ; description : string
@@ -51,7 +51,7 @@ let of_fields ~row_number fields =
       then failwith "invalid Bunq CSV amount";
       let amount =
         String.filter amount ~f:(fun c -> not (Char.equal c ' '))
-        |> fun s -> String.tr s ~target:',' ~replacement:'.' |> Bigdecimal.of_string
+        |> fun s -> String.tr s ~target:',' ~replacement:'.' |> Quantity.of_string
       in
       let day s =
         if not (Re.execp (Re.Perl.compile_pat "^[0-9]{4}-[0-9]{2}-[0-9]{2}$") s)
@@ -97,7 +97,7 @@ let key r =
 ;;
 
 let match_rows inputs candidates =
-  let index = String.Table.create () in
+  let index = Hashtbl.create (module String) in
   List.iter candidates ~f:(fun (id, tx) ->
     Hashtbl.add_multi index ~key:(Bunq_transaction.csv_key tx) ~data:(id, tx));
   let counts = Hashtbl.Poly.create ()

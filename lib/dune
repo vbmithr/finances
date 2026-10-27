@@ -4,6 +4,19 @@
  (name finances)
  (public_name finances)
  (private_modules validation db_schema sqlite_schema)
- (libraries core bigdecimal rel rel.sqlite3 yojson xmlm re digestif csv)
+ (libraries
+  base
+  stdio
+  bos
+  fpath
+  decimal
+  ptime
+  rel
+  rel.sqlite3
+  yojson
+  xmlm
+  re
+  digestif
+  csv)
  (preprocess
-  (pps ppx_jane)))
+  (pps ppx_sexp_conv ppx_compare ppx_let)))

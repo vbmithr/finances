@@ -1,4 +1,4 @@
-open Core
+open Base
 open Rel
 
 (** One current experimental baseline; older databases must be reimported. *)

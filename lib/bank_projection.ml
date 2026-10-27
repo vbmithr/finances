@@ -1,4 +1,4 @@
-open Core
+open Base
 
 let key = "bank-unclassified-v1"
 
@@ -10,7 +10,7 @@ let account_component value =
   else
     "x-"
     ^ (String.to_list value
-       |> List.map ~f:(fun c -> sprintf "%02x" (Char.to_int c))
+       |> List.map ~f:(fun c -> Printf.sprintf "%02x" (Char.to_int c))
        |> String.concat)
 ;;
 
@@ -70,7 +70,7 @@ let entry ?bank_account ?(counter_account = "equity:unclassified") event =
     Accounting.posting
       ~account:counter_account
       ~commodity:account.currency
-      (Bigdecimal.neg Bigdecimal.(transaction.amount + transaction.fee))
+      (Quantity.neg Quantity.(transaction.amount + transaction.fee))
   in
   let descriptions =
     List.filter_opt [ transaction.name; transaction.memo ]
@@ -83,7 +83,7 @@ let entry ?bank_account ?(counter_account = "equity:unclassified") event =
     | values -> String.concat ~sep:" | " values
   in
   let%bind fees =
-    if Bigdecimal.is_zero transaction.fee
+    if Quantity.is_zero transaction.fee
     then Ok []
     else (
       let%map fee =

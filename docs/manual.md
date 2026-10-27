@@ -230,6 +230,19 @@ totals represent the records you supplied; opening balances and complete coverag
 are needed before treating them as actual bank balances. Financial aggregation
 belongs to hledger; `fin` tracks import evidence, account identity and review state.
 
+## Library and dependency changes
+
+This build uses Base, decimal, Ptime and Bos, with no Core or Bigdecimal
+dependency. CLI commands, JSON formats, schema 10 databases, saved configuration
+and generated journals remain compatible; reimporting records is unnecessary.
+
+OCaml callers use `Quantity.t` (a `Decimal.t` alias) and `Date.t` (a `Ptime.date`
+alias). Use the `Quantity` functions for exact accounting sums and products:
+ordinary decimal arithmetic follows its configured precision and rounding rules.
+Dates remain calendar dates, and Wise booking days retain their supplied local
+date. Bos handles high-level file operations; import file-identity checks and
+private configuration permissions remain in place.
+
 ## Command reference
 
 | Command | Purpose |

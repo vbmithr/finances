@@ -1,4 +1,4 @@
-open Core
+open Base
 
 type t =
   { contents : string
@@ -6,8 +6,8 @@ type t =
   ; currency : string
   ; opening_on : Date.t
   ; closing_on : Date.t
-  ; opening : Bigdecimal.t
-  ; closing : Bigdecimal.t
+  ; opening : Quantity.t
+  ; closing : Quantity.t
   ; transactions : Bunq_transaction.t list
   }
 
@@ -34,10 +34,8 @@ let balance s =
   | None -> failwith "invalid Bunq booked balance"
   | Some g ->
     let get = Re.Group.get g in
-    let amount = Bigdecimal.of_string (String.tr (get 4) ~target:',' ~replacement:'.') in
-    ( date (get 2)
-    , get 3
-    , if String.equal (get 1) "D" then Bigdecimal.neg amount else amount )
+    let amount = Quantity.of_string (String.tr (get 4) ~target:',' ~replacement:'.') in
+    date (get 2), get 3, if String.equal (get 1) "D" then Quantity.neg amount else amount
 ;;
 
 let parse contents =
@@ -82,7 +80,7 @@ let parse contents =
           if String.equal k tag then Some v else None)
       with
       | [ v ] -> v
-      | _ -> failwithf "expected exactly one MT940 %s" tag ()
+      | _ -> Printf.failwithf "expected exactly one MT940 %s" tag ()
     in
     ignore (required "20" : string);
     ignore (required "28" : string);
@@ -102,7 +100,7 @@ let parse contents =
          (String.equal currency opening_currency && String.equal currency closing_currency))
       || Date.(opening_on > closing_on)
     then failwith "inconsistent Bunq statement balance interval or currency";
-    let counts = String.Table.create () in
+    let counts = Hashtbl.create (module String) in
     let rec entries acc = function
       | [] -> List.rev acc
       | ("61", raw) :: ("86", memo) :: rest ->
@@ -122,7 +120,7 @@ let parse contents =
             ~f:(fun year ->
               Or_error.try_with (fun () ->
                 Date.of_string
-                  (sprintf
+                  (Printf.sprintf
                      "%04d-%s-%s"
                      year
                      (String.prefix md 2)
@@ -157,9 +155,9 @@ let parse contents =
              | _ -> failwith "unsupported Bunq counterparty fields")
         in
         let amount =
-          Bigdecimal.of_string (String.tr (get 4) ~target:',' ~replacement:'.')
+          Quantity.of_string (String.tr (get 4) ~target:',' ~replacement:'.')
         in
-        let amount = if String.equal (get 3) "D" then Bigdecimal.neg amount else amount in
+        let amount = if String.equal (get 3) "D" then Quantity.neg amount else amount in
         let key =
           Bunq_transaction.key
             ~account_id
@@ -192,10 +190,10 @@ let parse contents =
     in
     let transactions = entries [] fields in
     let movements =
-      List.fold transactions ~init:Bigdecimal.zero ~f:(fun total tx ->
-        Bigdecimal.(total + tx.Bunq_transaction.amount))
+      List.fold transactions ~init:Quantity.zero ~f:(fun total tx ->
+        Quantity.(total + tx.Bunq_transaction.amount))
     in
-    if not Bigdecimal.(opening + movements = closing)
+    if not Quantity.(opening + movements = closing)
     then failwith "Bunq opening balance plus movements does not equal closing balance";
     { contents
     ; account_id

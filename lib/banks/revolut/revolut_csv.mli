@@ -1,4 +1,4 @@
-open Core
+open Base
 
 type transaction = private
   { account_id : string
@@ -8,10 +8,10 @@ type transaction = private
   ; booked_on : Date.t
   ; transaction_type : string
   ; description : string
-  ; principal : Bigdecimal.t
-  ; fee : Bigdecimal.t
-  ; amount : Bigdecimal.t
-  ; balance : Bigdecimal.t option
+  ; principal : Quantity.t
+  ; fee : Quantity.t
+  ; amount : Quantity.t
+  ; balance : Quantity.t option
   ; occurrence : int
   ; source_id : string
   ; payload : string

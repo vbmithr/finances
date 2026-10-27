@@ -1,11 +1,11 @@
-open Core
+open Base
 
 type t =
   { account_id : string
   ; currency : string
   ; booked_on : Date.t
   ; value_on : Date.t
-  ; amount : Bigdecimal.t
+  ; amount : Quantity.t
   ; counterparty : string
   ; name : string
   ; description : string
@@ -32,7 +32,7 @@ let key ~account_id ~booked_on ~value_on ~amount ~counterparty ~name ~descriptio
            [ account_id
            ; Date.to_string booked_on
            ; Date.to_string value_on
-           ; Bigdecimal.to_string_no_sn amount
+           ; Quantity.to_string amount
            ; normalize counterparty
            ; normalize name
            ; normalize description
@@ -87,7 +87,7 @@ let create
             ; "currency", `String currency
             ; "booked_on", `String (Date.to_string booked_on)
             ; "value_on", `String (Date.to_string value_on)
-            ; "amount", `String (Bigdecimal.to_string_no_sn amount)
+            ; "amount", `String (Quantity.to_string amount)
             ; "counterparty", `String counterparty
             ; "name", `String name
             ; "description", `String description
@@ -124,7 +124,7 @@ let source_transaction (event : Source_event.t) =
         ~currency:(field "currency")
         ~booked_on:(Date.of_string (field "booked_on"))
         ~value_on:(Date.of_string (field "value_on"))
-        ~amount:(Bigdecimal.of_string (field "amount"))
+        ~amount:(Quantity.of_string (field "amount"))
         ~counterparty:(field "counterparty")
         ~name:(field "name")
         ~description:(field "description")

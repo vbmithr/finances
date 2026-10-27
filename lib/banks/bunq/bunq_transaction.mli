@@ -1,11 +1,11 @@
-open Core
+open Base
 
 type t = private
   { account_id : string
   ; currency : string
   ; booked_on : Date.t
   ; value_on : Date.t
-  ; amount : Bigdecimal.t
+  ; amount : Quantity.t
   ; counterparty : string
   ; name : string
   ; description : string
@@ -20,7 +20,7 @@ val key
   :  account_id:string
   -> booked_on:Date.t
   -> value_on:Date.t
-  -> amount:Bigdecimal.t
+  -> amount:Quantity.t
   -> counterparty:string
   -> name:string
   -> description:string
@@ -34,7 +34,7 @@ val create
   -> currency:string
   -> booked_on:Date.t
   -> value_on:Date.t
-  -> amount:Bigdecimal.t
+  -> amount:Quantity.t
   -> counterparty:string
   -> name:string
   -> description:string

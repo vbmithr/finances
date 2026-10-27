@@ -1,4 +1,4 @@
-open Core
+open Base
 
 type account =
   { bank_id : string
@@ -10,8 +10,8 @@ type account =
 type t = private
   { account : account
   ; booked_on : Date.t
-  ; amount : Bigdecimal.t
-  ; fee : Bigdecimal.t
+  ; amount : Quantity.t
+  ; fee : Quantity.t
   ; name : string option
   ; memo : string option
   }

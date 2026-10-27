@@ -1,4 +1,4 @@
-open Core
+open Base
 
 type occurrence =
   | At_ms of int64
@@ -29,5 +29,7 @@ let create ~venue ~account ~kind ~source_id ~occurred_at_ms ~payload =
 ;;
 
 let create_dated ~venue ~account ~kind ~source_id ~occurred_on ~payload =
+  let open Or_error.Let_syntax in
+  let%bind () = Or_error.try_with (fun () -> Date.validate_exn occurred_on) in
   make ~venue ~account ~kind ~source_id ~occurred:(On_date occurred_on) ~payload
 ;;

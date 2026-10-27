@@ -1,4 +1,4 @@
-open Core
+open Base
 
 type reference =
   { institution : string
@@ -134,7 +134,7 @@ let of_json contents =
     if
       List.contains_dup
         (List.map rows ~f:(fun a -> a.reference.institution, source_account a.reference))
-        ~compare:(Tuple2.compare ~cmp1:String.compare ~cmp2:String.compare)
+        ~compare:[%compare: string * string]
     then failwith "duplicate configured account";
     rows)
 ;;

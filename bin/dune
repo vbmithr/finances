@@ -5,10 +5,12 @@
   finances
   finances.hledger
   finances.bank
-  core
-  core_unix
-  core_unix.filename_unix
+  base
+  stdio
+  bos
+  fpath
+  unix
   cmdliner
   yojson)
  (preprocess
-  (pps ppx_jane)))
+  (pps ppx_sexp_conv ppx_compare ppx_let)))

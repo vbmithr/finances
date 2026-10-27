@@ -1,18 +1,18 @@
-open Core
+open Base
 
 type row =
   { row_number : int
   ; account_id : string
   ; booked_on : Date.t
   ; value_on : Date.t option
-  ; amount : Bigdecimal.t
+  ; amount : Quantity.t
   ; description : string
   ; suggested_description : string option
   ; category : string option
   ; parent_category : string option
   ; comment : string option
   ; account_label : string option
-  ; reported_balance : Bigdecimal.t option
+  ; reported_balance : Quantity.t option
   ; pointage : string option
   ; fields : string list
   }
@@ -69,12 +69,12 @@ let amount value =
   value
   |> String.filter ~f:(fun c -> not (Char.equal c ' '))
   |> String.map ~f:(fun c -> if Char.equal c ',' then '.' else c)
-  |> Bigdecimal.of_string
+  |> Quantity.of_string
 ;;
 
 let balance value =
   if not (Re.execp balance_syntax value) then failwith "invalid decimal account balance";
-  Bigdecimal.of_string value
+  Quantity.of_string value
 ;;
 
 let of_fields ~row_number fields =
@@ -100,7 +100,7 @@ let of_fields ~row_number fields =
     ; pointage = optional 11
     ; fields
     })
-  |> fun result -> Or_error.tag result ~tag:(sprintf "CSV row %d" row_number)
+  |> fun result -> Or_error.tag result ~tag:(Printf.sprintf "CSV row %d" row_number)
 ;;
 
 let parse contents =

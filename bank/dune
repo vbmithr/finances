@@ -1,6 +1,6 @@
 (library
  (name finances_bank)
  (public_name finances.bank)
- (libraries finances finances.hledger core core_unix core_unix.filename_unix)
+ (libraries finances finances.hledger base stdio bos fpath unix)
  (preprocess
-  (pps ppx_jane)))
+  (pps ppx_sexp_conv ppx_compare ppx_let)))

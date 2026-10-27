@@ -1,4 +1,5 @@
-open Core
+open Base
+open Stdio
 open Finances
 
 let ok = Or_error.ok_exn
@@ -54,7 +55,7 @@ let parser () =
   Alcotest.(check bool)
     "grouped CSV decimal"
     true
-    (Bigdecimal.equal (List.nth_exn rows 2).amount (Bigdecimal.of_string "1100"));
+    (Quantity.equal (List.nth_exn rows 2).amount (Quantity.of_string "1100"));
   error (Bunq_csv.parse (replace (csv ()) "100,00" "1 1,00"));
   error (Bunq_csv.parse (replace (csv ()) "2026-01-02" "2026-02-30"))
 ;;
@@ -73,7 +74,7 @@ let workflow () =
         Alcotest.(check bool)
           "persisted statement reconciles"
           true
-          (Bigdecimal.is_zero r.Store.difference));
+          (Quantity.is_zero r.Store.difference));
     let journal = ok (Finances_hledger.export db) in
     Alcotest.(check bool)
       "CSV provenance"

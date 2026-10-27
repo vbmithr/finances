@@ -1,4 +1,4 @@
-open Core
+open Base
 
 type transaction =
   { account_id : string
@@ -8,10 +8,10 @@ type transaction =
   ; booked_on : Date.t
   ; transaction_type : string
   ; description : string
-  ; principal : Bigdecimal.t
-  ; fee : Bigdecimal.t
-  ; amount : Bigdecimal.t
-  ; balance : Bigdecimal.t option
+  ; principal : Quantity.t
+  ; fee : Quantity.t
+  ; amount : Quantity.t
+  ; balance : Quantity.t option
   ; occurrence : int
   ; source_id : string
   ; payload : string
@@ -75,7 +75,7 @@ let make
     String.length currency <> 3
     || (not (String.for_all currency ~f:Char.is_uppercase))
     || occurrence < 1
-    || Bigdecimal.(fee < zero)
+    || Quantity.(fee < zero)
   then failwith "invalid Revolut currency, occurrence or fee";
   let clock s =
     if
@@ -86,8 +86,8 @@ let make
     then failwith "unsupported Revolut datetime"
     else
       ignore
-        (Time_ns.of_string_with_utc_offset (String.tr s ~target:' ' ~replacement:'T' ^ "Z")
-         : Time_ns.t)
+        (Timestamp.of_rfc3339_exn (String.tr s ~target:' ' ~replacement:'T' ^ "Z")
+         : Ptime.t)
   in
   clock started_at;
   clock completed_at;
@@ -97,7 +97,7 @@ let make
     (Validation.text "Revolut transaction type" transaction_type |> Or_error.ok_exn
      : string);
   let booked_on = Date.of_string (String.prefix completed_at 10) in
-  let amount = Bigdecimal.(principal - fee) in
+  let amount = Quantity.(principal - fee) in
   let fields =
     [ "format", `String "revolut-v1"
     ; "account_id", `String account_id
@@ -106,8 +106,8 @@ let make
     ; "completed_at", `String completed_at
     ; "transaction_type", `String transaction_type
     ; "description", `String description
-    ; "principal", `String (Bigdecimal.to_string_no_sn principal)
-    ; "fee", `String (Bigdecimal.to_string_no_sn fee)
+    ; "principal", `String (Quantity.to_string principal)
+    ; "fee", `String (Quantity.to_string fee)
     ]
   in
   let base = Yojson.Safe.to_string (`Assoc fields) in
@@ -145,10 +145,10 @@ let parse ~account_id contents =
     let decimal s =
       if not (Re.execp (Re.Perl.compile_pat "^-?[0-9]+(\\.[0-9]+)?$") s)
       then failwith "invalid Revolut decimal"
-      else Bigdecimal.of_string s
+      else Quantity.of_string s
     in
-    let counts = String.Table.create () in
-    let balances = String.Table.create () in
+    let counts = Hashtbl.create (module String) in
+    let balances = Hashtbl.create (module String) in
     let transactions =
       Csv.input_all input
       |> List.map ~f:(fun fields ->
@@ -199,7 +199,7 @@ let parse ~account_id contents =
             ~f:(fun (previous_at, previous_balance) ->
               if String.compare completed_at previous_at < 0
               then failwith "Revolut rows are not in completion order";
-              if not Bigdecimal.(previous_balance + tx.amount = balance)
+              if not Quantity.(previous_balance + tx.amount = balance)
               then failwith "Revolut running balance does not agree with amount minus fee");
           Hashtbl.set balances ~key:currency ~data:(completed_at, balance);
           tx
@@ -229,8 +229,8 @@ let source_transaction (event : Source_event.t) =
         ~completed_at:(field "completed_at")
         ~transaction_type:(field "transaction_type")
         ~description:(field "description")
-        ~principal:(Bigdecimal.of_string (field "principal"))
-        ~fee:(Bigdecimal.of_string (field "fee"))
+        ~principal:(Quantity.of_string (field "principal"))
+        ~fee:(Quantity.of_string (field "fee"))
         ~balance:None
         ~occurrence:(member "occurrence" json |> to_int)
     in

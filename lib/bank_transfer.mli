@@ -1,4 +1,4 @@
-open Core
+open Base
 
 type state =
   | Confirmed
@@ -25,7 +25,7 @@ val of_json : string -> decision list Or_error.t
 val account : int64 -> int64 -> string
 
 (** Transfer amount excluding separately recorded fees. *)
-val principal : Bank_transaction.t -> Bigdecimal.t
+val principal : Bank_transaction.t -> Quantity.t
 
 val eligible
   :  Source_event.t

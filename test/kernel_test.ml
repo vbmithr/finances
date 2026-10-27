@@ -1,12 +1,12 @@
-open Core
+open Base
 open Finances
 
 let ok = Or_error.ok_exn
-let decimal = Bigdecimal.of_string
+let decimal = Quantity.of_string
 let error result = Alcotest.(check bool) "rejected" true (Result.is_error result)
 
 let equal_decimal expected actual =
-  Alcotest.(check bool) "exact amount" true (Bigdecimal.equal (decimal expected) actual)
+  Alcotest.(check bool) "exact amount" true (Quantity.equal (decimal expected) actual)
 ;;
 
 let with_database f =
@@ -136,7 +136,7 @@ let accounting_invariants () =
           ; posting "assets:cash" "0.2"
           ; posting "equity:opening" "-0.3"
           ]));
-  error (Accounting.posting ~account:"assets::cash" ~commodity:"USD" Bigdecimal.one)
+  error (Accounting.posting ~account:"assets::cash" ~commodity:"USD" Quantity.one)
 ;;
 
 let journal_replay () =
@@ -168,7 +168,7 @@ let journal_replay () =
         Alcotest.(check bool)
           "all decimal digits preserved"
           true
-          (Bigdecimal.equal a.quantity b.quantity))))
+          (Quantity.equal a.quantity b.quantity))))
 ;;
 
 let foreign_keys () =
@@ -240,7 +240,7 @@ let linear_perpetual () =
   let mark = decimal "65000" in
   equal_decimal "10" (ok (Position.unrealized_pnl_in_quote ~mark (position "2")));
   equal_decimal "-10" (ok (Position.unrealized_pnl_in_quote ~mark (position "-2")));
-  error (Position.unrealized_pnl_in_quote ~mark:Bigdecimal.zero (position "2"));
+  error (Position.unrealized_pnl_in_quote ~mark:Quantity.zero (position "2"));
   error
     (Instrument.linear_perpetual
        ~venue:"paradex"
@@ -248,7 +248,7 @@ let linear_perpetual () =
        ~base:"BTC"
        ~quote:"USD"
        ~settlement:"USDC"
-       ~multiplier:Bigdecimal.zero)
+       ~multiplier:Quantity.zero)
 ;;
 
 let () =

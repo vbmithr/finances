@@ -1,4 +1,4 @@
-open Core
+open Base
 
 type state = Bank_match.state =
   | Matched
@@ -18,7 +18,7 @@ type candidate =
   ; institution : string
   ; account_id : string
   ; booked_on : Date.t
-  ; amount : Bigdecimal.t
+  ; amount : Quantity.t
   ; descriptions : string list
   }
 
@@ -44,10 +44,10 @@ let normalized text =
 ;;
 
 let amount_key amount =
-  if Bigdecimal.is_zero amount
+  if Quantity.is_zero amount
   then "0"
   else (
-    let text = Bigdecimal.to_string_no_sn amount in
+    let text = Quantity.to_string amount in
     if not (String.contains text '.')
     then text
     else (
@@ -65,7 +65,7 @@ let key institution account date amount =
 ;;
 
 let match_rows inputs candidates =
-  let index = String.Table.create () in
+  let index = Hashtbl.create (module String) in
   List.iter candidates ~f:(fun (candidate : candidate) ->
     Hashtbl.add_multi
       index
@@ -143,11 +143,11 @@ let match_rows inputs candidates =
           } )
       | _ -> input, result)
   in
-  let observations = Int64.Table.create () in
+  let observations = Hashtbl.create (module Int64) in
   List.iter unique ~f:(fun (input, result) ->
     Option.iter result.event_id ~f:(fun event ->
       Hashtbl.add_multi observations ~key:event ~data:input.row));
-  let conflicts = Int64.Table.create () in
+  let conflicts = Hashtbl.create (module Int64) in
   Hashtbl.iteri observations ~f:(fun ~key:event ~data:rows ->
     let fields =
       [ ("value date", fun (r : Bank_csv.row) -> Option.map r.value_on ~f:Date.to_string)

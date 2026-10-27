@@ -1,4 +1,4 @@
-open Core
+open Base
 
 type edge =
   { first : int64

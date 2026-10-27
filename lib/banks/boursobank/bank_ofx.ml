@@ -1,4 +1,4 @@
-open Core
+open Base
 
 type account =
   { bank_id : string
@@ -11,7 +11,7 @@ type transaction =
   { fitid : string
   ; booked_on : Date.t
   ; user_date : string option
-  ; amount : Bigdecimal.t
+  ; amount : Quantity.t
   ; transaction_type : string
   ; name : string option
   ; memo : string option
@@ -19,7 +19,7 @@ type transaction =
   }
 
 type balance =
-  { amount : Bigdecimal.t
+  { amount : Quantity.t
   ; as_of : string
   }
 
@@ -55,7 +55,7 @@ let children tag = function
 let required_child tag node =
   match children tag node with
   | [ child ] -> child
-  | _ -> failwithf "expected exactly one %s element" tag ()
+  | _ -> Printf.failwithf "expected exactly one %s element" tag ()
 ;;
 
 let text = function
@@ -66,7 +66,7 @@ let text = function
 
 let required tag node =
   let value = text (required_child tag node) in
-  if String.is_empty value then failwithf "%s cannot be empty" tag ();
+  if String.is_empty value then Printf.failwithf "%s cannot be empty" tag ();
   value
 ;;
 
@@ -76,7 +76,7 @@ let optional tag node =
   | [ child ] ->
     let value = text child in
     if String.is_empty value then None else Some value
-  | _ -> failwithf "duplicate %s element" tag ()
+  | _ -> Printf.failwithf "duplicate %s element" tag ()
 ;;
 
 let date s =
@@ -113,7 +113,7 @@ let parse_transaction account node =
   (* BoursoBank's observed DTUSER is not a valid calendar date. Preserve it
      verbatim as source metadata; it cannot supply a value or booking date. *)
   let user_date = optional "DTUSER" node in
-  let amount = Bigdecimal.of_string (required "TRNAMT" node) in
+  let amount = Quantity.of_string (required "TRNAMT" node) in
   let transaction_type = required "TRNTYPE" node in
   if
     List.exists [ "CORRECTFITID"; "CORRECTACTION" ] ~f:(fun tag ->
@@ -156,8 +156,8 @@ let parse_balance tag node =
   | [ balance ] ->
     let as_of = required "DTASOF" balance in
     ignore (date as_of : Date.t);
-    Some { amount = Bigdecimal.of_string (required "BALAMT" balance); as_of }
-  | _ -> failwithf "duplicate %s element" tag ()
+    Some { amount = Quantity.of_string (required "BALAMT" balance); as_of }
+  | _ -> Printf.failwithf "duplicate %s element" tag ()
 ;;
 
 let parse_statement node =

@@ -1,4 +1,4 @@
-open Core
+open Base
 open Rel
 
 (** SQLite features missing from the pinned Rel DDL generator. Checks refer to

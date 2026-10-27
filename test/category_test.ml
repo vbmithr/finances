@@ -1,4 +1,5 @@
-open Core
+open Base
+open Stdio
 open Finances
 
 let ok = Or_error.ok_exn
@@ -75,7 +76,7 @@ let after_projection () =
         "amounts unchanged"
         true
         (List.equal
-           (fun a b -> Bigdecimal.equal a.Accounting.quantity b.Accounting.quantity)
+           (fun a b -> Quantity.equal a.Accounting.quantity b.Accounting.quantity)
            a.postings
            b.postings));
     let wise = In_channel.read_all "fixtures/wise.xml" in
@@ -156,9 +157,9 @@ let sql db query =
 
 let workspace f =
   let path =
-    Filename_unix.temp_file ~in_dir:(Sys.getenv_exn "TMPDIR") "categories" ".sqlite3"
+    Stdlib.Filename.temp_file ~temp_dir:(Sys.getenv_exn "TMPDIR") "categories" ".sqlite3"
   in
-  Exn.protect ~finally:(fun () -> Core_unix.unlink path) ~f:(fun () -> f path)
+  Exn.protect ~finally:(fun () -> Unix.unlink path) ~f:(fun () -> f path)
 ;;
 
 let conflicts () =

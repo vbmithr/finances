@@ -1,4 +1,5 @@
-open Core
+open Base
+open Stdio
 open Finances
 
 let ok = Or_error.ok_exn
@@ -56,16 +57,15 @@ let journal_replay () =
     Alcotest.(check bool)
       "exact quantities balance"
       true
-      (Bigdecimal.is_zero
-         (List.fold quantities ~init:Bigdecimal.zero ~f:Bigdecimal.( + )));
+      (Quantity.is_zero (List.fold quantities ~init:Quantity.zero ~f:Quantity.( + )));
     Alcotest.(check bool)
       "huge precise amount survives journal parsing"
       true
       (List.exists
          quantities
          ~f:
-           (Bigdecimal.equal
-              (Bigdecimal.of_string "12345678901234567890.1234567890123456789")));
+           (Quantity.equal
+              (Quantity.of_string "12345678901234567890.1234567890123456789")));
     Alcotest.(check bool)
       "not guessed as expenses"
       false

@@ -1,4 +1,4 @@
-open Core
+open Base
 
 (** Stable bank projection identity. The default counter-account is
     equity:unclassified; reviewed categories explicitly replace it. *)

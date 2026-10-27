@@ -1,4 +1,4 @@
-open Core
+open Base
 
 type account =
   { bank_id : string
@@ -10,8 +10,8 @@ type account =
 type t =
   { account : account
   ; booked_on : Date.t
-  ; amount : Bigdecimal.t
-  ; fee : Bigdecimal.t
+  ; amount : Quantity.t
+  ; fee : Quantity.t
   ; name : string option
   ; memo : string option
   }
@@ -55,7 +55,7 @@ let of_event (event : Source_event.t) =
     { account
     ; booked_on = tx.booked_on
     ; amount = tx.amount
-    ; fee = Bigdecimal.zero
+    ; fee = Quantity.zero
     ; name = Some tx.name
     ; memo = Some tx.description
     })
@@ -72,7 +72,7 @@ let of_event (event : Source_event.t) =
     { account
     ; booked_on = tx.booked_on
     ; amount = tx.amount
-    ; fee = Bigdecimal.zero
+    ; fee = Quantity.zero
     ; name = Some tx.description
     ; memo = None
     })
@@ -88,7 +88,7 @@ let of_event (event : Source_event.t) =
     { account
     ; booked_on = tx.booked_on
     ; amount = tx.amount
-    ; fee = Bigdecimal.zero
+    ; fee = Quantity.zero
     ; name = tx.name
     ; memo = tx.memo
     })

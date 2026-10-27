@@ -1,4 +1,4 @@
-open Core
+open Base
 
 type edge =
   { first : int64
@@ -42,18 +42,15 @@ let assignments edges =
   in
   let key e = Int64.min e.first e.second, Int64.max e.first e.second in
   let%bind () =
-    if
-      List.contains_dup
-        (List.map edges ~f:key)
-        ~compare:(Tuple2.compare ~cmp1:Int64.compare ~cmp2:Int64.compare)
+    if List.contains_dup (List.map edges ~f:key) ~compare:[%compare: int64 * int64]
     then Or_error.error_string "duplicate ranking edge"
     else Ok ()
   in
-  let neighbors = Int64.Table.create () in
+  let neighbors = Hashtbl.create (module Int64) in
   List.iter edges ~f:(fun e ->
     Hashtbl.add_multi neighbors ~key:e.first ~data:e.second;
     Hashtbl.add_multi neighbors ~key:e.second ~data:e.first);
-  let seen = Int64.Hash_set.create () in
+  let seen = Hash_set.create (module Int64) in
   let rec flood acc = function
     | [] -> acc
     | id :: rest when Hash_set.mem seen id -> flood acc rest
@@ -72,7 +69,7 @@ let assignments edges =
   Ok
     (List.concat_mapi components ~f:(fun component vertices ->
        let component = component + 1 in
-       let members = Int64.Set.of_list vertices in
+       let members = Set.of_list (module Int64) vertices in
        let es = List.filter edges ~f:(fun e -> Set.mem members e.first) in
        if List.length vertices > max_component_vertices
        then
@@ -85,7 +82,7 @@ let assignments edges =
            ; status = "not_evaluated"
            })
        else (
-         let positions = Int64.Table.create () in
+         let positions = Hashtbl.create (module Int64) in
          List.iteri vertices ~f:(fun pos id -> Hashtbl.set positions ~key:id ~data:pos);
          let indexed =
            List.mapi es ~f:(fun i e ->
@@ -99,7 +96,7 @@ let assignments edges =
            adjacent.(a) <- (i, b, w) :: adjacent.(a);
            adjacent.(b) <- (i, a, w) :: adjacent.(b));
          let solver banned =
-           let memo = Int.Table.create () in
+           let memo = Hashtbl.create (module Int) in
            let rec solve mask =
              if mask = 0
              then 0
@@ -195,7 +192,7 @@ let evidence (c : Store.transfer_candidate) =
     ; detail =
         (if c.days_apart = 0
          then "same booking day"
-         else sprintf "booking dates are %d calendar days apart" c.days_apart)
+         else Printf.sprintf "booking dates are %d calendar days apart" c.days_apart)
     }
   in
   let extra =

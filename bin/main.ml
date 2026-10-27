@@ -1,4 +1,5 @@
-open Core
+open Base
+open Stdio
 open Finances
 open Cmdliner
 open Or_error.Let_syntax
@@ -6,16 +7,22 @@ open Or_error.Let_syntax
 let paths =
   let home =
     match Sys.getenv "HOME" with
-    | Some home when not (Filename.is_relative home) -> home
-    | _ -> (Core_unix.Passwd.getbyuid_exn (Core_unix.getuid ())).dir
+    | Some home when not (Stdlib.Filename.is_relative home) -> home
+    | _ -> (Unix.getpwuid (Unix.getuid ())).pw_dir
   in
   App_paths.resolve ~home ~getenv:Sys.getenv
 ;;
 
 let ensure_database_parent path =
-  Or_error.try_with (fun () ->
-    if not (String.equal path ":memory:")
-    then Core_unix.mkdir_p ~perm:0o700 (Filename.dirname path))
+  if String.equal path ":memory:"
+  then Ok ()
+  else (
+    let%bind parent =
+      Or_error.try_with (fun () -> Fpath.v (Stdlib.Filename.dirname path))
+    in
+    Bos.OS.Dir.create ~mode:0o700 parent
+    |> Result.map_error ~f:(fun (`Msg message) -> Error.of_string message)
+    |> Result.map ~f:(fun _ -> ()))
 ;;
 
 let with_database path f =
@@ -24,27 +31,21 @@ let with_database path f =
 ;;
 
 let write_file path contents =
-  Or_error.try_with (fun () ->
-    Core_unix.mkdir_p ~perm:0o700 (Filename.dirname path);
-    let temporary, channel =
-      Filename_unix.open_temp_file
-        ~in_dir:(Filename.dirname path)
-        ~perm:0o600
-        ".fin-config-"
-        ".json"
-    in
-    Exn.protect
-      ~finally:(fun () ->
-        (try Out_channel.close channel with
-         | _ -> ());
-        if Stdlib.Sys.file_exists temporary then Core_unix.unlink temporary)
-      ~f:(fun () ->
-        Out_channel.output_string channel contents;
-        Out_channel.close channel;
-        Core_unix.rename ~src:temporary ~dst:path))
+  let%bind () = ensure_database_parent path in
+  let%bind path =
+    Or_error.try_with (fun () -> Fpath.v (if String.equal path "-" then "./-" else path))
+  in
+  Bos.OS.File.write ~mode:0o600 path contents
+  |> Result.map_error ~f:(fun (`Msg message) -> Error.of_string message)
 ;;
 
-let read_file path = Or_error.try_with (fun () -> In_channel.read_all path)
+let read_file path =
+  let%bind path =
+    Or_error.try_with (fun () -> Fpath.v (if String.equal path "-" then "./-" else path))
+  in
+  Bos.OS.File.read path
+  |> Result.map_error ~f:(fun (`Msg message) -> Error.of_string message)
+;;
 
 let ingest database venue account kind source_id at path =
   let%bind payload = read_file path in
@@ -59,7 +60,7 @@ let ingest database venue account kind source_id at path =
       | Store.Inserted id -> "inserted", id
       | Existing id -> "existing", id
     in
-    Printf.printf "%s %Ld\n" status id;
+    Stdio.printf "%s %Ld\n" status id;
     Ok ())
 ;;
 
@@ -144,9 +145,9 @@ let setup database =
   let database_option =
     if String.equal database paths.database
     then ""
-    else " --database " ^ Filename.quote database
+    else " --database " ^ Stdlib.Filename.quote database
   in
-  Printf.printf
+  Stdio.printf
     "fin is ready.\n\n\
      Database: %s\n\
      Account config (optional): %s\n\n\
@@ -434,7 +435,8 @@ let sync_bank database directory institution journal accounts max_mib account_id
     let journal =
       Option.value
         journal
-        ~default:(Filename.concat (Filename.dirname database) "bank.journal")
+        ~default:
+          (Stdlib.Filename.concat (Stdlib.Filename.dirname database) "bank.journal")
     in
     let%bind report =
       Finances_bank.Sync.run
@@ -571,7 +573,7 @@ let csv_enrichments database review =
           ; "account_id", string row.account_id
           ; "booked_on", string (Date.to_string row.booked_on)
           ; "value_on", optional (fun date -> string (Date.to_string date)) row.value_on
-          ; "amount", string (Bigdecimal.to_string_no_sn row.amount)
+          ; "amount", string (Quantity.to_string row.amount)
           ; "description", string row.description
           ; "suggested_description", optional string row.suggested_description
           ; "category", optional string row.category
@@ -580,7 +582,7 @@ let csv_enrichments database review =
           ; "account_label", optional string row.account_label
           ; ( "reported_balance"
             , optional
-                (fun amount -> string (Bigdecimal.to_string_no_sn amount))
+                (fun amount -> string (Quantity.to_string amount))
                 row.reported_balance )
           ; "pointage", optional string row.pointage
           ; ( "event_id"
@@ -653,12 +655,12 @@ let wise_status database =
                    ; "document_id", `Intlit (Int64.to_string s.document_id)
                    ; "currency", string s.currency
                    ; "source_account", string s.source_account
-                   ; "opening", string (Bigdecimal.to_string_no_sn s.opening)
-                   ; "closing", string (Bigdecimal.to_string_no_sn s.closing)
-                   ; "movements", string (Bigdecimal.to_string_no_sn s.movements)
+                   ; "opening", string (Quantity.to_string s.opening)
+                   ; "closing", string (Quantity.to_string s.closing)
+                   ; "movements", string (Quantity.to_string s.movements)
                    ; "entries", `Int s.entries
-                   ; "difference", string (Bigdecimal.to_string_no_sn s.difference)
-                   ; "reconciled", `Bool (Bigdecimal.is_zero s.difference)
+                   ; "difference", string (Quantity.to_string s.difference)
+                   ; "reconciled", `Bool (Quantity.is_zero s.difference)
                    ])) )
         ; ( "csv_rows"
           , `List
@@ -726,8 +728,8 @@ let bank_review database all json_output =
              ; "institution", `String r.institution
              ; "source_account", `String tx.account.account_id
              ; "booked_on", `String (Date.to_string tx.booked_on)
-             ; "amount", `String (Bigdecimal.to_string_no_sn tx.amount)
-             ; "fee", `String (Bigdecimal.to_string_no_sn tx.fee)
+             ; "amount", `String (Quantity.to_string tx.amount)
+             ; "fee", `String (Quantity.to_string tx.fee)
              ; "currency", `String tx.account.currency
              ; ( "description"
                , `String (String.concat ~sep:" | " (List.filter_opt [ tx.name; tx.memo ]))
@@ -796,8 +798,8 @@ let bunq_status database =
                    ; "account_id", `String s.account_id
                    ; "currency", `String s.currency
                    ; "entries", `Int s.entries
-                   ; "difference", `String (Bigdecimal.to_string_no_sn s.difference)
-                   ; "reconciled", `Bool (Bigdecimal.is_zero s.difference)
+                   ; "difference", `String (Quantity.to_string s.difference)
+                   ; "reconciled", `Bool (Quantity.is_zero s.difference)
                    ])) )
         ; ( "csv_rows"
           , `List
@@ -834,9 +836,9 @@ let transfer_leg event_id (event : Source_event.t) (tx : Bank_transaction.t) =
     ; "source_account", `String event.account
     ; "booked_on", `String (Date.to_string tx.booked_on)
     ; "currency", `String tx.account.currency
-    ; "bank_amount", `String (Bigdecimal.to_string_no_sn tx.amount)
-    ; "principal", `String (Bigdecimal.to_string_no_sn (Bank_transfer.principal tx))
-    ; "fee", `String (Bigdecimal.to_string_no_sn tx.fee)
+    ; "bank_amount", `String (Quantity.to_string tx.amount)
+    ; "principal", `String (Quantity.to_string (Bank_transfer.principal tx))
+    ; "fee", `String (Quantity.to_string tx.fee)
     ; ( "description"
       , `String (String.concat ~sep:" | " (List.filter_opt [ tx.name; tx.memo ])) )
     ]
@@ -1064,8 +1066,8 @@ let accounts_export database output =
       | Some output ->
         let same =
           Or_error.try_with (fun () ->
-            let a = Core_unix.stat database
-            and b = Core_unix.stat output in
+            let a = Unix.LargeFile.stat database
+            and b = Unix.LargeFile.stat output in
             a.st_dev = b.st_dev && a.st_ino = b.st_ino)
         in
         if Result.ok same |> Option.value ~default:false
@@ -1198,7 +1200,7 @@ let paths_cmd =
 let group name doc commands = Cmd.group (Cmd.info name ~doc) commands
 
 let () =
-  exit
+  Stdlib.exit
     (Cmd.eval
        (Cmd.group
           ~default:Term.(const welcome $ const ())

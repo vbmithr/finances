@@ -1,4 +1,4 @@
-open Core
+open Base
 open Finances
 
 let header_text text =
@@ -58,14 +58,14 @@ let transaction
       ]
   in
   let comment : Hledger.Journal.comment =
-    { same_line = Some (sprintf "source-event-id: %Ld" event_id)
+    { same_line = Some (Printf.sprintf "source-event-id: %Ld" event_id)
     ; lines = [ "projection-key: " ^ key ] @ extra @ provenance @ wise_extra
     }
   in
   Hledger.Journal.transaction
     entry.date
     ?date2
-    ~code:(sprintf "event-%Ld" event_id)
+    ~code:(Printf.sprintf "event-%Ld" event_id)
     ~description:(header_text entry.description)
     ~comment
     postings
@@ -81,20 +81,20 @@ let export db =
   let%bind bunq_transactions = Store.bunq_transactions db in
   let%bind bunq_observations = Store.bunq_csv_observations db in
   let%map transfer_decisions = Store.bank_transfer_decisions db in
-  let secondary_dates = Int64.Table.create () in
+  let secondary_dates = Hashtbl.create (module Int64) in
   List.iter wise_transactions ~f:(fun (id, tx) ->
     Option.iter tx.Wise_camt.value_on ~f:(fun date ->
       Hashtbl.set secondary_dates ~key:id ~data:date));
   List.iter bunq_transactions ~f:(fun (id, tx) ->
     Hashtbl.set secondary_dates ~key:id ~data:tx.Bunq_transaction.value_on);
-  let extra_metadata = Int64.Table.create () in
+  let extra_metadata = Hashtbl.create (module Int64) in
   List.iter wise ~f:(fun (observation : Store.wise_csv_observation) ->
     match observation.matching with
     | Some { state = Matched; event_id = Some id; _ } ->
       let row = observation.row in
       let tags =
         [ Some ("wise-csv-row-id: " ^ Int64.to_string observation.row_id)
-        ; Some ("wise-reported-fees: " ^ tag_text (Bigdecimal.to_string_no_sn row.fees))
+        ; Some ("wise-reported-fees: " ^ tag_text (Quantity.to_string row.fees))
         ; Option.map row.merchant ~f:(fun s -> "wise-merchant: " ^ tag_text s)
         ; Option.map row.payment_reference ~f:(fun s ->
             "wise-payment-reference: " ^ tag_text s)
@@ -122,7 +122,7 @@ let export db =
     then
       List.iter [ decision.first_event_id; decision.second_event_id ] ~f:(fun event_id ->
         let tags =
-          [ sprintf
+          [ Printf.sprintf
               "transfer-pair: %Ld %Ld"
               decision.first_event_id
               decision.second_event_id
@@ -131,7 +131,7 @@ let export db =
         in
         Hashtbl.update extra_metadata event_id ~f:(fun previous ->
           Option.value previous ~default:[] @ tags)));
-  let latest_categories = Int64.Table.create () in
+  let latest_categories = Hashtbl.create (module Int64) in
   List.iter category_history ~f:(fun (decision : Store.category_change) ->
     Hashtbl.set latest_categories ~key:decision.event_id ~data:decision);
   Hashtbl.iteri latest_categories ~f:(fun ~key:event_id ~data:decision ->
@@ -142,7 +142,7 @@ let export db =
     in
     Hashtbl.update extra_metadata event_id ~f:(fun existing ->
       Option.value existing ~default:[] @ tags));
-  let metadata = Int64.Table.create () in
+  let metadata = Hashtbl.create (module Int64) in
   List.iter observations ~f:(fun observation ->
     match observation.Store.matching with
     | Some { state = Matched; event_id = Some event_id; _ } ->
@@ -161,12 +161,12 @@ let export db =
     List.map postings ~f:(fun p -> p.account)
     |> List.dedup_and_sort ~compare:String.compare
   in
-  let precision = String.Table.create () in
+  let precision = Hashtbl.create (module String) in
   List.iter postings ~f:(fun p ->
     Hashtbl.update precision p.commodity ~f:(fun previous ->
       Int.max
         (Option.value previous ~default:2)
-        (Int.max 0 (-Bigdecimal.exponent p.quantity))));
+        (Int.max 0 (-Quantity.exponent p.quantity))));
   let declarations =
     [ Hledger.Journal.Comment_line
         "; Generated from SQLite. Regenerate after database changes."
@@ -182,7 +182,7 @@ let export db =
            (Commodity
               { symbol
               ; sample =
-                  Some (Hledger.Amount.create ~commodity:symbol ~precision Bigdecimal.one)
+                  Some (Hledger.Amount.create ~commodity:symbol ~precision Quantity.one)
               ; comment = Hledger.Journal.no_comment
               ; subdirectives = []
               })))
@@ -196,7 +196,7 @@ let export db =
        then []
        else
          [ Hledger.Journal.Comment_line
-             (sprintf
+             (Printf.sprintf
                 "; CSV enrichment: matched_events=%d review_rows=%d. Bank categories are \
                  source suggestions."
                 (Hashtbl.length metadata)

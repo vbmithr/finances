@@ -1,4 +1,4 @@
-open Core
+open Base
 
 type t =
   { institution : string
@@ -70,10 +70,7 @@ let of_json contents =
            create ~institution ~bank_id ~account_id ~account_type ~ledger_account)))
   in
   let keys = List.map mappings ~f:(fun t -> t.institution, source_account t) in
-  if
-    List.contains_dup
-      keys
-      ~compare:(Tuple2.compare ~cmp1:String.compare ~cmp2:String.compare)
+  if List.contains_dup keys ~compare:[%compare: string * string]
   then Or_error.error_string "duplicate source account in mapping configuration"
   else Ok mappings
 ;;

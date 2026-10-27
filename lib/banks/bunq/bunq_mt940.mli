@@ -1,4 +1,4 @@
-open Core
+open Base
 
 type t = private
   { contents : string
@@ -6,8 +6,8 @@ type t = private
   ; currency : string
   ; opening_on : Date.t
   ; closing_on : Date.t
-  ; opening : Bigdecimal.t
-  ; closing : Bigdecimal.t
+  ; opening : Quantity.t
+  ; closing : Quantity.t
   ; transactions : Bunq_transaction.t list
   }
 

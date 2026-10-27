@@ -1,7 +1,7 @@
 (test
  (name kernel_test)
  (modules kernel_test)
- (libraries finances core alcotest rel rel.sqlite3))
+ (libraries finances base stdio bos fpath alcotest rel rel.sqlite3))
 
 (test
  (name csv_test)
@@ -13,9 +13,11 @@
   finances.bank
   finances.hledger
   hledger
-  core
-  core_unix
-  core_unix.filename_unix
+  base
+  stdio
+  bos
+  fpath
+  unix
   alcotest
   rel
   rel.sqlite3))
@@ -30,9 +32,11 @@
   finances.bank
   finances.hledger
   hledger
-  core
-  core_unix
-  core_unix.filename_unix
+  base
+  stdio
+  bos
+  fpath
+  unix
   alcotest
   rel
   rel.sqlite3))
@@ -41,14 +45,14 @@
  (name journal_test)
  (modules journal_test)
  (deps fixtures/bank.ofx)
- (libraries finances finances.hledger hledger core alcotest))
+ (libraries finances finances.hledger hledger base stdio bos fpath alcotest))
 
 (test
  (name bank_test)
  (modules bank_test)
  (deps
   (glob_files fixtures/*))
- (libraries finances core alcotest rel rel.sqlite3))
+ (libraries finances base stdio bos fpath alcotest rel rel.sqlite3))
 
 (test
  (name wise_test)
@@ -60,9 +64,11 @@
   finances.bank
   finances.hledger
   hledger
-  core
-  core_unix
-  core_unix.filename_unix
+  base
+  stdio
+  bos
+  fpath
+  unix
   alcotest
   rel
   rel.sqlite3))
@@ -75,9 +81,11 @@
  (libraries
   finances
   finances.hledger
-  core
-  core_unix
-  core_unix.filename_unix
+  base
+  stdio
+  bos
+  fpath
+  unix
   alcotest
   rel
   rel.sqlite3))
@@ -90,9 +98,11 @@
  (libraries
   finances
   finances.hledger
-  core
-  core_unix
-  core_unix.filename_unix
+  base
+  stdio
+  bos
+  fpath
+  unix
   alcotest
   rel
   rel.sqlite3))
@@ -105,9 +115,11 @@
  (libraries
   finances
   finances.hledger
-  core
-  core_unix
-  core_unix.filename_unix
+  base
+  stdio
+  bos
+  fpath
+  unix
   alcotest
   rel
   rel.sqlite3))
@@ -117,51 +129,35 @@
  (modules ranking_test)
  (deps
   (glob_files fixtures/*))
- (libraries
-  finances
-  core
-  core_unix
-  core_unix.filename_unix
-  alcotest
-  rel
-  rel.sqlite3))
+ (libraries finances base stdio bos fpath unix alcotest rel rel.sqlite3))
 
 (test
  (name accounts_test)
  (modules accounts_test)
  (deps
   (glob_files fixtures/*))
- (libraries
-  finances
-  core
-  core_unix
-  core_unix.filename_unix
-  alcotest
-  rel
-  rel.sqlite3))
+ (libraries finances base stdio bos fpath unix alcotest rel rel.sqlite3))
 
 (test
  (name schema_test)
  (modules schema_test)
  (deps
   (glob_files fixtures/*))
- (libraries
-  finances
-  core
-  core_unix
-  core_unix.filename_unix
-  alcotest
-  rel
-  rel.sqlite3))
+ (libraries finances base stdio bos fpath unix alcotest rel rel.sqlite3))
 
 (test
  (name paths_test)
  (modules paths_test)
- (libraries finances core alcotest))
+ (libraries finances base stdio bos fpath alcotest))
 
 (test
  (name status_test)
  (modules status_test)
  (deps
   (glob_files fixtures/*))
- (libraries finances finances.bank core alcotest))
+ (libraries finances finances.bank base stdio bos fpath alcotest))
+
+(test
+ (name quantity_test)
+ (modules quantity_test)
+ (libraries finances base decimal ptime zarith alcotest))

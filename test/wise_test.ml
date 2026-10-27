@@ -1,4 +1,5 @@
-open Core
+open Base
+open Stdio
 open Finances
 
 let ok = Or_error.ok_exn
@@ -88,7 +89,7 @@ let multi_bank () =
         Alcotest.(check bool)
           "stored balance reconciled"
           true
-          (Bigdecimal.is_zero r.Store.difference));
+          (Quantity.is_zero r.Store.difference));
     let journal = ok (Finances_hledger.export db) in
     Alcotest.(check bool)
       "merchant metadata exported"

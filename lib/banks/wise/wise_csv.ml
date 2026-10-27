@@ -1,14 +1,14 @@
-open Core
+open Base
 
 type row =
   { row_number : int
   ; reference : string
   ; booked_local : string
-  ; amount : Bigdecimal.t
+  ; amount : Quantity.t
   ; currency : string
   ; description : string
-  ; running_balance : Bigdecimal.t
-  ; fees : Bigdecimal.t
+  ; running_balance : Quantity.t
+  ; fees : Quantity.t
   ; payment_reference : string option
   ; merchant : string option
   ; payee : string option
@@ -76,7 +76,7 @@ let clock_pattern =
 
 let decimal s =
   if not (Re.execp decimal_pattern s) then failwith "invalid Wise CSV decimal";
-  Bigdecimal.of_string s
+  Quantity.of_string s
 ;;
 
 let date s =
@@ -104,13 +104,13 @@ let of_fields ~row_number fields =
     then failwith "Wise CSV date and datetime disagree";
     let booked_local = Date.to_string day ^ "T" ^ String.drop_prefix a.(2) 11 in
     (* Validate the clock without assigning a timezone to the CSV observation. *)
-    ignore (Time_ns.of_string_with_utc_offset (booked_local ^ "Z") : Time_ns.t);
+    ignore (Timestamp.of_rfc3339_exn (booked_local ^ "Z") : Ptime.t);
     let amount = decimal a.(3) in
     if not (List.mem [ "DEBIT"; "CREDIT" ] a.(21) ~equal:String.equal)
     then failwith "invalid Wise CSV transaction direction";
     if
-      (String.equal a.(21) "DEBIT" && Bigdecimal.(amount > zero))
-      || (String.equal a.(21) "CREDIT" && Bigdecimal.(amount < zero))
+      (String.equal a.(21) "DEBIT" && Quantity.(amount > zero))
+      || (String.equal a.(21) "CREDIT" && Quantity.(amount < zero))
     then failwith "Wise CSV amount and transaction direction disagree";
     let reference =
       Validation.text "Wise ID" a.(0)
@@ -150,8 +150,8 @@ let parse contents =
 
 let match_rows rows candidates =
   let amount_key x =
-    let s = Bigdecimal.to_string_no_sn x in
-    if Bigdecimal.is_zero x
+    let s = Quantity.to_string x in
+    if Quantity.is_zero x
     then "0"
     else if not (String.contains s '.')
     then s
@@ -167,7 +167,7 @@ let match_rows rows candidates =
             [ reference; local; amount_key amount; currency ]
             ~f:(fun s -> Sexp.Atom s)))
   in
-  let index = String.Table.create () in
+  let index = Hashtbl.create (module String) in
   List.iter candidates ~f:(fun (id, tx) ->
     Hashtbl.add_multi
       index
@@ -213,17 +213,17 @@ let match_rows rows candidates =
           } )
       | _ -> input, result)
   in
-  let groups = Int64.Table.create () in
+  let groups = Hashtbl.create (module Int64) in
   List.iter unique ~f:(fun (input, result) ->
     Option.iter result.event_id ~f:(fun id ->
       Hashtbl.add_multi groups ~key:id ~data:input.row));
-  let conflict = Int64.Table.create () in
+  let conflict = Hashtbl.create (module Int64) in
   Hashtbl.iteri groups ~f:(fun ~key:id ~data:observations ->
     (* Balance/labels/notes may vary by observation. Fees and FX details must not
        silently disagree for a uniquely identified movement. *)
     let signatures =
       List.map observations ~f:(fun row ->
-        Bigdecimal.to_string_no_sn row.fees
+        Quantity.to_string row.fees
         :: List.map [ 8; 9; 10; 20 ] ~f:(List.nth_exn row.fields))
       |> List.dedup_and_sort ~compare:(List.compare String.compare)
     in

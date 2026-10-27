@@ -1,4 +1,4 @@
-open Core
+open Base
 open Finances
 
 (** Import and review progress. Counts are movements and candidate pairs, not

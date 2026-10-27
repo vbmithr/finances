@@ -1,4 +1,4 @@
-open Core
+open Base
 
 (** The observed BoursoBank semicolon CSV layout, in UTF-8 with optional BOM.
     The first "Solde" column is the movement amount; the second is a reported
@@ -8,14 +8,14 @@ type row = private
   ; account_id : string
   ; booked_on : Date.t
   ; value_on : Date.t option
-  ; amount : Bigdecimal.t
+  ; amount : Quantity.t
   ; description : string
   ; suggested_description : string option
   ; category : string option
   ; parent_category : string option
   ; comment : string option
   ; account_label : string option
-  ; reported_balance : Bigdecimal.t option
+  ; reported_balance : Quantity.t option
   ; pointage : string option
   ; fields : string list
   }

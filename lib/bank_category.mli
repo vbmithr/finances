@@ -1,4 +1,4 @@
-open Core
+open Base
 
 (** Explicit reviewed counter-account for one immutable bank movement. *)
 type t = private

@@ -1,14 +1,14 @@
-open Core
+open Base
 
 type row = private
   { row_number : int
   ; reference : string
   ; booked_local : string
-  ; amount : Bigdecimal.t
+  ; amount : Quantity.t
   ; currency : string
   ; description : string
-  ; running_balance : Bigdecimal.t
-  ; fees : Bigdecimal.t
+  ; running_balance : Quantity.t
+  ; fees : Quantity.t
   ; payment_reference : string option
   ; merchant : string option
   ; payee : string option

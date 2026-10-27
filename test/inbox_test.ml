@@ -1,31 +1,32 @@
-open Core
+open Base
+open Stdio
 open Rel
 open Finances
 
 let ok = Or_error.ok_exn
 let error result = Alcotest.(check bool) "rejected" true (Result.is_error result)
 let fixture () = In_channel.read_all "fixtures/bank.ofx"
-let join = Filename.concat
+let join = Stdlib.Filename.concat
 let database root = join root "bank.sqlite3"
 let inbox root = join root "inbox"
 let journal root = join root "bank.journal"
 
 let rec remove path =
-  match (Core_unix.lstat path).st_kind with
+  match (Unix.LargeFile.lstat path).st_kind with
   | S_DIR ->
     Array.iter (Stdlib.Sys.readdir path) ~f:(fun name -> remove (join path name));
-    Core_unix.rmdir path
-  | _ -> Core_unix.unlink path
+    Unix.rmdir path
+  | _ -> Unix.unlink path
 ;;
 
 let workspace f =
   let root =
-    Filename_unix.temp_dir ~in_dir:(Sys.getenv_exn "TMPDIR") "finances-inbox" ""
+    Stdlib.Filename.temp_dir ~temp_dir:(Sys.getenv_exn "TMPDIR") "finances-inbox" ""
   in
   Exn.protect
     ~finally:(fun () -> remove root)
     ~f:(fun () ->
-      Core_unix.mkdir ~perm:0o700 (inbox root);
+      Unix.mkdir (inbox root) 0o700;
       f root)
 ;;
 
@@ -96,13 +97,11 @@ let recursive_and_repeat () =
     write (join (inbox root) "m-broken.ofx") "not an OFX document";
     write (join (inbox root) "categories.csv") "date;amount\n2026-01-03;-0.10\n";
     let nested = join (inbox root) "nested" in
-    Core_unix.mkdir nested;
+    Unix.mkdir nested 0o755;
     write (join nested "z-overlap.ofx") (overlap ());
     write (join nested "copy.ofx.part") (fixture ());
     write (join (inbox root) ".hidden.ofx") (fixture ());
-    Core_unix.symlink
-      ~target:(join (inbox root) "a-renamed.txt")
-      ~link_name:(join (inbox root) "link.ofx");
+    Unix.symlink (join (inbox root) "a-renamed.txt") (join (inbox root) "link.ofx");
     let first = ok (sync root) in
     Alcotest.(check int) "accepted files" 2 (count Imported first.inbox);
     Alcotest.(check int) "bad file isolated" 1 (count Rejected first.inbox);
@@ -245,7 +244,8 @@ let mappings_after_projection () =
     ignore (ok (sync root));
     let initial = ok (Store.with_open (database root) Store.bank_accounts) in
     let mappings =
-      List.mapi initial ~f:(fun i mapping -> remap (sprintf "account-%d" i) mapping)
+      List.mapi initial ~f:(fun i mapping ->
+        remap (Printf.sprintf "account-%d" i) mapping)
     in
     let config = join root "accounts.json" in
     write config (config_json mappings);
@@ -330,7 +330,7 @@ let mapping_conflict_preserves_journal () =
     let before = In_channel.read_all (journal root) in
     let mappings =
       ok (Store.with_open (database root) Store.bank_accounts)
-      |> List.mapi ~f:(fun i m -> remap (sprintf "changed-%d" i) m)
+      |> List.mapi ~f:(fun i m -> remap (Printf.sprintf "changed-%d" i) m)
     in
     let config = join root "accounts.json" in
     write config (config_json mappings);
@@ -372,10 +372,10 @@ let path_protection () =
     error (run (database root) (inbox root) (join (inbox root) "out.journal"));
     ignore (ok (sync root));
     let linked = join root "linked.journal" in
-    Core_unix.link ~target:(database root) ~link_name:linked ();
+    Unix.link (database root) linked;
     error (run (database root) (inbox root) linked);
     let input_link = join (inbox root) "database-copy.bin" in
-    Core_unix.link ~target:(database root) ~link_name:input_link ();
+    Unix.link (database root) input_link;
     let report = ok (sync root) in
     Alcotest.(check bool)
       "database hard links are not ingested"
@@ -383,7 +383,7 @@ let path_protection () =
       (List.exists report.inbox.ignored ~f:(fun row ->
          String.equal row.reason "control file alias"));
     let symlink = join root "linked-inbox" in
-    Core_unix.symlink ~target:(inbox root) ~link_name:symlink;
+    Unix.symlink (inbox root) symlink;
     error (run (database root) symlink (journal root));
     source_count root 3)
 ;;
@@ -411,9 +411,9 @@ let output_failure () =
     write (journal root) "previous journal";
     let original = Sys.getenv_exn "TMPDIR" in
     Exn.protect
-      ~finally:(fun () -> Core_unix.putenv ~key:"TMPDIR" ~data:original)
+      ~finally:(fun () -> Unix.putenv "TMPDIR" original)
       ~f:(fun () ->
-        Core_unix.putenv ~key:"TMPDIR" ~data:(join root "absent-staging");
+        Unix.putenv "TMPDIR" (join root "absent-staging");
         error (sync root));
     Alcotest.(check string)
       "failed publication leaves old output"
