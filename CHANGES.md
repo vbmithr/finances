@@ -14,6 +14,9 @@ short line of their own.
 rebuild: `fin backup`, `fin delete`, `fin init`, then sync each bank's statements
 again.
 
+- `fin accounts edit` opens the accounts in your editor and applies the edits on
+  save: ledger names, IBANs and card settlement links. Invalid edits apply nothing
+  and can be edited again; the result is saved as the account configuration.
 - Movements are stored normalized when they are imported (new `movements` table),
   and every read uses that table instead of decoding payloads again. Transfer
   candidates are a SQL self-join on currency and principal instead of a comparison

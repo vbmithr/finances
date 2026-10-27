@@ -1183,6 +1183,89 @@ let accounts_apply database path dry_run =
     Ok ())
 ;;
 
+let editor () =
+  List.find_map [ "VISUAL"; "EDITOR" ] ~f:(fun name ->
+    Option.filter (Sys.getenv name) ~f:(Fn.non String.is_empty))
+  |> Option.value ~default:"vi"
+;;
+
+let ask question =
+  Out_channel.output_string stdout question;
+  Out_channel.flush stdout;
+  match In_channel.input_line In_channel.stdin with
+  | None -> false
+  | Some answer ->
+    (match String.lowercase (String.strip answer) with
+     | "" | "y" | "yes" -> true
+     | _ -> false)
+;;
+
+(* Opens the current account configuration in the user's editor and applies it on
+   save, keeping it as the configuration file so that a rebuilt database can get it
+   back with fin accounts apply. *)
+let accounts_edit database config =
+  let config = Option.first_some config (config_of database) in
+  with_database database (fun db ->
+    let%bind current = Store.export_bank_accounts db in
+    let original = Bank_account_config.to_json current ^ "\n" in
+    let draft = Option.value config ~default:database ^ ".edit" in
+    let%bind () =
+      if Stdlib.Sys.file_exists draft
+      then (
+        printf "Continuing the draft that was not applied: %s\n" draft;
+        Ok ())
+      else write_file draft original
+    in
+    let discard () = ignore (Stdlib.Sys.remove draft : unit) in
+    let rec edit () =
+      match Stdlib.Sys.command (editor () ^ " " ^ Stdlib.Filename.quote draft) with
+      | status when status <> 0 ->
+        Or_error.errorf
+          "the editor exited with status %d; your draft is in %s"
+          status
+          draft
+      | _ ->
+        let%bind contents = read_file draft in
+        if String.equal contents original
+        then (
+          discard ();
+          print_endline "No changes.";
+          Ok ())
+        else (
+          match
+            Result.bind (Bank_account_config.of_json contents) ~f:(fun edited ->
+              Store.apply_bank_accounts db edited)
+          with
+          | Ok result ->
+            let%map () =
+              match config with
+              | None -> Ok ()
+              | Some path -> write_file path contents
+            in
+            discard ();
+            printf
+              "Applied %d change%s.\n"
+              (List.length result.changes)
+              (if List.length result.changes = 1 then "" else "s");
+            List.iter result.changes ~f:(fun c ->
+              printf
+                "  %s %s %s: %s -> %s\n"
+                c.institution
+                c.source_account
+                c.kind
+                (Option.value c.previous_value ~default:"none")
+                (Option.value c.value ~default:"none"));
+            Option.iter config ~f:(printf "Saved as %s.\n")
+          | Error error ->
+            eprintf "fin: %s\n" (Error.to_string_hum error);
+            Out_channel.flush stderr;
+            if Unix.isatty Unix.stdin && ask "Nothing was applied. Edit again? [Y/n] "
+            then edit ()
+            else Or_error.errorf "nothing was applied; your draft is in %s" draft)
+    in
+    edit ())
+;;
+
 let accounts_history database =
   with_database database (fun db ->
     let%bind rows = Store.bank_account_history db in
@@ -1214,6 +1297,22 @@ let accounts_cmd =
                   ~docv:"FILE"
                   ~doc:
                     "Write configuration atomically to FILE instead of standard output."))
+    ; command
+        "edit"
+        "Edit account names, IBANs and card settlement links in your editor, and apply \
+         them on save."
+        Term.(
+          const accounts_edit
+          $ database
+          $ Arg.(
+              value
+              & pos 0 (some string) None
+              & info
+                  []
+                  ~docv:"CONFIG"
+                  ~doc:
+                    "Where to save the applied configuration (default: the XDG config \
+                     file for the default database; see fin paths)."))
     ; command
         "apply"
         "Apply the whole account configuration atomically, or preview it with --dry-run."

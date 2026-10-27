@@ -89,6 +89,8 @@ The import side is done; turning movements into accounting is not.
 
 ### 3. Smaller gaps
 
+- [x] `fin accounts edit` sets IBANs, names and card links without handling the
+  configuration file by hand.
 - [x] `fin backup` and `fin delete` save and remove all fin state without
   knowing where it lives; only `fin init` creates a database.
 - [ ] `bank.journal` is rewritten only by `fin bank sync`, so it is stale after

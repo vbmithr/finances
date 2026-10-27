@@ -211,15 +211,31 @@ additional detail, or use `fin bank sync --help` for current options.
 
 ```sh
 fin accounts list
+fin accounts edit
+```
+
+`fin accounts edit` opens your accounts in your editor (`$VISUAL`, then `$EDITOR`,
+then `vi`) as JSON: set ledger account names, register IBANs and associate a credit
+card with its settlement account, then save and quit. The edits are applied at
+once, atomically and audited, and saved as `accounts.json` in the config directory
+(see `fin paths`) so that a rebuilt database can get them back with
+`fin accounts apply`. If something is invalid, such as an IBAN with wrong check
+digits, nothing is applied: in a terminal you can edit again, otherwise the draft
+is kept and the next `fin accounts edit` continues from it.
+
+Statements from Wise and Bunq include the account's IBAN; for BoursoBank and
+Revolut, register it yourself. A credit card does not need its own IBAN. IBANs may
+use spaces or lower case; `fin` checks them against the country's registered
+length and structure and the check digits, and refuses invalid ones. Keep the
+account identity fields unchanged so settings refer to the correct imported
+account.
+
+To manage the file yourself instead, export it, edit it and apply it:
+
+```sh
 fin accounts export -o "${XDG_CONFIG_HOME:-$HOME/.config}/fin/accounts.json"
 ```
 
-Export after importing your statements, then edit that JSON file to set ledger
-account names, register known IBANs and associate a credit card with its settlement
-account. A credit card does not need its own IBAN. IBANs may use spaces or lower
-case; `fin` checks them against the country's registered length and structure
-and the check digits, and refuses invalid ones. Keep the exported account
-identity fields unchanged so settings refer to the correct imported account.
 Export writes a new snapshot to the chosen file; keep existing edits before
 exporting over it.
 
