@@ -94,7 +94,8 @@ fin delete
 ```
 
 `fin backup [DIR]` creates `fin-backup-YYYYMMDDTHHMMSSZ` in `DIR` (default: the
-current directory), readable only by you, holding a consistent copy of the
+current directory), creating missing parent directories with mode 0700. The new
+backup folder is readable only by you and holds a consistent copy of the
 database (safe even while `fin` is running), including all account settings.
 To restore, run `fin delete`, then copy the backup's `fin.sqlite3` to the database
 path it prints.

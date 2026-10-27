@@ -10,6 +10,9 @@ short line of their own.
 
 ### 2026-10-27
 
+- `fin backup DIR` creates missing parent directories privately, so a first backup
+  to a new directory succeeds. Existing backup folders are never overwritten.
+
 **Action required:** schema 13 refuses earlier databases unchanged. Export account
 settings with the previous binary, back up, then delete/init/reimport statements
 and restore the account snapshot. See the manual's storage instructions.

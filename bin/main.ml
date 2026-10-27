@@ -152,6 +152,10 @@ let stamp () =
 
 let backup database directory =
   with_database database (fun db ->
+    let%bind _ =
+      Bos.OS.Dir.create ~mode:0o700 (Fpath.v directory)
+      |> Result.map_error ~f:(fun (`Msg m) -> Error.of_string m)
+    in
     let target = Stdlib.Filename.concat directory ("fin-backup-" ^ stamp ()) in
     let%bind () =
       Bos.OS.Dir.create ~path:false ~mode:0o700 (Fpath.v target)
@@ -182,7 +186,8 @@ let backup_cmd =
               ~docv:"DIR"
               ~doc:
                 "Where to create the fin-backup-YYYYMMDDTHHMMSSZ folder (default: the \
-                 current directory). The copy is consistent even while fin is running."))
+                 current directory). Missing parent directories are created privately. \
+                 The copy is consistent even while fin is running."))
 ;;
 
 let delete database yes =

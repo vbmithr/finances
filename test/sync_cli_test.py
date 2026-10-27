@@ -167,8 +167,11 @@ class SyncOnboarding(unittest.TestCase):
         snapshot = self.root / 'data/fin/accounts.json'
         self.run_fin('accounts', 'export', '-o', snapshot)
         original = snapshot.read_bytes()
-        self.run_fin('backup', self.root)
-        backup = next(self.root.glob('fin-backup-*'))
+        directory = self.root / 'new/nested/backups'
+        self.run_fin('backup', directory)
+        backup = next(directory.glob('fin-backup-*'))
+        self.assertEqual(directory.stat().st_mode & 0o777, 0o700)
+        self.assertEqual(backup.stat().st_mode & 0o777, 0o700)
         self.assertEqual([p.name for p in backup.iterdir()], ['fin.sqlite3'])
         restored = json.loads(self.run_fin('accounts', 'export', '--database',
                                          backup / 'fin.sqlite3').stdout)

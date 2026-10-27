@@ -30,7 +30,7 @@ Last updated: 2026-10-27.
   new build and diffing every report.
 - Issue #1 is implemented locally and awaits publication.
 - The installed Arch package is `finances 0.1.0-19` (schema 12); the tree is at
-  package revision 20 (schema 13).
+  package revision 21 (schema 13).
 
 ### Personal data
 
@@ -94,6 +94,9 @@ The import side is done; turning movements into accounting is not.
   there is no correction workflow for changed source evidence.
 
 ### 3. Smaller gaps
+
+- [x] Backup creates missing destination directories privately, including nested
+  paths, so the documented first-backup command succeeds.
 
 - [x] SQLite is the only account settings store. No config directory or implicit
   file remains; snapshot export/import is explicit, editor drafts are temporary,
