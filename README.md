@@ -842,7 +842,9 @@ tokens; tokens allow letters, digits, underscores, and hyphens.
 ## Design
 
 See [the architecture notes](docs/architecture.md) for storage ownership,
-invariants, and the bank workflow milestones.
+invariants, and the bank workflow milestones. The
+[bank adapter interface proposal](docs/bank-adapters.md) describes a common module
+signature, registry and shared import model for future external bank adapters.
 
 ## License
 
