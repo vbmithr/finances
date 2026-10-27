@@ -340,6 +340,10 @@
  (libraries finances.ofx base stdio alcotest))
 
 (test
- (name reset_test)
- (modules reset_test)
- (libraries finances base bos fpath ptime alcotest))
+ (name state_test)
+ (modules state_test)
+ (deps
+  (glob_files fixtures/*))
+ (libraries finances test_support base stdio bos fpath unix alcotest)
+ (preprocess
+  (pps ppx_let)))

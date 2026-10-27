@@ -1,7 +1,7 @@
 # Generated with packaging/arch/build.py from a locally compiled native payload.
 pkgname=finances
 pkgver=@VERSION@
-pkgrel=13
+pkgrel=14
 pkgdesc='Personal finance accounting and bank statement tracking (experimental)'
 arch=('@ARCH@')
 url='https://github.com/vbmithr/finances'

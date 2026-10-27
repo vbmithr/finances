@@ -12,18 +12,19 @@ command creates a database. Every command supports `--help`, including nested
 commands such as `fin bank sync --help`. The installed package also provides
 `man fin` and subcommand man pages.
 
-Initialization is optional:
+Start with:
 
 ```sh
 fin init
-fin paths
 ```
 
-`fin init` creates the database if needed and shows the next step. Repeating it
-preserves existing records and account configuration. It does not create a config
-file or ask you to enter accounts. Accounts are discovered from imported records.
-You can skip initialization and start with an import instead. `fin db init`
-provides quiet initialization for scripts.
+`fin init` creates the database and shows the next step. It is the only command
+that creates one: every other command, imports included, fails with "fin is not
+initialized" until you have run it, so a mistyped `--database` path cannot start
+a second, empty database. Repeating `fin init` preserves existing records and
+account configuration. It does not create a config file or ask you to enter
+accounts. Accounts are discovered from imported records. `fin db init` provides
+quiet initialization for scripts, and `fin paths` shows where everything lives.
 
 ## Checking progress
 
@@ -36,8 +37,7 @@ fin transfers preview
 
 `fin status` shows discovered banks and accounts, per-account observed date
 ranges, movement counts, unclassified movements, unreviewed transfer candidate
-pairs, and the latest inbox import attempt (including failures). It does not
-create a missing database. Candidate pairs can overlap: their count is not a
+pairs, and the latest inbox import attempt (including failures). Candidate pairs can overlap: their count is not a
 count of distinct transfers. The latest attempt is not a summary of all unresolved
 import failures; use `fin bank history` to inspect earlier attempts.
 
@@ -90,27 +90,43 @@ fin init --database ~/fin-experiment.sqlite3
 fin accounts list --database ~/fin-experiment.sqlite3
 ```
 
-Back up the database while no `fin` process is using it, or use SQLite's backup
-facility. Keep your original bank exports and any review/configuration files too.
-This experimental release accepts schema version 11; it does not migrate older
-experimental databases, and refuses them without changing the file. After
-installing a release with a new schema, move the old database aside with
-`fin db reset` and rebuild:
+Back up and delete fin's state without knowing where it lives:
 
 ```sh
-fin db reset
+fin backup ~/fin-backups
+fin delete
+```
+
+`fin backup [DIR]` creates `fin-backup-YYYYMMDDTHHMMSSZ` in `DIR` (default: the
+current directory), readable only by you, holding a consistent copy of the
+database (safe even while `fin` is running) and `accounts.json` if you have one.
+To restore, run `fin delete`, then copy those files back to the paths it prints.
+Keep your original bank exports too.
+
+`fin delete` lists everything it will delete, the database, its `bank.journal`
+and the account configuration, and asks you to type `yes`. Your statement folders
+are never touched. In a script, `fin delete --yes` skips the question; without a
+terminal and without `--yes` it refuses. With `--database FILE` it deletes that
+database and keeps the account configuration, which belongs to the default one.
+
+This experimental release accepts schema version 11; it does not migrate older
+experimental databases, and refuses them without changing the file. After
+installing a release with a new schema, back up, delete and rebuild:
+
+```sh
+fin backup ~/fin-backups
+fin delete
+fin init
 fin bank sync boursobank ~/Statements/boursobank
 fin bank sync wise ~/Statements/wise
 fin bank sync bunq ~/Statements/bunq
 fin bank sync revolut ~/Statements/revolut --account-id main
-fin accounts apply
 ```
 
-`fin db reset` renames the database and `bank.journal` with a timestamp, for
-example `fin.sqlite3.20261027T172203Z.old`, and leaves the account configuration
-alone; delete the `.old` files once you no longer need them. It works on the
-database `--database` names, or the default one. Apply the account configuration
-after every inbox is synced: it refers to accounts from all banks.
+If you keep an account configuration, copy `accounts.json` from the backup back to
+`~/.config/fin/accounts.json` and run `fin accounts apply` after every bank is
+synced: it refers to accounts from all banks. Without one, accounts keep the names
+fin gives them.
 Review decisions contain database-specific event IDs, so inspect new IDs before
 reapplying decisions to a rebuilt database.
 
@@ -292,14 +308,15 @@ private configuration permissions remain in place.
 
 | Command | Purpose |
 | --- | --- |
-| `fin init` | Optional setup and first-import guidance |
+| `fin init` | Create the database, with first-import guidance |
 | `fin status` | Import coverage and outstanding review work |
 | `fin paths` | Resolved storage paths |
 | `fin accounts --help` | Account listing, config and history |
 | `fin bank --help` | Imports, reconciliation and category review |
 | `fin transfers --help` | Candidates, preview and explicit decisions |
 | `fin journal --help` | hledger journal export |
-| `fin db reset` | Move the database aside to start over |
+| `fin backup` | Copy the database and account configuration |
+| `fin delete` | Delete all fin state, after confirmation |
 | `fin db --help` | Lower-level database and source-event commands |
 
 For detailed options, put `--help` after the specific command. Argument errors

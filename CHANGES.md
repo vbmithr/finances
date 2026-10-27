@@ -15,6 +15,9 @@ short line of their own.
 `fin bank sync ~/statements/bourso --institution boursobank`. `--institution` is
 gone from `sync`, and so is its `boursobank` default.
 
+- `fin accounts apply` without a configuration file says that none exists, that
+  it is optional, and how to create one, instead of "No such file or directory".
+  The manual's rebuild steps mark it as needed only with a configuration.
 - `fin bank sync BANK PATH...` accepts any number of files and directories.
   Directories are searched recursively as before; a file named explicitly is always
   processed, even if hidden, and fails the command if no bank recognizes it. A file
@@ -26,9 +29,15 @@ folders (see "Storage and backups" in the manual).
 
 - `make install` builds the Arch package and installs it with `sudo pacman -U`;
   on systems without pacman it stops and points to `make package`.
-- `fin db reset` moves the database and its `bank.journal` aside under a
-  timestamped name, so starting over needs no paths; the account configuration is
-  kept. The unsupported-schema error now says to run it.
+- `fin backup [DIR]` writes a consistent copy of the database, and the account
+  configuration if any, to a new private `fin-backup-YYYYMMDDTHHMMSSZ` folder.
+  `fin delete` lists all fin state (database, `bank.journal`, account
+  configuration) and deletes it once you type `yes`; `--yes` skips the question.
+  Neither needs a path. The unsupported-schema error points to them.
+- `fin init` is the only command that creates a database. Every other command,
+  imports included, fails with "fin is not initialized" until it has run, so a
+  mistyped `--database` no longer starts an empty database. `fin status --json`
+  loses its `initialized` field, now always true.
 - `fin accounts apply` names every configured account that has no imported
   statements yet, with its bank, type and identifier, and says to sync its
   statement folder first. Before, it repeated "unknown source account" once per

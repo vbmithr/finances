@@ -37,8 +37,8 @@ let initialize db =
     | _ ->
       Or_error.errorf
         "unsupported database schema; this experimental build accepts only schema %d. \
-         Run fin db reset to move the old database aside, then sync your statement \
-         folders again"
+         Back it up with fin backup if you need it, then run fin delete and fin init, \
+         and sync your statement folders again"
         Db_schema.version)
 ;;
 
@@ -61,6 +61,14 @@ let with_open ~registry path f =
   | Ok _ ->
     let* () = closed in
     result
+;;
+
+let backup db path =
+  if Stdlib.Sys.file_exists path
+  then Or_error.errorf "%s already exists" path
+  else (
+    let quoted = "'" ^ String.substr_replace_all path ~pattern:"'" ~with_:"''" ^ "'" in
+    db_result (Db.exec_sql db.conn ("VACUUM INTO " ^ quoted)))
 ;;
 
 (* Read-only result projections share their column types with the table model. *)

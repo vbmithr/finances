@@ -88,7 +88,8 @@ The import side is done; turning movements into accounting is not.
 
 ### 3. Smaller gaps
 
-- [x] `fin db reset` starts over without knowing where fin stores its database.
+- [x] `fin backup` and `fin delete` save and remove all fin state without
+  knowing where it lives; only `fin init` creates a database.
 - [ ] `bank.journal` is rewritten only by `fin bank sync`, so it is stale after
   `fin accounts apply` or a review decision until the next sync. Every command
   that changes accounting should rewrite it, or the file should go in favour of
@@ -97,10 +98,8 @@ The import side is done; turning movements into accounting is not.
   statements, instead of repeating "unknown source account".
 - [x] `fin bank sync BANK PATH...`: the bank is a required argument, and the paths
   are any number of files or directories, described in `--help`.
-- [ ] `fin accounts apply` without a configuration file fails with a bare "No such
-  file or directory". The manual's rebuild steps end with it, so a first-time user
-  without `accounts.json` hits this; it should say that no configuration exists
-  and that applying one is optional.
+- [x] `fin accounts apply` without a configuration file says that none exists,
+  that it is optional, and how to create one with `fin accounts export -o`.
 - [ ] `fin paths` prints only JSON, like `bank statements` and `bank companions`.
 - [ ] `fin bank statements` and `fin bank companions` print only JSON, unlike the
   other commands, which print text and take `--json`.

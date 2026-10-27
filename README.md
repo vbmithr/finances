@@ -56,12 +56,12 @@ fin transfers preview
 ```
 
 Running `fin` without arguments shows a welcome and useful first steps, exits
-successfully, and creates no files. `fin init` optionally creates the database
-and prints its location, the optional account-config location, and an import
-example. It is safe to repeat and preserves existing data and configuration.
-Use `fin init --database FILE` to initialize a different database. No account
-questionnaire is needed: accounts appear from imported statements. You can also
-skip initialization and import directly; the first import creates the database.
+successfully, and creates no files. `fin init` creates the database and prints its
+location, the optional account-config location, and an import example. It is the
+only command that creates a database; the others fail with "fin is not
+initialized" until it has run. It is safe to repeat and preserves existing data and
+configuration. Use `fin init --database FILE` to initialize a different database.
+No account questionnaire is needed: accounts appear from imported statements.
 The lower-level `fin db init` remains available for quiet database initialization.
 
 `fin status` summarizes observed account date ranges, imported movements,
@@ -140,7 +140,8 @@ It requires makepkg/fakeroot, Python, zstd and the prepared opam build dependenc
 The installed executable requires only glibc, GMP (used through Zarith/decimal),
 and SQLite; opam and OCaml are not needed at runtime. The hledger CLI is optional
 for querying rendered journals. No personal records or configuration enter the package.
-Installation is explicit; the helper never runs sudo or installs the package.
+`packaging/arch/build.py` never runs sudo or installs anything; only `make install`
+does, after building.
 
 The CLI provides `init`, `status` and `paths`, with grouped commands under `db`,
 `accounts`, `bank`, `transfers`, and `journal`:
@@ -290,6 +291,7 @@ financial data, not scratch files.
 
 ```sh
 mkdir -p personal
+dune exec fin -- init
 dune exec fin -- bank sync boursobank /path/to/statements
 dune exec fin -- bank project
 dune exec fin -- journal export > personal/bank.journal
@@ -351,6 +353,7 @@ milestones. The first milestone is available:
 ~~~sh
 mkdir -p personal/{boursobank,wise,bunq,revolut}/inbox personal/reviews personal/reports
 # Copy bank exports into personal/boursobank/inbox, then run after copying has completed.
+dune exec fin -- init
 dune exec fin -- bank sync boursobank personal/boursobank/inbox \
   --journal personal/bank.journal
 dune exec fin -- bank history --limit 100

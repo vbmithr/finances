@@ -10,15 +10,6 @@ type t =
   ; latest_import : Bank_import.file_report option
   }
 
-let empty =
-  { accounts = []
-  ; movements = 0
-  ; unclassified_movements = 0
-  ; transfer_candidate_pairs = 0
-  ; latest_import = None
-  }
-;;
-
 let read db =
   let%bind accounts = Store.bank_account_info db in
   let%bind movements = Store.bank_review db in

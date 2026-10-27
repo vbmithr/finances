@@ -11,5 +11,4 @@ type t =
   ; latest_import : Bank_import.file_report option
   }
 
-val empty : t
 val read : Store.t -> t Or_error.t

@@ -25,8 +25,27 @@ let ensure_database_parent path =
     |> Result.map ~f:(fun _ -> ()))
 ;;
 
-let with_database path f =
+(* Only fin init creates the database; every other command needs it to exist, so
+   a mistyped --database fails instead of starting an empty database. *)
+let require_database path =
+  if String.equal path ":memory:" || Stdlib.Sys.file_exists path
+  then Ok ()
+  else
+    Or_error.errorf
+      "fin is not initialized: no database at %s. Run fin init%s first."
+      path
+      (if String.equal path paths.database
+       then ""
+       else " --database " ^ Stdlib.Filename.quote path)
+;;
+
+let create_database path f =
   let%bind () = ensure_database_parent path in
+  Store.with_open ~registry:Builtin.registry path f
+;;
+
+let with_database path f =
+  let%bind () = require_database path in
   Store.with_open ~registry:Builtin.registry path f
 ;;
 
@@ -121,36 +140,120 @@ let init =
   command
     "init"
     "Initialize the latest experimental database schema."
-    Term.(const (fun path -> with_database path (fun _ -> Ok ())) $ database)
+    Term.(const (fun path -> create_database path (fun _ -> Ok ())) $ database)
 ;;
 
-let reset =
+let stamp () =
+  let (y, m, d), ((hh, mm, ss), _) = Ptime.to_date_time (Ptime_clock.now ()) in
+  Printf.sprintf "%04d%02d%02dT%02d%02d%02dZ" y m d hh mm ss
+;;
+
+(* The account configuration belongs to the default database; another database
+   given with --database leaves it alone. *)
+let config_of database =
+  Option.some_if (String.equal database paths.database) paths.accounts_config
+;;
+
+let backup database directory =
+  with_database database (fun db ->
+    let target = Stdlib.Filename.concat directory ("fin-backup-" ^ stamp ()) in
+    let%bind () =
+      Bos.OS.Dir.create ~path:false ~mode:0o700 (Fpath.v target)
+      |> Result.map_error ~f:(fun (`Msg m) -> Error.of_string m)
+      |> Result.bind ~f:(function
+        | true -> Ok ()
+        | false -> Or_error.errorf "%s already exists" target)
+    in
+    let copy = Stdlib.Filename.concat target in
+    let%bind () = Store.backup db (copy "fin.sqlite3") in
+    let%bind config =
+      match config_of database with
+      | Some config when Stdlib.Sys.file_exists config ->
+        let%bind contents = read_file config in
+        let%map () = write_file (copy "accounts.json") contents in
+        Some config
+      | _ -> Ok None
+    in
+    let%map () = Or_error.try_with (fun () -> Unix.chmod (copy "fin.sqlite3") 0o600) in
+    printf "Backed up to %s:\n  fin.sqlite3    from %s\n" target database;
+    Option.iter config ~f:(fun config -> printf "  accounts.json  from %s\n" config);
+    printf
+      "To restore, run fin delete, then copy %s back to %s.\n"
+      (if Option.is_some config then "these files" else "fin.sqlite3")
+      (if Option.is_some config then "those paths" else database))
+;;
+
+let backup_cmd =
   command
-    "reset"
-    "Move the database aside so that the next command starts a fresh one."
+    "backup"
+    "Copy the database and account configuration into a new dated folder."
     Term.(
-      const (fun database ->
-        let open Or_error.Let_syntax in
-        let%map moved = Database_reset.archive ~now:(Ptime_clock.now ()) ~database in
-        (match moved with
-         | [] -> printf "No database at %s; nothing to move.\n" database
-         | moved ->
-           print_endline "Moved aside:";
-           List.iter moved ~f:(fun { Database_reset.from; to_ } ->
-             printf "  %s\n    -> %s\n" from to_));
-        if Stdlib.Sys.file_exists paths.accounts_config
-        then printf "Kept your account configuration: %s\n" paths.accounts_config;
-        print_endline
-          "Next: fin bank sync BANK PATH for each bank's statement folder, then fin \
-           accounts apply.")
-      $ database)
+      const backup
+      $ database
+      $ Arg.(
+          value
+          & pos 0 string Stdlib.Filename.current_dir_name
+          & info
+              []
+              ~docv:"DIR"
+              ~doc:
+                "Where to create the fin-backup-YYYYMMDDTHHMMSSZ folder (default: the \
+                 current directory). The copy is consistent even while fin is running."))
+;;
+
+let delete database yes =
+  let%bind files = Fin_state.files ~database ~config:(config_of database) in
+  match files with
+  | [] ->
+    print_endline "fin has no state to delete.";
+    Ok ()
+  | files ->
+    print_endline "This permanently deletes:";
+    List.iter files ~f:(fun f -> printf "  %s\n" f);
+    print_endline
+      "Your statement folders are not touched. Run fin backup first if you may need this \
+       data.";
+    let%bind confirmed =
+      if yes
+      then Ok true
+      else if Unix.isatty Unix.stdin
+      then (
+        Out_channel.output_string stdout "Type yes to delete these files: ";
+        Out_channel.flush stdout;
+        Ok
+          (Option.value_map
+             (In_channel.input_line In_channel.stdin)
+             ~default:false
+             ~f:(fun answer -> String.equal (String.strip answer) "yes")))
+      else
+        Or_error.error_string
+          "refusing to delete without confirmation: run fin delete in a terminal, or \
+           pass --yes"
+    in
+    if confirmed
+    then (
+      let%map () = Fin_state.delete files in
+      print_endline "Deleted. Run fin init to start again.")
+    else (
+      print_endline "Nothing deleted.";
+      Ok ())
+;;
+
+let delete_cmd =
+  command
+    "delete"
+    "Delete all fin state: the database, its journal and the account configuration."
+    Term.(
+      const delete
+      $ database
+      $ Arg.(value & flag & info [ "yes" ] ~doc:"Delete without asking, for scripts."))
 ;;
 
 let welcome () =
   print_endline
     "fin - your personal finances\n\n\
      Get started:\n\
-     \032 fin init                Set up your database (optional)\n\
+     \032 fin init                Set up your database\n\
      \032 fin bank sync --help    Learn how to import bank statements\n\n\
      Explore your finances:\n\
      \032 fin status              See import coverage and review progress\n\
@@ -159,11 +262,13 @@ let welcome () =
      \032 fin journal export      Produce an hledger journal\n\n\
      More:\n\
      \032 fin paths               Show data and config locations\n\
+     \032 fin backup              Save a copy of your data\n\
+     \032 fin delete              Delete all fin data, after confirmation\n\
      \032 fin --help              Explore all commands"
 ;;
 
 let setup database =
-  let%bind () = with_database database (fun _ -> Ok ()) in
+  let%bind () = create_database database (fun _ -> Ok ()) in
   let database_option =
     if String.equal database paths.database
     then ""
@@ -294,10 +399,7 @@ let list_bank_accounts database json_output =
 
 let status database json_output =
   let module Status = Finances_bank.Bank_status in
-  let initialized = String.equal database ":memory:" || Stdlib.Sys.file_exists database in
-  let%bind report =
-    if initialized then with_database database Status.read else Ok Status.empty
-  in
+  let%bind report = with_database database Status.read in
   let banks =
     List.map report.accounts ~f:(fun a -> a.Store.mapping.institution)
     |> List.dedup_and_sort ~compare:String.compare
@@ -309,7 +411,6 @@ let status database json_output =
       (Yojson.Safe.pretty_to_string
          (`Assoc
              [ "database", `String database
-             ; "initialized", `Bool initialized
              ; "banks", `Int banks
              ; "accounts", `List (List.map report.accounts ~f:account_details_json)
              ; "movements", `Int report.movements
@@ -329,54 +430,43 @@ let status database json_output =
              ]))
   else (
     printf "Database: %s\n\n" (Terminal.text database);
-    if not initialized
-    then
-      print_endline
-        "No database yet. Run fin init, or import statements with fin bank sync."
-    else (
-      printf
-        "%d banks, %d accounts, %d imported movements\n\n"
-        banks
-        (List.length report.accounts)
-        report.movements;
-      if List.is_empty report.accounts
-      then print_endline "No bank records yet. See fin bank sync --help."
-      else
-        Terminal.table
-          [ "Bank"
-          ; "Account"
-          ; "Currency"
-          ; "Movements"
-          ; "First observed"
-          ; "Last observed"
-          ]
-          (List.map report.accounts ~f:(fun a ->
-             [ a.Store.mapping.institution
-             ; a.mapping.ledger_account
-             ; Iso4217.to_alpha_code a.currency
-             ; Int.to_string a.movements
-             ; Date.to_string a.first_on
-             ; Date.to_string a.last_on
-             ]));
-      printf
-        "\nReview: %d unclassified movements; %d unreviewed transfer candidate pairs\n"
-        report.unclassified_movements
-        report.transfer_candidate_pairs;
-      (match report.latest_import with
-       | None -> print_endline "Latest inbox import: none recorded."
-       | Some a ->
-         printf
-           "Latest inbox import: %s  %s  %s\n  %s\n"
-           a.attempted_at
-           (Terminal.text a.institution)
-           (Bank_import.outcome_name a.outcome)
-           (Terminal.text a.path);
-         Option.iter a.message ~f:(fun message -> printf "  %s\n" (Terminal.text message)));
-      print_endline
-        "\n\
-         Date ranges show observed records, not complete statement coverage. Financial \
-         reports: fin journal export, then query with hledger.";
-      print_endline "Next: fin bank review; fin transfers preview; fin bank history."));
+    printf
+      "%d banks, %d accounts, %d imported movements\n\n"
+      banks
+      (List.length report.accounts)
+      report.movements;
+    if List.is_empty report.accounts
+    then print_endline "No bank records yet. See fin bank sync --help."
+    else
+      Terminal.table
+        [ "Bank"; "Account"; "Currency"; "Movements"; "First observed"; "Last observed" ]
+        (List.map report.accounts ~f:(fun a ->
+           [ a.Store.mapping.institution
+           ; a.mapping.ledger_account
+           ; Iso4217.to_alpha_code a.currency
+           ; Int.to_string a.movements
+           ; Date.to_string a.first_on
+           ; Date.to_string a.last_on
+           ]));
+    printf
+      "\nReview: %d unclassified movements; %d unreviewed transfer candidate pairs\n"
+      report.unclassified_movements
+      report.transfer_candidate_pairs;
+    (match report.latest_import with
+     | None -> print_endline "Latest inbox import: none recorded."
+     | Some a ->
+       printf
+         "Latest inbox import: %s  %s  %s\n  %s\n"
+         a.attempted_at
+         (Terminal.text a.institution)
+         (Bank_import.outcome_name a.outcome)
+         (Terminal.text a.path);
+       Option.iter a.message ~f:(fun message -> printf "  %s\n" (Terminal.text message)));
+    print_endline
+      "\n\
+       Date ranges show observed records, not complete statement coverage. Financial \
+       reports: fin journal export, then query with hledger.";
+    print_endline "Next: fin bank review; fin transfers preview; fin bank history.");
   Ok ()
 ;;
 
@@ -431,7 +521,7 @@ let sync_bank database institution paths journal accounts max_mib account_id =
   if max_mib < 1 || max_mib > 1024
   then Or_error.error_string "max-file-mib must be between 1 and 1024"
   else (
-    let%bind () = ensure_database_parent database in
+    let%bind () = require_database database in
     let journal =
       Option.value
         journal
@@ -1066,6 +1156,17 @@ let account_change_json (r : Store.account_change) =
 ;;
 
 let accounts_apply database path dry_run =
+  let%bind () =
+    if Stdlib.Sys.file_exists path
+    then Ok ()
+    else
+      Or_error.errorf
+        "no account configuration at %s. It is optional: without one, accounts keep the \
+         names fin gives them. To create one, run fin accounts export -o %s, edit it, \
+         then run fin accounts apply again."
+        path
+        (Stdlib.Filename.quote path)
+  in
   let%bind contents = read_file path in
   let%bind config = Bank_account_config.of_json contents in
   with_database database (fun db ->
@@ -1179,9 +1280,10 @@ let () =
                     transactions, and export an hledger journal. Run $(b,fin) without \
                     arguments for a short welcome."
                ; `P
-                   "Setup is optional: $(b,fin init) initializes the database and shows \
-                    how to import statements. The first import can also initialize it. \
-                    Accounts are discovered from imported records."
+                   "Start with $(b,fin init): it creates the database and shows how to \
+                    import statements. Every other command needs that database and says \
+                    so when it is missing. Accounts are discovered from imported \
+                    records."
                ; `S Manpage.s_examples
                ; `Pre
                    "fin init\n\
@@ -1197,11 +1299,13 @@ let () =
           [ setup_cmd
           ; status_cmd
           ; paths_cmd
+          ; backup_cmd
+          ; delete_cmd
           ; accounts_cmd
           ; group
               "db"
               "Initialize and inspect local source evidence."
-              [ init; reset; events; ingest_cmd ]
+              [ init; events; ingest_cmd ]
           ; group
               "bank"
               "Import and review banking records."

@@ -13,6 +13,10 @@ type ingest =
     names none. *)
 val with_open : registry:Registry.t -> string -> (t -> 'a Or_error.t) -> 'a Or_error.t
 
+(** Writes a consistent copy of the database to [path], a new file, with SQLite's
+    [VACUUM INTO]; other connections may be using the database meanwhile. *)
+val backup : t -> string -> unit Or_error.t
+
 val registry : t -> Registry.t
 
 (** Identical retries return [Existing]; changed evidence for the same identity

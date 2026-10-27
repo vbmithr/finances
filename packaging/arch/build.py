@@ -69,7 +69,7 @@ def main():
         for doc in sorted((root / 'docs').glob('*.md')):
             shutil.copy2(doc, payload / 'docs' / doc.name)
         (payload / 'man').mkdir()
-        for group in (None, 'init', 'status', 'accounts', 'bank', 'transfers', 'journal', 'db'):
+        for group in (None, 'init', 'status', 'backup', 'delete', 'accounts', 'bank', 'transfers', 'journal', 'db'):
             command = [str(executable)] + ([group] if group else []) + ['--help=groff']
             name = 'fin' + (f'-{group}' if group else '')
             (payload / 'man' / f'{name}.1').write_text(
