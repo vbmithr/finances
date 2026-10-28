@@ -20,6 +20,16 @@ let reader () =
     (Csv.next channel)
 ;;
 
+let separators () =
+  let check label expected input =
+    Alcotest.(check (option char)) label expected (Csv_reader.detect_separator input)
+  in
+  check "comma" (Some ',') "Date,Amount\n2026-01-01,1\n";
+  check "semicolon with quoted comma" (Some ';') "Date;\"Amount, USD\"\n2026-01-01;1\n";
+  check "ambiguous" None "Date,Amount;Currency\n";
+  check "one column" None "Date\n2026-01-01\n"
+;;
+
 let malformed () =
   Alcotest.(check bool)
     "unknown header not recognized"
@@ -267,6 +277,7 @@ let () =
     [ ( "transport"
       , [ Alcotest.test_case "headers and raw rows" `Quick reader
         ; Alcotest.test_case "malformed input" `Quick malformed
+        ; Alcotest.test_case "separator detection" `Quick separators
         ] )
     ; ( "schema"
       , [ Alcotest.test_case "typed cells and row construction" `Quick schema_decoding

@@ -33,7 +33,7 @@ quiet initialization for scripts, and `fin paths` shows where everything lives.
 
 ```sh
 fin status
-fin accounts list
+fin account list
 fin bank review
 fin transfers preview
 ```
@@ -53,7 +53,7 @@ readable text by default. Add `--json` for machine-readable output:
 
 ```sh
 fin status --json
-fin accounts list --json
+fin account list --json
 fin bank review --json > bank-review.json
 fin transfers candidates --json > transfer-candidates.json
 fin transfers preview --json > transfer-preview.json
@@ -82,10 +82,10 @@ implicit account settings file.
 
 SQLite holds everything fin knows: the original statement contents, movements,
 accounting entries, account names, registered IBANs, card settlement links and
-review history. `fin accounts edit` and the import command's IBAN prompts update
+review history. `fin account edit` and the import command's IBAN prompts update
 that database.
 JSON account snapshots are optional exports to a filename you choose; they are
-read only when you explicitly run `fin accounts import FILE`.
+read only when you explicitly run `fin account import FILE`.
 
 `bank.journal`, beside the database, is not state: every `fin import` rewrites
 it from the database for hledger. Statement folders can live anywhere you
@@ -96,7 +96,7 @@ alternative database:
 
 ```sh
 fin init --database ~/fin-experiment.sqlite3
-fin accounts list --database ~/fin-experiment.sqlite3
+fin account list --database ~/fin-experiment.sqlite3
 ```
 
 Save a SQLite snapshot without knowing where the database lives:
@@ -145,7 +145,7 @@ installing a release with a new schema, save an account snapshot as well as a
 full backup, then delete and rebuild:
 
 ```sh
-fin accounts export -o ~/fin-accounts.json
+fin account export -o ~/fin-accounts.json
 fin backup ~/fin-backups
 fin delete
 fin init
@@ -156,7 +156,7 @@ fin import revolut ~/Statements/revolut --account-id main
 ```
 
 After importing all banks, restore account settings with
-`fin accounts import ~/fin-accounts.json`. The snapshot refers to already
+`fin account import ~/fin-accounts.json`. The snapshot refers to already
 discovered source accounts; it cannot create them. A full SQLite backup is for
 restoring a database of the same schema version; an account snapshot is for
 restoring settings into a rebuilt database.
@@ -180,14 +180,14 @@ Keep a separate inbox for each bank. Supply the formats below:
 Companion CSV files enrich the primary records; they do not create a second
 transaction stream. Currencies must be ISO 4217 alphabetic codes such as `EUR`;
 a file using any other code, or a lowercase one, is rejected and appears in
-`fin bank history`. Arbitrary CSV layouts, Excel, PDF and QIF are not supported
-imports. Export the supported format from your bank instead.
+`fin bank history`. Other CSV layouts can be configured as described below. Excel, PDF and QIF
+are not supported imports.
 
 For example, put your BoursoBank exports in `~/Statements/boursobank`, then run:
 
 ```sh
 fin import boursobank ~/Statements/boursobank
-fin accounts list
+fin account list
 fin bank review
 ```
 
@@ -199,10 +199,9 @@ fin import bunq ~/Statements/bunq
 fin import revolut ~/Statements/revolut --account-id main
 ```
 
-The first argument is the bank that produced the files: one of `boursobank`,
-`bunq`, `revolut` or `wise` (listed in `fin import --help`). It is required,
-since a file does not always say which bank it came from: OFX, CAMT and MT940 are
-shared formats. The arguments after it are files or directories, any number of
+For known bank formats, the first argument names the institution: `boursobank`,
+`bunq`, `revolut` or `wise`. This is required for formats such as OFX, CAMT
+and MT940 that may be shared by several banks. The arguments after it are files or directories, any number of
 them. Directories are searched recursively, skipping hidden and partially
 downloaded files; a file you name is always processed, and fails the command if
 no bank recognizes it. A file that clearly comes from another bank is rejected
@@ -250,7 +249,7 @@ statements do not supply one. It asks once for a group of currency accounts with
 the same bank and account identifier, and registers the answer on all missing
 accounts in that group. Invalid IBANs are explained and can be entered again.
 Enter skips; importing those accounts again does not repeat the question. Use
-`fin accounts edit` to fill it later. Cards never prompt, and scripts never prompt
+`fin account edit` to fill it later. Cards never prompt, and scripts never prompt
 for IBANs. Answers are audited in SQLite. Import reads and updates account settings
 only in the database. Exported snapshots are never read or rewritten during import.
 
@@ -282,24 +281,86 @@ Use `fin bank review --all` to browse individual movements instead.
 See [Bank import and review reference](../README.md#folder-workflow) for
 additional detail, or use `fin import --help` for current options.
 
+
+### Configure another card CSV
+
+For a CSV that describes card transactions, initialize fin and run:
+
+```sh
+fin import card.csv --provider my-provider --account-id my-card
+```
+
+The first import must run in a terminal. Fin detects a comma or semicolon
+separator from the header when unambiguous, and asks if it cannot decide. It
+then proposes date, description and account amount columns when it recognizes
+them. Accept the proposal or choose columns yourself. It also explains the
+account type and asks whether purchases have positive amounts. Dates
+must be ISO `YYYY-MM-DD`, amounts must use a dot decimal mark, and the account
+currency is fixed for the file. If there is a summary row, specify its label;
+fin skips it only when its date is empty. Review the preview and confirm to import.
+Only one generic CSV file can be imported per command. Raw fields are retained
+with the source evidence, including original currency amounts and exchange rates.
+The mapped account amount, not the local amount, is posted to the ledger.
+
+The provider name identifies the institution; fin prompts for it when omitted
+on a terminal. The layout is saved with the accepted document in the database
+and reused for later files with the same header and provider. Supply the same `--account-id` for the same
+card, and different labels for separate card balances. A known layout can be
+imported without a terminal. Reimports are safe: repeated identical rows are
+preserved as distinct occurrences, and a changed or partial overlapping day is
+rejected for review. Layouts with the same header but different settings are
+ambiguous and require separate handling. Fin does not infer transfers between
+cards or from card top-ups.
+
+For generic imports recorded under the former `csv` institution, delete the
+old account and import its files under the provider name. See account deletion
+below; reviews and account settings associated with the deleted account are lost.
+
+Prepaid card balances are assets. Select `prepaid-card` for a separately funded
+card and `credit-card` for a card paid later. New generic prepaid cards default
+to `assets:cards:PROVIDER:ACCOUNT` and credit cards to
+`liabilities:cards:PROVIDER:ACCOUNT`. Account settings can map either to another
+asset or liability account.
+
+## Delete an account
+
+`fin account list` shows a short ID alongside each account. Use that ID to
+inspect what deletion will remove, then delete it (replace `ACCOUNT_ID` below
+with the value shown):
+
+```sh
+fin account delete ACCOUNT_ID --dry-run
+fin account delete ACCOUNT_ID
+```
+
+Deletion removes the account's transactions, projected entries, classifications,
+settings, exclusive source documents and their import history. Statement files
+outside fin remain untouched. The command asks for confirmation; scripts can use
+`--yes`. The ID is derived from the provider and source account identity, so it
+is stable across runs and reimports of the same identity. Fin refuses deletion if
+two accounts have the same short ID. Deletion is atomic and refuses shared documents, companion
+references, transfer decisions and settlement references from another account.
+The default generated `bank.journal`, if present, is refreshed; regenerate any
+custom journal separately. Make a backup first if the removed records may be needed.
+
 ## Account settings and snapshots
 
 ```sh
-fin accounts list
-fin accounts edit
+fin account list
+fin account edit
 ```
 
-`fin accounts edit` opens your accounts in your editor (`$VISUAL`, then `$EDITOR`,
+`fin account edit` opens your accounts in your editor (`$VISUAL`, then `$EDITOR`,
 then `vi`) as JSON: set ledger account names, register IBANs and associate a credit
 card with its settlement account, then save and quit. The edits are applied at
 once, atomically and audited, in SQLite. No settings file is maintained.
 If something is invalid, such as an IBAN with wrong check
 digits, nothing is applied: in a terminal you can edit again, otherwise the draft
-is kept beside the database as `fin.sqlite3.edit`, and the next `fin accounts edit`
+is kept beside the database as `fin.sqlite3.edit`, and the next `fin account edit`
 continues from it. A successfully applied or unchanged draft is removed.
 
 Statements from Wise and Bunq include the account's IBAN; for BoursoBank and
-Revolut, supply it when import asks or register it with `fin accounts edit`. A
+Revolut, supply it when import asks or register it with `fin account edit`. A
 credit card does not need its own IBAN. IBANs may use spaces or lower case; `fin` checks them against the country's registered
 length and structure and the check digits, and refuses invalid ones. Keep the
 account identity fields unchanged so settings refer to the correct imported
@@ -308,10 +369,10 @@ account.
 To save or restore account settings separately from a full database backup:
 
 ```sh
-fin accounts export -o ~/fin-accounts.json
-fin accounts import ~/fin-accounts.json --dry-run
-fin accounts import ~/fin-accounts.json
-fin accounts history
+fin account export -o ~/fin-accounts.json
+fin account import ~/fin-accounts.json --dry-run
+fin account import ~/fin-accounts.json
+fin account history
 ```
 
 Export writes a version 1 JSON snapshot to the chosen file, or standard output
@@ -325,7 +386,7 @@ settings. IBANs inferred from primary records cannot be overridden or cleared.
 See the [account settings reference](../README.md#manage-bank-accounts) for the
 JSON field definitions.
 
-Existing version 1 account JSON files still import with `fin accounts import FILE`.
+Existing version 1 account JSON files still import with `fin account import FILE`.
 The old `accounts apply` command, optional `accounts edit CONFIG` argument and
 `bank sync --accounts` option have been removed. Old files are left untouched;
 there is no default account JSON path.
@@ -435,7 +496,7 @@ above; no automatic migration runs.
 | `fin import BANK PATH...` | Import bank statement files and publish the journal |
 | `fin status` | Import coverage and outstanding review work |
 | `fin paths` | Resolved storage paths |
-| `fin accounts --help` | Account listing, config and history |
+| `fin account --help` | Account listing, config and history |
 | `fin bank --help` | Import history, reconciliation and category review |
 | `fin transfers --help` | Candidates, preview and explicit decisions |
 | `fin journal --help` | hledger journal export |

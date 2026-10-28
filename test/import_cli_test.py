@@ -74,7 +74,99 @@ class ImportOnboarding(unittest.TestCase):
             os.close(master)
 
     def accounts(self):
-        return json.loads(self.run_fin('accounts', 'export').stdout)['accounts']
+        return json.loads(self.run_fin('account', 'export').stdout)['accounts']
+
+    def test_generic_csv_setup_and_reimport(self):
+        csv_path = self.root / 'card.csv'
+        csv_path.write_text('Merchant,Category,Date,Local currency,Local amount,Exchange rate,USD\n'
+                            'Shop,Food,2026-10-01,EUR,10.00,1.1,11.00\n'
+                            'Total,,,,,,11.00\n')
+        output = self.terminal(['import', str(csv_path), '--account-id', 'card-a', '--provider', 'card-provider'], [
+            ('Use these columns?', 'yes'),
+            ('Account type (prepaid-card or credit-card):', 'prepaid-card'),
+            ('Are purchases positive amounts in the file?', 'yes'),
+            ('Skip this summary row?', 'yes'),
+            ('Import these transactions?', 'yes'),
+        ])
+        self.assertIn('Detected separator: comma.', output)
+        self.assertIn('Suggested mapping:', output)
+        self.assertIn('Local currency: EUR', output)
+        self.assertIn('inserted=1', output)
+        result = self.run_fin('import', csv_path, '--account-id', 'card-a', '--provider', 'card-provider')
+        self.assertIn('inserted=0', result.stdout)
+        status = json.loads(self.run_fin('status', '--json').stdout)
+        self.assertEqual(status['movements'], 1)
+        accounts = self.accounts()
+        self.assertEqual([a['institution'] for a in accounts], ['card-provider'])
+        self.assertEqual(accounts[0]['ledger_account'], 'assets:cards:card-provider:card-a')
+
+    def test_generic_csv_can_change_suggested_columns(self):
+        path = self.root / 'manual-card.csv'
+        path.write_text('Merchant,Date,USD,Other\nShop,2026-10-01,11.00,9.00\n')
+        output = self.terminal(['import', str(path), '--account-id', 'manual', '--provider', 'manual-provider'], [
+            ('Use these columns?', 'no'),
+            ('Column containing the transaction date', 'Date'),
+            ('Column containing the merchant or description:', 'Merchant'),
+            ('Column containing the amount charged to the account:', 'Other'),
+            ('Account currency (e.g. USD):', 'USD'),
+            ('Account type (prepaid-card or credit-card):', 'prepaid-card'),
+            ('Are purchases positive amounts in the file?', 'yes'),
+            ('Skip a summary row with an empty date?', 'no'),
+            ('Import these transactions?', 'yes'),
+        ])
+        self.assertIn('-9 USD', output)
+        self.assertIn('inserted=1', output)
+
+    def test_delete_one_account_and_reimport(self):
+        a = self.root / 'delete-a.csv'
+        b = self.root / 'delete-b.csv'
+        a.write_text('Merchant,Date,USD\nDelete-only merchant,2026-10-01,11.00\n')
+        b.write_text('Merchant,Date,USD\nKeep-this merchant,2026-10-01,12.00\n')
+        self.terminal(['import', str(a), '--account-id', 'a', '--provider', 'provider'], [
+            ('Use these columns?', 'yes'),
+            ('Account type (prepaid-card or credit-card):', 'prepaid-card'),
+            ('Are purchases positive amounts in the file?', 'yes'),
+            ('Skip a summary row with an empty date?', 'no'),
+            ('Import these transactions?', 'yes'),
+        ])
+        self.run_fin('import', b, '--account-id', 'b', '--provider', 'provider')
+        listed = json.loads(self.run_fin('account', 'list', '--json').stdout)
+        account_id = next(x['id'] for x in listed if x['account_id'] == 'a')
+        self.assertIn('ID: ' + account_id, self.run_fin('account', 'list').stdout)
+        self.assertNotEqual(self.run_fin('account', 'delete', 'unknown', '--yes', check=False).returncode, 0)
+        preview = self.run_fin('account', 'delete', account_id, '--dry-run')
+        self.assertIn('Transactions: 1', preview.stdout)
+        self.assertEqual(json.loads(self.run_fin('status', '--json').stdout)['movements'], 2)
+        self.assertNotEqual(self.run_fin('account', 'delete', account_id, check=False).returncode, 0)
+        result = self.run_fin('account', 'delete', account_id, '--yes')
+        self.assertIn('Account and its records deleted.', result.stdout)
+        self.assertEqual(json.loads(self.run_fin('status', '--json').stdout)['movements'], 1)
+        self.assertEqual([x['account_id'] for x in self.accounts()], ['b'])
+        journal = (self.root / 'data/fin/bank.journal').read_text()
+        self.assertNotIn('Delete-only merchant', journal)
+        self.assertIn('Keep-this merchant', journal)
+        self.run_fin('import', a, '--account-id', 'a', '--provider', 'provider')
+        self.assertEqual(json.loads(self.run_fin('status', '--json').stdout)['movements'], 2)
+        listed_after = json.loads(self.run_fin('account', 'list', '--json').stdout)
+        self.assertEqual(next(x['id'] for x in listed_after if x['account_id'] == 'a'), account_id)
+
+    def test_account_delete_refuses_shared_document(self):
+        ofx = self.root / 'shared.ofx'
+        ofx.write_text(Path('fixtures/bank.ofx').read_text())
+        self.run_fin('import', 'boursobank', ofx)
+        accounts = self.accounts()
+        self.assertGreater(len(accounts), 1)
+        before = json.loads(self.run_fin('status', '--json').stdout)['movements']
+        account = json.loads(self.run_fin('account', 'list', '--json').stdout)[0]
+        result = self.run_fin('account', 'delete', account['id'], '--yes', check=False)
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn('shared documents', result.stderr)
+        self.assertEqual(json.loads(self.run_fin('status', '--json').stdout)['movements'], before)
+
+    def test_account_command_is_singular(self):
+        help_text = self.run_fin('account', '--help=plain').stdout
+        self.assertIn('delete', help_text)
+        self.assertNotEqual(self.run_fin('accounts', '--help', check=False).returncode, 0)
 
     def test_scripts_require_label_and_never_prompt(self):
         help_text = self.run_fin('import', '--help=plain').stdout
@@ -98,7 +190,7 @@ class ImportOnboarding(unittest.TestCase):
         self.assertIn('identity_changes=2', output)
         self.assertEqual(len(self.accounts()), 2)
         self.assertTrue(all(row['iban'] == IBAN for row in self.accounts()))
-        history = json.loads(self.run_fin('accounts', 'history').stdout)
+        history = json.loads(self.run_fin('account', 'history').stdout)
         self.assertEqual(len(history), 2)
         replay = self.terminal(['import', 'revolut', self.csv, self.usd,
                                 '--account-id', 'main'], [])
@@ -116,15 +208,15 @@ class ImportOnboarding(unittest.TestCase):
         self.terminal(['import', 'revolut', self.csv, '--account-id', 'main'],
                       [('IBAN (Enter to skip):', '')])
         snapshot = self.root / 'saved-accounts.json'
-        self.run_fin('accounts', 'export', '-o', snapshot)
+        self.run_fin('account', 'export', '-o', snapshot)
         rows = json.loads(snapshot.read_text())
         rows['accounts'][0]['iban'] = IBAN
         snapshot.write_text(json.dumps(rows))
-        self.run_fin('accounts', 'import', snapshot, '--dry-run')
+        self.run_fin('account', 'import', snapshot, '--dry-run')
         self.assertIsNone(self.accounts()[0]['iban'])
-        self.run_fin('accounts', 'import', snapshot)
+        self.run_fin('account', 'import', snapshot)
         self.assertEqual(self.accounts()[0]['iban'], IBAN)
-        self.assertNotEqual(self.run_fin('accounts', 'import', check=False).returncode, 0)
+        self.assertNotEqual(self.run_fin('account', 'import', check=False).returncode, 0)
         before = snapshot.read_bytes()
         self.terminal(['import', 'revolut', self.usd, '--account-id', 'main'],
                       [('IBAN (Enter to skip):', IBAN)])
@@ -140,7 +232,7 @@ class ImportOnboarding(unittest.TestCase):
                                          'account': 'expenses:food', 'reason': 'Reviewed'}]))
         self.run_fin('bank', 'categories', 'apply', decisions)
         expected = {name: self.run_fin(*args).stdout for name, args in {
-            'accounts': ['accounts', 'export'],
+            'accounts': ['account', 'export'],
             'events': ['db', 'events'],
             'review': ['bank', 'review', '--all', '--json'],
             'history': ['bank', 'categories', 'history'],
@@ -153,7 +245,7 @@ class ImportOnboarding(unittest.TestCase):
         self.run_fin('delete', '--yes')
         self.run_fin('restore', backup)
         for name, args in {
-            'accounts': ['accounts', 'export'], 'events': ['db', 'events'],
+            'accounts': ['account', 'export'], 'events': ['db', 'events'],
             'review': ['bank', 'review', '--all', '--json'],
             'history': ['bank', 'categories', 'history'], 'journal': ['journal', 'export'],
         }.items():
@@ -163,7 +255,7 @@ class ImportOnboarding(unittest.TestCase):
         self.run_fin('restore', source, '--database', target)
         self.assertEqual(target.stat().st_mode & 0o777, 0o600)
         self.assertEqual(target.parent.stat().st_mode & 0o777, 0o700)
-        self.assertEqual(self.run_fin('accounts', 'export', '--database', target).stdout,
+        self.assertEqual(self.run_fin('account', 'export', '--database', target).stdout,
                          expected['accounts'])
 
     def test_restore_requires_confirmation_and_clears_stale_outputs(self):
@@ -175,9 +267,9 @@ class ImportOnboarding(unittest.TestCase):
         changed[0]['ledger_account'] = 'assets:bank:renamed'
         snapshot = self.root / 'settings.json'
         snapshot.write_text(json.dumps({'version': 1, 'accounts': changed}))
-        self.run_fin('accounts', 'import', snapshot)
+        self.run_fin('account', 'import', snapshot)
         self.env['VISUAL'] = 'false'
-        self.run_fin('accounts', 'edit', check=False)
+        self.run_fin('account', 'edit', check=False)
         draft = self.root / 'data/fin/fin.sqlite3.edit'
         journal = self.root / 'data/fin/bank.journal'
         self.assertTrue(draft.exists())
@@ -234,29 +326,29 @@ class ImportOnboarding(unittest.TestCase):
         self.run_fin('import', 'revolut', self.csv, '--account-id', 'main')
         draft = self.root / 'data/fin/fin.sqlite3.edit'
         self.env['VISUAL'] = 'false'
-        self.assertNotEqual(self.run_fin('accounts', 'edit', check=False).returncode, 0)
+        self.assertNotEqual(self.run_fin('account', 'edit', check=False).returncode, 0)
         self.assertTrue(draft.exists())
         edited = json.loads(draft.read_text())
         edited['accounts'][0]['iban'] = 'invalid'
         draft.write_text(json.dumps(edited))
         self.env['VISUAL'] = 'true'
-        self.assertNotEqual(self.run_fin('accounts', 'edit', check=False).returncode, 0)
+        self.assertNotEqual(self.run_fin('account', 'edit', check=False).returncode, 0)
         self.assertIsNone(self.accounts()[0]['iban'])
         edited['accounts'][0]['iban'] = IBAN
         draft.write_text(json.dumps(edited))
-        result = self.run_fin('accounts', 'edit')
+        result = self.run_fin('account', 'edit')
         self.assertIn('Continuing the draft', result.stdout)
         self.assertEqual(self.accounts()[0]['iban'], IBAN)
         self.assertFalse(draft.exists())
         self.assertFalse(self.config.exists())
-        self.run_fin('accounts', 'edit')
+        self.run_fin('account', 'edit')
         self.assertFalse(draft.exists())
 
     def test_backup_and_delete_preserve_exported_snapshots(self):
         self.terminal(['import', 'revolut', self.csv, '--account-id', 'main'],
                       [('IBAN (Enter to skip):', IBAN)])
         snapshot = self.root / 'data/fin/accounts.json'
-        self.run_fin('accounts', 'export', '-o', snapshot)
+        self.run_fin('account', 'export', '-o', snapshot)
         original = snapshot.read_bytes()
         directory = self.root / 'new/nested/backups'
         self.run_fin('backup', directory)
@@ -264,13 +356,13 @@ class ImportOnboarding(unittest.TestCase):
         self.assertEqual(directory.stat().st_mode & 0o777, 0o700)
         self.assertEqual(backup.stat().st_mode & 0o777, 0o700)
         self.assertEqual([p.name for p in backup.iterdir()], ['fin.sqlite3'])
-        restored = json.loads(self.run_fin('accounts', 'export', '--database',
+        restored = json.loads(self.run_fin('account', 'export', '--database',
                                          backup / 'fin.sqlite3').stdout)
         self.assertEqual(restored['accounts'][0]['iban'], IBAN)
         # Only a pending draft is disposable app state; a user-exported snapshot
         # beside the database remains the user's file.
         self.env['VISUAL'] = 'false'
-        self.run_fin('accounts', 'edit', check=False)
+        self.run_fin('account', 'edit', check=False)
         self.run_fin('delete', '--yes')
         self.assertEqual(snapshot.read_bytes(), original)
         self.assertFalse((self.root / 'data/fin/fin.sqlite3.edit').exists())

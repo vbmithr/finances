@@ -76,7 +76,7 @@ fin import revolut inbox/revolut --account-id main
 fin import wise inbox/wise
 fin bank history --limit 20
 fin status
-fin accounts list
+fin account list
 ```
 
 Use OFX XML for BoursoBank, MT940 for Bunq, supported Current-account CSV for
@@ -92,7 +92,7 @@ they do not prove you have every statement between those dates.
 Next, run:
 
 ```sh
-fin accounts edit
+fin account edit
 ```
 
 Choose stable, readable ledger names. For example, use `assets:bank:daily` for

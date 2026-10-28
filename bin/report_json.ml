@@ -49,6 +49,7 @@ let account =
     Jsont.Object.mem name codec ~enc map
   in
   Jsont.Object.enc_only ()
+  |> field "id" Jsont.string (fun r -> Bank_account_mapping.id r.mapping)
   |> field "institution" Jsont.string (fun r -> r.mapping.institution)
   |> field "bank_id" Jsont.string (fun r -> r.mapping.bank_id)
   |> field "account_id" Jsont.string (fun r -> r.mapping.account_id)

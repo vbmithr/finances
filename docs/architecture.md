@@ -411,6 +411,14 @@ bank still requires wiring its importer and persistence into the workflow.
 `dune fmt` applies the repository's ocamlformat configuration (Jane Street profile)
 to all adapter and shared OCaml files, including nested directories.
 
+The `dune runtest` suite also generates a synthetic database with 4,400 Revolut
+movements across four accounts and times five warm `fin status --json` runs.
+The median process CPU time must be at most 600 ms; wall time is reported but
+does not determine the result. Set `FIN_STATUS_MAX_CPU_SECONDS` to a suitable
+value for slower machines. This is a regression guard for that workload, not a
+guarantee for every database; compare its results on the same machine and SQLite
+version, and tighten the budget after improving transfer-pair searches.
+
 ## Reviewed bank categories
 
 `Bank_category` validates explicit per-event decisions with an expense/income
@@ -522,7 +530,7 @@ Omitted properties retain state; explicit null clears optional curated metadata.
 Imported IBANs cannot be changed. Settlement links connect a card source account
 to a known non-card account in the same currency and never create accounting entries.
 
-`accounts export/list/import/edit/history` exposes this single workflow. Importing a
+`account export/list/import/edit/history` exposes this single workflow. Importing a
 snapshot validates source references, composes ledger/identity/relationship
 mutations inside one transaction, and checks existing projections and confirmed
 transfers. A dry run uses a savepoint and rolls back every update and audit row,
@@ -567,9 +575,9 @@ falls back to the user's passwd home directory. There is no configuration
 directory or default account JSON file.
 
 Commands take an optional `--database/-d` rather than a positional database.
-`accounts import FILE` requires an explicit snapshot filename; `accounts export
+`account import FILE` requires an explicit snapshot filename; `account export
 --output FILE` atomically writes a private snapshot and rejects output paths
-referring to the database. `accounts edit` uses a recoverable private draft beside
+referring to the database. `account edit` uses a recoverable private draft beside
 the database and removes it on success, applying changes only to SQLite. Missing
 database parents are created with private permissions; library callers still pass
 explicit database paths. `fin paths` reports only data and database paths without

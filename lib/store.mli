@@ -24,6 +24,9 @@ val backup : t -> string -> unit Or_error.t
     Source and destination must be different files. *)
 val restore : source:string -> destination:string -> unit Or_error.t
 
+(** Immutable contexts attached to accepted documents for an institution. *)
+val document_contexts : t -> institution:string -> string list Or_error.t
+
 val registry : t -> Registry.t
 
 (** Identical retries return [Existing]; changed evidence for the same identity
@@ -249,3 +252,16 @@ val apply_bank_accounts
   -> account_config_report Or_error.t
 
 val bank_account_history : t -> account_change list Or_error.t
+
+(** Delete one account's exclusively owned records atomically. Refuses shared
+    documents, transfer decisions and references from another account. *)
+type account_deletion =
+  { transactions : int
+  ; documents : int
+  }
+
+val delete_account
+  :  ?dry_run:bool
+  -> t
+  -> Bank_account_mapping.t
+  -> account_deletion Or_error.t

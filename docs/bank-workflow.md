@@ -105,7 +105,7 @@ Discover bank accounts from imported evidence and expose their complete source
 identity and current ledger name:
 
 ```sh
-fin accounts export -o ~/fin-accounts.json
+fin account export -o ~/fin-accounts.json
 ```
 
 Each mapping contains `institution`, `bank_id`, `account_id`, `account_type`, and
@@ -113,7 +113,7 @@ Each mapping contains `institution`, `bank_id`, `account_id`, `account_type`, an
 `assets:bank:...` name, then import the file explicitly:
 
 ```sh
-fin accounts import ~/fin-accounts.json
+fin account import ~/fin-accounts.json
 fin import boursobank personal/boursobank/inbox \
   --journal personal/bank.journal
 ```
@@ -300,8 +300,8 @@ future work. Rebuild the journal after decisions; import also preserves them.
 
 ## Account management and identity-backed transfer review
 
-Use `accounts edit` for everyday settings changes in SQLite. Optional version 1
-snapshots are written by `accounts export -o FILE` and restored by `accounts import
+Use `account edit` for everyday settings changes in SQLite. Optional version 1
+snapshots are written by `account export -o FILE` and restored by `account import
 FILE`, with `--dry-run` to preview. Account history remains audited. There is no
 config directory, default account file or import settings-file option. A snapshot
 manages ledger names, registered IBANs and card settlement relationships

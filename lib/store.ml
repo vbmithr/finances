@@ -399,6 +399,17 @@ let collect db stmt =
   Ok (List.rev rows)
 ;;
 
+let document_contexts db ~institution =
+  let query =
+    Rel_sql.Stmt.(
+      func
+        "SELECT c.context_json FROM document_contexts c JOIN import_documents d ON \
+         d.id=c.document_id WHERE d.institution=? ORDER BY d.id DESC"
+        (text @-> ret Row.(t1 (text "context_json"))))
+  in
+  collect db (query institution)
+;;
+
 let traverse f xs = Or_error.combine_errors (List.map xs ~f)
 
 let find_document =
@@ -3145,3 +3156,224 @@ let apply_bank_accounts ?(dry_run = false) db config =
 ;;
 
 let registry t = t.registry
+
+(* Deletion deliberately removes immutable evidence only within one transaction;
+   the original triggers are restored before commit and rollback restores them on
+   every error. Refuse relationships that would affect another account. *)
+type account_deletion =
+  { transactions : int
+  ; documents : int
+  }
+
+let delete_account ?(dry_run = false) db (mapping : Bank_account_mapping.t) =
+  transaction db (fun db ->
+    let quote value =
+      "'" ^ String.substr_replace_all value ~pattern:"'" ~with_:"''" ^ "'"
+    in
+    let institution = quote mapping.institution in
+    let account = quote (Bank_account_mapping.source_account mapping) in
+    let exec sql = db_result (Db.exec_sql db.conn sql) in
+    let scalar sql =
+      let* value = db_result (Db.first db.conn (statement sql integer)) in
+      Or_error.of_option value ~error:(Error.of_string "account deletion count missing")
+    in
+    let events =
+      "SELECT id FROM source_events WHERE venue="
+      ^ institution
+      ^ " AND account="
+      ^ account
+    in
+    let docs =
+      "SELECT DISTINCT document_id FROM import_document_events WHERE event_id IN ("
+      ^ events
+      ^ ")"
+    in
+    let* transactions =
+      scalar ("SELECT count(*) FROM source_events WHERE id IN (" ^ events ^ ")")
+    in
+    let* documents =
+      scalar ("SELECT count(*) FROM import_documents WHERE id IN (" ^ docs ^ ")")
+    in
+    if transactions = 0
+    then Or_error.error_string "account has no imported transactions"
+    else
+      let* shared =
+        scalar
+          ("SELECT count(*) FROM import_document_events WHERE document_id IN ("
+           ^ docs
+           ^ ") AND event_id NOT IN ("
+           ^ events
+           ^ ")")
+      in
+      let* statements_shared =
+        scalar
+          ("SELECT count(*) FROM statements WHERE document_id IN ("
+           ^ docs
+           ^ ") AND (institution<>"
+           ^ institution
+           ^ " OR source_account<>"
+           ^ account
+           ^ ")")
+      in
+      let* companions =
+        scalar ("SELECT count(*) FROM companion_rows WHERE document_id IN (" ^ docs ^ ")")
+      in
+      let* matches =
+        scalar
+          ("SELECT (SELECT count(*) FROM companion_matches WHERE event_id IN ("
+           ^ events
+           ^ ") OR EXISTS (SELECT 1 FROM json_each(candidates_json) WHERE CAST(value AS \
+              INTEGER) IN ("
+           ^ events
+           ^ "))) + (SELECT count(*) FROM companion_match_changes WHERE event_id IN ("
+           ^ events
+           ^ ") OR previous_event_id IN ("
+           ^ events
+           ^ ") OR EXISTS (SELECT 1 FROM json_each(candidates_json) WHERE CAST(value AS \
+              INTEGER) IN ("
+           ^ events
+           ^ ")))")
+      in
+      let* transfers =
+        scalar
+          ("SELECT (SELECT count(*) FROM bank_transfer_decisions WHERE first_event_id IN \
+            ("
+           ^ events
+           ^ ") OR second_event_id IN ("
+           ^ events
+           ^ ")) + (SELECT count(*) FROM bank_transfer_changes WHERE first_event_id IN ("
+           ^ events
+           ^ ") OR second_event_id IN ("
+           ^ events
+           ^ "))")
+      in
+      let* reference =
+        Bank_account_config.reference
+          ~institution:mapping.institution
+          ~bank_id:mapping.bank_id
+          ~account_id:mapping.account_id
+          ~account_type:mapping.account_type
+      in
+      let target = quote (Json.encode Bank_account_config.reference_jsont reference) in
+      let* settlement_refs =
+        scalar
+          ("SELECT (SELECT count(*) FROM bank_account_settlements WHERE \
+            settlement_account="
+           ^ target
+           ^ " AND NOT (institution="
+           ^ institution
+           ^ " AND source_account="
+           ^ account
+           ^ ")) + (SELECT count(*) FROM bank_account_settlement_changes WHERE \
+              (settlement_account="
+           ^ target
+           ^ " OR previous_settlement="
+           ^ target
+           ^ ") AND NOT (institution="
+           ^ institution
+           ^ " AND source_account="
+           ^ account
+           ^ "))")
+      in
+      let* shared_inventories =
+        scalar
+          ("SELECT count(*) FROM day_inventories WHERE document_id IN ("
+           ^ docs
+           ^ ") AND (institution<>"
+           ^ institution
+           ^ " OR source_account<>"
+           ^ account
+           ^ ")")
+      in
+      if
+        shared
+        + statements_shared
+        + companions
+        + matches
+        + transfers
+        + settlement_refs
+        + shared_inventories
+        > 0
+      then
+        Or_error.error_string
+          "account has shared documents, companion matches, transfer decisions or \
+           settlement references; deletion cannot safely affect other accounts"
+      else if dry_run
+      then Ok { transactions; documents }
+      else
+        let* () = exec "CREATE TEMP TABLE fin_delete_events(id INTEGER PRIMARY KEY)" in
+        let* () = exec ("INSERT INTO fin_delete_events " ^ events) in
+        let* () = exec "CREATE TEMP TABLE fin_delete_docs(id INTEGER PRIMARY KEY)" in
+        let* () = exec ("INSERT INTO fin_delete_docs " ^ docs) in
+        let tables =
+          [ "source_events"
+          ; "movements"
+          ; "import_documents"
+          ; "statements"
+          ; "day_inventories"
+          ; "bank_import_attempts"
+          ; "document_contexts"
+          ; "bank_category_changes"
+          ; "bank_account_mapping_changes"
+          ; "bank_account_identity_changes"
+          ; "bank_account_settlement_changes"
+          ]
+        in
+        let rec remove_triggers acc = function
+          | [] -> Ok acc
+          | table :: rest ->
+            let name = table ^ "_no_delete" in
+            let* sql =
+              db_result
+                (Db.first
+                   db.conn
+                   (statement
+                      ("SELECT sql FROM sqlite_schema WHERE type='trigger' AND name="
+                       ^ quote name)
+                      Row.(t1 (text "sql"))))
+            in
+            (match sql with
+             | None -> Or_error.errorf "missing immutable trigger %s" name
+             | Some sql ->
+               let* () = exec ("DROP TRIGGER " ^ name) in
+               remove_triggers (sql :: acc) rest)
+        in
+        let* triggers = remove_triggers [] tables in
+        let event_ids = "SELECT id FROM fin_delete_events"
+        and doc_ids = "SELECT id FROM fin_delete_docs" in
+        let local = "institution=" ^ institution ^ " AND source_account=" ^ account in
+        let statements =
+          [ "DELETE FROM postings WHERE entry_id IN (SELECT id FROM journal_entries \
+             WHERE event_id IN ("
+            ^ event_ids
+            ^ "))"
+          ; "DELETE FROM journal_entries WHERE event_id IN (" ^ event_ids ^ ")"
+          ; "DELETE FROM bank_categories WHERE event_id IN (" ^ event_ids ^ ")"
+          ; "DELETE FROM bank_category_changes WHERE event_id IN (" ^ event_ids ^ ")"
+          ; "DELETE FROM statement_events WHERE event_id IN ("
+            ^ event_ids
+            ^ ") OR statement_id IN (SELECT id FROM statements WHERE document_id IN ("
+            ^ doc_ids
+            ^ "))"
+          ; "DELETE FROM statements WHERE document_id IN (" ^ doc_ids ^ ")"
+          ; "DELETE FROM import_document_events WHERE event_id IN (" ^ event_ids ^ ")"
+          ; "DELETE FROM day_inventories WHERE " ^ local
+          ; "DELETE FROM bank_import_attempts WHERE document_id IN (" ^ doc_ids ^ ")"
+          ; "DELETE FROM document_contexts WHERE document_id IN (" ^ doc_ids ^ ")"
+          ; "DELETE FROM import_documents WHERE id IN (" ^ doc_ids ^ ")"
+          ; "DELETE FROM movements WHERE event_id IN (" ^ event_ids ^ ")"
+          ; "DELETE FROM source_events WHERE id IN (" ^ event_ids ^ ")"
+          ; "DELETE FROM bank_account_mappings WHERE " ^ local
+          ; "DELETE FROM bank_account_mapping_changes WHERE " ^ local
+          ; "DELETE FROM bank_account_identities WHERE " ^ local
+          ; "DELETE FROM bank_account_identity_changes WHERE " ^ local
+          ; "DELETE FROM bank_account_settlements WHERE " ^ local
+          ; "DELETE FROM bank_account_settlement_changes WHERE " ^ local
+          ; "DROP TABLE fin_delete_events"
+          ; "DROP TABLE fin_delete_docs"
+          ]
+        in
+        let* () = List.fold_result statements ~init:() ~f:(fun () sql -> exec sql) in
+        let* () = List.fold_result triggers ~init:() ~f:(fun () sql -> exec sql) in
+        Ok { transactions; documents })
+;;

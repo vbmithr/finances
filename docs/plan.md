@@ -32,8 +32,11 @@ Last updated: 2026-10-28.
   Review metadata is loaded in batches; candidate searches prepare known-account
   IBAN evidence once.
   No data is cached across commands or later account/review edits.
-  On 4,370 movements, median warm status takes 43 ms and JSON account listing
-  20 ms, restoring pre-Jsont performance after removing excess encoding work.
+  On 4,370 movements, warm status measured about 45–56 ms in a later run,
+  after an earlier 230 ms measurement under slower CPU conditions. A
+  frame-pointer profile attributes the largest share to SQLite transfer-pair
+  searches. A synthetic 4,400-movement status test guards CPU time; investigate
+  and reduce transfer matching cost before tightening its budget.
 - JSON uses typed `Jsont.t` descriptions throughout configuration, review files,
   bank payloads, storage and CLI reports; hand-built JSON trees and Yojson are
   removed. Codecs preserve exact quantities and account patch semantics.
@@ -43,19 +46,19 @@ Last updated: 2026-10-28.
 - Movements project to balanced entries against `equity:unclassified`, unless a
   reviewed category or confirmed transfer says otherwise. `fin journal export`
   writes a reproducible hledger journal.
-- Statement ingestion is `fin import BANK PATH...`. `fin backup` saves one
+- Statement ingestion is `fin import BANK PATH...` or a configured card CSV.
+  `fin backup` saves one
   consistent SQLite snapshot; `fin restore BACKUP` validates and restores it,
   with overwrite confirmation and automatic removal of stale generated files.
-- 148 tests (135 OCaml cases and 13 CLI cases). Each change is verified
-  by rebuilding the personal database from its inboxes with the previous and the
-  new build and diffing every report.
+- 160 tests (142 OCaml cases and 18 CLI cases), plus status performance and
+  package man-page checks. Selected import changes have also been compared by
+  rebuilding a personal database and diffing reports and source payloads.
 - Issue #1 is implemented locally and awaits publication.
-- The installed Arch package is `finances 0.1.0-19` (schema 12); the tree is at
-  package revision 23 (schema 13).
+- The installed Arch package is `finances 0.1.0-23`; the tree also uses schema 13.
 
 ### Personal data
 
-From a database rebuilt from `personal/*/inbox`:
+A prior database rebuilt from `personal/*/inbox` contained:
 
 | Bank | Account | Movements | Covered |
 | --- | --- | --- | --- |
@@ -72,17 +75,16 @@ From a database rebuilt from `personal/*/inbox`:
   BoursoBank and Revolut have no statement balances to reconcile against.
 - Companion rows: all matched except 8 BoursoBank CSV rows, ambiguous because the
   OFX has identical movements.
-- The live database was last checked at schema 12. Schema 13 needs an explicit
-  rebuild; this development task leaves the live database untouched.
+- The live schema 13 database currently contains 4,370 movements across 10
+  accounts, all unclassified, and reports 123 transfer candidate pairs. The
+  legacy card CSV accounts are no longer present.
 
 ## Next actions
 
-1. **Export account settings and back up with the previous binary**, then install
-   (`make install`) and rebuild for schema 13 following the manual. Restore the
-   exported snapshot after importing all banks.
-2. **Push `main`** when ready; it is public on GitHub.
-3. **Fill the coverage gaps** above: Wise for 2026, BoursoBank before September
-   2026, Revolut before April 2026, if those accounts were in use.
+1. Reimport the card statements under their provider if desired, then
+   record the card-balance transfer once its date and amount are known.
+2. Begin categorizing movements and reviewing transfer candidates.
+3. Push `main` when ready; it is public on GitHub.
 
 ## Workstreams
 
@@ -116,10 +118,25 @@ The import side is done; turning movements into accounting is not.
 
 ### 3. Smaller gaps
 
+- [x] Generate Arch package man pages for every top-level command and check the
+  package list against the CLI in the test suite.
+
 - [x] [Shared CSV decoding and format profiles](csv-imports.md): extract typed
   row descriptions and common reading/diagnostics, retaining primary/companion
   roles, identities and matching policies. `Csv_reader`, `Csv_schema`, all four
   bank CSV schemas and `Adapter_support` companion/profile helpers are in place.
+- [x] Initial generic card CSV import: suggested mappings, separator detection,
+  interactive setup, preview and a saved
+  layout with account-scoped identities and conservative day overlap checks.
+- [ ] Implement the [provider, account and format model](account-identities.md),
+  including meaningful ledger names and account-scoped deletion.
+- [x] Delete account-scoped development imports by their displayed stable ID
+  after preview; reimport source
+  files under their provider instead of migrating legacy `csv` identities.
+- [ ] Extend generic CSV setup beyond ISO dates, dot decimals, fixed currency
+  and one card file; support pending states and more flexible layout selection.
+- [x] Allow asset and liability ledger mappings; new generic prepaid and credit
+  cards default to their respective card hierarchies.
 - [x] [Personal accounting guide](personal-accounting.md): a first-month workflow
   from imports and classification to hledger reports, opening balances,
   reconciliation and ongoing backups.
@@ -137,7 +154,7 @@ The import side is done; turning movements into accounting is not.
   asks for missing labels and new account IBANs on a terminal and saves answers
   in SQLite.
 
-- [x] `fin accounts edit` sets IBANs, names and card links without handling the
+- [x] `fin account edit` sets IBANs, names and card links without handling the
   configuration file by hand.
 - [x] `fin backup` and `fin delete` save and remove all fin state without
   knowing where it lives; `fin init` creates a fresh database.
@@ -145,14 +162,14 @@ The import side is done; turning movements into accounting is not.
   or copying, validates it before replacement and asks before overwriting state.
 - [x] Statement imports use the top-level `fin import` command instead of `bank sync`.
 - [ ] `bank.journal` is rewritten only by `fin import`, so it is stale after
-  `fin accounts import FILE` or a review decision until the next import. Every command
+  `fin account import FILE` or a review decision until the next import. Every command
   that changes accounting should rewrite it, or the file should go in favour of
   `fin journal export`.
-- [x] `fin accounts import FILE` names the configured accounts that have no imported
+- [x] `fin account import FILE` names the configured accounts that have no imported
   statements, instead of repeating "unknown source account".
-- [x] `fin import BANK PATH...`: the bank is a required argument, and the paths
-  are any number of files or directories, described in `--help`.
-- [x] `fin accounts import FILE` requires a snapshot filename and offers a dry run;
+- [x] `fin import BANK PATH...` accepts named bank files or directories; a
+  generic card CSV can also be passed directly and configured interactively.
+- [x] `fin account import FILE` requires a snapshot filename and offers a dry run;
   there is no default file to confuse with active settings.
 - [ ] `fin paths` prints only JSON, like `bank statements` and `bank companions`.
 - [ ] `fin bank statements` and `fin bank companions` print only JSON, unlike the

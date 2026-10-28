@@ -15,13 +15,27 @@ let create ~institution ~bank_id ~account_id ~account_type ~ledger_account =
   let%bind account_id = Validation.text "account ID" account_id in
   let%bind account_type = Validation.text "account type" account_type in
   let%bind ledger_account = Validation.account ledger_account in
-  if not (String.is_prefix ledger_account ~prefix:"assets:bank:")
-  then Or_error.error_string "bank ledger accounts must be below assets:bank"
+  if
+    not
+      (String.is_prefix ledger_account ~prefix:"assets:"
+       || String.is_prefix ledger_account ~prefix:"liabilities:")
+  then Or_error.error_string "account mappings must be below assets or liabilities"
   else Ok { institution; bank_id; account_id; account_type; ledger_account }
 ;;
 
 let source_account t =
   Json.encode (Jsont.list Jsont.string) [ t.bank_id; t.account_id; t.account_type ]
+;;
+
+(* Stable across runs and rebuilds with the same source identity. The CLI
+   checks for collisions before acting on this shortened identifier. *)
+let id t =
+  Json.encode
+    (Jsont.list Jsont.string)
+    [ "fin-account-v1"; t.institution; t.bank_id; t.account_type; t.account_id ]
+  |> Digestif.SHA256.digest_string
+  |> Digestif.SHA256.to_hex
+  |> fun digest -> String.prefix digest 16
 ;;
 
 let jsont =

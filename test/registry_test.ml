@@ -47,7 +47,7 @@ let construction () =
   let registry = ok (Registry.create (Builtin.adapters @ [ (module Example) ])) in
   Alcotest.(check (list string))
     "institutions"
-    [ "boursobank"; "bunq"; "example"; "revolut"; "wise" ]
+    [ "boursobank"; "bunq"; "csv"; "example"; "revolut"; "wise" ]
     (Registry.institutions registry);
   rejected
     "duplicate institution"
@@ -142,7 +142,7 @@ let unregistered_import () =
              true
              (String.is_substring
                 (Option.value_exn report.message)
-                ~substring:"known institutions: boursobank, bunq, revolut, wise");
+                ~substring:"known institutions: boursobank, bunq, csv, revolut, wise");
            Alcotest.(check int) "no events" 0 (List.length (ok (Store.events db)));
            Ok ())))
 ;;

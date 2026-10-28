@@ -330,7 +330,7 @@ let welcome () =
      \032 fin import --help       Learn how to import bank statements\n\n\
      Explore your finances:\n\
      \032 fin status              See import coverage and review progress\n\
-     \032 fin accounts list       See your bank accounts\n\
+     \032 fin account list       See your bank accounts\n\
      \032 fin bank review         Review imported transactions\n\
      \032 fin journal export      Produce an hledger journal\n\n\
      More:\n\
@@ -355,7 +355,7 @@ let setup database =
      Import your first statements, for example:\n\
      \032 fin import boursobank ~/Statements/boursobank%s\n\n\
      Accounts appear when you import statements. Then explore:\n\
-     \032 fin accounts list%s\n\
+     \032 fin account list%s\n\
      \032 fin bank review%s\n\n\
      See fin import --help for import options.\n\
      You can repeat fin init safely; existing data and account settings are preserved.\n"
@@ -638,7 +638,240 @@ let configure_new_accounts db fresh =
   if Unix.isatty Unix.stdin then groups fresh else Ok 0
 ;;
 
-let import_bank database institution paths journal max_mib account_id =
+let csv_import_registry database path max_mib ~institution =
+  let%bind contents =
+    Or_error.try_with (fun () ->
+      let stat = Unix.stat path in
+      if not (Poly.equal stat.st_kind Unix.S_REG)
+      then failwith "CSV setup needs a regular file";
+      if stat.st_size > max_mib * 1024 * 1024
+      then failwith "CSV file exceeds --max-file-mib";
+      In_channel.read_all path)
+  in
+  let%bind contexts =
+    with_database database (fun db -> Store.document_contexts db ~institution)
+  in
+  let%bind profiles =
+    List.map contexts ~f:(fun context ->
+      let%bind fields = Json.decode Json.string_map context in
+      match List.Assoc.find fields "csv_profile" ~equal:String.equal with
+      | None -> Ok None
+      | Some value ->
+        let%map p = Json.decode Csv_profile.codec value in
+        Some p)
+    |> Or_error.combine_errors
+  in
+  let matching =
+    List.filter_opt profiles
+    |> List.filter ~f:(fun (p : Csv_profile.t) ->
+      Csv_reader.recognizes ~separator:p.separator ~trim:false ~header:p.header contents)
+    |> List.dedup_and_sort ~compare:Poly.compare
+  in
+  let read message =
+    match prompt message with
+    | Some s when not (String.is_empty (String.strip s)) -> String.strip s
+    | _ -> failwith "CSV setup cancelled"
+  in
+  let%bind profile =
+    match matching with
+    | [ p ] -> Ok p
+    | _ :: _ ->
+      Or_error.error_string "multiple saved CSV layouts match; choose a distinct header"
+    | [] when not (Unix.isatty Unix.stdin) ->
+      Or_error.error_string
+        "unknown CSV layout; run this command in a terminal to set it up"
+    | [] ->
+      Or_error.try_with (fun () ->
+        eprintf "Unknown CSV layout. Set up the columns below.\n";
+        let separator =
+          match Csv_reader.detect_separator contents with
+          | Some separator ->
+            eprintf
+              "Detected separator: %s.\n"
+              (if Char.equal separator ',' then "comma" else "semicolon");
+            separator
+          | None ->
+            (match String.lowercase (read "Separator (comma or semicolon): ") with
+             | "comma" | "," -> ','
+             | "semicolon" | ";" -> ';'
+             | _ -> failwith "unsupported separator")
+        in
+        let header = Csv.next (Csv_reader.channel ~separator contents) in
+        eprintf "Columns: %s\n" (String.concat ~sep:", " header);
+        let find names =
+          List.find header ~f:(fun h ->
+            List.mem names (String.lowercase (String.strip h)) ~equal:String.equal)
+        in
+        let date_guess = find [ "date"; "transaction date"; "booking date" ] in
+        let description_guess = find [ "merchant"; "description"; "payee" ] in
+        let currencies =
+          List.filter_map header ~f:(fun h ->
+            Option.map (Iso4217.of_alpha_code h) ~f:(fun currency -> h, currency))
+        in
+        let amount_guess =
+          match currencies with
+          | [ pair ] -> Some pair
+          | _ -> None
+        in
+        let proposed =
+          match date_guess, description_guess, amount_guess with
+          | Some date, Some description, Some (amount, currency) ->
+            eprintf
+              "\n\
+               Suggested mapping:\n\
+              \  Transaction date: %s\n\
+              \  Description: %s\n\
+              \  Account amount: %s (%s)\n"
+              date
+              description
+              amount
+              (Iso4217.to_alpha_code currency);
+            let other =
+              List.filter header ~f:(fun h ->
+                not (List.mem [ date; description; amount ] h ~equal:String.equal))
+            in
+            if not (List.is_empty other)
+            then eprintf "  Other source details: %s\n" (String.concat ~sep:", " other);
+            eprintf
+              "These columns describe when and where you spent money, and the amount \
+               charged to the card.\n";
+            (match String.lowercase (read "Use these columns? (yes/no): ") with
+             | "yes" | "y" -> Some (date, description, amount, currency)
+             | "no" | "n" -> None
+             | _ -> failwith "answer yes or no")
+          | _ ->
+            eprintf "I could not identify all transaction columns; choose them below.\n";
+            None
+        in
+        let date_column, description_column, amount_column, currency =
+          match proposed with
+          | Some mapping -> mapping
+          | None ->
+            let date = read "Column containing the transaction date (YYYY-MM-DD): " in
+            let description = read "Column containing the merchant or description: " in
+            let amount = read "Column containing the amount charged to the account: " in
+            let currency =
+              read "Account currency (e.g. USD): "
+              |> Iso4217.of_alpha_code
+              |> Option.value_exn
+            in
+            date, description, amount, currency
+        in
+        eprintf "A prepaid card holds money you add; a credit card is paid later.\n";
+        let account_type =
+          match
+            String.lowercase (read "Account type (prepaid-card or credit-card): ")
+          with
+          | "prepaid-card" -> "prepaid-card"
+          | "credit-card" -> "credit-card"
+          | _ -> failwith "unsupported account type"
+        in
+        eprintf
+          "A purchase should reduce the card balance. Check how your file writes \
+           purchases.\n";
+        let invert_amount =
+          match
+            String.lowercase
+              (read "Are purchases positive amounts in the file? (yes/no): ")
+          with
+          | "yes" | "y" -> true
+          | "no" | "n" -> false
+          | _ -> failwith "answer yes or no"
+        in
+        let raw = Csv_reader.channel ~separator contents in
+        ignore (Csv.next raw : string list);
+        let records = Csv.input_all raw in
+        let summary =
+          match List.findi header ~f:(fun _ h -> String.equal h date_column) with
+          | None -> None
+          | Some (date_pos, _) ->
+            List.filter records ~f:(fun row ->
+              List.length row = List.length header
+              && String.is_empty (String.strip (List.nth_exn row date_pos)))
+            |> List.filter_map ~f:(fun row ->
+              List.find_mapi row ~f:(fun i value ->
+                Option.some_if
+                  (String.Caseless.equal (String.strip value) "total")
+                  (List.nth_exn header i, String.strip value)))
+            |> List.dedup_and_sort ~compare:[%compare: string * string]
+            |> (function
+             | [ result ] -> Some result
+             | _ -> None)
+        in
+        let skip_when =
+          match summary with
+          | Some (column, value) ->
+            eprintf "Found a summary row with an empty date: %s = %s.\n" column value;
+            (match String.lowercase (read "Skip this summary row? (yes/no): ") with
+             | "yes" | "y" -> Some (column, value)
+             | "no" | "n" -> None
+             | _ -> failwith "answer yes or no")
+          | None ->
+            (match
+               String.lowercase (read "Skip a summary row with an empty date? (yes/no): ")
+             with
+             | "yes" | "y" ->
+               let column = read "Summary label column: " in
+               let value = read "Summary label value: " in
+               Some (column, value)
+             | "no" | "n" -> None
+             | _ -> failwith "answer yes or no")
+        in
+        Csv_profile.
+          { separator
+          ; header
+          ; date_column
+          ; description_column
+          ; amount_column
+          ; currency
+          ; account_type
+          ; invert_amount
+          ; skip_when
+          })
+  in
+  let%bind rows = Csv_profile.parse profile contents in
+  if Unix.isatty Unix.stdin
+  then (
+    eprintf
+      "Preview: %d transactions; %s account.\n"
+      (List.length rows)
+      profile.account_type;
+    List.take rows 5
+    |> List.iter ~f:(fun (r : Csv_profile.row) ->
+      eprintf
+        "  %s  %s  %s %s\n"
+        (Date.to_string r.date)
+        r.description
+        (Quantity.to_string r.amount)
+        (Iso4217.to_alpha_code r.currency);
+      let other =
+        List.zip_exn profile.header r.fields
+        |> List.filter ~f:(fun (name, value) ->
+          (not
+             (List.mem
+                [ profile.date_column; profile.description_column; profile.amount_column ]
+                name
+                ~equal:String.equal))
+          && not (String.is_empty (String.strip value)))
+        |> List.map ~f:(fun (name, value) -> name ^ ": " ^ value)
+      in
+      if not (List.is_empty other) then eprintf "    %s\n" (String.concat ~sep:"; " other)));
+  let%bind () =
+    if not (Unix.isatty Unix.stdin)
+    then Ok ()
+    else (
+      match prompt "Import these transactions? [y/N] " with
+      | Some answer
+        when List.mem
+               [ "y"; "yes" ]
+               (String.lowercase (String.strip answer))
+               ~equal:String.equal -> Ok ()
+      | _ -> Or_error.error_string "CSV import cancelled")
+  in
+  Ok (Builtin.registry_with_csv_profile ~institution profile)
+;;
+
+let import_bank database institution paths journal max_mib account_id provider =
   if max_mib < 1 || max_mib > 1024
   then Or_error.error_string "max-file-mib must be between 1 and 1024"
   else (
@@ -650,9 +883,52 @@ let import_bank database institution paths journal max_mib account_id =
         ~default:
           (Stdlib.Filename.concat (Stdlib.Filename.dirname database) "bank.journal")
     in
+    let%bind institution, registry =
+      if String.equal institution "csv"
+      then (
+        let%bind provider =
+          match provider with
+          | Some name -> Validation.token "CSV provider" name
+          | None when Unix.isatty Unix.stdin ->
+            (match prompt "Card provider name (e.g. examplecard): " with
+             | Some name -> Validation.token "CSV provider" (String.strip name)
+             | None -> Or_error.error_string "CSV provider is required")
+          | None -> Or_error.error_string "generic CSV imports require --provider NAME"
+        in
+        if String.equal provider "csv" || Registry.is_registered Builtin.registry provider
+        then Or_error.error_string "CSV provider must not be a built-in institution name"
+        else (
+          let%bind legacy =
+            with_database database (fun db -> Store.bank_account_info db)
+          in
+          if
+            List.exists legacy ~f:(fun a ->
+              String.equal a.Store.mapping.institution "csv"
+              && Option.value_map
+                   account_id
+                   ~default:false
+                   ~f:(String.equal a.mapping.account_id))
+          then
+            Or_error.error_string
+              "this account was imported under the old csv provider; migrate it before \
+               importing under a provider name"
+          else (
+            match paths with
+            | [ path ] ->
+              let%map registry =
+                csv_import_registry database path max_mib ~institution:provider
+              in
+              provider, registry
+            | _ ->
+              Or_error.error_string
+                "generic CSV import currently accepts one file at a time")))
+      else if Option.is_some provider
+      then Or_error.error_string "--provider applies only to generic CSV imports"
+      else Ok (institution, Builtin.registry)
+    in
     let%bind report =
       Finances_bank.Sync.run
-        ~registry:Builtin.registry
+        ~registry
         ~configure_new_accounts
         ?account_id
         ~max_file_bytes:Int64.(of_int max_mib * 1048576L)
@@ -719,25 +995,29 @@ let import_bank_cmd =
     "import"
     "Import a bank's statement files, apply mappings, and publish a bank journal."
     Term.(
-      const import_bank
+      const (fun database first paths journal max_mib account_id provider ->
+        if Registry.is_registered Builtin.registry first
+        then
+          if List.is_empty paths
+          then Or_error.error_string "provide at least one statement path"
+          else import_bank database first paths journal max_mib account_id provider
+        else if Stdlib.Sys.file_exists first
+        then
+          import_bank database "csv" (first :: paths) journal max_mib account_id provider
+        else Or_error.errorf "unknown institution or file: %s" first)
       $ database
       $ Arg.(
           required
-          & pos
-              0
-              (some
-                 (enum
-                    (List.map (Registry.institutions Builtin.registry) ~f:(fun i -> i, i))))
-              None
+          & pos 0 (some string) None
           & info
               []
-              ~docv:"BANK"
+              ~docv:"BANK-OR-CSV"
               ~doc:
-                ("The bank that produced the files: "
+                ("A CSV filename, or the bank that produced the files: "
                  ^ String.concat ~sep:", " (Registry.institutions Builtin.registry)
-                 ^ "."))
+                 ^ ". Unknown CSV layouts are configured interactively."))
       $ Arg.(
-          non_empty
+          value
           & pos_right 0 string []
           & info
               []
@@ -771,10 +1051,16 @@ let import_bank_cmd =
           & info
               [ "account-id" ]
               ~doc:
-                "Stable account label for account-free exports (Revolut). Asked on a \
-                 terminal if omitted; required in scripts. New accounts missing an IBAN \
-                 prompt once on a terminal; Enter skips, and accounts edit can add it \
-                 later."))
+                "Stable account label for account-free exports (Revolut and generic \
+                 CSV). Asked on a terminal if omitted; required in scripts. New accounts \
+                 missing an IBAN prompt once on a terminal; Enter skips, and account \
+                 edit can add it later.")
+      $ Arg.(
+          value
+          & opt (some string) None
+          & info
+              [ "provider" ]
+              ~doc:"Provider name for a generic CSV card; prompted on a terminal."))
 ;;
 
 let institution_filter =
@@ -1172,10 +1458,77 @@ let accounts_history database =
     Ok ())
 ;;
 
-let accounts_cmd =
+let accounts_delete database account_id dry_run yes =
+  with_database database (fun db ->
+    let%bind accounts = Store.bank_account_info db in
+    let matches =
+      List.filter accounts ~f:(fun (a : Store.bank_account_info) ->
+        String.equal (Bank_account_mapping.id a.mapping) account_id)
+    in
+    let%bind account =
+      match matches with
+      | [ account ] -> Ok account
+      | [] -> Or_error.error_string "no matching account ID; see fin account list"
+      | _ -> Or_error.error_string "account ID collision; deletion is refused"
+    in
+    let%bind preview = Store.delete_account ~dry_run:true db account.mapping in
+    printf
+      "Account: %s / %s (%s), ID %s\nTransactions: %d\nSource documents: %d\n"
+      account.mapping.institution
+      account.mapping.account_id
+      account.mapping.account_type
+      account_id
+      preview.transactions
+      preview.documents;
+    if dry_run
+    then (
+      print_endline "Dry run: nothing deleted.";
+      Ok ())
+    else (
+      let%bind confirmed =
+        if yes
+        then Ok true
+        else if Unix.isatty Unix.stdin
+        then (
+          Out_channel.output_string
+            stdout
+            "Type yes to delete this account and its records: ";
+          Out_channel.flush stdout;
+          Ok
+            (Option.value_map
+               (In_channel.input_line In_channel.stdin)
+               ~default:false
+               ~f:(fun answer -> String.equal (String.strip answer) "yes")))
+        else
+          Or_error.error_string
+            "refusing to delete without confirmation; use --yes in scripts"
+      in
+      if not confirmed
+      then (
+        print_endline "Nothing deleted.";
+        Ok ())
+      else (
+        let%bind _ = Store.delete_account db account.mapping in
+        let journal =
+          Stdlib.Filename.concat (Stdlib.Filename.dirname database) "bank.journal"
+        in
+        let%bind () =
+          if Stdlib.Sys.file_exists journal
+          then
+            (let%bind contents = Finances_hledger.export db in
+             write_file journal contents)
+            |> Or_error.tag
+                 ~tag:"account deleted; failed to refresh the generated journal"
+          else Ok ()
+        in
+        print_endline "Account and its records deleted.";
+        Ok ())))
+;;
+
+let account_cmd =
   Cmd.group
     (Cmd.info
-       "accounts"
+       "account"
        ~doc:"Manage bank account settings stored in SQLite; export and import snapshots.")
     [ command
         "list"
@@ -1225,6 +1578,26 @@ let accounts_cmd =
                     "Validate and report changes without committing updates or audit \
                      rows."))
     ; command
+        "delete"
+        "Delete one account and its transactions after showing what will be removed."
+        Term.(
+          const accounts_delete
+          $ database
+          $ Arg.(
+              required
+              & pos 0 (some string) None
+              & info [] ~docv:"ID" ~doc:"Account ID shown by fin account list.")
+          $ Arg.(
+              value
+              & flag
+              & info
+                  [ "dry-run" ]
+                  ~doc:"Show what would be deleted without changing data.")
+          $ Arg.(
+              value
+              & flag
+              & info [ "yes" ] ~doc:"Delete without interactive confirmation."))
+    ; command
         "history"
         "Inspect audited ledger name, IBAN and settlement relationship changes."
         Term.(const accounts_history $ database)
@@ -1269,7 +1642,7 @@ let () =
                    "fin init\n\
                     fin import boursobank ~/Statements/boursobank\n\
                     fin status\n\
-                    fin accounts list\n\
+                    fin account list\n\
                     fin bank review\n\
                     fin journal export > my-finances.journal"
                ; `P
@@ -1282,7 +1655,7 @@ let () =
           ; backup_cmd
           ; restore_cmd
           ; delete_cmd
-          ; accounts_cmd
+          ; account_cmd
           ; import_bank_cmd
           ; group
               "db"

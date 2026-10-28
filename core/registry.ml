@@ -3,9 +3,10 @@ open Base
 type t =
   { adapters : (module Adapter.S) Map.M(String).t
   ; kinds : Set.M(String).t
+  ; fallback : (string * (Source_event.t -> Movement.t Or_error.t)) option
   }
 
-let create adapters =
+let create ?fallback adapters =
   let open Or_error.Let_syntax in
   let%bind entries =
     List.map adapters ~f:(fun (module A : Adapter.S) ->
@@ -35,7 +36,7 @@ let create adapters =
       |> List.concat_map ~f:(fun (module A : Adapter.S) -> A.kinds)
       |> Set.of_list (module String)
     in
-    Ok { adapters; kinds }
+    Ok { adapters; kinds; fallback }
 ;;
 
 let institutions t = Map.keys t.adapters
@@ -54,7 +55,10 @@ let movement t (event : Source_event.t) =
   | Some (module A) when List.mem A.kinds event.kind ~equal:String.equal -> A.decode event
   | Some _ ->
     Or_error.errorf "institution %s does not produce %s events" event.venue event.kind
-  | None -> Or_error.errorf "no adapter is registered for institution %s" event.venue
+  | None ->
+    (match t.fallback with
+     | Some (kind, decode) when String.equal kind event.kind -> decode event
+     | _ -> Or_error.errorf "no adapter is registered for institution %s" event.venue)
 ;;
 
 let find t institution = Map.find t.adapters institution

@@ -394,3 +394,26 @@
   base
   csv
   alcotest))
+
+(rule
+ (alias runtest)
+ (deps status_perf_test.py)
+ (action
+  (run python3 %{dep:status_perf_test.py} %{exe:../bin/main.exe})))
+
+(test
+ (name csv_profile_test)
+ (modules csv_profile_test)
+ (flags
+  (:standard -open Finances_core))
+ (libraries finances finances.banks finances.core base iso4217 alcotest))
+
+(rule
+ (alias runtest)
+ (deps manpage_cli_test.py ../packaging/arch/build.py)
+ (action
+  (run
+   python3
+   %{dep:manpage_cli_test.py}
+   %{exe:../bin/main.exe}
+   %{dep:../packaging/arch/build.py})))

@@ -1,6 +1,6 @@
 # Shared CSV decoding and format profiles
 
-Status: implemented, 2026-10-28. All four bank CSV formats decode rows through
+Status: shared engine and initial interactive card CSV import implemented, 2026-10-28. All four bank CSV formats decode rows through
 `Csv_reader` and `Csv_schema`, and `Adapter_support` shares companion wiring and
 CSV adapter construction.
 
@@ -16,8 +16,8 @@ hooks where a bank needs them. A profile still describes the format: arbitrary
 CSV cannot reliably supply its own account identity, amount interpretation or
 accounting meaning.
 
-Start with OCaml profile values. A user-editable configuration language is later
-work, after the existing formats establish which operations are actually needed.
+Interactive setup now saves a limited card CSV profile with imported evidence.
+A general user-editable configuration language is later work.
 
 ## What exists today
 

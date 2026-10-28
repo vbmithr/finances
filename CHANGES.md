@@ -10,6 +10,26 @@ short line of their own.
 
 ### 2026-10-28
 
+- Fix Arch package man-page generation after renaming `fin account`, and cover
+  every top-level command with a generated man page.
+
+- Rename the `fin accounts` command group to `fin account`. **Action required:**
+  update scripts and aliases to use the singular command.
+
+- Show stable account IDs and add `fin account delete ID`, with preview,
+  confirmation and checks for shared evidence and relationships; deleted
+  development imports can be reimported.
+
+- Allow asset and liability ledger mappings; new generic prepaid and credit cards
+  use card-specific asset and liability account defaults.
+
+- Add interactive generic card CSV import with suggested mappings, separator
+  detection, provider-scoped identities, saved layouts, preview and account-scoped
+  overlap checks. **Action required:** use `--provider NAME` for noninteractive
+  generic imports; delete and reimport legacy `csv` accounts under their provider.
+
+- Add a synthetic, CPU-timed `fin status` performance regression test.
+
 - Share companion CSV wiring and CSV-only adapter construction in
   `Adapter_support`, completing the migration of BoursoBank, Bunq, Wise and
   Revolut CSV handling to `Csv_reader` and `Csv_schema`.

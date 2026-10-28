@@ -54,7 +54,7 @@ fin
 fin init
 fin status
 fin paths
-fin accounts list
+fin account list
 fin bank statements --institution bunq
 fin transfers preview
 ```
@@ -72,7 +72,7 @@ The lower-level `fin db init` remains available for quiet database initializatio
 unclassified movements, unreviewed transfer candidate pairs and the latest inbox
 attempt. It creates no database when none exists. Date ranges are observations,
 not proof of complete coverage; financial reports come from the exported hledger
-journal. `accounts list`, `bank review`, `transfers candidates` and
+journal. `account list`, `bank review`, `transfers candidates` and
 `transfers preview` now display readable text by default. Add `--json` to those
 commands or `status` for scripts; the existing inspection JSON shapes are retained.
 `bank history` also displays readable file import attempts by default, with
@@ -93,11 +93,11 @@ permissions are retained. Account exports are optional private snapshots written
 atomically with mode 0600 to a path you choose.
 
 ```sh
-fin accounts list
-fin accounts edit
-fin accounts export -o ~/fin-accounts.json
-fin accounts import ~/fin-accounts.json --dry-run
-fin accounts import ~/fin-accounts.json
+fin account list
+fin account edit
+fin account export -o ~/fin-accounts.json
+fin account import ~/fin-accounts.json --dry-run
+fin account import ~/fin-accounts.json
 ```
 
 `--database` (or `-d`) is an option on commands that access SQLite. Input files and
@@ -118,7 +118,7 @@ Build the current checkout using a prepared opam switch, and install it:
 ```sh
 make install OPAM_SWITCH=5.5.0
 fin --version
-fin accounts list
+fin account list
 fin bank statements --institution bunq
 ```
 
@@ -153,7 +153,7 @@ for querying rendered journals. No personal records or configuration enter the p
 does, after building.
 
 The CLI provides `init`, `import`, `status`, `paths`, `backup` and `restore`,
-with grouped commands under `db`, `accounts`, `bank`, `transfers`, and `journal`:
+with grouped commands under `db`, `account`, `bank`, `transfers`, and `journal`:
 
 ```sh
 fin db init
@@ -322,8 +322,10 @@ amount posted to the bank account and its opposite to `equity:unclassified`.
 Reimporting or projecting again creates no duplicate entries. A projection conflict
 or invalid source event rolls back the complete projection batch.
 
-Bank ledger names are
-`assets:bank:INSTITUTION:BANK_ID:ACCOUNT_TYPE:ACCOUNT_ID`. Components containing
+Default bank ledger names are
+`assets:bank:INSTITUTION:BANK_ID:ACCOUNT_TYPE:ACCOUNT_ID`. New generic prepaid
+and credit card accounts instead default to `assets:cards:PROVIDER:ACCOUNT` and
+`liabilities:cards:PROVIDER:ACCOUNT`. Components containing
 characters such as masking asterisks are encoded as `x-` followed by their UTF-8
 bytes in hexadecimal. Literal components starting with `x-` are also encoded,
 preventing collisions. Original identifiers remain in SQLite. Names and memos are
@@ -388,8 +390,9 @@ evidence and entries. Input files are never modified or moved.
 The summary distinguishes imported documents, unchanged documents, rejected inputs,
 unsupported formats, unreadable files, and ignored paths. The observed BoursoBank
 CSV layout, Wise 23-column CSV and Bunq seven-column CSV are companion observations.
-Revolut ten-column CSV supplies primary movements. Excel, QIF, and other CSV layouts are
-reported as unsupported. Companion CSV observations never create a second
+Revolut ten-column CSV supplies primary movements. Other card CSV layouts can be
+configured interactively with `fin import card.csv --provider PROVIDER --account-id CARD`; see the
+[manual](docs/manual.md#configure-another-card-csv). Excel and QIF are unsupported. Companion CSV observations never create a second
 transaction stream; Revolut CSV is its own primary movement source.
 
 Successful files commit independently. Import generates a journal from successfully
@@ -405,14 +408,19 @@ how many recent attempts to display (100 by default).
 To give bank accounts readable ledger names:
 
 ~~~sh
-dune exec fin -- accounts edit
+dune exec fin -- account edit
 dune exec fin -- import boursobank personal/boursobank/inbox \
   --journal personal/bank.journal
 ~~~
 
+An account and its exclusive imported records can be removed with
+`fin account delete ACCOUNT_ID` (shown by `fin account list`); use `--dry-run` to preview it.
+Shared documents and relationships with other accounts prevent deletion. See
+[account deletion](docs/manual.md#delete-an-account) for details.
+
 The version 1 account snapshot manages ledger names, IBANs and card settlement links
-as described below. Source identifiers remain immutable. Names stay below
-`assets:bank:` and renames verify existing projections before changing postings.
+as described below. Source identifiers remain immutable. Names must stay below `assets:` or
+`liabilities:`, and renames verify existing projections before changing postings.
 Keep the database and journal outside the inbox. Import rejects
 paths that would ingest its own outputs or overwrite a control file, and skips
 hard links to its control files. Journal publication uses an atomic rename after
@@ -427,13 +435,13 @@ SQLite is authoritative for account names, registered IBANs, and card settlement
 relationships. Configure accounts already discovered from imported statements:
 
 ```sh
-fin accounts list
-fin accounts edit
+fin account list
+fin account edit
 # Optional settings snapshot for restoration or batch edits:
-fin accounts export -o ~/fin-accounts.json
-fin accounts import ~/fin-accounts.json --dry-run
-fin accounts import ~/fin-accounts.json
-fin accounts history
+fin account export -o ~/fin-accounts.json
+fin account import ~/fin-accounts.json --dry-run
+fin account import ~/fin-accounts.json
+fin account history
 ```
 
 `list` displays source identifiers, ledger account, IBAN and its provenance,
@@ -485,7 +493,7 @@ rows. A failure anywhere rolls back all account edits and posting renames togeth
 Identity edits that contradict confirmed transfers are rejected for review first.
 
 Snapshots are optional, explicit export/import files. There is no default file,
-XDG config directory or automatic loading during import. `accounts edit` and the import
+XDG config directory or automatic loading during import. `account edit` and the import
 command's IBAN prompts update SQLite only. `fin backup` saves a consistent SQLite
 snapshot, including settings, evidence and review decisions. `fin restore BACKUP`
 restores the full database from a backup folder or SQLite file; replacing existing
@@ -493,7 +501,7 @@ state requires confirmation or `--yes`. Restoration validates the source and
 discards stale generated journal and edit-draft files after success. Exported
 settings snapshots are user files and are kept by both restore and delete.
 Import every referenced source account before restoring a multi-bank snapshot.
-Existing version 1 JSON exports remain accepted by `fin accounts import FILE`.
+Existing version 1 JSON exports remain accepted by `fin account import FILE`.
 
 
 ## Review and categorize bank movements

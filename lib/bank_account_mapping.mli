@@ -17,6 +17,10 @@ val create
   -> t Or_error.t
 
 val source_account : t -> string
+
+(** A deterministic short identifier; callers must reject collisions. *)
+val id : t -> string
+
 val of_json : string -> t list Or_error.t
 val to_json : t list -> string
 val jsont : t Jsont.t

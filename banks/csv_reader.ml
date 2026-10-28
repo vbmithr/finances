@@ -15,6 +15,29 @@ let channel ~separator contents =
     contents
 ;;
 
+(* Count delimiters outside quotes in the first logical record. Quoted newlines
+   and doubled quotes belong to a cell, not the header boundary. *)
+let detect_separator contents =
+  let length = String.length contents in
+  let rec scan i quoted commas semicolons =
+    if i >= length
+    then if quoted then None else Some (commas, semicolons)
+    else (
+      match contents.[i] with
+      | '"' when quoted && i + 1 < length && Char.equal contents.[i + 1] '"' ->
+        scan (i + 2) quoted commas semicolons
+      | '"' -> scan (i + 1) (not quoted) commas semicolons
+      | ('\n' | '\r') when not quoted -> Some (commas, semicolons)
+      | ',' when not quoted -> scan (i + 1) quoted (commas + 1) semicolons
+      | ';' when not quoted -> scan (i + 1) quoted commas (semicolons + 1)
+      | _ -> scan (i + 1) quoted commas semicolons)
+  in
+  match scan 0 false 0 0 with
+  | Some (commas, 0) when commas > 0 -> Some ','
+  | Some (0, semicolons) when semicolons > 0 -> Some ';'
+  | _ -> None
+;;
+
 let header_matches ~trim ~header input =
   let fields = Csv.next input in
   let fields = if trim then List.map fields ~f:String.strip else fields in

@@ -15,14 +15,27 @@ let account_component value =
 ;;
 
 let ledger_account ~institution (account : Movement.account) =
-  let name =
-    String.concat
-      ~sep:":"
-      ([ "assets"; "bank" ]
-       @ List.map
-           [ institution; account.bank_id; account.account_type; account.account_id ]
-           ~f:account_component)
+  let components =
+    if
+      (not (String.equal institution "csv"))
+      && String.equal account.bank_id institution
+      && String.equal account.account_type "prepaid-card"
+    then [ "assets"; "cards"; institution; account.account_id ]
+    else if
+      (not (String.equal institution "csv"))
+      && String.equal account.bank_id institution
+      && String.equal account.account_type "credit-card"
+    then [ "liabilities"; "cards"; institution; account.account_id ]
+    else
+      [ "assets"
+      ; "bank"
+      ; institution
+      ; account.bank_id
+      ; account.account_type
+      ; account.account_id
+      ]
   in
+  let name = String.concat ~sep:":" (List.map components ~f:account_component) in
   Validation.account name
 ;;
 

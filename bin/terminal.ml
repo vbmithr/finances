@@ -30,6 +30,7 @@ let table headers rows =
 
 let account (a : Store.bank_account_info) =
   Stdio.printf "%s  %s\n" (text a.mapping.institution) (text a.mapping.ledger_account);
+  Stdio.printf "  ID: %s\n" (Bank_account_mapping.id a.mapping);
   Stdio.printf
     "  Source: %s / %s (%s)\n"
     (text a.mapping.bank_id)
