@@ -330,11 +330,14 @@ let welcome () =
      \032 fin import --help       Learn how to import bank statements\n\n\
      Explore your finances:\n\
      \032 fin status              See import coverage and review progress\n\
-     \032 fin account list       See your bank accounts\n\
-     \032 fin bank review         Review imported transactions\n\
-     \032 fin journal export      Produce an hledger journal\n\n\
+     \032 fin account list        See your bank accounts\n\
+     \032 fin transaction list    List imported transactions\n\
+     \032 fin bank review          Review unclassified movements\n\
+     \032 fin transfers candidates  Find possible transfers\n\
+     \032 fin journal export       Produce an hledger journal\n\n\
      More:\n\
      \032 fin paths               Show database and data locations\n\
+     \032 fin db --help           Inspect source evidence commands\n\
      \032 fin backup              Save a SQLite database snapshot\n\
      \032 fin restore BACKUP      Restore a SQLite database snapshot\n\
      \032 fin delete              Delete all fin data, after confirmation\n\
@@ -356,10 +359,12 @@ let setup database =
      \032 fin import boursobank ~/Statements/boursobank%s\n\n\
      Accounts appear when you import statements. Then explore:\n\
      \032 fin account list%s\n\
+     \032 fin transaction list%s\n\
      \032 fin bank review%s\n\n\
      See fin import --help for import options.\n\
      You can repeat fin init safely; existing data and account settings are preserved.\n"
     database
+    database_option
     database_option
     database_option
     database_option;
@@ -672,6 +677,37 @@ let csv_import_registry database path max_mib ~institution =
     | Some s when not (String.is_empty (String.strip s)) -> String.strip s
     | _ -> failwith "CSV setup cancelled"
   in
+  let choose question options =
+    eprintf "%s\n" question;
+    List.iteri options ~f:(fun i (label, _, _) -> eprintf "  %d. %s\n" (i + 1) label);
+    let rec loop () =
+      match prompt "Choice: " with
+      | None -> failwith "CSV setup cancelled"
+      | Some input ->
+        let input = String.strip input in
+        let by_number =
+          Option.try_with (fun () -> Int.of_string input)
+          |> Option.bind ~f:(fun n -> List.nth options (n - 1))
+        in
+        let selected =
+          match by_number with
+          | Some choice -> Some choice
+          | None ->
+            List.find options ~f:(fun (label, aliases, _) ->
+              String.Caseless.equal input label
+              || List.mem aliases input ~equal:String.Caseless.equal)
+        in
+        (match selected with
+         | Some (_, _, value) when not (String.is_empty input) -> value
+         | _ ->
+           eprintf "Choose one of the numbered options.\n";
+           loop ())
+    in
+    loop ()
+  in
+  let yes_no question =
+    choose question [ "Yes", [ "y"; "yes" ], true; "No", [ "n"; "no" ], false ]
+  in
   let%bind profile =
     match matching with
     | [ p ] -> Ok p
@@ -691,10 +727,7 @@ let csv_import_registry database path max_mib ~institution =
               (if Char.equal separator ',' then "comma" else "semicolon");
             separator
           | None ->
-            (match String.lowercase (read "Separator (comma or semicolon): ") with
-             | "comma" | "," -> ','
-             | "semicolon" | ";" -> ';'
-             | _ -> failwith "unsupported separator")
+            choose "Separator:" [ "Comma", [ "," ], ','; "Semicolon", [ ";" ], ';' ]
         in
         let header = Csv.next (Csv_reader.channel ~separator contents) in
         eprintf "Columns: %s\n" (String.concat ~sep:", " header);
@@ -735,10 +768,9 @@ let csv_import_registry database path max_mib ~institution =
             eprintf
               "These columns describe when and where you spent money, and the amount \
                charged to the card.\n";
-            (match String.lowercase (read "Use these columns? (yes/no): ") with
-             | "yes" | "y" -> Some (date, description, amount, currency)
-             | "no" | "n" -> None
-             | _ -> failwith "answer yes or no")
+            if yes_no "Use these columns?"
+            then Some (date, description, amount, currency)
+            else None
           | _ ->
             eprintf "I could not identify all transaction columns; choose them below.\n";
             None
@@ -747,9 +779,12 @@ let csv_import_registry database path max_mib ~institution =
           match proposed with
           | Some mapping -> mapping
           | None ->
-            let date = read "Column containing the transaction date (YYYY-MM-DD): " in
-            let description = read "Column containing the merchant or description: " in
-            let amount = read "Column containing the amount charged to the account: " in
+            let column question =
+              choose question (List.map header ~f:(fun h -> h, [], h))
+            in
+            let date = column "Column containing the transaction date (YYYY-MM-DD):" in
+            let description = column "Column containing the merchant or description:" in
+            let amount = column "Column containing the amount charged to the account:" in
             let currency =
               read "Account currency (e.g. USD): "
               |> Iso4217.of_alpha_code
@@ -759,25 +794,16 @@ let csv_import_registry database path max_mib ~institution =
         in
         eprintf "A prepaid card holds money you add; a credit card is paid later.\n";
         let account_type =
-          match
-            String.lowercase (read "Account type (prepaid-card or credit-card): ")
-          with
-          | "prepaid-card" -> "prepaid-card"
-          | "credit-card" -> "credit-card"
-          | _ -> failwith "unsupported account type"
+          choose
+            "Account type:"
+            [ "Prepaid card", [ "prepaid-card" ], "prepaid-card"
+            ; "Credit card", [ "credit-card" ], "credit-card"
+            ]
         in
         eprintf
           "A purchase should reduce the card balance. Check how your file writes \
            purchases.\n";
-        let invert_amount =
-          match
-            String.lowercase
-              (read "Are purchases positive amounts in the file? (yes/no): ")
-          with
-          | "yes" | "y" -> true
-          | "no" | "n" -> false
-          | _ -> failwith "answer yes or no"
-        in
+        let invert_amount = yes_no "Are purchases positive amounts in the file?" in
         let raw = Csv_reader.channel ~separator contents in
         ignore (Csv.next raw : string list);
         let records = Csv.input_all raw in
@@ -802,20 +828,16 @@ let csv_import_registry database path max_mib ~institution =
           match summary with
           | Some (column, value) ->
             eprintf "Found a summary row with an empty date: %s = %s.\n" column value;
-            (match String.lowercase (read "Skip this summary row? (yes/no): ") with
-             | "yes" | "y" -> Some (column, value)
-             | "no" | "n" -> None
-             | _ -> failwith "answer yes or no")
+            if yes_no "Skip this summary row?" then Some (column, value) else None
           | None ->
-            (match
-               String.lowercase (read "Skip a summary row with an empty date? (yes/no): ")
-             with
-             | "yes" | "y" ->
-               let column = read "Summary label column: " in
-               let value = read "Summary label value: " in
-               Some (column, value)
-             | "no" | "n" -> None
-             | _ -> failwith "answer yes or no")
+            if yes_no "Skip a summary row with an empty date?"
+            then (
+              let column =
+                choose "Summary label column:" (List.map header ~f:(fun h -> h, [], h))
+              in
+              let value = read "Summary label value: " in
+              Some (column, value))
+            else None
         in
         Csv_profile.
           { separator
@@ -838,12 +860,20 @@ let csv_import_registry database path max_mib ~institution =
       profile.account_type;
     List.take rows 5
     |> List.iter ~f:(fun (r : Csv_profile.row) ->
+      eprintf "  %s  %s\n" (Date.to_string r.date) r.description;
+      let currency = Iso4217.to_alpha_code r.currency in
+      let source_amount =
+        List.zip_exn profile.header r.fields
+        |> fun fields ->
+        List.Assoc.find fields profile.amount_column ~equal:String.equal
+        |> Option.value_exn
+      in
       eprintf
-        "  %s  %s  %s %s\n"
-        (Date.to_string r.date)
-        r.description
+        "    CSV amount: %s %s; account movement: %s %s\n"
+        source_amount
+        currency
         (Quantity.to_string r.amount)
-        (Iso4217.to_alpha_code r.currency);
+        currency;
       let other =
         List.zip_exn profile.header r.fields
         |> List.filter ~f:(fun (name, value) ->
@@ -855,18 +885,16 @@ let csv_import_registry database path max_mib ~institution =
           && not (String.is_empty (String.strip value)))
         |> List.map ~f:(fun (name, value) -> name ^ ": " ^ value)
       in
-      if not (List.is_empty other) then eprintf "    %s\n" (String.concat ~sep:"; " other)));
+      if not (List.is_empty other)
+      then eprintf "    CSV details: %s\n" (String.concat ~sep:"; " other)));
   let%bind () =
     if not (Unix.isatty Unix.stdin)
     then Ok ()
     else (
-      match prompt "Import these transactions? [y/N] " with
-      | Some answer
-        when List.mem
-               [ "y"; "yes" ]
-               (String.lowercase (String.strip answer))
-               ~equal:String.equal -> Ok ()
-      | _ -> Or_error.error_string "CSV import cancelled")
+      let%bind confirmed =
+        Or_error.try_with (fun () -> yes_no "Import these transactions?")
+      in
+      if confirmed then Ok () else Or_error.error_string "CSV import cancelled")
   in
   Ok (Builtin.registry_with_csv_profile ~institution profile)
 ;;
@@ -890,9 +918,26 @@ let import_bank database institution paths journal max_mib account_id provider =
           match provider with
           | Some name -> Validation.token "CSV provider" name
           | None when Unix.isatty Unix.stdin ->
-            (match prompt "Card provider name (e.g. examplecard): " with
-             | Some name -> Validation.token "CSV provider" (String.strip name)
-             | None -> Or_error.error_string "CSV provider is required")
+            let rec read_provider () =
+              match prompt "Provider name (required): " with
+              | None -> Or_error.error_string "CSV provider is required"
+              | Some name when String.is_empty (String.strip name) ->
+                eprintf "A provider name is required.\n";
+                read_provider ()
+              | Some name ->
+                (match Validation.token "CSV provider" (String.strip name) with
+                 | Ok name
+                   when not
+                          (String.equal name "csv"
+                           || Registry.is_registered Builtin.registry name) -> Ok name
+                 | Ok _ ->
+                   eprintf "Choose a provider name that is not a built-in institution.\n";
+                   read_provider ()
+                 | Error error ->
+                   eprintf "%s\n" (Error.to_string_hum error);
+                   read_provider ())
+            in
+            read_provider ()
           | None -> Or_error.error_string "generic CSV imports require --provider NAME"
         in
         if String.equal provider "csv" || Registry.is_registered Builtin.registry provider
@@ -1181,6 +1226,142 @@ let categorize_bank_cmd =
               ~doc:
                 "JSON decisions: event_id, account, reason. Large IDs use decimal \
                  strings."))
+;;
+
+let list_transactions
+      database
+      account_id
+      institution
+      from_date
+      to_date
+      search
+      limit
+      json_output
+  =
+  let parse_date label = function
+    | None -> Ok None
+    | Some text ->
+      Or_error.try_with (fun () ->
+        let date = Date.of_string text in
+        if not (String.equal text (Date.to_string date))
+        then failwith "expected YYYY-MM-DD";
+        Some date)
+      |> Or_error.tag ~tag:label
+  in
+  let%bind from_date = parse_date "--from" from_date in
+  let%bind to_date = parse_date "--to" to_date in
+  let%bind () =
+    match from_date, to_date, limit with
+    | Some first, Some last, _ when Date.compare first last > 0 ->
+      Or_error.error_string "--from must not be after --to"
+    | _, _, Some n when n <= 0 -> Or_error.error_string "--limit must be positive"
+    | _ -> Ok ()
+  in
+  with_database database (fun db ->
+    let%bind accounts = Store.bank_account_info db in
+    let%bind () =
+      match account_id with
+      | None -> Ok ()
+      | Some id ->
+        (match
+           List.count accounts ~f:(fun a ->
+             String.equal (Bank_account_mapping.id a.Store.mapping) id)
+         with
+         | 1 -> Ok ()
+         | 0 -> Or_error.error_string "unknown account ID; see fin account list"
+         | _ -> Or_error.error_string "account ID collision; filtering is refused")
+    in
+    let ids = Hashtbl.Poly.create () in
+    List.iter accounts ~f:(fun a ->
+      Hashtbl.set
+        ids
+        ~key:(a.Store.mapping.institution, Bank_account_mapping.source_account a.mapping)
+        ~data:(Bank_account_mapping.id a.mapping));
+    let%bind reviews = Store.bank_review db in
+    let%bind rows =
+      List.map reviews ~f:(fun (review : Store.bank_review) ->
+        let account = review.transaction.account in
+        let source =
+          Json.encode
+            (Jsont.list Jsont.string)
+            [ account.bank_id; account.account_id; account.account_type ]
+        in
+        match Hashtbl.find ids (review.institution, source) with
+        | None -> Or_error.error_string "transaction references an unknown account"
+        | Some account_id -> Ok { Report_json.account_id; review })
+      |> Or_error.combine_errors
+    in
+    let rows =
+      List.filter rows ~f:(fun (row : Report_json.transaction) ->
+        let r = row.review in
+        Option.value_map account_id ~default:true ~f:(String.equal row.account_id)
+        && Option.value_map institution ~default:true ~f:(String.equal r.institution)
+        && Option.value_map from_date ~default:true ~f:(fun date ->
+          Date.compare r.transaction.booked_on date >= 0)
+        && Option.value_map to_date ~default:true ~f:(fun date ->
+          Date.compare r.transaction.booked_on date <= 0)
+        && Option.value_map search ~default:true ~f:(fun text ->
+          List.exists r.transaction.descriptions ~f:(fun d ->
+            String.Caseless.is_substring d ~substring:text)))
+      |> List.sort
+           ~compare:(fun (a : Report_json.transaction) (b : Report_json.transaction) ->
+             match
+               Date.compare b.review.transaction.booked_on a.review.transaction.booked_on
+             with
+             | 0 -> Int64.compare b.review.event_id a.review.event_id
+             | n -> n)
+    in
+    let rows = Option.value_map limit ~default:rows ~f:(List.take rows) in
+    if json_output
+    then Report_json.print (Jsont.list Report_json.transaction) rows
+    else Terminal.transactions rows;
+    Ok ())
+;;
+
+let transaction_list_cmd =
+  command
+    "list"
+    "List imported transactions, newest first."
+    Term.(
+      const list_transactions
+      $ database
+      $ Arg.(
+          value
+          & opt (some string) None
+          & info [ "account" ] ~docv:"ID" ~doc:"Only this ID from fin account list.")
+      $ Arg.(
+          value
+          & opt (some string) None
+          & info
+              [ "institution" ]
+              ~docv:"NAME"
+              ~doc:"Only transactions from this provider.")
+      $ Arg.(
+          value
+          & opt (some string) None
+          & info
+              [ "from" ]
+              ~docv:"DATE"
+              ~doc:"Include booking dates on or after YYYY-MM-DD.")
+      $ Arg.(
+          value
+          & opt (some string) None
+          & info
+              [ "to" ]
+              ~docv:"DATE"
+              ~doc:"Include booking dates on or before YYYY-MM-DD.")
+      $ Arg.(
+          value
+          & opt (some string) None
+          & info
+              [ "search" ]
+              ~docv:"TEXT"
+              ~doc:"ASCII case-insensitive description substring.")
+      $ Arg.(
+          value
+          & opt (some int) None
+          & info [ "limit" ] ~docv:"COUNT" ~doc:"Maximum number of transactions.")
+      $ json_output)
 ;;
 
 let bank_review database all json_output =
@@ -1643,6 +1824,7 @@ let () =
                     fin import boursobank ~/Statements/boursobank\n\
                     fin status\n\
                     fin account list\n\
+                    fin transaction list\n\
                     fin bank review\n\
                     fin journal export > my-finances.journal"
                ; `P
@@ -1683,6 +1865,7 @@ let () =
               ; review_transfers_cmd
               ; transfer_history_cmd
               ]
+          ; group "transaction" "Inspect imported transactions." [ transaction_list_cmd ]
           ; group "journal" "Render persisted accounting entries." [ export_hledger_cmd ]
           ]))
 ;;

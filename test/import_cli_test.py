@@ -4,6 +4,7 @@ import os
 from pathlib import Path
 import pty
 import select
+import shlex
 import sqlite3
 import subprocess
 import sys
@@ -76,21 +77,46 @@ class ImportOnboarding(unittest.TestCase):
     def accounts(self):
         return json.loads(self.run_fin('account', 'export').stdout)['accounts']
 
+    def test_generic_provider_prompt_retries_invalid_values(self):
+        path = self.root / 'provider.csv'
+        path.write_text('Merchant,Date,USD\nShop,2026-10-01,11.00\n')
+        output = self.terminal(['import', str(path), '--account-id', 'card'], [
+            ('Provider name (required):', ''),
+            ('Provider name (required):', 'bad name'),
+            ('Provider name (required):', 'provider'),
+            ('Use these columns?', '1'),
+            ('Account type:', '9'),
+            ('Choose one of the numbered options.', ''),
+            ('Choose one of the numbered options.', '1'),
+            ('Are purchases positive amounts in the file?', '1'),
+            ('Skip a summary row with an empty date?', '2'),
+            ('Import these transactions?', '1'),
+        ])
+        self.assertEqual(output.count('Provider name (required):'), 3)
+        self.assertIn('A provider name is required.', output)
+        self.assertEqual(output.count('Choose one of the numbered options.'), 2)
+        self.assertNotIn('examplecard', output.lower())
+        self.assertIn('inserted=1', output)
+        self.assertEqual(self.accounts()[0]['institution'], 'provider')
+
     def test_generic_csv_setup_and_reimport(self):
         csv_path = self.root / 'card.csv'
         csv_path.write_text('Merchant,Category,Date,Local currency,Local amount,Exchange rate,USD\n'
                             'Shop,Food,2026-10-01,EUR,10.00,1.1,11.00\n'
                             'Total,,,,,,11.00\n')
         output = self.terminal(['import', str(csv_path), '--account-id', 'card-a', '--provider', 'card-provider'], [
-            ('Use these columns?', 'yes'),
-            ('Account type (prepaid-card or credit-card):', 'prepaid-card'),
-            ('Are purchases positive amounts in the file?', 'yes'),
-            ('Skip this summary row?', 'yes'),
-            ('Import these transactions?', 'yes'),
+            ('Use these columns?', '1'),
+            ('Account type:', '1'),
+            ('Are purchases positive amounts in the file?', '1'),
+            ('Skip this summary row?', '1'),
+            ('Import these transactions?', '1'),
         ])
         self.assertIn('Detected separator: comma.', output)
         self.assertIn('Suggested mapping:', output)
-        self.assertIn('Local currency: EUR', output)
+        self.assertIn('1. Prepaid card', output)
+        self.assertIn('2. Credit card', output)
+        self.assertIn('CSV amount: 11.00 USD; account movement: -11 USD', output)
+        self.assertIn('CSV details: Category: Food; Local currency: EUR', output)
         self.assertIn('inserted=1', output)
         result = self.run_fin('import', csv_path, '--account-id', 'card-a', '--provider', 'card-provider')
         self.assertIn('inserted=0', result.stdout)
@@ -100,19 +126,37 @@ class ImportOnboarding(unittest.TestCase):
         self.assertEqual([a['institution'] for a in accounts], ['card-provider'])
         self.assertEqual(accounts[0]['ledger_account'], 'assets:cards:card-provider:card-a')
 
+    def test_generic_csv_numbered_separator_selection(self):
+        path = self.root / 'ambiguous.csv'
+        path.write_text('Merchant;Date;USD,Other\nShop;2026-10-01;11.00\n')
+        output = self.terminal(['import', str(path), '--account-id', 'card', '--provider', 'provider'], [
+            ('Separator:', '2'),
+            ('Column containing the transaction date', '2'),
+            ('Column containing the merchant or description:', '1'),
+            ('Column containing the amount charged to the account:', '3'),
+            ('Account currency (e.g. USD):', 'USD'),
+            ('Account type:', '1'),
+            ('Are purchases positive amounts in the file?', '1'),
+            ('Skip a summary row with an empty date?', '2'),
+            ('Import these transactions?', '1'),
+        ])
+        self.assertIn('1. Comma', output)
+        self.assertIn('2. Semicolon', output)
+        self.assertIn('inserted=1', output)
+
     def test_generic_csv_can_change_suggested_columns(self):
         path = self.root / 'manual-card.csv'
         path.write_text('Merchant,Date,USD,Other\nShop,2026-10-01,11.00,9.00\n')
         output = self.terminal(['import', str(path), '--account-id', 'manual', '--provider', 'manual-provider'], [
-            ('Use these columns?', 'no'),
-            ('Column containing the transaction date', 'Date'),
-            ('Column containing the merchant or description:', 'Merchant'),
-            ('Column containing the amount charged to the account:', 'Other'),
+            ('Use these columns?', '2'),
+            ('Column containing the transaction date', '2'),
+            ('Column containing the merchant or description:', '1'),
+            ('Column containing the amount charged to the account:', '4'),
             ('Account currency (e.g. USD):', 'USD'),
-            ('Account type (prepaid-card or credit-card):', 'prepaid-card'),
-            ('Are purchases positive amounts in the file?', 'yes'),
-            ('Skip a summary row with an empty date?', 'no'),
-            ('Import these transactions?', 'yes'),
+            ('Account type:', '1'),
+            ('Are purchases positive amounts in the file?', '1'),
+            ('Skip a summary row with an empty date?', '2'),
+            ('Import these transactions?', '1'),
         ])
         self.assertIn('-9 USD', output)
         self.assertIn('inserted=1', output)
@@ -123,11 +167,11 @@ class ImportOnboarding(unittest.TestCase):
         a.write_text('Merchant,Date,USD\nDelete-only merchant,2026-10-01,11.00\n')
         b.write_text('Merchant,Date,USD\nKeep-this merchant,2026-10-01,12.00\n')
         self.terminal(['import', str(a), '--account-id', 'a', '--provider', 'provider'], [
-            ('Use these columns?', 'yes'),
-            ('Account type (prepaid-card or credit-card):', 'prepaid-card'),
-            ('Are purchases positive amounts in the file?', 'yes'),
-            ('Skip a summary row with an empty date?', 'no'),
-            ('Import these transactions?', 'yes'),
+            ('Use these columns?', '1'),
+            ('Account type:', '1'),
+            ('Are purchases positive amounts in the file?', '1'),
+            ('Skip a summary row with an empty date?', '2'),
+            ('Import these transactions?', '1'),
         ])
         self.run_fin('import', b, '--account-id', 'b', '--provider', 'provider')
         listed = json.loads(self.run_fin('account', 'list', '--json').stdout)
@@ -162,6 +206,47 @@ class ImportOnboarding(unittest.TestCase):
         self.assertNotEqual(result.returncode, 0)
         self.assertIn('shared documents', result.stderr)
         self.assertEqual(json.loads(self.run_fin('status', '--json').stdout)['movements'], before)
+
+    def test_transaction_list_filters_and_reviewed_rows(self):
+        self.run_fin('import', 'revolut', self.csv, '--account-id', 'main')
+        accounts = json.loads(self.run_fin('account', 'list', '--json').stdout)
+        account_id = accounts[0]['id']
+        rows = json.loads(self.run_fin('transaction', 'list', '--json').stdout)
+        self.assertEqual(len(rows), 4)
+        self.assertEqual([x['booked_on'] for x in rows],
+                         ['2026-01-03', '2026-01-02', '2026-01-02', '2026-01-01'])
+        self.assertTrue(all(x['account_id'] == account_id for x in rows))
+        self.assertEqual(len({x['event_id'] for x in rows}), 4)
+        selected = json.loads(self.run_fin('transaction', 'list', '--json', '--account', account_id,
+                                           '--from', '2026-01-02', '--to', '2026-01-02',
+                                           '--search', 'REPEATED').stdout)
+        self.assertEqual(len(selected), 2)
+        self.assertTrue(all(x['description'] == 'Repeated transfer' for x in selected))
+        self.assertEqual(len(json.loads(self.run_fin('transaction', 'list', '--json', '--limit', '1').stdout)), 1)
+        self.assertEqual(json.loads(self.run_fin('transaction', 'list', '--json', '--institution', 'other').stdout), [])
+        text = self.run_fin('transaction', 'list', '--limit', '1').stdout
+        self.assertIn('ACCOUNT ID', text)
+        self.assertIn('INSTITUTION', text)
+        self.assertIn('revolut', text)
+        self.assertEqual(rows[0]['institution'], 'revolut')
+        self.assertIn(account_id, text)
+        for args in [('--account', 'unknown'), ('--from', '2026-02-30'),
+                     ('--from', '2026-01-03', '--to', '2026-01-01'), ('--limit', '0')]:
+            self.assertNotEqual(self.run_fin('transaction', 'list', *args, check=False).returncode, 0)
+        decisions = self.root / 'transaction-category.json'
+        decisions.write_text(json.dumps([{'event_id': rows[0]['event_id'],
+                                          'account': 'expenses:shopping', 'reason': 'Reviewed'}]))
+        self.run_fin('bank', 'categories', 'apply', decisions)
+        reviewed = json.loads(self.run_fin('transaction', 'list', '--json', '--limit', '1').stdout)
+        self.assertEqual(reviewed[0]['counter_account'], 'expenses:shopping')
+        self.assertEqual(reviewed[0]['reason'], 'Reviewed')
+
+    def test_welcome_and_init_show_transaction_list(self):
+        self.assertIn('fin transaction list', self.run_fin().stdout)
+        db = self.root / 'separate.sqlite3'
+        output = self.run_fin('init', '--database', db).stdout
+        line = next(line for line in output.splitlines() if 'fin transaction list' in line)
+        self.assertEqual(shlex.split(line), ['fin', 'transaction', 'list', '--database', str(db)])
 
     def test_account_command_is_singular(self):
         help_text = self.run_fin('account', '--help=plain').stdout

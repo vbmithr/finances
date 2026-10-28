@@ -179,6 +179,32 @@ let review =
   |> Jsont.Object.finish
 ;;
 
+type transaction =
+  { account_id : string
+  ; review : Store.bank_review
+  }
+
+let transaction =
+  let field name codec (enc : transaction -> _) map =
+    Jsont.Object.mem name codec ~enc map
+  in
+  Jsont.Object.enc_only ()
+  |> field "event_id" Json.int64_codec (fun r -> r.review.event_id)
+  |> field "account_id" Jsont.string (fun r -> r.account_id)
+  |> field "institution" Jsont.string (fun r -> r.review.institution)
+  |> field "source_account" Jsont.string (fun r ->
+    r.review.transaction.account.account_id)
+  |> field "booked_on" Json.date (fun r -> r.review.transaction.booked_on)
+  |> field "amount" Json.quantity (fun r -> r.review.transaction.amount)
+  |> field "fee" Json.quantity (fun r -> r.review.transaction.fee)
+  |> field "currency" Json.currency (fun r -> r.review.transaction.account.currency)
+  |> field "description" Jsont.string (fun r ->
+    String.concat ~sep:" | " r.review.transaction.descriptions)
+  |> field "counter_account" Jsont.string (fun r -> r.review.counter_account)
+  |> field "reason" (Jsont.option Jsont.string) (fun r -> r.review.reason)
+  |> Jsont.Object.finish
+;;
+
 let category_change =
   let field name codec (enc : Store.category_change -> _) map =
     Jsont.Object.mem name codec ~enc map

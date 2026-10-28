@@ -10,6 +10,21 @@ short line of their own.
 
 ### 2026-10-28
 
+- Show the institution in the readable transaction list.
+
+- Keep the `fin` welcome and initialization guidance current with transaction
+  listing and check all top-level commands appear in the welcome.
+
+- Add `fin transaction list` with account, provider, date and description
+  filters, a result limit and JSON output.
+
+- Show numbered choices in interactive CSV setup and retry invalid selections.
+
+- Retry empty or invalid generic CSV provider names without suggesting a real
+  provider in the prompt.
+
+- Show source amounts alongside signed account movements in the CSV preview.
+
 - Fix Arch package man-page generation after renaming `fin account`, and cover
   every top-level command with a generated man page.
 

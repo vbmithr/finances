@@ -34,6 +34,7 @@ quiet initialization for scripts, and `fin paths` shows where everything lives.
 ```sh
 fin status
 fin account list
+fin transaction list
 fin bank review
 fin transfers preview
 ```
@@ -276,7 +277,7 @@ It shows the bank, timestamp, filename, outcome, new/existing movement counts an
 any diagnostic. Attempts appear newest first; an unchanged file can appear more
 than once because each attempt is recorded. Use `fin bank history --limit 10` for
 the ten latest attempts, or `fin bank history --json` for machine-readable output.
-Use `fin bank review --all` to browse individual movements instead.
+Use `fin transaction list` to browse individual movements instead.
 
 See [Bank import and review reference](../README.md#folder-workflow) for
 additional detail, or use `fin import --help` for current options.
@@ -293,17 +294,20 @@ fin import card.csv --provider my-provider --account-id my-card
 The first import must run in a terminal. Fin detects a comma or semicolon
 separator from the header when unambiguous, and asks if it cannot decide. It
 then proposes date, description and account amount columns when it recognizes
-them. Accept the proposal or choose columns yourself. It also explains the
-account type and asks whether purchases have positive amounts. Dates
+them. Accept the proposal or choose columns yourself. For questions with
+numbered choices, enter the number; empty and invalid choices are retried. It
+also explains the account type and asks whether purchases have positive amounts. Dates
 must be ISO `YYYY-MM-DD`, amounts must use a dot decimal mark, and the account
 currency is fixed for the file. If there is a summary row, specify its label;
 fin skips it only when its date is empty. Review the preview and confirm to import.
+The preview shows each CSV amount beside the signed account movement; other
+CSV fields, such as local currency and exchange rate, retain their source signs.
 Only one generic CSV file can be imported per command. Raw fields are retained
 with the source evidence, including original currency amounts and exchange rates.
 The mapped account amount, not the local amount, is posted to the ledger.
 
-The provider name identifies the institution; fin prompts for it when omitted
-on a terminal. The layout is saved with the accepted document in the database
+The provider name identifies the institution; fin prompts for a nonempty name
+when omitted on a terminal and retries invalid answers. The layout is saved with the accepted document in the database
 and reused for later files with the same header and provider. Supply the same `--account-id` for the same
 card, and different labels for separate card balances. A known layout can be
 imported without a terminal. Reimports are safe: repeated identical rows are
@@ -420,6 +424,27 @@ Confirm a transfer only when both movements belong to your accounts. Registered
 IBANs improve the evidence used to rank candidates. Review changes are audited;
 regenerate the journal after changing settings or decisions.
 
+## List transactions
+
+`fin transaction list` lists all imported movements, including reviewed ones,
+newest first, with the institution and account ID for each movement. The
+displayed event IDs can be used in review decisions; account IDs come from
+`fin account list`.
+
+```sh
+fin transaction list
+fin transaction list --from 2026-01-01 --to 2026-01-31
+fin transaction list --search coffee --limit 20
+fin transaction list --json
+```
+
+Dates are inclusive booking dates. Use `--account ID` for one account or
+`--institution NAME` for a provider; `--search` matches description substrings using ASCII case-insensitive
+comparison. `--limit` must be positive. JSON includes amounts, fees,
+classification and review reason; CSV source fields and document provenance
+are not yet included. Use `fin bank review` for unclassified items and hledger
+for accounting reports and running balances.
+
 ## Exporting and querying accounting
 
 ```sh
@@ -497,6 +522,7 @@ above; no automatic migration runs.
 | `fin status` | Import coverage and outstanding review work |
 | `fin paths` | Resolved storage paths |
 | `fin account --help` | Account listing, config and history |
+| `fin transaction --help` | Imported transaction listing |
 | `fin bank --help` | Import history, reconciliation and category review |
 | `fin transfers --help` | Candidates, preview and explicit decisions |
 | `fin journal --help` | hledger journal export |

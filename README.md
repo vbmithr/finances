@@ -55,6 +55,7 @@ fin init
 fin status
 fin paths
 fin account list
+fin transaction list
 fin bank statements --institution bunq
 fin transfers preview
 ```
@@ -503,6 +504,14 @@ settings snapshots are user files and are kept by both restore and delete.
 Import every referenced source account before restoring a multi-bank snapshot.
 Existing version 1 JSON exports remain accepted by `fin account import FILE`.
 
+
+## List imported transactions
+
+Use `fin transaction list` to see imported movements, including reviewed ones.
+Filter by `--account ID`, `--institution NAME`, inclusive `--from` and `--to`
+dates, `--search TEXT`, or `--limit COUNT`; add `--json` for scripts. See the
+[manual](docs/manual.md#list-transactions) for examples. Use hledger for
+accounting reports and running balances.
 
 ## Review and categorize bank movements
 

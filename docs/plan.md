@@ -50,7 +50,7 @@ Last updated: 2026-10-28.
   `fin backup` saves one
   consistent SQLite snapshot; `fin restore BACKUP` validates and restores it,
   with overwrite confirmation and automatic removal of stale generated files.
-- 160 tests (142 OCaml cases and 18 CLI cases), plus status performance and
+- 164 tests (142 OCaml cases and 22 CLI cases), plus status performance and
   package man-page checks. Selected import changes have also been compared by
   rebuilding a personal database and diffing reports and source payloads.
 - Issue #1 is implemented locally and awaits publication.
@@ -75,14 +75,13 @@ A prior database rebuilt from `personal/*/inbox` contained:
   BoursoBank and Revolut have no statement balances to reconcile against.
 - Companion rows: all matched except 8 BoursoBank CSV rows, ambiguous because the
   OFX has identical movements.
-- The live schema 13 database currently contains 4,370 movements across 10
+- The live schema 13 database currently contains 4,427 movements across 12
   accounts, all unclassified, and reports 123 transfer candidate pairs. The
-  legacy card CSV accounts are no longer present.
+  57 card movements were reimported under their named provider.
 
 ## Next actions
 
-1. Reimport the card statements under their provider if desired, then
-   record the card-balance transfer once its date and amount are known.
+1. Record the card-balance transfer once its date and amount are known.
 2. Begin categorizing movements and reviewing transfer candidates.
 3. Push `main` when ready; it is public on GitHub.
 
@@ -125,6 +124,10 @@ The import side is done; turning movements into accounting is not.
   row descriptions and common reading/diagnostics, retaining primary/companion
   roles, identities and matching policies. `Csv_reader`, `Csv_schema`, all four
   bank CSV schemas and `Adapter_support` companion/profile helpers are in place.
+- [x] Keep the welcome in sync with top-level commands and show transaction
+  listing in the setup guidance.
+- [x] List imported transactions with institution and account IDs, provider, date
+  and description filters, and JSON output; source-field provenance remains later work.
 - [x] Initial generic card CSV import: suggested mappings, separator detection,
   interactive setup, preview and a saved
   layout with account-scoped identities and conservative day overlap checks.
@@ -133,6 +136,10 @@ The import side is done; turning movements into accounting is not.
 - [x] Delete account-scoped development imports by their displayed stable ID
   after preview; reimport source
   files under their provider instead of migrating legacy `csv` identities.
+- [x] Use numbered choices for interactive CSV setup and retry invalid answers.
+- [x] Require a valid provider name and retry empty or invalid terminal input.
+- [x] Show CSV amounts and source details alongside signed account movements
+  in the generic CSV preview.
 - [ ] Extend generic CSV setup beyond ISO dates, dot decimals, fixed currency
   and one card file; support pending states and more flexible layout selection.
 - [x] Allow asset and liability ledger mappings; new generic prepaid and credit

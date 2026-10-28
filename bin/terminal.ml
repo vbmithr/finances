@@ -103,6 +103,31 @@ let review rows =
       print_endline "")
 ;;
 
+let transactions rows =
+  if List.is_empty rows
+  then print_endline "No transactions found."
+  else
+    table
+      [ "DATE"
+      ; "AMOUNT"
+      ; "CURRENCY"
+      ; "INSTITUTION"
+      ; "ACCOUNT ID"
+      ; "DESCRIPTION"
+      ; "EVENT"
+      ]
+      (List.map rows ~f:(fun (row : Report_json.transaction) ->
+         let r = row.review in
+         [ Date.to_string r.transaction.booked_on
+         ; Quantity.to_string r.transaction.amount
+         ; Iso4217.to_alpha_code r.transaction.account.currency
+         ; r.institution
+         ; row.account_id
+         ; String.concat ~sep:" | " r.transaction.descriptions
+         ; Int64.to_string r.event_id
+         ]))
+;;
+
 let transfer (c : Store.transfer_candidate) =
   Stdio.printf
     "%Ld <-> %Ld  principal %s %s  (%d days apart)\n"
