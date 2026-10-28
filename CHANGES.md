@@ -10,6 +10,11 @@ short line of their own.
 
 ### 2026-10-28
 
+- Add a personal-accounting guide for fin and hledger: choose a first period,
+  import statements, review transfers and categories, produce spending reports,
+  add verified opening balances and closing assertions, and establish a monthly
+  routine. Explain current accounting limits and backing up manual journal files
+  alongside SQLite snapshots.
 - Rename statement ingestion to `fin import BANK PATH...`, with the same options,
   prompts, import rules and journal output. **Action required:** replace
   `fin bank sync` in scripts and commands; the old command has been removed.

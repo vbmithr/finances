@@ -3,6 +3,10 @@
 Personal finance kernel in OCaml, using Jane Street Base, decimal, Ptime, Bos, and SQLite
 through Rel. SQLite is the source of truth.
 
+To start keeping your books, follow [Personal accounting with fin and
+hledger](docs/personal-accounting.md). The [user manual](docs/manual.md) covers
+individual commands and storage.
+
 Where the project stands and what comes next: [docs/plan.md](docs/plan.md). What
 changed: [CHANGES.md](CHANGES.md).
 

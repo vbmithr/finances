@@ -5,6 +5,10 @@ accounts and transactions, and produces an hledger journal. It currently support
 BoursoBank, Wise, Bunq and Revolut exports. It does not connect to banks or fetch
 statements for you.
 
+For a practical first month of bookkeeping, follow
+[Personal accounting with fin and hledger](personal-accounting.md). This manual
+is the command and storage reference.
+
 ## Getting started
 
 Run `fin` for a short welcome, or `fin --help` for the command reference. Neither

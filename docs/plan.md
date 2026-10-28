@@ -116,6 +116,9 @@ The import side is done; turning movements into accounting is not.
 
 ### 3. Smaller gaps
 
+- [x] [Personal accounting guide](personal-accounting.md): a first-month workflow
+  from imports and classification to hledger reports, opening balances,
+  reconciliation and ongoing backups.
 - [x] Backup creates missing destination directories privately, including nested
   paths, so the documented first-backup command succeeds.
 
