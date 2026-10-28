@@ -116,6 +116,9 @@ The import side is done; turning movements into accounting is not.
 
 ### 3. Smaller gaps
 
+- [ ] [Shared CSV decoding and format profiles](csv-imports.md): extract typed
+  row descriptions and common reading/diagnostics, retaining primary/companion
+  roles, identities and matching policies. Design recorded; implementation pending.
 - [x] [Personal accounting guide](personal-accounting.md): a first-month workflow
   from imports and classification to hledger reports, opening balances,
   reconciliation and ongoing backups.

@@ -258,6 +258,10 @@ generated journals remain a rendering of SQLite accounting.
 
 ## Inbox import and mapping decisions
 
+CSV parsing still lives in format-specific modules. The proposed
+[shared CSV engine and typed profiles](csv-imports.md) would remove repeated
+reading and column-decoding code while retaining existing semantic policies.
+
 The bank workflow design in [bank-workflow.md](bank-workflow.md) specifies the
 implemented folder milestone and later phases. The separate finances.bank library
 owns filesystem scanning and import orchestration. Format detection, mapping types,

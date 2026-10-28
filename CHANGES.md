@@ -10,6 +10,9 @@ short line of their own.
 
 ### 2026-10-28
 
+- Record a design for shared CSV decoding and typed format profiles, including
+  primary/companion roles, semantic hooks, staged migration and compatibility
+  checks. Documentation only; CSV import behavior is unchanged.
 - Add a personal-accounting guide for fin and hledger: choose a first period,
   import statements, review transfers and categories, produce spending reports,
   add verified opening balances and closing assertions, and establish a monthly
