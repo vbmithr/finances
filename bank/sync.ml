@@ -86,7 +86,7 @@ let run
   let open Or_error.Let_syntax in
   let%bind database, paths, journal =
     Or_error.try_with (fun () ->
-      if List.is_empty paths then failwith "no file or directory to sync";
+      if List.is_empty paths then failwith "no file or directory to import";
       let roots =
         List.map paths ~f:(fun path ->
           match (Unix.LargeFile.lstat path).st_kind with
@@ -104,7 +104,8 @@ let run
             | `File file -> same_file file control))
       then
         failwith
-          "database and journal must not be synced, nor be inside a synced directory";
+          "database and journal must not be import inputs or lie inside an imported \
+           directory";
       if same_file database journal
       then failwith "database and journal must be distinct files";
       (match Or_error.try_with (fun () -> Unix.LargeFile.stat journal) with

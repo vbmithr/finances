@@ -1,9 +1,10 @@
-"""Exercise sync onboarding and account settings against a disposable database."""
+"""Exercise import onboarding and account settings against a disposable database."""
 import json
 import os
 from pathlib import Path
 import pty
 import select
+import sqlite3
 import subprocess
 import sys
 import tempfile
@@ -16,9 +17,9 @@ FIXTURE = Path('fixtures/revolut.csv').read_text()
 IBAN = 'BE68539007547034'
 
 
-class SyncOnboarding(unittest.TestCase):
+class ImportOnboarding(unittest.TestCase):
     def setUp(self):
-        self.temporary = tempfile.TemporaryDirectory(prefix='fin-sync-')
+        self.temporary = tempfile.TemporaryDirectory(prefix='fin-import-')
         self.addCleanup(self.temporary.cleanup)
         self.root = Path(self.temporary.name)
         self.env = dict(os.environ, XDG_DATA_HOME=str(self.root / 'data'),
@@ -76,14 +77,18 @@ class SyncOnboarding(unittest.TestCase):
         return json.loads(self.run_fin('accounts', 'export').stdout)['accounts']
 
     def test_scripts_require_label_and_never_prompt(self):
-        result = self.run_fin('bank', 'sync', 'revolut', self.csv, check=False)
+        help_text = self.run_fin('import', '--help=plain').stdout
+        self.assertIn('BANK', help_text)
+        self.assertIn('--account-id', help_text)
+        self.assertNotEqual(self.run_fin('bank', 'sync', '--help', check=False).returncode, 0)
+        result = self.run_fin('import', 'revolut', self.csv, check=False)
         self.assertNotEqual(result.returncode, 0)
         self.assertIn('--account-id LABEL', result.stderr)
-        self.run_fin('bank', 'sync', 'revolut', self.csv, '--account-id', 'main')
+        self.run_fin('import', 'revolut', self.csv, '--account-id', 'main')
         self.assertTrue(all(row['iban'] is None for row in self.accounts()))
 
     def test_label_and_iban_retry_once_for_two_currencies(self):
-        output = self.terminal(['bank', 'sync', 'revolut', self.csv, self.usd], [
+        output = self.terminal(['import', 'revolut', self.csv, self.usd], [
             ('Label for this account', 'bad label'),
             ('Label for this account', 'main'),
             ('IBAN (Enter to skip):', 'invalid'),
@@ -95,20 +100,20 @@ class SyncOnboarding(unittest.TestCase):
         self.assertTrue(all(row['iban'] == IBAN for row in self.accounts()))
         history = json.loads(self.run_fin('accounts', 'history').stdout)
         self.assertEqual(len(history), 2)
-        replay = self.terminal(['bank', 'sync', 'revolut', self.csv, self.usd,
+        replay = self.terminal(['import', 'revolut', self.csv, self.usd,
                                 '--account-id', 'main'], [])
         self.assertNotIn('IBAN (Enter to skip):', replay)
 
     def test_skip_is_not_repeated(self):
-        self.terminal(['bank', 'sync', 'revolut', self.csv, '--account-id', 'main'],
+        self.terminal(['import', 'revolut', self.csv, '--account-id', 'main'],
                       [('IBAN (Enter to skip):', '')])
-        replay = self.terminal(['bank', 'sync', 'revolut', self.csv,
+        replay = self.terminal(['import', 'revolut', self.csv,
                                 '--account-id', 'main'], [])
         self.assertNotIn('IBAN (Enter to skip):', replay)
         self.assertIsNone(self.accounts()[0]['iban'])
 
     def test_snapshot_import_is_explicit_and_supports_dry_run(self):
-        self.terminal(['bank', 'sync', 'revolut', self.csv, '--account-id', 'main'],
+        self.terminal(['import', 'revolut', self.csv, '--account-id', 'main'],
                       [('IBAN (Enter to skip):', '')])
         snapshot = self.root / 'saved-accounts.json'
         self.run_fin('accounts', 'export', '-o', snapshot)
@@ -121,26 +126,112 @@ class SyncOnboarding(unittest.TestCase):
         self.assertEqual(self.accounts()[0]['iban'], IBAN)
         self.assertNotEqual(self.run_fin('accounts', 'import', check=False).returncode, 0)
         before = snapshot.read_bytes()
-        self.terminal(['bank', 'sync', 'revolut', self.usd, '--account-id', 'main'],
+        self.terminal(['import', 'revolut', self.usd, '--account-id', 'main'],
                       [('IBAN (Enter to skip):', IBAN)])
         self.assertEqual(snapshot.read_bytes(), before)
         self.assertFalse(self.config.exists())
 
+    def test_restore_recovers_settings_reviews_and_evidence(self):
+        self.terminal(['import', 'revolut', self.csv, '--account-id', 'main'],
+                      [('IBAN (Enter to skip):', IBAN)])
+        review = json.loads(self.run_fin('bank', 'review', '--json').stdout)
+        decisions = self.root / 'decisions.json'
+        decisions.write_text(json.dumps([{'event_id': review[0]['event_id'],
+                                         'account': 'expenses:food', 'reason': 'Reviewed'}]))
+        self.run_fin('bank', 'categories', 'apply', decisions)
+        expected = {name: self.run_fin(*args).stdout for name, args in {
+            'accounts': ['accounts', 'export'],
+            'events': ['db', 'events'],
+            'review': ['bank', 'review', '--all', '--json'],
+            'history': ['bank', 'categories', 'history'],
+            'journal': ['journal', 'export'],
+        }.items()}
+        self.run_fin('backup', self.root / 'backups')
+        backup = next((self.root / 'backups').glob('fin-backup-*'))
+        source = backup / 'fin.sqlite3'
+        source_bytes = source.read_bytes()
+        self.run_fin('delete', '--yes')
+        self.run_fin('restore', backup)
+        for name, args in {
+            'accounts': ['accounts', 'export'], 'events': ['db', 'events'],
+            'review': ['bank', 'review', '--all', '--json'],
+            'history': ['bank', 'categories', 'history'], 'journal': ['journal', 'export'],
+        }.items():
+            self.assertEqual(self.run_fin(*args).stdout, expected[name], name)
+        self.assertEqual(source.read_bytes(), source_bytes)
+        target = self.root / 'alternative/nested/fin.sqlite3'
+        self.run_fin('restore', source, '--database', target)
+        self.assertEqual(target.stat().st_mode & 0o777, 0o600)
+        self.assertEqual(target.parent.stat().st_mode & 0o777, 0o700)
+        self.assertEqual(self.run_fin('accounts', 'export', '--database', target).stdout,
+                         expected['accounts'])
+
+    def test_restore_requires_confirmation_and_clears_stale_outputs(self):
+        self.run_fin('import', 'revolut', self.csv, '--account-id', 'main')
+        self.run_fin('backup', self.root / 'backups')
+        backup = next((self.root / 'backups').glob('fin-backup-*'))
+        expected = self.accounts()
+        changed = self.accounts()
+        changed[0]['ledger_account'] = 'assets:bank:renamed'
+        snapshot = self.root / 'settings.json'
+        snapshot.write_text(json.dumps({'version': 1, 'accounts': changed}))
+        self.run_fin('accounts', 'import', snapshot)
+        self.env['VISUAL'] = 'false'
+        self.run_fin('accounts', 'edit', check=False)
+        draft = self.root / 'data/fin/fin.sqlite3.edit'
+        journal = self.root / 'data/fin/bank.journal'
+        self.assertTrue(draft.exists())
+        self.assertTrue(journal.exists())
+        result = self.run_fin('restore', backup, check=False)
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn('--yes', result.stderr)
+        self.terminal(['restore', backup], [('Type yes to restore:', 'no')])
+        self.assertEqual(self.accounts(), changed)
+        self.assertTrue(draft.exists())
+        self.assertTrue(journal.exists())
+        self.terminal(['restore', backup], [('Type yes to restore:', 'yes')])
+        self.assertEqual(self.accounts(), expected)
+        self.assertFalse(draft.exists())
+        self.assertFalse(journal.exists())
+        self.assertTrue(snapshot.exists())
+        self.run_fin('restore', backup, '--yes')
+
+    def test_restore_rejects_invalid_or_same_source_without_changing_database(self):
+        database = self.root / 'data/fin/fin.sqlite3'
+        original = database.read_bytes()
+        invalid = self.root / 'invalid.sqlite3'
+        invalid.write_bytes(b'not SQLite')
+        self.assertNotEqual(self.run_fin('restore', invalid, '--yes', check=False).returncode, 0)
+        self.assertEqual(database.read_bytes(), original)
+        invalid.unlink()
+        with sqlite3.connect(invalid) as conn:
+            conn.execute('PRAGMA user_version=12')
+        source_bytes = invalid.read_bytes()
+        self.assertNotEqual(self.run_fin('restore', invalid, '--yes', check=False).returncode, 0)
+        self.assertEqual(database.read_bytes(), original)
+        self.assertEqual(invalid.read_bytes(), source_bytes)
+        target = self.root / 'absent/fin.sqlite3'
+        self.assertNotEqual(self.run_fin('restore', invalid, '--database', target,
+                                        check=False).returncode, 0)
+        self.assertFalse(target.exists())
+        self.assertNotEqual(self.run_fin('restore', database, '--yes', check=False).returncode, 0)
+        self.assertEqual(database.read_bytes(), original)
+
     def test_legacy_config_is_not_used_or_changed(self):
         self.config.parent.mkdir(parents=True)
         self.config.write_text('Not a settings input')
-        self.terminal(['bank', 'sync', 'revolut', self.csv, '--account-id', 'main'],
+        self.terminal(['import', 'revolut', self.csv, '--account-id', 'main'],
                       [('IBAN (Enter to skip):', IBAN)])
         self.assertEqual(self.config.read_text(), 'Not a settings input')
         self.assertEqual(self.accounts()[0]['iban'], IBAN)
         paths = json.loads(self.run_fin('paths').stdout)
         self.assertEqual(set(paths), {'data_dir', 'database'})
-        self.assertNotEqual(self.run_fin('bank', 'sync', 'revolut', self.csv,
+        self.assertNotEqual(self.run_fin('import', 'revolut', self.csv,
                                         '--account-id', 'main', '--accounts', self.config,
                                         check=False).returncode, 0)
 
     def test_editor_saves_only_to_database_and_recovers_draft(self):
-        self.run_fin('bank', 'sync', 'revolut', self.csv, '--account-id', 'main')
+        self.run_fin('import', 'revolut', self.csv, '--account-id', 'main')
         draft = self.root / 'data/fin/fin.sqlite3.edit'
         self.env['VISUAL'] = 'false'
         self.assertNotEqual(self.run_fin('accounts', 'edit', check=False).returncode, 0)
@@ -162,7 +253,7 @@ class SyncOnboarding(unittest.TestCase):
         self.assertFalse(draft.exists())
 
     def test_backup_and_delete_preserve_exported_snapshots(self):
-        self.terminal(['bank', 'sync', 'revolut', self.csv, '--account-id', 'main'],
+        self.terminal(['import', 'revolut', self.csv, '--account-id', 'main'],
                       [('IBAN (Enter to skip):', IBAN)])
         snapshot = self.root / 'data/fin/accounts.json'
         self.run_fin('accounts', 'export', '-o', snapshot)
@@ -189,7 +280,7 @@ class SyncOnboarding(unittest.TestCase):
         ofx = self.root / 'checking-and-card.ofx'
         ofx.write_text(Path('fixtures/bank.ofx').read_text()
                        .replace('<ACCTTYPE>SAVINGS</ACCTTYPE>', '<ACCTTYPE>CREDITCRD</ACCTTYPE>'))
-        output = self.terminal(['bank', 'sync', 'boursobank', ofx],
+        output = self.terminal(['import', 'boursobank', ofx],
                                [('IBAN (Enter to skip):', IBAN)])
         self.assertEqual(output.count('New account:'), 1)
         accounts = self.accounts()
@@ -198,7 +289,7 @@ class SyncOnboarding(unittest.TestCase):
 
     def test_zip_cli_outcomes_and_history(self):
         archive = self.root / 'export.zip'
-        args = ['bank', 'sync', 'revolut', archive, '--account-id', 'main']
+        args = ['import', 'revolut', archive, '--account-id', 'main']
         with zipfile.ZipFile(archive, 'w', compression=zipfile.ZIP_DEFLATED) as z:
             z.writestr('statement.csv', FIXTURE)
             z.writestr('README.txt', 'An unrelated file')
@@ -219,7 +310,7 @@ class SyncOnboarding(unittest.TestCase):
         csv.write_text(Path('fixtures/bank.ofx').read_text()
                        .replace('<ACCTTYPE>CHECKING</ACCTTYPE>', '<ACCTTYPE>CREDITCRD</ACCTTYPE>')
                        .replace('<ACCTTYPE>SAVINGS</ACCTTYPE>', '<ACCTTYPE>CREDITCRD</ACCTTYPE>'))
-        output = self.terminal(['bank', 'sync', 'boursobank', csv], [])
+        output = self.terminal(['import', 'boursobank', csv], [])
         self.assertNotIn('IBAN (Enter to skip):', output)
 
 

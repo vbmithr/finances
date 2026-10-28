@@ -25,8 +25,8 @@ let ensure_database_parent path =
     |> Result.map ~f:(fun _ -> ()))
 ;;
 
-(* Only fin init creates the database; every other command needs it to exist, so
-   a mistyped --database fails instead of starting an empty database. *)
+(* Only init and restore create a database. Other commands require one so a
+   mistyped --database fails instead of starting an empty database. *)
 let require_database path =
   if String.equal path ":memory:" || Stdlib.Sys.file_exists path
   then Ok ()
@@ -149,13 +149,18 @@ let backup database directory =
     let%bind () = Store.backup db (copy "fin.sqlite3") in
     let%map () = Or_error.try_with (fun () -> Unix.chmod (copy "fin.sqlite3") 0o600) in
     printf "Backed up to %s:\n  fin.sqlite3    from %s\n" target database;
-    printf "To restore, run fin delete, then copy fin.sqlite3 back to %s.\n" database)
+    printf
+      "To restore: fin restore %s%s\n"
+      (Stdlib.Filename.quote target)
+      (if String.equal database paths.database
+       then ""
+       else " --database " ^ Stdlib.Filename.quote database))
 ;;
 
 let backup_cmd =
   command
     "backup"
-    "Copy the database, including account settings, into a new dated folder."
+    "Save a consistent SQLite database snapshot in a new dated folder."
     Term.(
       const backup
       $ database
@@ -169,6 +174,104 @@ let backup_cmd =
                 "Where to create the fin-backup-YYYYMMDDTHHMMSSZ folder (default: the \
                  current directory). Missing parent directories are created privately. \
                  The copy is consistent even while fin is running."))
+;;
+
+let restore database backup yes =
+  let%bind source, stale, existing =
+    Or_error.try_with (fun () ->
+      let source =
+        if Stdlib.Sys.is_directory backup
+        then Stdlib.Filename.concat backup "fin.sqlite3"
+        else backup
+      in
+      let input = Unix.stat source in
+      let stale =
+        [ database ^ ".edit"
+        ; Stdlib.Filename.concat (Stdlib.Filename.dirname database) "bank.journal"
+        ]
+      in
+      List.iter stale ~f:(fun path ->
+        try
+          let file = Unix.stat path in
+          if input.st_dev = file.st_dev && input.st_ino = file.st_ino
+          then
+            failwith
+              "backup must not be a generated journal or pending account edit draft"
+        with
+        | Unix.Unix_error (Unix.ENOENT, _, _) -> ());
+      let existing =
+        List.filter
+          (database
+           :: (database ^ "-wal")
+           :: (database ^ "-shm")
+           :: (database ^ "-journal")
+           :: stale)
+          ~f:Stdlib.Sys.file_exists
+      in
+      source, stale, existing)
+  in
+  let%bind confirmed =
+    if List.is_empty existing || yes
+    then Ok true
+    else (
+      printf "Restore %s to %s.\n" source database;
+      print_endline
+        "This replaces the database and discards its generated journal and pending \
+         account edit draft:";
+      List.iter existing ~f:(fun path -> printf "  %s\n" path);
+      if Unix.isatty Unix.stdin
+      then (
+        Out_channel.output_string stdout "Type yes to restore: ";
+        Out_channel.flush stdout;
+        Ok
+          (Option.value_map
+             (In_channel.input_line In_channel.stdin)
+             ~default:false
+             ~f:(fun answer -> String.equal (String.strip answer) "yes")))
+      else
+        Or_error.error_string
+          "refusing to replace existing state without confirmation: run fin restore in a \
+           terminal, or pass --yes")
+  in
+  if not confirmed
+  then (
+    print_endline "Nothing restored.";
+    Ok ())
+  else (
+    let%bind () = Store.restore ~source ~destination:database in
+    let%bind () =
+      Fin_state.delete stale
+      |> Or_error.tag ~tag:"database restored; clearing stale generated files"
+    in
+    printf "Restored %s to %s.\n" source database;
+    print_endline
+      "Run fin journal export to generate a journal from the restored entries.";
+    Ok ())
+;;
+
+let restore_cmd =
+  command
+    "restore"
+    "Restore a SQLite snapshot, including all account settings and review decisions."
+    Term.(
+      const restore
+      $ database
+      $ Arg.(
+          required
+          & pos 0 (some string) None
+          & info
+              []
+              ~docv:"BACKUP"
+              ~doc:
+                "A fin backup folder or SQLite database file. The snapshot must use the \
+                 current schema and pass integrity checks. A missing destination is \
+                 created; replacing existing state requires confirmation. The generated \
+                 bank.journal and pending account edit draft are removed after success. \
+                 Exported account snapshots and statement files are kept.")
+      $ Arg.(
+          value
+          & flag
+          & info [ "yes" ] ~doc:"Replace existing state without asking, for scripts."))
 ;;
 
 let delete database yes =
@@ -224,7 +327,7 @@ let welcome () =
     "fin - your personal finances\n\n\
      Get started:\n\
      \032 fin init                Set up your database\n\
-     \032 fin bank sync --help    Learn how to import bank statements\n\n\
+     \032 fin import --help       Learn how to import bank statements\n\n\
      Explore your finances:\n\
      \032 fin status              See import coverage and review progress\n\
      \032 fin accounts list       See your bank accounts\n\
@@ -232,7 +335,8 @@ let welcome () =
      \032 fin journal export      Produce an hledger journal\n\n\
      More:\n\
      \032 fin paths               Show database and data locations\n\
-     \032 fin backup              Save a copy of your data\n\
+     \032 fin backup              Save a SQLite database snapshot\n\
+     \032 fin restore BACKUP      Restore a SQLite database snapshot\n\
      \032 fin delete              Delete all fin data, after confirmation\n\
      \032 fin --help              Explore all commands"
 ;;
@@ -249,11 +353,11 @@ let setup database =
      Database: %s\n\
      Account settings are stored in the database.\n\n\
      Import your first statements, for example:\n\
-     \032 fin bank sync boursobank ~/Statements/boursobank%s\n\n\
+     \032 fin import boursobank ~/Statements/boursobank%s\n\n\
      Accounts appear when you import statements. Then explore:\n\
      \032 fin accounts list%s\n\
      \032 fin bank review%s\n\n\
-     See fin bank sync --help for import options.\n\
+     See fin import --help for import options.\n\
      You can repeat fin init safely; existing data and account settings are preserved.\n"
     database
     database_option
@@ -333,8 +437,7 @@ let list_bank_accounts database json_output =
     else if List.is_empty accounts
     then
       print_endline
-        "No bank accounts yet. Import statements with fin bank sync; see fin bank sync \
-         --help."
+        "No bank accounts yet. Import statements with fin import; see fin import --help."
     else List.iter accounts ~f:Terminal.account;
     Ok ())
 ;;
@@ -357,7 +460,7 @@ let status database json_output =
       (List.length report.accounts)
       report.movements;
     if List.is_empty report.accounts
-    then print_endline "No bank records yet. See fin bank sync --help."
+    then print_endline "No bank records yet. See fin import --help."
     else
       Terminal.table
         [ "Bank"; "Account"; "Currency"; "Movements"; "First observed"; "Last observed" ]
@@ -427,7 +530,7 @@ let prompt text =
   In_channel.input_line In_channel.stdin
 ;;
 
-let sync_account_label institution account_id =
+let import_account_label institution account_id =
   let validate = Validation.token "account label" in
   match Registry.find Builtin.registry institution with
   | Some (module A : Adapter.S) when A.takes_account_label ->
@@ -535,12 +638,12 @@ let configure_new_accounts db fresh =
   if Unix.isatty Unix.stdin then groups fresh else Ok 0
 ;;
 
-let sync_bank database institution paths journal max_mib account_id =
+let import_bank database institution paths journal max_mib account_id =
   if max_mib < 1 || max_mib > 1024
   then Or_error.error_string "max-file-mib must be between 1 and 1024"
   else (
     let%bind () = require_database database in
-    let%bind account_id = sync_account_label institution account_id in
+    let%bind account_id = import_account_label institution account_id in
     let journal =
       Option.value
         journal
@@ -611,12 +714,12 @@ let sync_bank database institution paths journal max_mib account_id =
     else Ok ())
 ;;
 
-let sync_bank_cmd =
+let import_bank_cmd =
   command
-    "sync"
+    "import"
     "Import a bank's statement files, apply mappings, and publish a bank journal."
     Term.(
-      const sync_bank
+      const import_bank
       $ database
       $ Arg.(
           required
@@ -643,7 +746,7 @@ let sync_bank_cmd =
                 "Statement files exported from $(i,BANK), or directories holding them. \
                  Directories are searched recursively; hidden and partially downloaded \
                  files inside them are skipped. Files are only read, never modified, and \
-                 syncing them again imports only what is new. ZIP files are opened \
+                 importing them again imports only what is new. ZIP files are opened \
                  automatically in memory; each member follows the same import rules. \
                  Nested ZIPs and encrypted archives are unsupported. Revolut and Wise \
                  CSV clocks are assumed UTC; Wise matching retains CAMT source-local \
@@ -1158,13 +1261,13 @@ let () =
                     arguments for a short welcome."
                ; `P
                    "Start with $(b,fin init): it creates the database and shows how to \
-                    import statements. Every other command needs that database and says \
-                    so when it is missing. Accounts are discovered from imported \
+                    import statements. Imports and review commands need that database \
+                    and say so when it is missing. Accounts are discovered from imported \
                     records."
                ; `S Manpage.s_examples
                ; `Pre
                    "fin init\n\
-                    fin bank sync boursobank ~/Statements/boursobank\n\
+                    fin import boursobank ~/Statements/boursobank\n\
                     fin status\n\
                     fin accounts list\n\
                     fin bank review\n\
@@ -1177,17 +1280,18 @@ let () =
           ; status_cmd
           ; paths_cmd
           ; backup_cmd
+          ; restore_cmd
           ; delete_cmd
           ; accounts_cmd
+          ; import_bank_cmd
           ; group
               "db"
               "Initialize and inspect local source evidence."
               [ init; events; ingest_cmd ]
           ; group
               "bank"
-              "Import and review banking records."
-              [ sync_bank_cmd
-              ; project_bank_cmd
+              "Review banking records and reconcile statements."
+              [ project_bank_cmd
               ; bank_review_cmd
               ; import_history_cmd
               ; group

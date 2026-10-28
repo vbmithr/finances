@@ -9,7 +9,7 @@ statements for you.
 
 Run `fin` for a short welcome, or `fin --help` for the command reference. Neither
 command creates a database. Every command supports `--help`, including nested
-commands such as `fin bank sync --help`. The installed package also provides
+commands such as `fin import --help`. The installed package also provides
 `man fin` and subcommand man pages.
 
 Start with:
@@ -18,11 +18,11 @@ Start with:
 fin init
 ```
 
-`fin init` creates the database and shows the next step. It is the only command
-that creates one: every other command, imports included, fails with "fin is not
-initialized" until you have run it, so a mistyped `--database` path cannot start
-a second, empty database. Repeating `fin init` preserves existing records and
-account settings in SQLite. It does not ask you to enter accounts. Accounts are discovered from imported records. `fin db init` provides
+`fin init` creates the database and shows the next step. Imports and review
+commands fail with "fin is not initialized" until a database exists, so a
+mistyped `--database` path cannot start a second, empty database. `fin restore`
+can also create a database from a backup. Repeating `fin init` preserves existing
+records and account settings in SQLite. It does not ask you to enter accounts. Accounts are discovered from imported records. `fin db init` provides
 quiet initialization for scripts, and `fin paths` shows where everything lives.
 
 ## Checking progress
@@ -78,11 +78,12 @@ implicit account settings file.
 
 SQLite holds everything fin knows: the original statement contents, movements,
 accounting entries, account names, registered IBANs, card settlement links and
-review history. `fin accounts edit` and sync's IBAN prompts update that database.
+review history. `fin accounts edit` and the import command's IBAN prompts update
+that database.
 JSON account snapshots are optional exports to a filename you choose; they are
 read only when you explicitly run `fin accounts import FILE`.
 
-`bank.journal`, beside the database, is not state: every `fin bank sync` rewrites
+`bank.journal`, beside the database, is not state: every `fin import` rewrites
 it from the database for hledger. Statement folders can live anywhere you
 choose; fin only reads them.
 
@@ -94,20 +95,39 @@ fin init --database ~/fin-experiment.sqlite3
 fin accounts list --database ~/fin-experiment.sqlite3
 ```
 
-Back up and delete fin's state without knowing where it lives:
+Save a SQLite snapshot without knowing where the database lives:
 
 ```sh
 fin backup ~/fin-backups
-fin delete
 ```
 
 `fin backup [DIR]` creates `fin-backup-YYYYMMDDTHHMMSSZ` in `DIR` (default: the
 current directory), creating missing parent directories with mode 0700. The new
 backup folder is readable only by you and holds a consistent copy of the
 database (safe even while `fin` is running), including all account settings.
-To restore, run `fin delete`, then copy the backup's `fin.sqlite3` to the database
-path it prints.
-Keep your original bank exports too.
+The snapshot includes original statement contents, movements, accounting entries,
+settings and review history. Keep your original bank exports too.
+
+Restore the complete workspace from a backup folder or its SQLite file:
+
+```sh
+fin restore ~/fin-backups/fin-backup-20261028T120000Z
+fin restore ~/fin-backups/fin-backup-20261028T120000Z/fin.sqlite3 \
+  --database ~/restored-fin/fin.sqlite3
+```
+
+`fin restore BACKUP` opens the source read-only and checks its schema, integrity
+and foreign keys before copying. It creates a missing destination privately,
+without requiring `fin init`. If fin state already exists at the destination,
+it asks you to type `yes`; scripts must pass `--yes` to replace it. SQLite
+replaces the database in one transaction and manages any WAL sidecars. Invalid
+backups and failed copies preserve the existing database. Source and destination
+must be different files. The source backup is kept unchanged.
+
+After success, restore removes the generated `bank.journal` and any pending
+account edit draft, so neither can carry changes from the previous database.
+Use `fin journal export` to render the restored entries. Original statement
+files and exported settings snapshots are kept.
 
 `fin delete` lists the database, SQLite sidecars, generated journal and any pending
 account edit draft, then asks you to type `yes`. Your statement folders and
@@ -125,13 +145,13 @@ fin accounts export -o ~/fin-accounts.json
 fin backup ~/fin-backups
 fin delete
 fin init
-fin bank sync boursobank ~/Statements/boursobank
-fin bank sync wise ~/Statements/wise
-fin bank sync bunq ~/Statements/bunq
-fin bank sync revolut ~/Statements/revolut --account-id main
+fin import boursobank ~/Statements/boursobank
+fin import wise ~/Statements/wise
+fin import bunq ~/Statements/bunq
+fin import revolut ~/Statements/revolut --account-id main
 ```
 
-After syncing all banks, restore account settings with
+After importing all banks, restore account settings with
 `fin accounts import ~/fin-accounts.json`. The snapshot refers to already
 discovered source accounts; it cannot create them. A full SQLite backup is for
 restoring a database of the same schema version; an account snapshot is for
@@ -140,6 +160,9 @@ Review decisions contain database-specific event IDs, so inspect new IDs before
 reapplying decisions to a rebuilt database.
 
 ## Importing statements
+
+Use `fin import BANK PATH...` to read bank exports. This replaces the former
+`fin bank sync` command; update existing scripts to use `fin import`.
 
 Keep a separate inbox for each bank. Supply the formats below:
 
@@ -159,7 +182,7 @@ imports. Export the supported format from your bank instead.
 For example, put your BoursoBank exports in `~/Statements/boursobank`, then run:
 
 ```sh
-fin bank sync boursobank ~/Statements/boursobank
+fin import boursobank ~/Statements/boursobank
 fin accounts list
 fin bank review
 ```
@@ -167,13 +190,13 @@ fin bank review
 Use the corresponding institution for your other inboxes:
 
 ```sh
-fin bank sync wise ~/Statements/wise
-fin bank sync bunq ~/Statements/bunq
-fin bank sync revolut ~/Statements/revolut --account-id main
+fin import wise ~/Statements/wise
+fin import bunq ~/Statements/bunq
+fin import revolut ~/Statements/revolut --account-id main
 ```
 
 The first argument is the bank that produced the files: one of `boursobank`,
-`bunq`, `revolut` or `wise` (listed in `fin bank sync --help`). It is required,
+`bunq`, `revolut` or `wise` (listed in `fin import --help`). It is required,
 since a file does not always say which bank it came from: OFX, CAMT and MT940 are
 shared formats. The arguments after it are files or directories, any number of
 them. Directories are searched recursively, skipping hidden and partially
@@ -184,9 +207,9 @@ and appears in `fin bank history`.
 ZIP exports can be passed directly, including Wise's CAMT.053 downloads:
 
 ```sh
-fin bank sync wise ~/statements/wise
+fin import wise ~/statements/wise
 # Or name a ZIP file explicitly:
-fin bank sync wise ~/statements/wise/statement.zip
+fin import wise ~/statements/wise/statement.zip
 ```
 
 Files ending in `.zip` (case insensitive) are opened in memory with Zipc; nothing
@@ -208,29 +231,29 @@ statements are reported as unsupported without failing the command.
 
 For Revolut, choose a stable account label with `--account-id`, since its CSV does
 not identify the account; use separate labels and folders for different Revolut
-accounts. If you omit it on a terminal, sync asks for the label; scripts must
+accounts. If you omit it on a terminal, import asks for the label; scripts must
 supply it. Labels accept letters, digits, underscores and hyphens. Use the same
-label every time. Revolut exports one file per currency: sync them together under
+label every time. Revolut exports one file per currency: import them together under
 one label, and each currency becomes its own account. Reverted transactions, which
-never moved money, are skipped. Sync scans the folder recursively, archives the inputs,
+never moved money, are skipped. Import scans the folder recursively, archives the inputs,
 imports movements, projects accounting entries and publishes a combined
 `bank.journal` beside the selected database. `--journal FILE` chooses another
-output location. Syncing each bank into the same database produces one combined
+output location. Importing each bank into the same database produces one combined
 view of your finances.
 
-On a terminal, sync asks for an IBAN when it first discovers an account whose
+On a terminal, import asks for an IBAN when it first discovers an account whose
 statements do not supply one. It asks once for a group of currency accounts with
 the same bank and account identifier, and registers the answer on all missing
 accounts in that group. Invalid IBANs are explained and can be entered again.
-Enter skips; syncing those accounts again does not repeat the question. Use
+Enter skips; importing those accounts again does not repeat the question. Use
 `fin accounts edit` to fill it later. Cards never prompt, and scripts never prompt
-for IBANs. Answers are audited in SQLite. Sync reads and updates account settings
-only in the database. Exported snapshots are never read or rewritten during sync.
+for IBANs. Answers are audited in SQLite. Import reads and updates account settings
+only in the database. Exported snapshots are never read or rewritten during import.
 
 You can add more exports and repeat the command. Unchanged documents and known
 transactions are recognized. Conflicting evidence is reported for review.
 Successful files remain imported even if another file fails. Inspect the summary
-and history when sync reports an error:
+and history when import reports an error:
 
 ```sh
 fin bank history
@@ -243,7 +266,7 @@ movements it lists. `fin bank companions` lists the enrichment exports (the
 BoursoBank, Wise and Bunq CSV files) with their fields and match state;
 `--review` keeps the rows that still need attention. Both accept
 `--institution` to show one bank. `fin bank match` recomputes the matches;
-`fin bank sync` already does this.
+`fin import` already does this.
 
 `fin bank history` is a log of file import attempts, not a list of transactions.
 It shows the bank, timestamp, filename, outcome, new/existing movement counts and
@@ -253,7 +276,7 @@ the ten latest attempts, or `fin bank history --json` for machine-readable outpu
 Use `fin bank review --all` to browse individual movements instead.
 
 See [Bank import and review reference](../README.md#folder-workflow) for
-additional detail, or use `fin bank sync --help` for current options.
+additional detail, or use `fin import --help` for current options.
 
 ## Account settings and snapshots
 
@@ -272,7 +295,7 @@ is kept beside the database as `fin.sqlite3.edit`, and the next `fin accounts ed
 continues from it. A successfully applied or unchanged draft is removed.
 
 Statements from Wise and Bunq include the account's IBAN; for BoursoBank and
-Revolut, supply it when sync asks or register it with `fin accounts edit`. A
+Revolut, supply it when import asks or register it with `fin accounts edit`. A
 credit card does not need its own IBAN. IBANs may use spaces or lower case; `fin` checks them against the country's registered
 length and structure and the check digits, and refuses invalid ones. Keep the
 account identity fields unchanged so settings refer to the correct imported
@@ -346,7 +369,7 @@ The hledger CLI is optional and installed separately. The exported journal uses
 exact decimal amounts and includes stored accounting entries from all imported
 banks. It does not infer missing opening balances. Editing the journal does not
 update SQLite; regenerate it from the database after making changes through
-`fin`. `fin journal export` writes to standard output, whereas bank sync publishes
+`fin`. `fin journal export` writes to standard output, whereas import publishes
 the journal file automatically.
 
 Monthly expense reports become useful after categorizing movements. Account
@@ -405,13 +428,15 @@ above; no automatic migration runs.
 | Command | Purpose |
 | --- | --- |
 | `fin init` | Create the database, with first-import guidance |
+| `fin import BANK PATH...` | Import bank statement files and publish the journal |
 | `fin status` | Import coverage and outstanding review work |
 | `fin paths` | Resolved storage paths |
 | `fin accounts --help` | Account listing, config and history |
-| `fin bank --help` | Imports, reconciliation and category review |
+| `fin bank --help` | Import history, reconciliation and category review |
 | `fin transfers --help` | Candidates, preview and explicit decisions |
 | `fin journal --help` | hledger journal export |
 | `fin backup` | Copy the database, including account settings |
+| `fin restore BACKUP` | Restore a complete database snapshot |
 | `fin delete` | Delete all fin state, after confirmation |
 | `fin db --help` | Lower-level database and source-event commands |
 

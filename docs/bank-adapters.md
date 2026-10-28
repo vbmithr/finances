@@ -39,7 +39,7 @@ bank adapters        boursobank  wise  bunq  revolut    (no Rel/SQLite dependenc
         |
 kernel               Adapter types, Registry, Store, projection, review
         |
-CLI                  builds the registry, passes it to Store and sync
+CLI                  builds the registry, passes it to Store and import
 ```
 
 Dune dependencies enforce the arrows. Store receives a registry value and does
@@ -261,7 +261,7 @@ Notes:
 ## No migration
 
 Schema changes bump the version; `Store` refuses any other version without
-touching the file, and the database is rebuilt by syncing the archived inboxes
+touching the file, and the database is rebuilt by importing the archived inboxes
 and importing the account settings snapshot again. Schema 11 replaced the 18
 bank-specific tables this way. Verification compares reports from a database
 rebuilt with the previous build against one rebuilt with the new build.

@@ -38,19 +38,17 @@ let initialize db =
       Or_error.errorf
         "unsupported database schema; this experimental build accepts only schema %d. \
          Use the previous fin version to export account settings and run fin backup \
-         before rebuilding. Then run fin delete and fin init, sync your statement \
+         before rebuilding. Then run fin delete and fin init, import your statement \
          folders again and import the account snapshot"
         Db_schema.version)
 ;;
 
-let with_open ~registry path f =
-  let* conn = db_result (Db.open' ~foreign_keys:true ~mode:Read_write_create path) in
-  let db = { conn; registry } in
+let with_connection ~mode path f =
+  let* conn = db_result (Db.open' ~foreign_keys:true ~mode path) in
   let result =
     try
       let* () = db_result (Db.busy_timeout_ms conn 5000) in
-      let* () = initialize db in
-      f db
+      f conn
     with
     | exn ->
       ignore (Db.close conn);
@@ -64,12 +62,128 @@ let with_open ~registry path f =
     result
 ;;
 
+let with_open ~registry path f =
+  with_connection ~mode:Read_write_create path (fun conn ->
+    let db = { conn; registry } in
+    let* () = initialize db in
+    f db)
+;;
+
 let backup db path =
   if Stdlib.Sys.file_exists path
   then Or_error.errorf "%s already exists" path
   else (
     let quoted = "'" ^ String.substr_replace_all path ~pattern:"'" ~with_:"''" ^ "'" in
     db_result (Db.exec_sql db.conn ("VACUUM INTO " ^ quoted)))
+;;
+
+let validate_backup conn =
+  let* version = db_result (Db.first conn (statement "PRAGMA user_version" integer)) in
+  let* () =
+    match version with
+    | Some version when version = Db_schema.version -> Ok ()
+    | _ -> Or_error.errorf "backup must use database schema %d" Db_schema.version
+  in
+  let text = Row.(t1 (text "value")) in
+  let* checks =
+    db_result
+      (Db.fold conn (statement "PRAGMA quick_check" text) (fun s rest -> s :: rest) [])
+  in
+  let* () =
+    if List.equal String.equal checks [ "ok" ]
+    then Ok ()
+    else Or_error.error_string "backup failed SQLite integrity checks"
+  in
+  let* tables =
+    db_result
+      (Db.fold
+         conn
+         (statement "SELECT name FROM sqlite_schema WHERE type='table'" text)
+         (fun s rest -> s :: rest)
+         [])
+  in
+  let* () =
+    if
+      List.for_all (Schema.tables Db_schema.schema) ~f:(fun table ->
+        List.mem tables (Table.name' table) ~equal:String.equal)
+    then Ok ()
+    else Or_error.error_string "backup is missing fin database tables"
+  in
+  let* violations =
+    db_result
+      (Db.first conn (statement "SELECT count(*) FROM pragma_foreign_key_check" integer))
+  in
+  if Option.equal Int.equal violations (Some 0)
+  then Ok ()
+  else Or_error.error_string "backup contains foreign-key violations"
+;;
+
+let restore ~source ~destination =
+  let* () =
+    if String.equal destination ":memory:"
+    then Or_error.error_string "restore requires a persistent destination database"
+    else Ok ()
+  in
+  let* existed =
+    Or_error.try_with (fun () ->
+      let input = Unix.stat source in
+      if not (Poly.equal input.st_kind Unix.S_REG)
+      then failwith "backup must be a regular SQLite file";
+      try
+        let output = Unix.lstat destination in
+        if not (Poly.equal output.st_kind Unix.S_REG)
+        then failwith "restore destination must be a regular file, not a symbolic link";
+        if input.st_dev = output.st_dev && input.st_ino = output.st_ino
+        then failwith "backup and destination are the same file";
+        true
+      with
+      | Unix.Unix_error (Unix.ENOENT, _, _) -> false)
+  in
+  with_connection ~mode:Read source (fun src ->
+    (* Pin the checked source snapshot until copying has completed. The backup
+       API holds the destination write transaction and rolls back on failure. *)
+    db_result
+      (Db.with_transaction `Deferred src (fun src ->
+         let* () = validate_backup src in
+         let* _ =
+           Bos.OS.Dir.create ~mode:0o700 (Fpath.v (Stdlib.Filename.dirname destination))
+           |> Result.map_error ~f:(fun (`Msg message) -> Error.of_string message)
+         in
+         let* () =
+           Or_error.try_with (fun () ->
+             if not existed
+             then (
+               let fd =
+                 Unix.openfile
+                   destination
+                   [ Unix.O_WRONLY; Unix.O_CREAT; Unix.O_EXCL ]
+                   0o600
+               in
+               Unix.close fd))
+         in
+         let copied =
+           with_connection ~mode:Read_write destination (fun dst ->
+             let* copy = db_result (Db.Backup.init ~dst ~src ()) in
+             let stepped =
+               try db_result (Db.Backup.step copy ()) with
+               | exn ->
+                 ignore (Db.Backup.finish copy);
+                 raise exn
+             in
+             let finished = db_result (Db.Backup.finish copy) in
+             let* complete = stepped in
+             let* () = finished in
+             if complete
+             then Ok ()
+             else Or_error.error_string "database restore was incomplete")
+         in
+         match copied with
+         | Ok () -> Ok ()
+         | Error _ as error ->
+           if not existed
+           then ignore (Bos.OS.File.delete ~must_exist:false (Fpath.v destination));
+           error))
+    |> Result.join)
 ;;
 
 (* Read-only result projections share their column types with the table model. *)
@@ -847,7 +961,7 @@ let import_bank_file ?account_label db ~institution ~path ~contents =
          ~format
          Rejected
          (Printf.sprintf
-            "this is a %s export (%s); sync it with fin bank sync %s"
+            "this is a %s export (%s); import it with fin import %s"
             owner
             format
             owner)
@@ -2805,7 +2919,7 @@ let apply_bank_accounts ?(dry_run = false) db config =
         ~error:
           (Error.of_string
              (Printf.sprintf
-                "%s has no imported statements; sync them with fin bank sync %s FOLDER \
+                "%s has no imported statements; import them with fin import %s FOLDER \
                  before importing the account settings"
                 (describe r)
                 r.institution))
@@ -2818,9 +2932,9 @@ let apply_bank_accounts ?(dry_run = false) db config =
       | [] -> Ok ()
       | missing ->
         Or_error.errorf
-          "%d configured account%s ha%s no imported statements: %s. Sync each one's \
-           statement folder with fin bank sync BANK PATH, then import the account \
-           settings again."
+          "%d configured account%s ha%s no imported statements: %s. Import each one's \
+           statement folder with fin import BANK PATH, then import the account settings \
+           again."
           (List.length missing)
           (if List.length missing = 1 then "" else "s")
           (if List.length missing = 1 then "s" else "ve")

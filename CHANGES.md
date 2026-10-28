@@ -10,6 +10,16 @@ short line of their own.
 
 ### 2026-10-28
 
+- Rename statement ingestion to `fin import BANK PATH...`, with the same options,
+  prompts, import rules and journal output. **Action required:** replace
+  `fin bank sync` in scripts and commands; the old command has been removed.
+- Add `fin restore BACKUP`, accepting a backup folder or SQLite file. It checks
+  schema 13, SQLite integrity and foreign keys before replacing the destination
+  through SQLite's transactional copy API. Replacing existing state asks for
+  confirmation; scripts can use `--yes`. A missing database is created privately.
+  Successful restoration clears its stale generated journal and account edit
+  draft, retaining original statements and exported settings snapshots. Backup
+  output now provides the restore command. No schema change is required.
 - Restore status and account-listing performance after the Jsont migration:
   compute account identifiers once per account and use a 256-byte scratch
   buffer per JSON encode instead of repeatedly allocating 64 KiB. Larger

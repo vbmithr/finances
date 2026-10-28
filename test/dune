@@ -350,9 +350,9 @@
 
 (rule
  (alias runtest)
- (deps sync_cli_test.py fixtures/revolut.csv fixtures/bank.ofx)
+ (deps import_cli_test.py fixtures/revolut.csv fixtures/bank.ofx)
  (action
-  (run python3 %{dep:sync_cli_test.py} %{exe:../bin/main.exe})))
+  (run python3 %{dep:import_cli_test.py} %{exe:../bin/main.exe})))
 
 (test
  (name zip_test)

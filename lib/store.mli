@@ -17,6 +17,13 @@ val with_open : registry:Registry.t -> string -> (t -> 'a Or_error.t) -> 'a Or_e
     [VACUUM INTO]; other connections may be using the database meanwhile. *)
 val backup : t -> string -> unit Or_error.t
 
+(** Restore a SQLite backup after checking its schema, integrity and foreign
+    keys. The source is opened read-only. SQLite replaces the destination in
+    one write transaction, preserving it on copy failure and managing its
+    sidecars. A missing destination and its parents are created privately.
+    Source and destination must be different files. *)
+val restore : source:string -> destination:string -> unit Or_error.t
+
 val registry : t -> Registry.t
 
 (** Identical retries return [Existing]; changed evidence for the same identity

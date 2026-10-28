@@ -43,7 +43,10 @@ Last updated: 2026-10-28.
 - Movements project to balanced entries against `equity:unclassified`, unless a
   reviewed category or confirmed transfer says otherwise. `fin journal export`
   writes a reproducible hledger journal.
-- 138 tests (128 OCaml cases and 10 CLI cases). Each change is verified
+- Statement ingestion is `fin import BANK PATH...`. `fin backup` saves one
+  consistent SQLite snapshot; `fin restore BACKUP` validates and restores it,
+  with overwrite confirmation and automatic removal of stale generated files.
+- 143 tests (130 OCaml cases and 13 CLI cases). Each change is verified
   by rebuilding the personal database from its inboxes with the previous and the
   new build and diffing every report.
 - Issue #1 is implemented locally and awaits publication.
@@ -76,7 +79,7 @@ From a database rebuilt from `personal/*/inbox`:
 
 1. **Export account settings and back up with the previous binary**, then install
    (`make install`) and rebuild for schema 13 following the manual. Restore the
-   exported snapshot after syncing all banks.
+   exported snapshot after importing all banks.
 2. **Push `main`** when ready; it is public on GitHub.
 3. **Fill the coverage gaps** above: Wise for 2026, BoursoBank before September
    2026, Revolut before April 2026, if those accounts were in use.
@@ -123,21 +126,24 @@ The import side is done; turning movements into accounting is not.
 - [x] ZIP statement exports import directly through Zipc, with per-member history,
   idempotent replay, bounded expansion and no filesystem extraction.
 
-- [x] Issue #1: shared-IBAN currency siblings do not contradict transfers; sync
+- [x] Issue #1: shared-IBAN currency siblings do not contradict transfers; import
   asks for missing labels and new account IBANs on a terminal and saves answers
   in SQLite.
 
 - [x] `fin accounts edit` sets IBANs, names and card links without handling the
   configuration file by hand.
 - [x] `fin backup` and `fin delete` save and remove all fin state without
-  knowing where it lives; only `fin init` creates a database.
-- [ ] `bank.journal` is rewritten only by `fin bank sync`, so it is stale after
-  `fin accounts import FILE` or a review decision until the next sync. Every command
+  knowing where it lives; `fin init` creates a fresh database.
+- [x] `fin restore BACKUP` restores a whole SQLite snapshot without manual deletion
+  or copying, validates it before replacement and asks before overwriting state.
+- [x] Statement imports use the top-level `fin import` command instead of `bank sync`.
+- [ ] `bank.journal` is rewritten only by `fin import`, so it is stale after
+  `fin accounts import FILE` or a review decision until the next import. Every command
   that changes accounting should rewrite it, or the file should go in favour of
   `fin journal export`.
 - [x] `fin accounts import FILE` names the configured accounts that have no imported
   statements, instead of repeating "unknown source account".
-- [x] `fin bank sync BANK PATH...`: the bank is a required argument, and the paths
+- [x] `fin import BANK PATH...`: the bank is a required argument, and the paths
   are any number of files or directories, described in `--help`.
 - [x] `fin accounts import FILE` requires a snapshot filename and offers a dry run;
   there is no default file to confuse with active settings.

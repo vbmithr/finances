@@ -58,7 +58,7 @@ let scan ?account_id ?(max_file_bytes = 67108864L) ?(exclude = []) db ~instituti
     Or_error.try_with (fun () ->
       if Int64.(max_file_bytes <= 0L || max_file_bytes >= of_int Int.max_value)
       then failwith "file read limit must be positive and fit in memory";
-      if List.is_empty paths then failwith "no file or directory to sync";
+      if List.is_empty paths then failwith "no file or directory to import";
       List.iter paths ~f:(fun path ->
         match (Unix.LargeFile.lstat path).st_kind with
         | S_DIR | S_REG -> ()

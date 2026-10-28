@@ -56,8 +56,7 @@ let account (a : Store.bank_account_info) =
 
 let import_history attempts =
   if List.is_empty attempts
-  then
-    print_endline "No import attempts yet. See fin bank sync --help to import statements."
+  then print_endline "No import attempts yet. See fin import --help to import statements."
   else (
     print_endline "Import attempts, newest first:\n";
     List.iter attempts ~f:(fun (a : Bank_import.file_report) ->

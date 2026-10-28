@@ -256,11 +256,11 @@ Available balance observations do not automatically supply ledger opening balanc
 Corrections to source evidence, splits and FX transfers need a future workflow;
 generated journals remain a rendering of SQLite accounting.
 
-## Inbox sync and mapping decisions
+## Inbox import and mapping decisions
 
 The bank workflow design in [bank-workflow.md](bank-workflow.md) specifies the
 implemented folder milestone and later phases. The separate finances.bank library
-owns filesystem scanning and sync orchestration. Format detection, mapping types,
+owns filesystem scanning and import orchestration. Format detection, mapping types,
 and durable import/history operations remain in the core library.
 
 Readable files are archived even when unsupported or rejected. A successful file
@@ -277,7 +277,7 @@ record in one transaction. Future projections use that mapping. Multiple identit
 may share a ledger name for reporting, but this does not merge source identities
 or deduplicate differently masked observations of one underlying account.
 
-Sync validates database/config/output paths, imports files independently, applies
+Import validates database/config/output paths, imports files independently, applies
 mappings, matches CSV observations, projects accepted bank events, and atomically
 publishes a journal. A
 failed mapping or projection leaves earlier successful source imports committed
@@ -399,7 +399,7 @@ The adapters share `Bank_match` for matching states and results; Wise does not
 depend on the BoursoBank matcher. `Bank_csv_match` re-exports these types for
 compatibility. Source events, database persistence, account mappings,
 the common bank transaction view, and accounting projection stay in `lib/`.
-Folder scanning and sync orchestration remain in `bank/`, and journal rendering
+Folder scanning and import orchestration remain in `bank/`, and journal rendering
 remains in `journal/`. This is source organization within one library; adding a
 bank still requires wiring its importer and persistence into the workflow.
 
@@ -448,7 +448,7 @@ existing document/event links. The reconciliation API sums those persisted event
 account, dates, amount, counterparty, name and description form a matching key.
 Both sources must supply equal occurrence counts per key within each document;
 mismatches or currency ambiguity remain review items. CSV arrival order does not
-matter: sync recomputes its matches after scanning all files and before projection.
+matter: import recomputes its matches after scanning all files and before projection.
 Shared audited match persistence saves transitions without rewriting evidence.
 
 ## Revolut and transfer decisions
@@ -521,8 +521,8 @@ to a known non-card account in the same currency and never create accounting ent
 snapshot validates source references, composes ledger/identity/relationship
 mutations inside one transaction, and checks existing projections and confirmed
 transfers. A dry run uses a savepoint and rolls back every update and audit row,
-while returning concrete planned changes. Account editing and sync's new-account
-IBAN prompts update only SQLite. Snapshots are optional explicit exports and
+while returning concrete planned changes. Account editing and the import
+command's new-account IBAN prompts update only SQLite. Snapshots are optional explicit exports and
 imports, with no default path and no automatic loading or rewriting.
 
 ## Explainable transfer ranking
@@ -568,6 +568,16 @@ referring to the database. `accounts edit` uses a recoverable private draft besi
 the database and removes it on success, applying changes only to SQLite. Missing
 database parents are created with private permissions; library callers still pass
 explicit database paths. `fin paths` reports only data and database paths without
-opening SQLite. `fin backup` saves the complete database, including settings;
-`fin delete` removes its journal and draft as well, leaving exported snapshots
-alone. Statement inboxes remain caller-selected.
+opening SQLite. `fin import BANK PATH...` imports statements through the existing
+bank orchestration library. `fin backup` uses `VACUUM INTO` to save the complete
+database, including settings, as one consistent SQLite file.
+
+`fin restore BACKUP` accepts that file or its enclosing backup folder. The source
+is opened read-only and held in a read transaction while its schema version,
+required tables, SQLite integrity and foreign keys are checked. SQLite's
+[backup API](https://www.sqlite.org/c3ref/backup_finish.html) then replaces the
+destination inside a write transaction; copy errors roll back, including on a
+WAL database. No source initialization or filesystem replacement is involved.
+New destinations are private. Existing state requires confirmation or `--yes`.
+After success the CLI removes its old journal and edit draft. `fin delete` also
+removes these files. Exported snapshots and original statements remain user files.

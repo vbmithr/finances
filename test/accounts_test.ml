@@ -75,7 +75,7 @@ let roundtrip () =
       List.iter
         [ "1 configured account has no imported statements"
         ; "boursobank CHECKING unknown"
-        ; "fin bank sync BANK PATH"
+        ; "fin import BANK PATH"
         ]
         ~f:(fun part ->
           Alcotest.(check bool) part true (String.is_substring message ~substring:part)))

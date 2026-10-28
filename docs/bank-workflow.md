@@ -38,13 +38,13 @@ Task scratch files and test databases belong in disk-backed scratch storage.
 
 | Milestone | Deliverable | Acceptance criterion |
 |---|---|---|
-| Folder ingestion and account mapping | Explicit folder sync, durable per-file outcomes, readable ledger names | Repeated and overlapping exports create no duplicate postings; one bad file does not stop unrelated imports |
+| Folder ingestion and account mapping | Explicit folder import, durable per-file outcomes, readable ledger names | Repeated and overlapping exports create no duplicate postings; one bad file does not stop unrelated imports |
 | CSV enrichment | BoursoBank value dates, suggested labels, and categories attached to existing OFX transactions | OFX plus CSV describes each movement once; ambiguous matches are visible |
 | Accounting rules and review | Persistent manual decisions and versioned categorization rules | Regenerating a journal retains reviewed choices and their provenance |
 | Transfer matching | Explicit links between movements in owned accounts | Reviewed internal transfers do not inflate income or expenses |
 | Reconciliation and reporting | Verified opening balances, statement checks, and reports | Every balance discrepancy is visible and explainable |
 
-The first milestone is implemented: folder sync, import history, and persisted
+The first milestone is implemented: folder import, import history, and persisted
 ledger naming are available. CSV enrichment is also implemented, including exact
 matching, persisted review states, and journal metadata. A background watcher,
 source account identity resolution, Excel/QIF parsing, automatic category rules,
@@ -55,7 +55,7 @@ FX/split transfer matching, and BoursoBank balance reconciliation are later work
 The initial entry point is an explicit command:
 
 ```sh
-fin bank sync boursobank personal/boursobank/inbox \
+fin import boursobank personal/boursobank/inbox \
   --journal personal/bank.journal
 ```
 
@@ -65,7 +65,7 @@ or invocations can be used for different banks.
 
 Scan regular files recursively in deterministic path order. Do not follow symbolic
 links. Ignore hidden files/directories and names ending in `.part`, `.tmp`, or `~`;
-report ignored paths. Run sync after copying files has finished. Detect changes in
+report ignored paths. Run import after copying files has finished. Detect changes in
 size, identity, or modification time during a read and request a retry. A stable
 read cannot prove that a paused writer has finished.
 
@@ -114,7 +114,7 @@ Each mapping contains `institution`, `bank_id`, `account_id`, `account_type`, an
 
 ```sh
 fin accounts import ~/fin-accounts.json
-fin bank sync boursobank personal/boursobank/inbox \
+fin import boursobank personal/boursobank/inbox \
   --journal personal/bank.journal
 ```
 
@@ -135,7 +135,7 @@ descriptions, source evidence, and unclassified counter-postings are preserved.
 Mapping rows, audit rows, and posting renames commit atomically. Future projections
 use the stored name, so rerunning them does not create another entry.
 
-## Sync and publication
+## Import and publication
 
 Validate control paths and parse the optional mapping file before import. Keep the
 database, config, and journal outside the inbox. Refuse a journal destination that
@@ -149,7 +149,7 @@ journal. When TMPDIR is unset, staging uses the destination directory. If mappin
 projection, or publication fails, the existing journal stays
 intact. Earlier successful source imports remain committed and can be resumed.
 
-Sync publishes the successfully imported subset even when other files need review.
+Import publishes the successfully imported subset even when other files need review.
 Its summary lists outcomes and reports transaction, mapping, and projection counts.
 Rejected or unreadable inputs produce a nonzero CLI exit after reporting results;
 unsupported companions are reported as pending work. CSV match coverage and review
@@ -257,8 +257,8 @@ SQLite retains statement balances and movement membership for independent review
 CSV adds metadata only, matched by reference/local millisecond clock/amount/currency
 with conservative ambiguity and conflict handling. Reimport and overlap reuse events.
 
-Use separate folders, synced with `fin bank sync wise …` and
-`fin bank sync boursobank …`, sharing the same database and journal output.
+Use separate folders, imported with `fin import wise …` and
+`fin import boursobank …`, sharing the same database and journal output.
 `bank statements --institution wise` reports statement differences and `bank companions --institution wise` the CSV matching decisions.
 The combined journal includes every institution already stored. Opening balance
 postings, fee postings, and FX accounting are not inferred. Real FX and nonzero-fee
@@ -268,7 +268,7 @@ currency separation, reversals, and multi-bank replay.
 ## Bunq import
 
 The Bunq adapter accepts the observed MT940 export and its seven-column CSV
-companion from `personal/bunq/inbox/`, synced with `fin bank sync bunq`. MT940 supplies
+companion from `personal/bunq/inbox/`, imported with `fin import bunq`. MT940 supplies
 movements and reconciled account/currency balances; CSV observations add corroborating
 row provenance, never extra movements. `bank statements` reports persisted reconciliation
 and CSV matching states.
@@ -296,14 +296,14 @@ names or matching amounts. Ambiguous candidates need explicit selection; only on
 confirmed counterpart per movement is allowed. Rejection can undo confirmation.
 Existing categories must be reset before confirming, and confirmed transfers must
 be rejected before recategorization. FX, splits and broader date policies remain
-future work. Rebuild the journal after decisions; sync also preserves them.
+future work. Rebuild the journal after decisions; import also preserves them.
 
 ## Account management and identity-backed transfer review
 
 Use `accounts edit` for everyday settings changes in SQLite. Optional version 1
 snapshots are written by `accounts export -o FILE` and restored by `accounts import
 FILE`, with `--dry-run` to preview. Account history remains audited. There is no
-config directory, default account file or sync settings-file option. A snapshot
+config directory, default account file or import settings-file option. A snapshot
 manages ledger names, registered IBANs and card settlement relationships
 atomically; explicit null clears curated metadata and omitted properties preserve
 it. Full database backups already include all settings.

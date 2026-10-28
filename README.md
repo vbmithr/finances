@@ -24,7 +24,7 @@ changed: [CHANGES.md](CHANGES.md).
 - Bank movement accounting entries with atomic, repeatable projection and explicit
   reviewed categories or transfer counter-accounts.
 - Deterministic hledger journal export through the separate OCaml hledger binding.
-- Recursive inbox sync with content detection, per-file import history, and
+- Recursive inbox import with content detection, per-file import history, and
   atomic journal publication.
 - Persisted bank account names with audited updates to verified generated entries.
 - BoursoBank CSV enrichment with conservative OFX matching and a review report for
@@ -99,10 +99,10 @@ fin accounts import ~/fin-accounts.json
 `--database` (or `-d`) is an option on commands that access SQLite. Input files and
 inbox directories are positional; the old positional database argument is removed.
 Use `dune exec fin -- ...` when running from the checkout. Journals default to
-`bank.journal` beside the selected database when syncing. Original statement inboxes
+`bank.journal` beside the selected database when importing. Original statement inboxes
 are ordinary user-chosen directories, independent of the database location.
 
-Bank sync accepts ZIP exports directly, including Wise CAMT.053 downloads. It
+Bank import accepts ZIP exports directly, including Wise CAMT.053 downloads. It
 reads members in memory with Zipc, preserves per-member import history and replay
 checks, and applies the configured size limit to the archive and its expanded
 contents. See the [manual](docs/manual.md) for limits and supported compression.
@@ -148,12 +148,12 @@ for querying rendered journals. No personal records or configuration enter the p
 `packaging/arch/build.py` never runs sudo or installs anything; only `make install`
 does, after building.
 
-The CLI provides `init`, `status` and `paths`, with grouped commands under `db`,
-`accounts`, `bank`, `transfers`, and `journal`:
+The CLI provides `init`, `import`, `status`, `paths`, `backup` and `restore`,
+with grouped commands under `db`, `accounts`, `bank`, `transfers`, and `journal`:
 
 ```sh
 fin db init
-fin bank sync bunq personal/bunq/inbox
+fin import bunq personal/bunq/inbox
 fin transfers preview
 fin journal export
 ```
@@ -239,10 +239,11 @@ to whitespace. `events` prints metadata as JSON without printing source payloads
 ## Bank imports
 
 ```sh
-dune exec fin -- bank sync boursobank /path/to/statements
+dune exec fin -- import boursobank /path/to/statements
 ```
 
-Every import goes through `bank sync BANK PATH...`. `BANK` is required and must name a
+Every statement import goes through `fin import BANK PATH...`, replacing the old
+`fin bank sync` command. `BANK` is required and must name a
 registered bank (`boursobank`, `bunq`, `revolut` or `wise`); files imported under
 any other identifier are rejected, with the attempt recorded. The institution's
 adapter recognizes each file's format; a file another bank recognizes is rejected
@@ -305,7 +306,7 @@ financial data, not scratch files.
 ```sh
 mkdir -p personal
 dune exec fin -- init
-dune exec fin -- bank sync boursobank /path/to/statements
+dune exec fin -- import boursobank /path/to/statements
 dune exec fin -- bank project
 dune exec fin -- journal export > personal/bank.journal
 hledger --no-conf -f personal/bank.journal check --strict
@@ -367,12 +368,12 @@ milestones. The first milestone is available:
 mkdir -p personal/{boursobank,wise,bunq,revolut}/inbox personal/reviews personal/reports
 # Copy bank exports into personal/boursobank/inbox, then run after copying has completed.
 dune exec fin -- init
-dune exec fin -- bank sync boursobank personal/boursobank/inbox \
+dune exec fin -- import boursobank personal/boursobank/inbox \
   --journal personal/bank.journal
 dune exec fin -- bank history --limit 100
 ~~~
 
-Sync traverses regular files recursively in path order and detects OFX content
+Import traverses regular files recursively in path order and detects OFX content
 even when an export has a different extension. It ignores symbolic links, hidden
 paths, and names ending in .part, .tmp, or ~. Readable rejected and unsupported
 files are archived in SQLite with append-only attempt history. A bad file does not
@@ -387,10 +388,10 @@ Revolut ten-column CSV supplies primary movements. Excel, QIF, and other CSV lay
 reported as unsupported. Companion CSV observations never create a second
 transaction stream; Revolut CSV is its own primary movement source.
 
-Successful files commit independently. Sync generates a journal from successfully
+Successful files commit independently. Import generates a journal from successfully
 imported data even if some files need review, and returns a nonzero exit for
 rejected or unreadable inputs. Unsupported companions are visible in the summary
-without failing sync. The CSV summary separately counts matched, unmatched,
+without failing import. The CSV summary separately counts matched, unmatched,
 ambiguous, and conflicting observations; review items do not prevent valid OFX
 entries from being exported. Import history is readable text, newest attempt
 first; use `fin bank history --json` for the original JSON layout. It lists file
@@ -401,14 +402,14 @@ To give bank accounts readable ledger names:
 
 ~~~sh
 dune exec fin -- accounts edit
-dune exec fin -- bank sync boursobank personal/boursobank/inbox \
+dune exec fin -- import boursobank personal/boursobank/inbox \
   --journal personal/bank.journal
 ~~~
 
 The version 1 account snapshot manages ledger names, IBANs and card settlement links
 as described below. Source identifiers remain immutable. Names stay below
 `assets:bank:` and renames verify existing projections before changing postings.
-Keep the database and journal outside the inbox. Sync rejects
+Keep the database and journal outside the inbox. Import rejects
 paths that would ingest its own outputs or overwrite a control file, and skips
 hard links to its control files. Journal publication uses an atomic rename after
 all accounting work succeeds; account,
@@ -480,9 +481,13 @@ rows. A failure anywhere rolls back all account edits and posting renames togeth
 Identity edits that contradict confirmed transfers are rejected for review first.
 
 Snapshots are optional, explicit export/import files. There is no default file,
-XDG config directory or automatic loading during sync. `accounts edit` and sync's
-IBAN prompts update SQLite only. `fin backup` copies the entire database, including
-settings; exported snapshots are user files and `fin delete` leaves them alone.
+XDG config directory or automatic loading during import. `accounts edit` and the import
+command's IBAN prompts update SQLite only. `fin backup` saves a consistent SQLite
+snapshot, including settings, evidence and review decisions. `fin restore BACKUP`
+restores the full database from a backup folder or SQLite file; replacing existing
+state requires confirmation or `--yes`. Restoration validates the source and
+discards stale generated journal and edit-draft files after success. Exported
+settings snapshots are user files and are kept by both restore and delete.
 Import every referenced source account before restoring a multi-bank snapshot.
 Existing version 1 JSON exports remain accepted by `fin accounts import FILE`.
 
@@ -524,7 +529,7 @@ review. Refunds can use the same expense account as the original purchase. Amoun
 signs are preserved; classification does not infer or reverse them.
 
 SQLite retains the current account and reason plus append-only change history.
-Repeated identical decisions are harmless. Decisions survive sync, reimports and
+Repeated identical decisions are harmless. Decisions survive import, reimports and
 account renames, and can precede first projection. Existing generated entries are
 verified before updating only their counter-account; dates, bank postings, amounts
 and source evidence remain intact. An invalid or conflicting decision rejects the
@@ -548,7 +553,7 @@ Use the same bank-prefixed layout for every institution:
 | Revolut | `personal/revolut/inbox/` | Completed Current-account CSV, explicit account label |
 
 Keep the shared database, journal, configuration, and reports outside these inboxes.
-Pass the institution explicitly when syncing. All `personal/` contents are
+Pass the institution explicitly when importing. All `personal/` contents are
 ignored by Git. Existing import history retains the paths used at import time;
 moving an inbox does not change source identities or create new movements.
 
@@ -556,20 +561,20 @@ moving an inbox does not change source identities or create new movements.
 
 Wise CAMT.053.001.10 XML supplies movements, full booking timestamps, account
 currency, and opening/closing booked balances. The matching 23-column Wise CSV is
-optional enrichment. Keep a separate inbox per institution and sync both into the
+optional enrichment. Keep a separate inbox per institution and import both into the
 same database and journal:
 
 ```sh
-fin bank sync boursobank personal/boursobank/inbox \
+fin import boursobank personal/boursobank/inbox \
   --journal personal/bank.journal
-fin bank sync wise personal/wise/inbox \
+fin import wise personal/wise/inbox \
   --journal personal/bank.journal
 fin bank statements --institution wise
 hledger -f personal/bank.journal --strict check
 hledger -f personal/bank.journal register assets:bank:wise
 ```
 
-Each sync regenerates the journal from all stored bank entries. Default account
+Each import regenerates the journal from all stored bank entries. Default account
 names include institution, bank, account type, and account ID; Wise balance account
 types include currency. Existing account mappings also work for Wise. Wise exports
 name `wise` as the bank, like every other import. CSV and XML may arrive in either order.
@@ -609,7 +614,7 @@ Put Bunq's MT940 export (including exports with no filename extension) and its
 optional seven-column CSV into `personal/bunq/inbox/`:
 
 ```sh
-fin bank sync bunq personal/bunq/inbox \
+fin import bunq personal/bunq/inbox \
   --journal personal/bank.journal
 fin bank statements --institution bunq
 ```
@@ -645,7 +650,7 @@ Bunq uses the same persisted account mappings and reviewed categories as other b
 Place the ten-column Revolut CSV export in `personal/revolut/inbox/`:
 
 ```sh
-fin bank sync revolut personal/revolut/inbox \
+fin import revolut personal/revolut/inbox \
   --account-id main --journal personal/bank.journal
 ```
 
@@ -722,7 +727,7 @@ it silently. Confirmed legs cannot be categorized until their transfer is reject
 Use `"decision": "reject"` to hide a proposed pair or undo a confirmation. Undo
 restores each leg's unclassified counter-account and retains the full audit history.
 Identical decisions are idempotent, and batches commit atomically after verifying
-existing projections. Account remapping, sync and reimports preserve decisions.
+existing projections. Account remapping, import and reimports preserve decisions.
 Default candidate output hides reviewed pairs and movements already confirmed
 elsewhere; `--all` includes them for inspection. FX, splits and delayed transfers
 outside the seven-day window need a future explicit policy.
@@ -780,7 +785,7 @@ after checking identities and evidence.
 
 OFX is sufficient to import transactions. For BoursoBank's fuller data, put both
 OFX and CSV exports for the same accounts and period in the inbox. Either may
-arrive first; repeat sync when more evidence arrives. The current reader supports
+arrive first; repeat import when more evidence arrives. The current reader supports
 the observed UTF-8 semicolon CSV layout, including quoted/multiline fields and an
 optional BOM. The two columns named Solde are interpreted by their fixed positions:
 column 7 is the exact French-decimal movement amount, and column 11 is a separate
@@ -801,7 +806,7 @@ from the matched OFX movement; CSV does not supply a currency or perform FX
 conversion. CSV-only observations wait for OFX.
 
 ~~~sh
-# Recompute automatically during sync, or explicitly after other imports:
+# Recompute automatically during import, or explicitly after other imports:
 dune exec fin -- bank match
 # Inspect all observations or just those still needing review:
 dune exec fin -- bank companions --institution boursobank
