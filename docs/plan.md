@@ -118,9 +118,9 @@ The import side is done; turning movements into accounting is not.
 
 - [ ] [Shared CSV decoding and format profiles](csv-imports.md): extract typed
   row descriptions and common reading/diagnostics, retaining primary/companion
-  roles, identities and matching policies. `Csv_reader`, `Csv_schema` and the
-  BoursoBank, Bunq and Wise schemas are implemented; Revolut and adapter profiles
-  remain.
+  roles, identities and matching policies. `Csv_reader`, `Csv_schema` and all four
+  bank CSV schemas are implemented; shared companion glue and primary profile
+  adapters remain.
 - [x] [Personal accounting guide](personal-accounting.md): a first-month workflow
   from imports and classification to hledger reports, opening balances,
   reconciliation and ongoing backups.

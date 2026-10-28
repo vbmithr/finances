@@ -258,10 +258,10 @@ generated journals remain a rendering of SQLite accounting.
 
 ## Inbox import and mapping decisions
 
-CSV formats share `Csv_reader` and `Csv_schema` for reading, header checks,
-typed cell decoding and row construction. BoursoBank, Bunq and Wise use
-`Csv_schema`; Revolut row migration and profile-level adapter construction are
-tracked in [shared CSV engine and typed profiles](csv-imports.md).
+All four CSV formats share `Csv_reader` and `Csv_schema` for reading, header
+checks, typed cell decoding and row construction. Shared companion glue and
+profile-level adapter construction are tracked in
+[shared CSV engine and typed profiles](csv-imports.md).
 
 The bank workflow design in [bank-workflow.md](bank-workflow.md) specifies the
 implemented folder milestone and later phases. The separate finances.bank library

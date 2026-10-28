@@ -36,8 +36,84 @@ let header =
   ]
 ;;
 
-let channel = Csv_reader.channel ~separator:','
-let recognizes = Csv_reader.recognizes ~separator:',' ~trim:false ~header
+let decimal =
+  Csv_schema.Cell.quantity
+    ~sign:`Negative_only
+    ~grouping:`None
+    ~decimal_mark:`Dot
+    ~decimals:`Optional
+    ~message:"invalid Revolut decimal"
+    ()
+;;
+
+let row_error = "expected ten-column completed or reverted Revolut Current transactions"
+
+type row =
+  | Reverted
+  | Completed of
+      { transaction_type : string
+      ; started_at : string
+      ; completed_at : string
+      ; description : string
+      ; principal : Quantity.t
+      ; fee : Quantity.t
+      ; currency : Iso4217.t
+      ; balance : Quantity.t
+      }
+
+let schema =
+  let open Csv_schema in
+  make
+    (fun
+        transaction_type
+         _product
+         started_at
+         completed_at
+         description
+         principal
+         fee
+         currency
+         state
+         balance
+       ->
+       (* A reverted transaction never completed and never changed the balance:
+         Revolut lists it with no completion date and no balance. The document
+         keeps it as evidence; it is not a movement. *)
+       match state, completed_at, balance with
+       | "REVERTED", None, None -> Reverted
+       | "COMPLETED", Some completed_at, Some balance ->
+         Completed
+           { transaction_type
+           ; started_at
+           ; completed_at
+           ; description
+           ; principal
+           ; fee
+           ; currency
+           ; balance
+           }
+       | _ -> failwith row_error)
+  |> col_name "Type" Cell.string
+  |> col_name "Product" (Cell.literal ~message:row_error "Current")
+  |> col_name "Started Date" Cell.string
+  |> col_name "Completed Date" (Cell.opt Cell.string)
+  |> col_name "Description" Cell.string
+  |> col_name "Amount" decimal
+  |> col_name "Fee" decimal
+  |> col_name "Currency" (Cell.currency ~name:"Revolut currency" ())
+  |> col_name "State" (Cell.one_of ~message:row_error [ "COMPLETED"; "REVERTED" ])
+  |> col_name "Balance" (Cell.opt decimal)
+  |> create
+       ~name:"Revolut"
+       ~separator:','
+       ~header
+       ~trim_header:false
+       ~trim_cells:false
+       ~skip_blank_rows:false
+       ~columns_message:(fun _ _ -> row_error)
+;;
+
+let recognizes = Csv_schema.recognizes schema
 
 let account_identity t =
   Json.encode
@@ -159,85 +235,50 @@ let jsont = Lazy.force jsont
 
 let parse ~account_id contents =
   Or_error.try_with (fun () ->
-    Csv_reader.check_utf8 ~name:"Revolut" contents;
     ignore (Validation.token "Revolut account_id" account_id |> Or_error.ok_exn : string);
-    let input = channel contents in
-    Csv_reader.check_header
-      ~trim:false
-      ~header
-      ~message:"unsupported Revolut CSV header"
-      input;
-    let decimal s =
-      if not (Re.execp (Re.Perl.compile_pat "^-?[0-9]+(\\.[0-9]+)?$") s)
-      then failwith "invalid Revolut decimal"
-      else Quantity.of_string s
-    in
+    let rows = Csv_schema.parse schema contents |> Or_error.ok_exn in
     let counts = Hashtbl.create (module String) in
     let balances = Hashtbl.create (module Iso4217) in
     let transactions =
-      Csv.input_all input
-      |> List.filter_map ~f:(fun fields ->
-        match fields with
-        (* A reverted transaction never completed and never changed the balance:
-           Revolut lists it with no completion date and no balance. The document
-           keeps it as evidence; it is not a movement. *)
-        | [ _; "Current"; _; ""; _; _; _; _; "REVERTED"; "" ] -> None
-        | [ transaction_type
-          ; "Current"
-          ; started_at
-          ; completed_at
-          ; description
-          ; principal
-          ; fee
-          ; currency
-          ; "COMPLETED"
-          ; balance
-          ] ->
-          let principal = decimal principal
-          and fee = decimal fee
-          and balance = decimal balance
-          and currency =
-            Validation.currency "Revolut currency" currency |> Or_error.ok_exn
-          in
+      List.filter_map rows ~f:(function
+        | Reverted -> None
+        | Completed r ->
           let initial =
             make
               ~account_id
-              ~currency
-              ~started_at
-              ~completed_at
-              ~transaction_type
-              ~description
-              ~principal
-              ~fee
-              ~balance:(Some balance)
+              ~currency:r.currency
+              ~started_at:r.started_at
+              ~completed_at:r.completed_at
+              ~transaction_type:r.transaction_type
+              ~description:r.description
+              ~principal:r.principal
+              ~fee:r.fee
+              ~balance:(Some r.balance)
               ~occurrence:1
           in
           Hashtbl.incr counts initial.source_id;
           let tx =
             make
               ~account_id
-              ~currency
-              ~started_at
-              ~completed_at
-              ~transaction_type
-              ~description
-              ~principal
-              ~fee
-              ~balance:(Some balance)
+              ~currency:r.currency
+              ~started_at:r.started_at
+              ~completed_at:r.completed_at
+              ~transaction_type:r.transaction_type
+              ~description:r.description
+              ~principal:r.principal
+              ~fee:r.fee
+              ~balance:(Some r.balance)
               ~occurrence:(Hashtbl.find_exn counts initial.source_id)
           in
           Option.iter
-            (Hashtbl.find balances currency)
+            (Hashtbl.find balances r.currency)
             ~f:(fun (previous_at, previous_balance) ->
               if Ptime.compare tx.completed_at previous_at < 0
               then failwith "Revolut rows are not in completion order";
-              if not Quantity.(previous_balance + tx.amount = balance)
+              if not Quantity.(previous_balance + tx.amount = r.balance)
               then failwith "Revolut running balance does not agree with amount minus fee");
-          Hashtbl.set balances ~key:currency ~data:(tx.completed_at, balance);
-          Some tx
-        | _ ->
-          failwith
-            "expected ten-column completed or reverted Revolut Current transactions")
+          Hashtbl.set balances ~key:r.currency ~data:(tx.completed_at, r.balance);
+          Some tx)
     in
     { contents; transactions })
   |> fun r -> Or_error.tag r ~tag:"Revolut CSV"
