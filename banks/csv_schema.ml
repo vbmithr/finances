@@ -67,6 +67,33 @@ module Cell = struct
       Date.of_string iso)
   ;;
 
+  let iso_clock_syntax =
+    Re.Perl.compile_pat "^[0-9]{4}-[0-9]{2}-[0-9]{2} [0-9]{2}:[0-9]{2}:[0-9]{2}$"
+  ;;
+
+  let dmy_clock_ms_syntax =
+    Re.Perl.compile_pat
+      "^[0-9]{2}-[0-9]{2}-[0-9]{4} [0-9]{2}:[0-9]{2}:[0-9]{2}\\.[0-9]{3}$"
+  ;;
+
+  let utc_clock ?(layout = `Iso_seconds) ?message () =
+    match layout with
+    | `Iso_seconds ->
+      let msg = Option.value message ~default:"unsupported ISO UTC datetime" in
+      create ~name:"utc_clock" (fun s ->
+        if not (Re.execp iso_clock_syntax s) then failwith msg;
+        Timestamp.of_rfc3339_exn (String.tr s ~target:' ' ~replacement:'T' ^ "Z"))
+    | `Dmy_millis ->
+      let msg =
+        Option.value message ~default:"expected DD-MM-YYYY HH:MM:SS.mmm UTC clock"
+      in
+      let parse_day = (dmy_date ~message:msg ()).decode in
+      create ~name:"dmy_utc_clock_ms" (fun s ->
+        if not (Re.execp dmy_clock_ms_syntax s) then failwith msg;
+        let day = parse_day (String.prefix s 10) in
+        Timestamp.of_rfc3339_exn (Date.to_string day ^ "T" ^ String.drop_prefix s 11 ^ "Z"))
+  ;;
+
   let quantity
         ?(sign = `Any)
         ?(grouping = `None)

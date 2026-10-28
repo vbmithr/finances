@@ -57,7 +57,13 @@ let parser () =
   let finish = String.substr_index_exn original ~pattern:"</Ntry>" + 7 in
   let entry = String.sub original ~pos:start ~len:(finish - start) in
   error (Wise_camt.parse (replace original "</Stmt>" (entry ^ "</Stmt>")));
-  error (Wise_csv.parse (replace (csv ()) "02-01-2025" "32-01-2025"))
+  error (Wise_csv.parse (replace (csv ()) "02-01-2025" "32-01-2025"));
+  error
+    (Wise_csv.parse
+       (replace (csv ()) "02-01-2025 00:00:00.123" "03-01-2025 00:00:00.123"));
+  error (Wise_csv.parse (replace (csv ()) "DEBIT" "CREDIT"));
+  error
+    (Wise_csv.parse (replace (csv ()) "02-01-2025 00:00:00.123" "02-01-2025 00:00:00"))
 ;;
 
 let multi_bank () =

@@ -19,6 +19,12 @@ module Cell : sig
   val iso_date : ?message:string -> unit -> Date.t t
   val dmy_date : ?message:string -> unit -> Date.t t
 
+  val utc_clock
+    :  ?layout:[ `Iso_seconds | `Dmy_millis ]
+    -> ?message:string
+    -> unit
+    -> Ptime.t t
+
   val quantity
     :  ?sign:[ `Any | `Negative_only | `None ]
     -> ?grouping:[ `None | `Spaces ]

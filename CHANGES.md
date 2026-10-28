@@ -10,6 +10,8 @@ short line of their own.
 
 ### 2026-10-28
 
+- Move Wise CSV row decoding onto `Csv_schema` with UTC clock decoding and
+  explicit cross-field date, direction, reference and fee/FX checks.
 - Introduce `Csv_schema` with typed cell decoders, compiled column selectors and
   row/column diagnostics, and move BoursoBank and Bunq CSV row decoding onto it.
   Normalized values, raw companion fields and matching policies are unchanged.
