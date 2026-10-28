@@ -1,8 +1,8 @@
 # Shared CSV decoding and format profiles
 
-Status: implementation in progress, 2026-10-28. All four bank CSV formats
-(BoursoBank, Bunq, Wise and Revolut) decode rows through `Csv_schema`; shared
-companion glue and primary profile adapter construction remain.
+Status: implemented, 2026-10-28. All four bank CSV formats decode rows through
+`Csv_reader` and `Csv_schema`, and `Adapter_support` shares companion wiring and
+CSV adapter construction.
 
 ## Goal
 
@@ -21,12 +21,12 @@ work, after the existing formats establish which operations are actually needed.
 
 ## What exists today
 
-The project already uses the `Csv` library for CSV syntax. The duplication was in
-the layer above it. `Csv_reader` shares BOM removal, UTF-8 checks, reader options
-and header checks; `Csv_schema` adds typed cells, compiled column selectors,
-blank-row policies and row/column diagnostics. All four bank CSV formats now
-decode rows through `Csv_schema`; `Adapter_support` does not yet factor companion
-adapter glue or construct adapters from CSV profiles.
+The project uses the `Csv` library for CSV syntax, with `Csv_reader` and
+`Csv_schema` above it. `Csv_reader` shares BOM removal, UTF-8 checks, reader
+options and header checks; `Csv_schema` adds typed cells, compiled column
+selectors, blank-row policies and row/column diagnostics. All four bank CSV
+formats decode rows through `Csv_schema`, and `Adapter_support` shares companion
+wiring and CSV-only adapter construction.
 
 The existing formats have different roles:
 

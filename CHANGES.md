@@ -10,6 +10,9 @@ short line of their own.
 
 ### 2026-10-28
 
+- Share companion CSV wiring and CSV-only adapter construction in
+  `Adapter_support`, completing the migration of BoursoBank, Bunq, Wise and
+  Revolut CSV handling to `Csv_reader` and `Csv_schema`.
 - Move Revolut CSV row decoding onto `Csv_schema`, preserving reverted-record
   handling, per-currency running-balance checks and duplicate occurrences.
 - Move Wise CSV row decoding onto `Csv_schema` with UTC clock decoding and

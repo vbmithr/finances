@@ -69,64 +69,47 @@ let parse ~context:_ ~format contents =
       |> Or_error.combine_errors
     in
     { Document.empty with statements })
-  else (
-    let%map rows = Wise_csv.parse contents in
-    { Document.empty with
-      companion_rows =
-        List.map rows ~f:(fun (row : Wise_csv.row) -> row.row_number, row.fields)
-    })
+  else
+    Adapter_support.companion_document
+      Wise_csv.parse
+      ~number:(fun (row : Wise_csv.row) -> row.row_number)
+      ~fields:(fun row -> row.fields)
+      contents
 ;;
 
-let row (r : Companion.row) = Wise_csv.of_fields ~row_number:r.row_number r.fields
-
 let companion : Companion.t =
-  { format = csv
-  ; policy = "wise-csv-v1"
-  ; match_rows =
-      (fun rows events ->
-        let open Or_error.Let_syntax in
-        let%bind inputs =
-          List.map rows ~f:(fun (r : Companion.row) ->
-            let%map row = row r in
-            { Wise_csv.row_id = r.row_id; document_id = r.document_id; row })
-          |> Or_error.combine_errors
-        in
-        let%map transactions =
-          List.map events ~f:(fun (id, event) ->
-            let%map tx = Wise_camt.source_transaction event in
-            id, tx)
-          |> Or_error.combine_errors
-        in
-        Wise_csv.match_rows inputs transactions)
-  ; annotate =
-      (fun r ->
-        let open Or_error.Let_syntax in
-        let%map row = row r in
-        { Companion.value_on = None
-        ; tags =
-            List.filter_opt
-              [ Some ("wise-reported-fees", Quantity.to_string row.fees)
-              ; Option.map row.merchant ~f:(fun s -> "wise-merchant", s)
-              ; Option.map row.payment_reference ~f:(fun s -> "wise-payment-reference", s)
-              ]
-        })
-  ; describe =
-      (fun r ->
-        let open Or_error.Let_syntax in
-        let%map row = row r in
-        Adapter_support.
-          [ "reference", Some row.reference
-          ; "booked_at", Some (Timestamp.to_rfc3339 row.booked_at)
-          ; "amount", Some (quantity row.amount)
-          ; "currency", Some (Iso4217.to_alpha_code row.currency)
-          ; "description", Some row.description
-          ; "fees", Some (quantity row.fees)
-          ; "running_balance", Some (quantity row.running_balance)
-          ; "payment_reference", row.payment_reference
-          ; "merchant", row.merchant
-          ; "payee", row.payee
-          ])
-  }
+  Adapter_support.companion
+    ~format:csv
+    ~policy:"wise-csv-v1"
+    ~of_fields:Wise_csv.of_fields
+    ~input:(fun r row -> { Wise_csv.row_id = r.row_id; document_id = r.document_id; row })
+    ~candidate:(fun id event ->
+      let open Or_error.Let_syntax in
+      let%map tx = Wise_camt.source_transaction event in
+      id, tx)
+    ~match_rows:Wise_csv.match_rows
+    ~annotate:(fun row ->
+      { Companion.value_on = None
+      ; tags =
+          List.filter_opt
+            [ Some ("wise-reported-fees", Quantity.to_string row.fees)
+            ; Option.map row.merchant ~f:(fun s -> "wise-merchant", s)
+            ; Option.map row.payment_reference ~f:(fun s -> "wise-payment-reference", s)
+            ]
+      })
+    ~describe:(fun row ->
+      Adapter_support.
+        [ "reference", Some row.reference
+        ; "booked_at", Some (Timestamp.to_rfc3339 row.booked_at)
+        ; "amount", Some (quantity row.amount)
+        ; "currency", Some (Iso4217.to_alpha_code row.currency)
+        ; "description", Some row.description
+        ; "fees", Some (quantity row.fees)
+        ; "running_balance", Some (quantity row.running_balance)
+        ; "payment_reference", row.payment_reference
+        ; "merchant", row.merchant
+        ; "payee", row.payee
+        ])
 ;;
 
 let companions = [ companion ]

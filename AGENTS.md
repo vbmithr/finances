@@ -17,3 +17,6 @@ Use Base for general utilities, decimal for quantities, Ptime for dates and
 clocks, and Bos for high-level OS operations. Keep accounting arithmetic exact
 through Quantity's local contexts. Do not reintroduce Core, Core_unix,
 Bigdecimal or a home-grown standard-library compatibility layer.
+
+Every Git commit must include a detailed body describing what changed and how
+it was verified, followed by a `Co-Authored-By:` trailer.

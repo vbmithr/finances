@@ -159,6 +159,108 @@ let schema_validation_and_diagnostics () =
     (Result.is_error empty_doc)
 ;;
 
+type profile_row =
+  { id : string
+  ; account_id : string
+  ; booked_on : Date.t
+  ; amount : Quantity.t
+  ; currency : Iso4217.t
+  ; description : string
+  }
+
+let profile_adapter () =
+  let schema =
+    let open Csv_schema in
+    make (fun id account_id booked_on amount currency description ->
+      { id; account_id; booked_on; amount; currency; description })
+    |> col_name "Reference" (Cell.token ~name:"reference" ())
+    |> col_name "Account" (Cell.token ~name:"account" ())
+    |> col_name "Booked" (Cell.iso_date ())
+    |> col_name "Amount" Cell.decimal_balance
+    |> col_name "Currency" (Cell.currency ())
+    |> col_name "Description" (Cell.required Cell.string)
+    |> create
+         ~name:"SimpleBank"
+         ~separator:','
+         ~header:[ "Reference"; "Account"; "Booked"; "Amount"; "Currency"; "Description" ]
+         ~trim_header:true
+         ~trim_cells:true
+         ~skip_blank_rows:true
+  in
+  let payload_jsont =
+    let open Jsont.Object in
+    map (fun account_id booked_on amount currency description ->
+      account_id, booked_on, amount, currency, description)
+    |> mem "account_id" Jsont.string ~enc:(fun (a, _, _, _, _) -> a)
+    |> mem "booked_on" Json.date ~enc:(fun (_, d, _, _, _) -> d)
+    |> mem "amount" Json.quantity ~enc:(fun (_, _, q, _, _) -> q)
+    |> mem "currency" Json.currency ~enc:(fun (_, _, _, c, _) -> c)
+    |> mem "description" Jsont.string ~enc:(fun (_, _, _, _, s) -> s)
+    |> finish
+  in
+  let adapter =
+    Adapter_support.schema_adapter
+      ~institution:"simplebank"
+      ~aliases:[ "simple" ]
+      ~format:"simple_csv"
+      ~kind:"simple-tx"
+      ~overlap:Adapter.Source_ids
+      ~schema
+      ~events:(fun ~context:_ rows ->
+        List.map rows ~f:(fun r ->
+          Source_event.create_dated
+            ~venue:"simplebank"
+            ~account:r.account_id
+            ~kind:"simple-tx"
+            ~source_id:r.id
+            ~occurred_on:r.booked_on
+            ~payload:
+              (Json.encode
+                 payload_jsont
+                 (r.account_id, r.booked_on, r.amount, r.currency, r.description)))
+        |> Or_error.combine_errors)
+      ~decode:(fun event ->
+        Or_error.bind
+          (Json.decode payload_jsont event.payload)
+          ~f:(fun (account_id, booked_on, amount, currency, description) ->
+            Movement.create
+              ~account:
+                { bank_id = "simplebank"
+                ; account_id
+                ; account_type = "checking"
+                ; currency
+                }
+              ~own_iban:Unknown
+              ~booked_on
+              ~amount
+              [ description ]))
+      ()
+  in
+  let module A = (val adapter : Adapter.S) in
+  let csv =
+    "Reference,Account,Booked,Amount,Currency,Description\n\
+     TX-1,MAIN,2026-02-01,-19.99,EUR,Subscription\n"
+  in
+  Alcotest.(check (option string))
+    "profile adapter probes CSV"
+    (Some "simple_csv")
+    (A.probe ~filename:"export.csv" csv);
+  let doc =
+    Or_error.ok_exn (A.parse ~context:{ account_label = None } ~format:"simple_csv" csv)
+  in
+  Alcotest.(check int) "one event produced" 1 (List.length doc.events);
+  let registry = Or_error.ok_exn (Registry.create [ adapter ]) in
+  let movement = Or_error.ok_exn (Registry.movement registry (List.hd_exn doc.events)) in
+  Alcotest.(check bool)
+    "movement amount preserved"
+    true
+    (Quantity.equal movement.amount (Quantity.of_string "-19.99"));
+  Alcotest.(check (list string))
+    "movement description preserved"
+    [ "Subscription" ]
+    movement.descriptions
+;;
+
 let () =
   Alcotest.run
     "Shared CSV reader"
@@ -172,6 +274,7 @@ let () =
             "selectors and diagnostics"
             `Quick
             schema_validation_and_diagnostics
+        ; Alcotest.test_case "profile adapter construction" `Quick profile_adapter
         ] )
     ]
 ;;

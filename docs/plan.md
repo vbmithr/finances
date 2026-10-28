@@ -46,7 +46,7 @@ Last updated: 2026-10-28.
 - Statement ingestion is `fin import BANK PATH...`. `fin backup` saves one
   consistent SQLite snapshot; `fin restore BACKUP` validates and restores it,
   with overwrite confirmation and automatic removal of stale generated files.
-- 147 tests (134 OCaml cases and 13 CLI cases). Each change is verified
+- 148 tests (135 OCaml cases and 13 CLI cases). Each change is verified
   by rebuilding the personal database from its inboxes with the previous and the
   new build and diffing every report.
 - Issue #1 is implemented locally and awaits publication.
@@ -116,11 +116,10 @@ The import side is done; turning movements into accounting is not.
 
 ### 3. Smaller gaps
 
-- [ ] [Shared CSV decoding and format profiles](csv-imports.md): extract typed
+- [x] [Shared CSV decoding and format profiles](csv-imports.md): extract typed
   row descriptions and common reading/diagnostics, retaining primary/companion
-  roles, identities and matching policies. `Csv_reader`, `Csv_schema` and all four
-  bank CSV schemas are implemented; shared companion glue and primary profile
-  adapters remain.
+  roles, identities and matching policies. `Csv_reader`, `Csv_schema`, all four
+  bank CSV schemas and `Adapter_support` companion/profile helpers are in place.
 - [x] [Personal accounting guide](personal-accounting.md): a first-month workflow
   from imports and classification to hledger reports, opening balances,
   reconciliation and ongoing backups.

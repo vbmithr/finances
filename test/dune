@@ -385,4 +385,12 @@
  (modules csv_reader_test)
  (flags
   (:standard -open Finances_core))
- (libraries finances.banks finances.core iban iso4217 base csv alcotest))
+ (libraries
+  finances.banks
+  finances.core
+  iban
+  iso4217
+  jsont
+  base
+  csv
+  alcotest))

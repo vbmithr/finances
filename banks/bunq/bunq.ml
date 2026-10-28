@@ -74,59 +74,42 @@ let parse ~context:_ ~format contents =
           }
         ]
     })
-  else (
-    let%map rows = Bunq_csv.parse contents in
-    { Document.empty with
-      companion_rows =
-        List.map rows ~f:(fun (row : Bunq_csv.row) -> row.row_number, row.fields)
-    })
+  else
+    Adapter_support.companion_document
+      Bunq_csv.parse
+      ~number:(fun (row : Bunq_csv.row) -> row.row_number)
+      ~fields:(fun row -> row.fields)
+      contents
 ;;
 
-let row (r : Companion.row) = Bunq_csv.of_fields ~row_number:r.row_number r.fields
-
 let companion : Companion.t =
-  { format = csv
-  ; policy = "bunq-csv-v1"
-  ; match_rows =
-      (fun rows events ->
-        let open Or_error.Let_syntax in
-        let%bind inputs =
-          List.map rows ~f:(fun (r : Companion.row) ->
-            let%map row = row r in
-            { Bunq_csv.row_id = r.row_id; document_id = r.document_id; row })
-          |> Or_error.combine_errors
-        in
-        let%map transactions =
-          List.map events ~f:(fun (id, event) ->
-            let%map tx = Bunq_transaction.source_transaction event in
-            id, tx)
-          |> Or_error.combine_errors
-        in
-        Bunq_csv.match_rows inputs transactions)
-  ; annotate =
-      (fun r ->
-        let open Or_error.Let_syntax in
-        let%map row = row r in
-        { Companion.value_on = None
-        ; tags =
-            (if String.is_empty row.counterparty
-             then []
-             else [ "bunq-counterparty", row.counterparty ])
-        })
-  ; describe =
-      (fun r ->
-        let open Or_error.Let_syntax in
-        let%map row = row r in
-        Adapter_support.
-          [ "account_id", Some row.account_id
-          ; "booked_on", Some (date row.booked_on)
-          ; "value_on", Some (date row.value_on)
-          ; "amount", Some (quantity row.amount)
-          ; "counterparty", Some row.counterparty
-          ; "name", Some row.name
-          ; "description", Some row.description
-          ])
-  }
+  Adapter_support.companion
+    ~format:csv
+    ~policy:"bunq-csv-v1"
+    ~of_fields:Bunq_csv.of_fields
+    ~input:(fun r row -> { Bunq_csv.row_id = r.row_id; document_id = r.document_id; row })
+    ~candidate:(fun id event ->
+      let open Or_error.Let_syntax in
+      let%map tx = Bunq_transaction.source_transaction event in
+      id, tx)
+    ~match_rows:Bunq_csv.match_rows
+    ~annotate:(fun row ->
+      { Companion.value_on = None
+      ; tags =
+          (if String.is_empty row.counterparty
+           then []
+           else [ "bunq-counterparty", row.counterparty ])
+      })
+    ~describe:(fun row ->
+      Adapter_support.
+        [ "account_id", Some row.account_id
+        ; "booked_on", Some (date row.booked_on)
+        ; "value_on", Some (date row.value_on)
+        ; "amount", Some (quantity row.amount)
+        ; "counterparty", Some row.counterparty
+        ; "name", Some row.name
+        ; "description", Some row.description
+        ])
 ;;
 
 let companions = [ companion ]
