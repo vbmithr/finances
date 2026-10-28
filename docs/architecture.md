@@ -258,7 +258,8 @@ generated journals remain a rendering of SQLite accounting.
 
 ## Inbox import and mapping decisions
 
-CSV parsing still lives in format-specific modules. The proposed
+CSV formats share reader and header handling; typed row decoding still lives in
+format-specific modules. The proposed
 [shared CSV engine and typed profiles](csv-imports.md) would remove repeated
 reading and column-decoding code while retaining existing semantic policies.
 

@@ -22,21 +22,8 @@ let header =
   [ "Date"; "Interest Date"; "Amount"; "Account"; "Counterparty"; "Name"; "Description" ]
 ;;
 
-let channel s =
-  Csv.of_string
-    ~separator:','
-    ~strip:false
-    ~backslash_escape:false
-    ~excel_tricks:false
-    ~fix:false
-    (Option.value (String.chop_prefix s ~prefix:"\239\187\191") ~default:s)
-;;
-
-let recognizes contents =
-  match Or_error.try_with (fun () -> Csv.next (channel contents)) with
-  | Ok fields -> List.equal String.equal fields header
-  | Error _ -> false
-;;
+let channel = Csv_reader.channel ~separator:','
+let recognizes = Csv_reader.recognizes ~separator:',' ~trim:false ~header
 
 let of_fields ~row_number fields =
   Or_error.try_with (fun () ->
@@ -76,10 +63,13 @@ let of_fields ~row_number fields =
 
 let parse contents =
   Or_error.try_with (fun () ->
-    if not (Stdlib.String.is_valid_utf_8 contents) then failwith "Bunq CSV must be UTF-8";
+    Csv_reader.check_utf8 ~name:"Bunq" contents;
     let input = channel contents in
-    if not (List.equal String.equal (Csv.next input) header)
-    then failwith "unsupported Bunq CSV header";
+    Csv_reader.check_header
+      ~trim:false
+      ~header
+      ~message:"unsupported Bunq CSV header"
+      input;
     Csv.input_all input
     |> List.mapi ~f:(fun i fields ->
       of_fields ~row_number:(i + 1) fields |> Or_error.ok_exn))

@@ -36,21 +36,8 @@ let header =
   ]
 ;;
 
-let channel s =
-  Csv.of_string
-    ~separator:','
-    ~strip:false
-    ~backslash_escape:false
-    ~excel_tricks:false
-    ~fix:false
-    (Option.value (String.chop_prefix s ~prefix:"\239\187\191") ~default:s)
-;;
-
-let recognizes contents =
-  match Or_error.try_with (fun () -> Csv.next (channel contents)) with
-  | Ok fields -> List.equal String.equal fields header
-  | Error _ -> false
-;;
+let channel = Csv_reader.channel ~separator:','
+let recognizes = Csv_reader.recognizes ~separator:',' ~trim:false ~header
 
 let account_identity t =
   Json.encode
@@ -172,12 +159,14 @@ let jsont = Lazy.force jsont
 
 let parse ~account_id contents =
   Or_error.try_with (fun () ->
-    if not (Stdlib.String.is_valid_utf_8 contents)
-    then failwith "Revolut CSV must be UTF-8";
+    Csv_reader.check_utf8 ~name:"Revolut" contents;
     ignore (Validation.token "Revolut account_id" account_id |> Or_error.ok_exn : string);
     let input = channel contents in
-    if not (List.equal String.equal (Csv.next input) header)
-    then failwith "unsupported Revolut CSV header";
+    Csv_reader.check_header
+      ~trim:false
+      ~header
+      ~message:"unsupported Revolut CSV header"
+      input;
     let decimal s =
       if not (Re.execp (Re.Perl.compile_pat "^-?[0-9]+(\\.[0-9]+)?$") s)
       then failwith "invalid Revolut decimal"

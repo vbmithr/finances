@@ -10,6 +10,9 @@ short line of their own.
 
 ### 2026-10-28
 
+- Share CSV reader, UTF-8 and header handling across the four bank formats.
+  Each format retains its existing delimiter and header normalization rules;
+  raw fields, identities and matching policies are unchanged.
 - Record a design for shared CSV decoding and typed format profiles, including
   primary/companion roles, semantic hooks, staged migration and compatibility
   checks. Documentation only; CSV import behavior is unchanged.

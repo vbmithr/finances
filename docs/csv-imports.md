@@ -1,7 +1,7 @@
 # Shared CSV decoding and format profiles
 
-Status: proposal, 2026-10-28. This document records a direction for future work;
-the current CSV adapters are unchanged.
+Status: implementation started, 2026-10-28. The four formats share CSV reader,
+UTF-8 and header handling; typed row descriptions and policy integration remain.
 
 ## Goal
 
@@ -21,9 +21,10 @@ work, after the existing formats establish which operations are actually needed.
 ## What exists today
 
 The project already uses the `Csv` library for CSV syntax. The duplication is in
-the layer above it: BOM removal, UTF-8 checks, reader options, header checks,
-column selection, date/quantity conversion, blank-row handling and error context.
-`Adapter_support` shares a little adapter glue, but does not describe row schemas.
+the layer above it. `Csv_reader` now shares BOM removal, UTF-8 checks, reader
+options and header checks. Column selection, date/quantity conversion, blank-row
+handling and error context still live in format-specific code. `Adapter_support`
+shares adapter glue, but does not describe row schemas.
 
 The existing formats have different roles:
 
@@ -177,8 +178,8 @@ not automatically a new persisted payload format.
 
 1. Capture the current acceptance rules and raw-field/row-number behavior in
    fixtures, including malformed inputs and duplicate transactions.
-2. Extract the common reader and header handling. Have the current parsers
-   delegate to it without changing their public interfaces or normalized output.
+2. Extract the common reader and header handling. The current parsers delegate
+   to `Csv_reader` without changing their public interfaces or normalized output.
 3. Introduce typed cells and row construction. Move BoursoBank and Bunq layouts
    into descriptions; leave their matching policies in place.
 4. Move Wise's layout into a description, keeping cross-field date, direction,

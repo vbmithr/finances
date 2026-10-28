@@ -48,25 +48,8 @@ let header =
   ]
 ;;
 
-let channel contents =
-  let contents =
-    Option.value (String.chop_prefix contents ~prefix:"\239\187\191") ~default:contents
-  in
-  Csv.of_string
-    ~separator:','
-    ~strip:false
-    ~backslash_escape:false
-    ~excel_tricks:false
-    ~fix:false
-    contents
-;;
-
-let recognizes contents =
-  match Or_error.try_with (fun () -> Csv.next (channel contents)) with
-  | Ok fields -> List.equal String.equal (List.map fields ~f:String.strip) header
-  | Error _ -> false
-;;
-
+let channel = Csv_reader.channel ~separator:','
+let recognizes = Csv_reader.recognizes ~separator:',' ~trim:true ~header
 let decimal_pattern = Re.Perl.compile_pat "^[+-]?[0-9]+(\\.[0-9]+)?$"
 let date_pattern = Re.Perl.compile_pat "^[0-9]{2}-[0-9]{2}-[0-9]{4}$"
 
@@ -136,10 +119,13 @@ let of_fields ~row_number fields =
 
 let parse contents =
   Or_error.try_with (fun () ->
-    if not (Stdlib.String.is_valid_utf_8 contents) then failwith "Wise CSV must be UTF-8";
+    Csv_reader.check_utf8 ~name:"Wise" contents;
     let input = channel contents in
-    if not (List.equal String.equal (List.map (Csv.next input) ~f:String.strip) header)
-    then failwith "unsupported Wise CSV header";
+    Csv_reader.check_header
+      ~trim:true
+      ~header
+      ~message:"unsupported Wise CSV header"
+      input;
     Csv.input_all input
     |> List.mapi ~f:(fun i fields ->
       if List.for_all fields ~f:(fun s -> String.is_empty (String.strip s))

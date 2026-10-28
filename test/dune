@@ -379,3 +379,8 @@
  (flags
   (:standard -open Finances_core))
  (libraries finances finances.core base jsont jsont.bytesrw alcotest))
+
+(test
+ (name csv_reader_test)
+ (modules csv_reader_test)
+ (libraries finances.banks base csv alcotest))

@@ -33,24 +33,8 @@ let header =
   ]
 ;;
 
-let without_bom s = Option.value (String.chop_prefix s ~prefix:"\239\187\191") ~default:s
-
-let channel s =
-  Csv.of_string
-    ~separator:';'
-    ~strip:false
-    ~backslash_escape:false
-    ~excel_tricks:false
-    ~fix:false
-    (without_bom s)
-;;
-
-let recognizes contents =
-  match Or_error.try_with (fun () -> Csv.next (channel contents)) with
-  | Ok fields -> List.equal String.equal (List.map fields ~f:String.strip) header
-  | Error _ -> false
-;;
-
+let channel = Csv_reader.channel ~separator:';'
+let recognizes = Csv_reader.recognizes ~separator:';' ~trim:true ~header
 let amount_syntax = Re.Perl.compile_pat "^[+-]?([0-9]+|[0-9]{1,3}( [0-9]{3})+)(,[0-9]+)?$"
 let balance_syntax = Re.Perl.compile_pat "^[+-]?[0-9]+(\\.[0-9]+)?$"
 let date_syntax = Re.Perl.compile_pat "^[0-9]{4}-[0-9]{2}-[0-9]{2}$"
@@ -105,11 +89,13 @@ let of_fields ~row_number fields =
 
 let parse contents =
   Or_error.try_with (fun () ->
-    if not (Stdlib.String.is_valid_utf_8 contents)
-    then failwith "BoursoBank CSV must be UTF-8";
+    Csv_reader.check_utf8 ~name:"BoursoBank" contents;
     let input = channel contents in
-    if not (List.equal String.equal (List.map (Csv.next input) ~f:String.strip) header)
-    then failwith "unsupported BoursoBank CSV header";
+    Csv_reader.check_header
+      ~trim:true
+      ~header
+      ~message:"unsupported BoursoBank CSV header"
+      input;
     Csv.input_all input
     |> List.mapi ~f:(fun index fields ->
       if List.for_all fields ~f:(fun s -> String.is_empty (String.strip s))
