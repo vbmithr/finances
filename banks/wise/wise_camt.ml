@@ -90,8 +90,16 @@ let optional node path =
 ;;
 
 let account_identity a =
-  Yojson.Safe.to_string
-    (`List (List.map [ a.bank_id; a.account_id; a.account_type ] ~f:(fun s -> `String s)))
+  Json.encode (Jsont.list Jsont.string) [ a.bank_id; a.account_id; a.account_type ]
+;;
+
+let account_of_identity identity currency =
+  match Json.decode (Jsont.list Jsont.string) identity |> Or_error.ok_exn with
+  | [ bank_id; account_id; account_type ]
+    when String.equal bank_id "wise"
+         && String.equal account_type ("balance-" ^ Iso4217.to_alpha_code currency) ->
+    { bank_id; account_id; account_type; currency }
+  | _ -> failwith "invalid Wise balance account"
 ;;
 
 let hex32 text =
@@ -129,7 +137,15 @@ let matching_time (tx : transaction) =
   | None -> invalid_arg "Wise local matching clock is outside the Ptime range"
 ;;
 
-let make_transaction account ~reference ~booked_at ~value_on ~amount ~credit ~description =
+let rec make_transaction
+          account
+          ~reference
+          ~booked_at
+          ~value_on
+          ~amount
+          ~credit
+          ~description
+  =
   if (credit && Quantity.(amount < zero)) || ((not credit) && Quantity.(amount > zero))
   then failwith "Wise amount sign disagrees with direction";
   let booked_at_source = booked_at in
@@ -139,42 +155,55 @@ let make_transaction account ~reference ~booked_at ~value_on ~amount ~credit ~de
   let reference = normalize_reference ~description reference in
   ignore (Validation.text "Wise reference" reference |> Or_error.ok_exn : string);
   let source_id =
-    Yojson.Safe.to_string
-      (`List
-          [ `String reference
-          ; `String instant_ns
-          ; `String (if credit then "CRDT" else "DBIT")
-          ])
+    Json.encode
+      (Jsont.list Jsont.string)
+      [ reference; instant_ns; (if credit then "CRDT" else "DBIT") ]
   in
-  let payload =
-    Yojson.Safe.to_string
-      (`Assoc
-          [ "format", `String "wise-camt-v1"
-          ; "account", `String (account_identity account)
-          ; "currency", `String (Iso4217.to_alpha_code account.currency)
-          ; "reference", `String reference
-          ; "booked_at", `String booked_at
-          ; ( "value_on"
-            , Option.value_map value_on ~default:`Null ~f:(fun date ->
-                `String (Date.to_string date)) )
-          ; "amount", `String (Quantity.to_string amount)
-          ; "credit", `Bool credit
-          ; "description", `String description
-          ])
+  let tx =
+    { account
+    ; reference
+    ; booked_at = instant
+    ; booked_at_source
+    ; booked_on
+    ; value_on
+    ; amount
+    ; credit
+    ; description
+    ; source_id
+    ; payload = ""
+    }
   in
-  { account
-  ; reference
-  ; booked_at = instant
-  ; booked_at_source
-  ; booked_on
-  ; value_on
-  ; amount
-  ; credit
-  ; description
-  ; source_id
-  ; payload
-  }
+  { tx with payload = Json.encode (Lazy.force jsont) tx }
+
+and jsont =
+  lazy
+    (Jsont.Object.map
+       (fun () identity currency reference booked_at value_on amount credit description ->
+          Json.validated (fun () ->
+            let account = account_of_identity identity currency in
+            make_transaction
+              account
+              ~reference
+              ~booked_at
+              ~value_on
+              ~amount
+              ~credit
+              ~description))
+     |> Jsont.Object.mem "format" (Json.tag "wise-camt-v1") ~enc:(fun _ -> ())
+     |> Jsont.Object.mem "account" Jsont.string ~enc:(fun (t : transaction) ->
+       account_identity t.account)
+     |> Jsont.Object.mem "currency" Json.currency ~enc:(fun (t : transaction) ->
+       t.account.currency)
+     |> Jsont.Object.mem "reference" Jsont.string ~enc:(fun t -> t.reference)
+     |> Jsont.Object.mem "booked_at" Jsont.string ~enc:(fun t -> t.booked_at_source)
+     |> Jsont.Object.mem "value_on" (Jsont.option Json.date) ~enc:(fun t -> t.value_on)
+     |> Jsont.Object.mem "amount" Json.quantity ~enc:(fun t -> t.amount)
+     |> Jsont.Object.mem "credit" Jsont.bool ~enc:(fun t -> t.credit)
+     |> Jsont.Object.mem "description" Jsont.string ~enc:(fun t -> t.description)
+     |> Jsont.Object.finish)
 ;;
+
+let jsont = Lazy.force jsont
 
 let direction node =
   match value node [ "CdtDbtInd" ] with
@@ -329,53 +358,10 @@ let source_transaction (event : Source_event.t) =
   Or_error.try_with (fun () ->
     if not (String.equal event.kind "wise-transaction")
     then failwith "not a Wise source event";
-    let fields =
-      match Yojson.Safe.from_string event.payload with
-      | `Assoc fields -> fields
-      | _ -> failwith "invalid Wise payload"
-    in
-    let field name = List.Assoc.find_exn fields name ~equal:String.equal in
-    let string name =
-      match field name with
-      | `String s -> s
-      | _ -> failwith "invalid Wise payload field"
-    in
-    if not (String.equal (string "format") "wise-camt-v1")
-    then failwith "unsupported Wise payload version";
-    let bank_id, account_id, account_type =
-      match Yojson.Safe.from_string (string "account") with
-      | `List [ `String bank; `String id; `String kind ] -> bank, id, kind
-      | _ -> failwith "invalid Wise account identity"
-    in
-    let currency =
-      Validation.currency "Wise currency" (string "currency") |> Or_error.ok_exn
-    in
-    if
-      not
-        (String.equal bank_id "wise"
-         && String.equal account_type ("balance-" ^ Iso4217.to_alpha_code currency))
-    then failwith "invalid Wise balance account";
-    let account = { bank_id; account_id; account_type; currency } in
-    let tx =
-      make_transaction
-        account
-        ~reference:(string "reference")
-        ~booked_at:(string "booked_at")
-        ~value_on:
-          (match field "value_on" with
-           | `Null -> None
-           | `String s -> Some (Date.of_string s)
-           | _ -> failwith "invalid Wise value date")
-        ~amount:(Quantity.of_string (string "amount"))
-        ~credit:
-          (match field "credit" with
-           | `Bool b -> b
-           | _ -> failwith "invalid Wise debit/credit flag")
-        ~description:(string "description")
-    in
+    let tx = Json.decode jsont event.payload |> Or_error.ok_exn in
     if
       (not
-         (String.equal event.account (account_identity account)
+         (String.equal event.account (account_identity tx.account)
           && String.equal event.source_id tx.source_id))
       || not
            (match event.occurred with

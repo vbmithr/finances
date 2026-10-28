@@ -28,6 +28,29 @@ movements into accounting entries, and exports journals through a separate
 `finances.hledger` adapter. It does not categorize bank entries or interpret an
 exchange's financial semantics.
 
+## JSON codecs
+
+JSON is described by typed `Jsont.t` values rather than intermediate JSON trees.
+Account settings and references, category and transfer decisions, and canonical
+bank payloads share their descriptions between decoding and encoding. Existing
+constructors validate decoded domain values. `Finances_core.Json` supplies the
+string codec boundary, scalar descriptions for dates, quantities, currencies and
+IBANs, and exact integer checks. It checks repeated object members with a
+separate recursive Jsont validation pass before typed decoding, without building
+a generic JSON tree. CLI report descriptions live in `bin/report_json.ml` and
+encode report records directly.
+
+Each encode allocates a 256-byte scratch buffer and flushes larger outputs in
+chunks. Buffers are local to the call so nested encodes remain independent.
+Status and account listings compute an encoded source account identifier once
+per account, sharing it between movement filtering and database lookups.
+
+Quantities stay decimal strings. Integer IDs beyond the interoperable exact
+number range use Jsont's decimal-string representation; review decoders reject
+unsafe numeric values and fractions. The persisted bank payload formats, source
+identities and schema version are unchanged. Account snapshots retain the
+difference between missing updates (`Keep`), null (`Clear`) and values (`Set`).
+
 ## Domain boundaries
 
 `Source_event` describes external evidence. Its identity is

@@ -186,10 +186,7 @@ let insert_movement =
             )
         ; Value (principal_sign, if negative then "-" else "+")
         ; Value (counterparty_iban, Option.map m.counterparty_iban ~f:Iban.to_string)
-        ; Value
-            ( descriptions
-            , Yojson.Safe.to_string
-                (`List (List.map m.descriptions ~f:(fun d -> `String d))) )
+        ; Value (descriptions, Json.encode (Jsont.list Jsont.string) m.descriptions)
         ]
 ;;
 
@@ -213,11 +210,7 @@ let movement_of_row (r : Db_schema.Movements.t) =
        | None -> Ok None
        | Some s -> Result.map (iban "counterparty IBAN" s) ~f:Option.some
      in
-     let* descriptions =
-       Or_error.try_with (fun () ->
-         Yojson.Safe.Util.(
-           Yojson.Safe.from_string r.descriptions |> to_list |> List.map ~f:to_string))
-     in
+     let* descriptions = Json.decode (Jsont.list Jsont.string) r.descriptions in
      let* booked_on, value_on, amount, fee =
        Or_error.try_with (fun () ->
          ( Date.of_string r.booked_on
@@ -491,19 +484,8 @@ let accepted_document =
 
 (* Companion observations keep their raw fields; the adapter's parser rebuilds
    typed rows when matching. Replaying a document must find identical fields. *)
-let encode_fields fields =
-  Yojson.Safe.to_string (`List (List.map fields ~f:(fun s -> `String s)))
-;;
-
-let decode_fields text =
-  Or_error.try_with (fun () ->
-    match Yojson.Safe.from_string text with
-    | `List fields ->
-      List.map fields ~f:(function
-        | `String s -> s
-        | _ -> failwith "invalid companion field")
-    | _ -> failwith "invalid stored companion row")
-;;
+let encode_fields = Json.encode (Jsont.list Jsont.string)
+let decode_fields = Json.decode (Jsont.list Jsont.string)
 
 let store_companion_rows db ~document_id ~institution ~format rows =
   let find =
@@ -745,10 +727,9 @@ let import_document
         bind_document_context
           db
           ~document_id
-          (Yojson.Safe.to_string
-             (`Assoc
-                 (List.sort document.context ~compare:[%compare: string * string]
-                  |> List.map ~f:(fun (k, v) -> k, `String v))))
+          (Json.encode
+             Json.string_map
+             (List.sort document.context ~compare:[%compare: string * string]))
     in
     let* () =
       match A.overlap with
@@ -1413,16 +1394,7 @@ let csv_match_row row_id event_id state reason candidates_json policy =
 
 let decode_csv_match (row_id, event_id, state, reason, candidates, policy) =
   let* state = Bank_match.state_of_string state in
-  let* candidates =
-    Or_error.try_with (fun () ->
-      match Yojson.Safe.from_string candidates with
-      | `List values ->
-        List.map values ~f:(function
-          | `Int n -> Int64.of_int n
-          | `Intlit s -> Int64.of_string s
-          | _ -> failwith "invalid candidate ID")
-      | _ -> failwith "invalid candidate list")
-  in
+  let* candidates = Json.decode (Jsont.list Json.int64_codec) candidates in
   Ok ({ Bank_match.row_id; event_id; state; reason; candidates }, policy)
 ;;
 
@@ -1531,11 +1503,7 @@ let save_csv_results
           equal row result && String.equal policy matching_policy)
       then save changed rest
       else (
-        let candidates =
-          Yojson.Safe.to_string
-            (`List
-                (List.map result.candidates ~f:(fun id -> `Intlit (Int64.to_string id))))
-        in
+        let candidates = Json.encode (Jsont.list Json.int64_codec) result.candidates in
         let state = Bank_match.state_name result.state in
         let* () =
           db_result
@@ -2491,36 +2459,29 @@ let bank_account_info_from ~summaries db source table =
   let* mappings = bank_accounts_from db source ~movement:(stored table) in
   traverse
     (fun mapping ->
+       let source_account = Bank_account_mapping.source_account mapping in
        let members =
          List.filter source ~f:(fun (_, e) ->
            Registry.is_movement db.registry e
            && String.equal e.Source_event.venue mapping.Bank_account_mapping.institution
-           && String.equal e.account (Bank_account_mapping.source_account mapping))
+           && String.equal e.account source_account)
        in
        let event_id, event = List.hd_exn members in
        let* tx = stored table event_id in
        let* iban, iban_source = account_iban db event tx in
        let* settlement =
-         db_result
-           (Db.first
-              db.conn
-              (find_settlement
-                 mapping.institution
-                 (Bank_account_mapping.source_account mapping)))
+         db_result (Db.first db.conn (find_settlement mapping.institution source_account))
        in
        let* settlement_account =
          match settlement with
          | None -> Ok None
          | Some text ->
-           let* json = Or_error.try_with (fun () -> Yojson.Safe.from_string text) in
-           let* reference = Bank_account_config.reference_of_json json in
+           let* reference = Json.decode Bank_account_config.reference_jsont text in
            Ok (Some reference)
        in
        let* count, first_on, last_on =
          Or_error.of_option
-           (Hashtbl.Poly.find
-              summaries
-              (mapping.institution, Bank_account_mapping.source_account mapping))
+           (Hashtbl.Poly.find summaries (mapping.institution, source_account))
            ~error:(Error.of_string "missing account summary")
        in
        Ok
@@ -3025,11 +2986,7 @@ let apply_bank_accounts ?(dry_run = false) db config =
                    Or_error.error_string
                      "card settlement must link a credit-card account to a non-card \
                       account in the same currency"
-                 else
-                   Ok
-                     (Some
-                        (Yojson.Safe.to_string
-                           (Bank_account_config.reference_to_json parent)))
+                 else Ok (Some (Json.encode Bank_account_config.reference_jsont parent))
              in
              let* previous =
                db_result (Db.first db.conn (find_settlement r.institution source))

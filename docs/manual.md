@@ -61,6 +61,14 @@ history is readable too, with `--json` retaining its existing JSON layout. Other
 history and provider reconciliation commands still output JSON. Account snapshot export remains
 JSON, and journal export remains hledger text.
 
+JSON uses Jsont codecs. Monetary quantities remain exact decimal strings.
+Integer IDs in the range −9007199254740991 to 9007199254740991 are numbers;
+larger IDs are decimal strings. Preserve these strings when preparing category
+or transfer review files: unsafe numeric IDs and fractional IDs are rejected.
+Repeated object fields are rejected, including in account snapshots and review
+batches. JSON whitespace and error wording may differ from earlier versions;
+the field layouts and account patch semantics are unchanged.
+
 ## Storage and backups
 
 The default database is `~/.local/share/fin/fin.sqlite3`. `XDG_DATA_HOME`

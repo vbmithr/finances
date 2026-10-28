@@ -48,3 +48,6 @@ val normalize_reference : description:string -> string -> string
 val matching_time : transaction -> Ptime.t
 
 val source_transaction : Source_event.t -> transaction Or_error.t
+
+(** Canonical source payload codec; derived identities are rebuilt on decode. *)
+val jsont : transaction Jsont.t

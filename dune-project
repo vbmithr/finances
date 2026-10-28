@@ -35,7 +35,9 @@
   ppx_let
   (cmdliner
    (>= 1.3.0))
-  yojson
+  (jsont
+   (>= 0.2.0))
+  bytesrw
   xmlm
   re
   digestif

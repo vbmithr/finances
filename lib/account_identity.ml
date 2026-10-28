@@ -20,47 +20,30 @@ let create ~institution ~bank_id ~account_id ~account_type ~iban =
 ;;
 
 let source_account t =
-  Yojson.Safe.to_string
-    (`List [ `String t.bank_id; `String t.account_id; `String t.account_type ])
+  Json.encode (Jsont.list Jsont.string) [ t.bank_id; t.account_id; t.account_type ]
+;;
+
+let jsont =
+  Jsont.Object.map (fun institution bank_id account_id account_type iban ->
+    Option.map iban ~f:(fun iban ->
+      create ~institution ~bank_id ~account_id ~account_type ~iban |> Json.or_error))
+  |> Jsont.Object.mem "institution" Jsont.string
+  |> Jsont.Object.mem "bank_id" Jsont.string
+  |> Jsont.Object.mem "account_id" Jsont.string
+  |> Jsont.Object.mem "account_type" Jsont.string
+  |> Jsont.Object.mem "iban" (Jsont.option Json.iban)
+  |> Jsont.Object.error_unknown
+  |> Jsont.Object.finish
 ;;
 
 let of_json contents =
-  Or_error.try_with (fun () ->
-    let open Yojson.Safe.Util in
-    let rows =
-      Yojson.Safe.from_string contents
-      |> to_list
-      |> List.filter_map ~f:(fun row ->
-        let fields = to_assoc row in
-        let names = List.map fields ~f:fst |> List.sort ~compare:String.compare in
-        if
-          not
-            (List.equal
-               String.equal
-               names
-               [ "account_id"; "account_type"; "bank_id"; "iban"; "institution" ])
-        then
-          failwith
-            "identity requires exactly institution, bank_id, account_id, account_type \
-             and iban";
-        let field k = member k row |> to_string in
-        let institution = field "institution"
-        and bank_id = field "bank_id"
-        and account_id = field "account_id"
-        and account_type = field "account_type" in
-        match member "iban" row with
-        | `Null -> None
-        | `String iban ->
-          let iban = Iban.of_string iban |> Or_error.ok_exn in
-          Some
-            (create ~institution ~bank_id ~account_id ~account_type ~iban
-             |> Or_error.ok_exn)
-        | _ -> failwith "iban must be a string or null")
-    in
-    if
-      List.contains_dup
-        (List.map rows ~f:(fun r -> r.institution, source_account r))
-        ~compare:[%compare: string * string]
-    then failwith "duplicate account identity";
-    rows)
+  let open Or_error.Let_syntax in
+  let%bind rows = Json.decode (Jsont.list jsont) contents in
+  let rows = List.filter_opt rows in
+  if
+    List.contains_dup
+      (List.map rows ~f:(fun r -> r.institution, source_account r))
+      ~compare:[%compare: string * string]
+  then Or_error.error_string "duplicate account identity"
+  else Ok rows
 ;;

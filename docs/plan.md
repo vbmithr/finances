@@ -5,7 +5,7 @@ its status: tick off finished work, add discovered work, and refresh the "Where 
 are" figures when they move. History belongs in `CHANGES.md`; designs stay in the
 other documents, which this one links to rather than repeats.
 
-Last updated: 2026-10-27.
+Last updated: 2026-10-28.
 
 ## Where we are
 
@@ -32,11 +32,18 @@ Last updated: 2026-10-27.
   Review metadata is loaded in batches; candidate searches prepare known-account
   IBAN evidence once.
   No data is cached across commands or later account/review edits.
+  On 4,370 movements, median warm status takes 43 ms and JSON account listing
+  20 ms, restoring pre-Jsont performance after removing excess encoding work.
+- JSON uses typed `Jsont.t` descriptions throughout configuration, review files,
+  bank payloads, storage and CLI reports; hand-built JSON trees and Yojson are
+  removed. Codecs preserve exact quantities and account patch semantics.
+  Encoding uses small per-call buffers; status and account listings compute
+  each source account identifier once per account rather than per movement.
 - IBANs and currencies are validated types (`Iban.t`, `Iso4217.t`).
 - Movements project to balanced entries against `equity:unclassified`, unless a
   reviewed category or confirmed transfer says otherwise. `fin journal export`
   writes a reproducible hledger journal.
-- 135 tests (125 OCaml cases and 10 CLI cases). Each change is verified
+- 138 tests (128 OCaml cases and 10 CLI cases). Each change is verified
   by rebuilding the personal database from its inboxes with the previous and the
   new build and diffing every report.
 - Issue #1 is implemented locally and awaits publication.

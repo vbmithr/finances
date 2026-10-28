@@ -56,12 +56,12 @@ let parse ~context:_ ~format contents =
     { Document.empty with
       statements =
         [ { source_account =
-              Yojson.Safe.to_string
-                (`List
-                    [ `String "bunq"
-                    ; `String document.account_id
-                    ; `String ("current-" ^ Iso4217.to_alpha_code document.currency)
-                    ])
+              Json.encode
+                (Jsont.list Jsont.string)
+                [ "bunq"
+                ; document.account_id
+                ; "current-" ^ Iso4217.to_alpha_code document.currency
+                ]
           ; reference = None
           ; currency = document.currency
           ; period_start = Temporal.Date document.opening_on

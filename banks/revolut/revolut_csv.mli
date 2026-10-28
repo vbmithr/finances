@@ -29,3 +29,6 @@ val account_identity : transaction -> string
 (** Running balance is a document observation, not part of source identity;
     reconstructed transactions expose None for that unavailable observation. *)
 val source_transaction : Source_event.t -> transaction Or_error.t
+
+(** Canonical source payload codec; derived identities are rebuilt on decode. *)
+val jsont : transaction Jsont.t

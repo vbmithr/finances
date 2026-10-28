@@ -27,7 +27,8 @@ val reference
   -> reference Or_error.t
 
 val source_account : reference -> string
-val reference_to_json : reference -> Yojson.Safe.t
-val reference_of_json : Yojson.Safe.t -> reference Or_error.t
 val of_json : string -> t list Or_error.t
 val to_json : t list -> string
+val reference_jsont : reference Jsont.t
+val jsont : t Jsont.t
+val snapshot_jsont : t list Jsont.t

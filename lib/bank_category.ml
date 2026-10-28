@@ -23,26 +23,14 @@ let create ~event_id ~account ~reason =
   else Ok { event_id; account; reason }
 ;;
 
-let of_json contents =
-  Or_error.try_with (fun () ->
-    let open Yojson.Safe.Util in
-    Yojson.Safe.from_string contents
-    |> to_list
-    |> List.map ~f:(fun json ->
-      let fields = to_assoc json in
-      if
-        List.length fields <> 3
-        || List.contains_dup (List.map fields ~f:fst) ~compare:String.compare
-      then failwith "expected exactly event_id, account and reason";
-      let id =
-        match member "event_id" json with
-        | `Int n -> Int64.of_int n
-        | `Intlit s -> Int64.of_string s
-        | _ -> failwith "event_id must be an integer"
-      in
-      create
-        ~event_id:id
-        ~account:(member "account" json |> to_string)
-        ~reason:(member "reason" json |> to_string)
-      |> Or_error.ok_exn))
+let jsont =
+  Jsont.Object.map (fun event_id account reason ->
+    create ~event_id ~account ~reason |> Json.or_error)
+  |> Jsont.Object.mem "event_id" Json.int64_codec ~enc:(fun t -> t.event_id)
+  |> Jsont.Object.mem "account" Jsont.string ~enc:(fun t -> t.account)
+  |> Jsont.Object.mem "reason" Jsont.string ~enc:(fun t -> t.reason)
+  |> Jsont.Object.error_unknown
+  |> Jsont.Object.finish
 ;;
+
+let of_json = Json.decode (Jsont.list jsont)

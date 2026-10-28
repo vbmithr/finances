@@ -42,3 +42,6 @@ val create
   -> t Or_error.t
 
 val source_transaction : Source_event.t -> t Or_error.t
+
+(** Canonical source payload codec; derived identities are rebuilt on decode. *)
+val jsont : t Jsont.t

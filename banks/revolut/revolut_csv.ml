@@ -53,25 +53,44 @@ let recognizes contents =
 ;;
 
 let account_identity t =
-  Yojson.Safe.to_string
-    (`List
-        [ `String "revolut"
-        ; `String t.account_id
-        ; `String ("current-" ^ Iso4217.to_alpha_code t.currency)
-        ])
+  Json.encode
+    (Jsont.list Jsont.string)
+    [ "revolut"; t.account_id; "current-" ^ Iso4217.to_alpha_code t.currency ]
 ;;
 
-let make
-      ~account_id
-      ~currency
-      ~started_at:started_at_source
-      ~completed_at:completed_at_source
-      ~transaction_type
-      ~description
-      ~principal
-      ~fee
-      ~balance
-      ~occurrence
+let source_clock instant =
+  String.prefix (Timestamp.to_rfc3339 instant) 19
+  |> String.tr ~target:'T' ~replacement:' '
+;;
+
+let payload_members map =
+  map
+  |> Jsont.Object.mem "format" (Json.tag "revolut-v1") ~enc:(fun _ -> ())
+  |> Jsont.Object.mem "account_id" Jsont.string ~enc:(fun (t : transaction) ->
+    t.account_id)
+  |> Jsont.Object.mem "currency" Json.currency ~enc:(fun t -> t.currency)
+  |> Jsont.Object.mem "started_at" Jsont.string ~enc:(fun t -> source_clock t.started_at)
+  |> Jsont.Object.mem "completed_at" Jsont.string ~enc:(fun t ->
+    source_clock t.completed_at)
+  |> Jsont.Object.mem "transaction_type" Jsont.string ~enc:(fun t -> t.transaction_type)
+  |> Jsont.Object.mem "description" Jsont.string ~enc:(fun t -> t.description)
+  |> Jsont.Object.mem "principal" Json.quantity ~enc:(fun t -> t.principal)
+  |> Jsont.Object.mem "fee" Json.quantity ~enc:(fun t -> t.fee)
+;;
+
+let identity_jsont = Jsont.Object.enc_only () |> payload_members |> Jsont.Object.finish
+
+let rec make
+          ~account_id
+          ~currency
+          ~started_at:started_at_source
+          ~completed_at:completed_at_source
+          ~transaction_type
+          ~description
+          ~principal
+          ~fee
+          ~balance
+          ~occurrence
   =
   ignore (Validation.token "Revolut account_id" account_id |> Or_error.ok_exn : string);
   if occurrence < 1 || Quantity.(fee < zero)
@@ -94,41 +113,62 @@ let make
      : string);
   let booked_on = Ptime.to_date ~tz_offset_s:0 completed_at in
   let amount = Quantity.(principal - fee) in
-  let fields =
-    [ "format", `String "revolut-v1"
-    ; "account_id", `String account_id
-    ; "currency", `String (Iso4217.to_alpha_code currency)
-    ; "started_at", `String started_at_source
-    ; "completed_at", `String completed_at_source
-    ; "transaction_type", `String transaction_type
-    ; "description", `String description
-    ; "principal", `String (Quantity.to_string principal)
-    ; "fee", `String (Quantity.to_string fee)
-    ]
+  let tx =
+    { account_id
+    ; currency
+    ; started_at
+    ; completed_at
+    ; booked_on
+    ; transaction_type
+    ; description
+    ; principal
+    ; fee
+    ; amount
+    ; balance
+    ; occurrence
+    ; source_id = ""
+    ; payload = ""
+    }
   in
-  let base = Yojson.Safe.to_string (`Assoc fields) in
+  let base = Json.encode identity_jsont tx in
   let source_id =
     Digestif.SHA256.(to_hex (digest_string base)) ^ ":" ^ Int.to_string occurrence
   in
-  let payload =
-    Yojson.Safe.to_string (`Assoc (fields @ [ "occurrence", `Int occurrence ]))
-  in
-  { account_id
-  ; currency
-  ; started_at
-  ; completed_at
-  ; booked_on
-  ; transaction_type
-  ; description
-  ; principal
-  ; fee
-  ; amount
-  ; balance
-  ; occurrence
-  ; source_id
-  ; payload
-  }
+  { tx with source_id; payload = Json.encode (Lazy.force jsont) tx }
+
+and jsont =
+  lazy
+    (Jsont.Object.map
+       (fun
+           ()
+            account_id
+            currency
+            started_at
+            completed_at
+            transaction_type
+            description
+            principal
+            fee
+            occurrence
+          ->
+          Json.validated (fun () ->
+            make
+              ~account_id
+              ~currency
+              ~started_at
+              ~completed_at
+              ~transaction_type
+              ~description
+              ~principal
+              ~fee
+              ~balance:None
+              ~occurrence))
+     |> payload_members
+     |> Jsont.Object.mem "occurrence" Json.integer ~enc:(fun t -> t.occurrence)
+     |> Jsont.Object.finish)
 ;;
+
+let jsont = Lazy.force jsont
 
 let parse ~account_id contents =
   Or_error.try_with (fun () ->
@@ -221,25 +261,7 @@ let source_transaction (event : Source_event.t) =
         (String.equal event.venue "revolut"
          && String.equal event.kind "revolut-transaction")
     then failwith "not a Revolut event";
-    let open Yojson.Safe.Util in
-    let json = Yojson.Safe.from_string event.payload in
-    let field k = member k json |> to_string in
-    if not (String.equal (field "format") "revolut-v1")
-    then failwith "unsupported Revolut payload";
-    let tx =
-      make
-        ~account_id:(field "account_id")
-        ~currency:
-          (Validation.currency "Revolut currency" (field "currency") |> Or_error.ok_exn)
-        ~started_at:(field "started_at")
-        ~completed_at:(field "completed_at")
-        ~transaction_type:(field "transaction_type")
-        ~description:(field "description")
-        ~principal:(Quantity.of_string (field "principal"))
-        ~fee:(Quantity.of_string (field "fee"))
-        ~balance:None
-        ~occurrence:(member "occurrence" json |> to_int)
-    in
+    let tx = Json.decode jsont event.payload |> Or_error.ok_exn in
     if
       not
         (String.equal event.account (account_identity tx)

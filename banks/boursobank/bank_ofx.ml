@@ -35,14 +35,110 @@ type t =
   ; statements : statement list
   }
 
-let rec canonical = function
-  | Ofx.Text s -> `String (String.strip s)
-  | Element (tag, nodes) -> `List [ `String tag; `List (List.map nodes ~f:canonical) ]
+(* The archived wire format represents XML elements as [tag, children]. *)
+let rec tree_jsont =
+  lazy
+    (let text =
+       Jsont.map
+         Jsont.string
+         ~dec:(fun s -> Ofx.Text s)
+         ~enc:(function
+           | Ofx.Text s -> String.strip s
+           | _ -> assert false)
+     in
+     let parts =
+       let tag =
+         Jsont.map
+           Jsont.string
+           ~dec:(fun s -> `Tag s)
+           ~enc:(function
+             | `Tag s -> s
+             | _ -> assert false)
+       in
+       let children =
+         Jsont.map
+           (Jsont.list (Jsont.rec' tree_jsont))
+           ~dec:(fun nodes -> `Children nodes)
+           ~enc:(function
+             | `Children nodes -> nodes
+             | _ -> assert false)
+       in
+       Jsont.any
+         ~dec_string:tag
+         ~dec_array:children
+         ~enc:(function
+           | `Tag _ -> tag
+           | `Children _ -> children)
+         ()
+     in
+     let element =
+       Jsont.t2
+         parts
+         ~dec:(fun tag nodes ->
+           match tag, nodes with
+           | `Tag tag, `Children nodes -> Ofx.Element (tag, nodes)
+           | _ -> failwith "invalid canonical bank XML")
+         ~enc:(fun tree i ->
+           match tree, i with
+           | Ofx.Element (tag, _), 0 -> `Tag tag
+           | Ofx.Element (_, nodes), 1 -> `Children nodes
+           | _ -> assert false)
+     in
+     Jsont.any
+       ~dec_string:text
+       ~dec_array:element
+       ~enc:(function
+         | Ofx.Text _ -> text
+         | Ofx.Element _ -> element)
+       ())
 ;;
 
 let account_identity a =
-  Yojson.Safe.to_string
-    (`List (List.map [ a.bank_id; a.account_id; a.account_type ] ~f:(fun s -> `String s)))
+  Json.encode (Jsont.list Jsont.string) [ a.bank_id; a.account_id; a.account_type ]
+;;
+
+let payload_jsont =
+  let scalar =
+    Jsont.map
+      Jsont.string
+      ~dec:(fun s -> `Scalar s)
+      ~enc:(function
+        | `Scalar s -> s
+        | _ -> assert false)
+  in
+  let tree =
+    Jsont.map
+      (Lazy.force tree_jsont)
+      ~dec:(fun tree -> `Tree tree)
+      ~enc:(function
+        | `Tree tree -> tree
+        | _ -> assert false)
+  in
+  let part =
+    Jsont.any
+      ~dec_string:scalar
+      ~dec_array:tree
+      ~enc:(function
+        | `Scalar _ -> scalar
+        | `Tree _ -> tree)
+      ()
+  in
+  Jsont.t3
+    part
+    ~dec:(fun identity currency tree ->
+      match identity, currency, tree with
+      | `Scalar identity, `Scalar currency, `Tree tree ->
+        let currency = Validation.currency "currency" currency |> Or_error.ok_exn in
+        (match Json.decode (Jsont.list Jsont.string) identity |> Or_error.ok_exn with
+         | [ bank_id; account_id; account_type ] ->
+           { bank_id; account_id; account_type; currency }, tree
+         | _ -> failwith "invalid bank account identity")
+      | _ -> failwith "unsupported bank source payload")
+    ~enc:(fun (account, tree) -> function
+      | 0 -> `Scalar (account_identity account)
+      | 1 -> `Scalar (Iso4217.to_alpha_code account.currency)
+      | 2 -> `Tree tree
+      | _ -> assert false)
 ;;
 
 (* Keep the date in the source's local calendar. A timestamp suffix does not
@@ -70,14 +166,7 @@ let parse_transaction account (tx : Ofx.transaction) =
             | _ -> true) )
     | Text _ -> assert false
   in
-  let source_payload =
-    Yojson.Safe.to_string
-      (`List
-          [ `String (account_identity account)
-          ; `String (Iso4217.to_alpha_code account.currency)
-          ; canonical stable_node
-          ])
-  in
+  let source_payload = Json.encode payload_jsont (account, stable_node) in
   { fitid
   ; booked_on
   ; user_date_source
@@ -137,26 +226,10 @@ let source_transaction (event : Source_event.t) =
   Or_error.try_with (fun () ->
     if not (String.equal event.kind "bank-transaction")
     then failwith "not a bank source event";
-    let identity, currency, tree =
-      match Yojson.Safe.from_string event.payload with
-      | `List [ `String identity; `String currency; tree ] -> identity, currency, tree
-      | _ -> failwith "unsupported bank source payload"
-    in
-    let bank_id, account_id, account_type =
-      match Yojson.Safe.from_string identity with
-      | `List [ `String bank_id; `String account_id; `String account_type ] ->
-        bank_id, account_id, account_type
-      | _ -> failwith "invalid bank account identity"
-    in
-    let currency = Validation.currency "currency" currency |> Or_error.ok_exn in
-    let account = { bank_id; account_id; account_type; currency } in
-    let rec decode = function
-      | `String s -> Ofx.Text s
-      | `List [ `String tag; `List nodes ] -> Ofx.Element (tag, List.map nodes ~f:decode)
-      | _ -> failwith "invalid canonical bank XML"
-    in
+    let account, tree = Json.decode payload_jsont event.payload |> Or_error.ok_exn in
+    let identity = account_identity account in
     let trn =
-      parse_transaction account (Ofx.transaction_of_tree (decode tree) |> Or_error.ok_exn)
+      parse_transaction account (Ofx.transaction_of_tree tree |> Or_error.ok_exn)
     in
     if
       not

@@ -8,6 +8,28 @@ short line of their own.
 
 ## Unreleased
 
+### 2026-10-28
+
+- Restore status and account-listing performance after the Jsont migration:
+  compute account identifiers once per account and use a 256-byte scratch
+  buffer per JSON encode instead of repeatedly allocating 64 KiB. Larger
+  outputs flush in chunks; nested encodes keep independent buffers. Output
+  and schema are unchanged; no database rebuild is needed. On 4,370 movements,
+  median warm status falls from 220 ms to 43 ms, matching the pre-Jsont build;
+  JSON account listing falls from 187 ms to 20 ms.
+- Replace Yojson and manual JSON-tree conversions with typed `Jsont.t` codecs
+  for account settings, review decisions, bank payloads, stored lists and CLI
+  reports. Domain validation and account patch semantics remain in force;
+  source identities, payload layouts and schema 13 stay compatible.
+- JSON integer IDs outside the exact interoperable range
+  (−9007199254740991 to 9007199254740991) are encoded as decimal strings.
+  Review files accept those strings; unsafe numeric IDs and fractional IDs are
+  rejected. **Action required:** scripts handling such large IDs must accept
+  strings and write them as strings in review files. No database rebuild is
+  needed.
+- Library users can use the exported codecs directly; account references now
+  expose `reference_jsont` instead of JSON-tree conversion helpers.
+
 ### 2026-10-27
 
 - Unify event occurrences and statement times as `Temporal.t` (`Date` or

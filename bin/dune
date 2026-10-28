@@ -19,6 +19,6 @@
   ptime
   ptime.clock.os
   cmdliner
-  yojson)
+  jsont)
  (preprocess
   (pps ppx_sexp_conv ppx_compare ppx_let)))

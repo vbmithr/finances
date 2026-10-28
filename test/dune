@@ -372,3 +372,10 @@
   unix
   zipc
   alcotest))
+
+(test
+ (name json_test)
+ (modules json_test)
+ (flags
+  (:standard -open Finances_core))
+ (libraries finances finances.core base jsont jsont.bytesrw alcotest))

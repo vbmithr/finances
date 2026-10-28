@@ -19,7 +19,7 @@
   ptime
   rel
   rel.sqlite3
-  yojson
+  jsont
   xmlm
   re
   digestif

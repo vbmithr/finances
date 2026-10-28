@@ -88,26 +88,7 @@ let ingest database venue account kind source_id at path =
 let list_events database =
   with_database database (fun db ->
     let%bind events = Store.events db in
-    let json =
-      `List
-        (List.map events ~f:(fun (id, (e : Source_event.t)) ->
-           `Assoc
-             [ "id", `Intlit (Int64.to_string id)
-             ; "venue", `String e.venue
-             ; "account", `String e.account
-             ; "kind", `String e.kind
-             ; "source_id", `String e.source_id
-             ; ( "occurred_at"
-               , match e.occurred with
-                 | Temporal.Instant instant -> `String (Timestamp.to_rfc3339 instant)
-                 | Temporal.Date _ -> `Null )
-             ; ( "occurred_on"
-               , match e.occurred with
-                 | Temporal.Date date -> `String (Date.to_string date)
-                 | Temporal.Instant _ -> `Null )
-             ]))
-    in
-    Out_channel.print_endline (Yojson.Safe.pretty_to_string json);
+    Report_json.print (Jsont.list Report_json.event) events;
     Ok ())
 ;;
 
@@ -344,41 +325,11 @@ let export_hledger_cmd =
     Term.(const export_hledger $ database)
 ;;
 
-let account_info_json (info : Store.bank_account_info) =
-  let a = info.mapping in
-  [ "institution", `String a.institution
-  ; "bank_id", `String a.bank_id
-  ; "account_id", `String a.account_id
-  ; "account_type", `String a.account_type
-  ; ( "iban"
-    , Option.value_map info.iban ~default:`Null ~f:(fun iban ->
-        `String (Iban.to_string iban)) )
-  ]
-;;
-
-let account_details_json info =
-  `Assoc
-    (account_info_json info
-     @ [ "iban_source", `String info.Store.iban_source
-       ; "ledger_account", `String info.mapping.ledger_account
-       ; "currency", `String (Iso4217.to_alpha_code info.currency)
-       ; "movements", `Int info.movements
-       ; "first_on", `String (Date.to_string info.first_on)
-       ; "last_on", `String (Date.to_string info.last_on)
-       ; ( "settlement_account"
-         , Option.value_map
-             info.settlement_account
-             ~default:`Null
-             ~f:Bank_account_config.reference_to_json )
-       ])
-;;
-
 let list_bank_accounts database json_output =
   with_database database (fun db ->
     let%bind accounts = Store.bank_account_info db in
-    let json = `List (List.map accounts ~f:account_details_json) in
     if json_output
-    then print_endline (Yojson.Safe.pretty_to_string json)
+    then Report_json.print (Jsont.list Report_json.account) accounts
     else if List.is_empty accounts
     then
       print_endline
@@ -397,28 +348,7 @@ let status database json_output =
     |> List.length
   in
   if json_output
-  then
-    print_endline
-      (Yojson.Safe.pretty_to_string
-         (`Assoc
-             [ "database", `String database
-             ; "banks", `Int banks
-             ; "accounts", `List (List.map report.accounts ~f:account_details_json)
-             ; "movements", `Int report.movements
-             ; "unclassified_movements", `Int report.unclassified_movements
-             ; "transfer_candidate_pairs", `Int report.transfer_candidate_pairs
-             ; ( "latest_import"
-               , Option.value_map report.latest_import ~default:`Null ~f:(fun a ->
-                   `Assoc
-                     [ "attempted_at", `String (Timestamp.to_rfc3339 a.attempted_at)
-                     ; "institution", `String a.institution
-                     ; "path", `String a.path
-                     ; "outcome", `String (Bank_import.outcome_name a.outcome)
-                     ; ( "message"
-                       , Option.value_map a.message ~default:`Null ~f:(fun s -> `String s)
-                       )
-                     ]) )
-             ]))
+  then Report_json.print Report_json.status (database, banks, report)
   else (
     printf "Database: %s\n\n" (Terminal.text database);
     printf
@@ -472,27 +402,8 @@ let status_cmd =
 let import_history database limit json_output =
   with_database database (fun db ->
     let%bind attempts = Store.bank_import_history ~limit db in
-    let optional f value = Option.value_map value ~default:`Null ~f in
-    let json =
-      `List
-        (List.map attempts ~f:(fun (row : Bank_import.file_report) ->
-           `Assoc
-             [ "attempt_id", `Intlit (Int64.to_string row.attempt_id)
-             ; "institution", `String row.institution
-             ; "path", `String row.path
-             ; "format", `String row.format
-             ; "outcome", `String (Bank_import.outcome_name row.outcome)
-             ; ( "document_id"
-               , optional (fun id -> `Intlit (Int64.to_string id)) row.document_id )
-             ; "sha256", optional (fun s -> `String s) row.sha256
-             ; "inserted", `Int row.inserted
-             ; "existing", `Int row.existing
-             ; "message", optional (fun s -> `String s) row.message
-             ; "attempted_at", `String (Timestamp.to_rfc3339 row.attempted_at)
-             ]))
-    in
     if json_output
-    then Out_channel.print_endline (Yojson.Safe.pretty_to_string json)
+    then Report_json.print (Jsont.list Report_json.import) attempts
     else Terminal.import_history attempts;
     Ok ())
 ;;
@@ -763,25 +674,6 @@ let sync_bank_cmd =
                  later."))
 ;;
 
-let statement_json (s : Store.statement_reconciliation) =
-  `Assoc
-    [ "statement_id", `Intlit (Int64.to_string s.statement_id)
-    ; "document_id", `Intlit (Int64.to_string s.document_id)
-    ; "institution", `String s.institution
-    ; "source_account", `String s.source_account
-    ; "reference", Option.value_map s.reference ~default:`Null ~f:(fun r -> `String r)
-    ; "currency", `String (Iso4217.to_alpha_code s.currency)
-    ; "period_start", `String (Temporal.to_string s.period_start)
-    ; "period_end", `String (Temporal.to_string s.period_end)
-    ; "opening", `String (Quantity.to_string s.opening)
-    ; "closing", `String (Quantity.to_string s.closing)
-    ; "movements", `String (Quantity.to_string s.movements)
-    ; "entries", `Int s.entries
-    ; "difference", `String (Quantity.to_string s.difference)
-    ; "reconciled", `Bool (Quantity.is_zero s.difference)
-    ]
-;;
-
 let institution_filter =
   Arg.(
     value
@@ -795,9 +687,7 @@ let institution_filter =
 let statements database institution =
   with_database database (fun db ->
     let%bind statements = Store.statement_reconciliations ?institution db in
-    print_endline
-      (Yojson.Safe.pretty_to_string
-         (`Assoc [ "statements", `List (List.map statements ~f:statement_json) ]));
+    Report_json.print Report_json.statements statements;
     Ok ())
 ;;
 
@@ -821,8 +711,6 @@ let companions database institution review =
                Poly.equal m.state Bank_match.Matched)))
     in
     let describers = Registry.companions (Store.registry db) in
-    let id n = `Intlit (Int64.to_string n) in
-    let optional f value = Option.value_map value ~default:`Null ~f in
     let%map rows =
       List.map observations ~f:(fun (o : Store.companion_observation) ->
         let row = o.row in
@@ -836,33 +724,10 @@ let companions database institution review =
             ~error:(Error.of_string "companion row of an unregistered format")
         in
         let%map fields = companion.describe row in
-        `Assoc
-          ([ "row_id", id row.row_id
-           ; "document_id", id row.document_id
-           ; "row_number", `Int row.row_number
-           ; "institution", `String row.institution
-           ; "format", `String row.format
-           ]
-           @ List.map fields ~f:(fun (name, value) ->
-             name, optional (fun s -> `String s) value)
-           @ [ "event_id", optional id (Option.bind o.matching ~f:(fun m -> m.event_id))
-             ; ( "state"
-               , `String
-                   (Option.value_map o.matching ~default:"pending" ~f:(fun m ->
-                      Bank_match.state_name m.state)) )
-             ; ( "reason"
-               , optional
-                   (fun s -> `String s)
-                   (Option.map o.matching ~f:(fun m -> m.reason)) )
-             ; ( "candidate_event_ids"
-               , `List
-                   (List.map
-                      (Option.value_map o.matching ~default:[] ~f:(fun m -> m.candidates))
-                      ~f:id) )
-             ]))
+        o, fields)
       |> Or_error.combine_errors
     in
-    Out_channel.print_endline (Yojson.Safe.pretty_to_string (`List rows)))
+    Report_json.print (Jsont.list Report_json.companion) rows)
 ;;
 
 let companions_cmd =
@@ -921,7 +786,12 @@ let categorize_bank_cmd =
       $ Arg.(
           required
           & pos 0 (some string) None
-          & info [] ~docv:"DECISIONS" ~doc:"JSON decisions: event_id, account, reason."))
+          & info
+              []
+              ~docv:"DECISIONS"
+              ~doc:
+                "JSON decisions: event_id, account, reason. Large IDs use decimal \
+                 strings."))
 ;;
 
 let bank_review database all json_output =
@@ -931,25 +801,8 @@ let bank_review database all json_output =
       List.filter rows ~f:(fun r ->
         all || String.equal r.Store.counter_account "equity:unclassified")
     in
-    let json =
-      `List
-        (List.map rows ~f:(fun r ->
-           let tx = r.Store.transaction in
-           `Assoc
-             [ "event_id", `Intlit (Int64.to_string r.event_id)
-             ; "institution", `String r.institution
-             ; "source_account", `String tx.account.account_id
-             ; "booked_on", `String (Date.to_string tx.booked_on)
-             ; "amount", `String (Quantity.to_string tx.amount)
-             ; "fee", `String (Quantity.to_string tx.fee)
-             ; "currency", `String (Iso4217.to_alpha_code tx.account.currency)
-             ; "description", `String (String.concat ~sep:" | " tx.descriptions)
-             ; "account", `String r.counter_account
-             ; "reason", Option.value_map r.reason ~default:`Null ~f:(fun s -> `String s)
-             ]))
-    in
     if json_output
-    then print_endline (Yojson.Safe.pretty_to_string json)
+    then Report_json.print (Jsont.list Report_json.review) rows
     else Terminal.review rows;
     Ok ())
 ;;
@@ -969,21 +822,7 @@ let bank_review_cmd =
 let category_history database =
   with_database database (fun db ->
     let%bind rows = Store.bank_category_history db in
-    let json =
-      `List
-        (List.map rows ~f:(fun (r : Store.category_change) ->
-           `Assoc
-             [ "id", `Intlit (Int64.to_string r.id)
-             ; "event_id", `Intlit (Int64.to_string r.event_id)
-             ; ( "previous_account"
-               , Option.value_map r.previous_account ~default:`Null ~f:(fun s ->
-                   `String s) )
-             ; "account", `String r.account
-             ; "reason", `String r.reason
-             ; "changed_at", `String (Timestamp.to_rfc3339 r.changed_at)
-             ]))
-    in
-    print_endline (Yojson.Safe.pretty_to_string json);
+    Report_json.print (Jsont.list Report_json.category_change) rows;
     Ok ())
 ;;
 
@@ -994,42 +833,11 @@ let category_history_cmd =
     Term.(const category_history $ database)
 ;;
 
-let transfer_leg event_id (event : Source_event.t) (tx : Movement.t) =
-  `Assoc
-    [ "event_id", `Intlit (Int64.to_string event_id)
-    ; "institution", `String event.venue
-    ; "source_account", `String event.account
-    ; "booked_on", `String (Date.to_string tx.booked_on)
-    ; "currency", `String (Iso4217.to_alpha_code tx.account.currency)
-    ; "bank_amount", `String (Quantity.to_string tx.amount)
-    ; "principal", `String (Quantity.to_string (Movement.principal tx))
-    ; "fee", `String (Quantity.to_string tx.fee)
-    ; "description", `String (String.concat ~sep:" | " tx.descriptions)
-    ]
-;;
-
 let transfer_candidates database all json_output =
   with_database database (fun db ->
     let%bind rows = Store.transfer_candidates ~include_reviewed:all db in
-    let json =
-      `List
-        (List.map rows ~f:(fun (r : Store.transfer_candidate) ->
-           `Assoc
-             [ "first", transfer_leg r.first_event_id r.first r.first_transaction
-             ; "second", transfer_leg r.second_event_id r.second r.second_transaction
-             ; "days_apart", `Int r.days_apart
-             ; "unique_both_directions", `Bool r.unique
-             ; "iban_compatible", `Bool r.iban_compatible
-             ; "iban_match", `Bool r.iban_match
-             ; "iban_evidence", `List (List.map r.iban_evidence ~f:(fun s -> `String s))
-             ; ( "state"
-               , Option.value_map r.state ~default:(`String "unreviewed") ~f:(fun s ->
-                   `String (Bank_transfer.state_name s)) )
-             ; "reason", Option.value_map r.reason ~default:`Null ~f:(fun s -> `String s)
-             ]))
-    in
     if json_output
-    then print_endline (Yojson.Safe.pretty_to_string json)
+    then Report_json.print (Jsont.list Report_json.candidate) rows
     else if List.is_empty rows
     then print_endline "No transfer candidates."
     else
@@ -1081,28 +889,16 @@ let review_transfers_cmd =
       $ Arg.(
           required
           & pos 0 (some string) None
-          & info [] ~docv:"DECISIONS" ~doc:"JSON transfer review decisions."))
+          & info
+              []
+              ~docv:"DECISIONS"
+              ~doc:"JSON transfer review decisions. Large IDs use decimal strings."))
 ;;
 
 let transfer_history database =
   with_database database (fun db ->
     let%bind rows = Store.bank_transfer_history db in
-    let json =
-      `List
-        (List.map rows ~f:(fun (r : Store.transfer_change) ->
-           `Assoc
-             [ "id", `Intlit (Int64.to_string r.id)
-             ; "first_event_id", `Intlit (Int64.to_string r.first_event_id)
-             ; "second_event_id", `Intlit (Int64.to_string r.second_event_id)
-             ; ( "previous_state"
-               , Option.value_map r.previous_state ~default:`Null ~f:(fun s -> `String s)
-               )
-             ; "state", `String (Bank_transfer.state_name r.state)
-             ; "reason", `String r.reason
-             ; "changed_at", `String (Timestamp.to_rfc3339 r.changed_at)
-             ]))
-    in
-    print_endline (Yojson.Safe.pretty_to_string json);
+    Report_json.print (Jsont.list Report_json.transfer_change) rows;
     Ok ())
 ;;
 
@@ -1118,74 +914,8 @@ let transfer_preview database json_output =
     let%bind candidates = Store.transfer_candidates db in
     let%bind all_candidates = Store.transfer_candidates ~include_reviewed:true db in
     let%bind ranked = Transfer_ranking.analyze (Store.registry db) candidates in
-    let id x = `Intlit (Int64.to_string x) in
-    let optional_int = Option.value_map ~default:`Null ~f:(fun x -> `Int x) in
-    let json =
-      `Assoc
-        [ "policy", `String Transfer_ranking.policy
-        ; ( "notice"
-          , `String
-              "Heuristic evidence, not calibrated probabilities. Conditional on imported \
-               records, registered identities and the seven-day candidate policy. Review \
-               is required; nothing is confirmed automatically." )
-        ; "component_vertex_limit", `Int Transfer_ranking.max_component_vertices
-        ; ( "excluded_pairs"
-          , `List
-              (List.filter_map all_candidates ~f:(fun c ->
-                 if c.Store.iban_compatible
-                 then None
-                 else
-                   Some
-                     (`Assoc
-                         [ "first_event_id", id c.first_event_id
-                         ; "second_event_id", id c.second_event_id
-                         ; ( "reasons"
-                           , `List (List.map c.iban_evidence ~f:(fun s -> `String s)) )
-                         ]))) )
-        ; ( "proposed_pairs"
-          , `List
-              (List.filter_map ranked ~f:(fun r ->
-                 if String.equal r.Transfer_ranking.assignment.status "supported"
-                 then
-                   Some
-                     (`Assoc
-                         [ "first_event_id", id r.candidate.first_event_id
-                         ; "second_event_id", id r.candidate.second_event_id
-                         ; "confidence", `String r.confidence
-                         ; "review_required", `Bool true
-                         ])
-                 else None)) )
-        ; ( "candidates"
-          , `List
-              (List.map ranked ~f:(fun r ->
-                 let c = r.Transfer_ranking.candidate in
-                 `Assoc
-                   [ "first", transfer_leg c.first_event_id c.first c.first_transaction
-                   ; ( "second"
-                     , transfer_leg c.second_event_id c.second c.second_transaction )
-                   ; "score", `Int r.score
-                   ; "confidence", `String r.confidence
-                   ; "iban_match", `Bool c.iban_match
-                   ; ( "evidence"
-                     , `List
-                         (List.map r.evidence ~f:(fun e ->
-                            `Assoc
-                              [ "code", `String e.Transfer_ranking.code
-                              ; "points", `Int e.points
-                              ; "detail", `String e.detail
-                              ])) )
-                   ; ( "iban_evidence"
-                     , `List (List.map c.iban_evidence ~f:(fun s -> `String s)) )
-                   ; "component", `Int r.assignment.component
-                   ; "assignment_status", `String r.assignment.status
-                   ; "component_best_score", optional_int r.assignment.best_score
-                   ; "exclusion_margin", optional_int r.assignment.exclusion_margin
-                   ; "inclusion_penalty", optional_int r.assignment.inclusion_penalty
-                   ])) )
-        ]
-    in
     if json_output
-    then print_endline (Yojson.Safe.pretty_to_string json)
+    then Report_json.print Report_json.preview (ranked, all_candidates)
     else (
       print_endline
         "Transfer preview - evidence scores, not probabilities. Nothing is confirmed \
@@ -1248,38 +978,12 @@ let accounts_export database output =
     | Some path -> write_file path contents)
 ;;
 
-let account_change_json (r : Store.account_change) =
-  let value =
-    Option.value_map ~default:`Null ~f:(fun text ->
-      if String.equal r.kind "settlement_account"
-      then Yojson.Safe.from_string text
-      else `String text)
-  in
-  `Assoc
-    [ "id", `Intlit (Int64.to_string r.id)
-    ; "kind", `String r.kind
-    ; "institution", `String r.institution
-    ; "source_account", `String r.source_account
-    ; "previous_value", value r.previous_value
-    ; "value", value r.value
-    ; "changed_at", `String (Timestamp.to_rfc3339 r.changed_at)
-    ]
-;;
-
 let accounts_import database path dry_run =
   let%bind contents = read_file path in
   let%bind config = Bank_account_config.of_json contents in
   with_database database (fun db ->
     let%bind result = Store.apply_bank_accounts ~dry_run db config in
-    print_endline
-      (Yojson.Safe.pretty_to_string
-         (`Assoc
-             [ "dry_run", `Bool dry_run
-             ; "mapping_changes", `Int result.mapping_changes
-             ; "identity_changes", `Int result.identity_changes
-             ; "settlement_changes", `Int result.settlement_changes
-             ; "changes", `List (List.map result.changes ~f:account_change_json)
-             ]));
+    Report_json.print Report_json.account_config (dry_run, result);
     Ok ())
 ;;
 
@@ -1361,8 +1065,7 @@ let accounts_edit database =
 let accounts_history database =
   with_database database (fun db ->
     let%bind rows = Store.bank_account_history db in
-    print_endline
-      (Yojson.Safe.pretty_to_string (`List (List.map rows ~f:account_change_json)));
+    Report_json.print (Jsont.list Report_json.account_change) rows;
     Ok ())
 ;;
 
@@ -1431,12 +1134,7 @@ let paths_cmd =
     "Display resolved data directory and authoritative SQLite database path."
     Term.(
       const (fun () ->
-        print_endline
-          (Yojson.Safe.pretty_to_string
-             (`Assoc
-                 [ "data_dir", `String paths.data_dir
-                 ; "database", `String paths.database
-                 ]));
+        Report_json.print Report_json.paths paths;
         Ok ())
       $ const ())
 ;;

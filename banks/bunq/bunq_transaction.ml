@@ -21,27 +21,24 @@ let normalize s =
 ;;
 
 let account_identity t =
-  Yojson.Safe.to_string
-    (`List
-        [ `String "bunq"
-        ; `String t.account_id
-        ; `String ("current-" ^ Iso4217.to_alpha_code t.currency)
-        ])
+  Json.encode
+    (Jsont.list Jsont.string)
+    [ "bunq"; t.account_id; "current-" ^ Iso4217.to_alpha_code t.currency ]
 ;;
 
 let key ~account_id ~booked_on ~value_on ~amount ~counterparty ~name ~description =
-  Yojson.Safe.to_string
-    (`List
-        (List.map
-           [ account_id
-           ; Date.to_string booked_on
-           ; Date.to_string value_on
-           ; Quantity.to_string amount
-           ; normalize counterparty
-           ; normalize name
-           ; normalize description
-           ]
-           ~f:(fun s -> `String s)))
+  Json.encode
+    (Jsont.list Jsont.string)
+    (List.map
+       [ account_id
+       ; Date.to_string booked_on
+       ; Date.to_string value_on
+       ; Quantity.to_string amount
+       ; normalize counterparty
+       ; normalize name
+       ; normalize description
+       ]
+       ~f:Fn.id)
 ;;
 
 let csv_key t =
@@ -55,16 +52,16 @@ let csv_key t =
     ~description:t.description
 ;;
 
-let create
-      ~account_id
-      ~currency
-      ~booked_on
-      ~value_on
-      ~amount
-      ~counterparty
-      ~name
-      ~description
-      ~occurrence
+let rec create
+          ~account_id
+          ~currency
+          ~booked_on
+          ~value_on
+          ~amount
+          ~counterparty
+          ~name
+          ~description
+          ~occurrence
   =
   let open Or_error.Let_syntax in
   let%bind account_id = Validation.token "Bunq account" account_id in
@@ -83,22 +80,7 @@ let create
       ^ ":"
       ^ Int.to_string occurrence
     in
-    let payload =
-      Yojson.Safe.to_string
-        (`Assoc
-            [ "format", `String "bunq-v1"
-            ; "account_id", `String account_id
-            ; "currency", `String code
-            ; "booked_on", `String (Date.to_string booked_on)
-            ; "value_on", `String (Date.to_string value_on)
-            ; "amount", `String (Quantity.to_string amount)
-            ; "counterparty", `String counterparty
-            ; "name", `String name
-            ; "description", `String description
-            ; "occurrence", `Int occurrence
-            ])
-    in
-    Ok
+    let tx =
       { account_id
       ; currency
       ; booked_on
@@ -109,33 +91,57 @@ let create
       ; description
       ; occurrence
       ; source_id
-      ; payload
-      })
+      ; payload = ""
+      }
+    in
+    Ok { tx with payload = Json.encode (Lazy.force jsont) tx })
+
+and jsont =
+  lazy
+    (Jsont.Object.map
+       (fun
+           ()
+            account_id
+            currency
+            booked_on
+            value_on
+            amount
+            counterparty
+            name
+            description
+            occurrence
+          ->
+          create
+            ~account_id
+            ~currency
+            ~booked_on
+            ~value_on
+            ~amount
+            ~counterparty
+            ~name
+            ~description
+            ~occurrence
+          |> Json.or_error)
+     |> Jsont.Object.mem "format" (Json.tag "bunq-v1") ~enc:(fun _ -> ())
+     |> Jsont.Object.mem "account_id" Jsont.string ~enc:(fun t -> t.account_id)
+     |> Jsont.Object.mem "currency" Json.currency ~enc:(fun t -> t.currency)
+     |> Jsont.Object.mem "booked_on" Json.date ~enc:(fun t -> t.booked_on)
+     |> Jsont.Object.mem "value_on" Json.date ~enc:(fun t -> t.value_on)
+     |> Jsont.Object.mem "amount" Json.quantity ~enc:(fun t -> t.amount)
+     |> Jsont.Object.mem "counterparty" Jsont.string ~enc:(fun t -> t.counterparty)
+     |> Jsont.Object.mem "name" Jsont.string ~enc:(fun t -> t.name)
+     |> Jsont.Object.mem "description" Jsont.string ~enc:(fun t -> t.description)
+     |> Jsont.Object.mem "occurrence" Json.integer ~enc:(fun t -> t.occurrence)
+     |> Jsont.Object.finish)
 ;;
+
+let jsont = Lazy.force jsont
 
 let source_transaction (event : Source_event.t) =
   Or_error.try_with (fun () ->
     if not (String.equal event.kind "bunq-transaction" && String.equal event.venue "bunq")
     then failwith "not a Bunq event";
-    let open Yojson.Safe.Util in
-    let json = Yojson.Safe.from_string event.payload in
-    let field k = member k json |> to_string in
-    if not (String.equal (field "format") "bunq-v1")
-    then failwith "unsupported Bunq payload";
-    let tx =
-      create
-        ~account_id:(field "account_id")
-        ~currency:
-          (Validation.currency "Bunq currency" (field "currency") |> Or_error.ok_exn)
-        ~booked_on:(Date.of_string (field "booked_on"))
-        ~value_on:(Date.of_string (field "value_on"))
-        ~amount:(Quantity.of_string (field "amount"))
-        ~counterparty:(field "counterparty")
-        ~name:(field "name")
-        ~description:(field "description")
-        ~occurrence:(member "occurrence" json |> to_int)
-      |> Or_error.ok_exn
-    in
+    let tx = Json.decode jsont event.payload |> Or_error.ok_exn in
     if
       not
         (String.equal event.account (account_identity tx)

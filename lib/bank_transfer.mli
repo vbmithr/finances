@@ -24,3 +24,4 @@ val create
 val of_json : string -> decision list Or_error.t
 val account : int64 -> int64 -> string
 val eligible : Source_event.t -> Movement.t -> Source_event.t -> Movement.t -> bool
+val decision_jsont : decision Jsont.t
