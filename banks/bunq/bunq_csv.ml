@@ -22,58 +22,53 @@ let header =
   [ "Date"; "Interest Date"; "Amount"; "Account"; "Counterparty"; "Name"; "Description" ]
 ;;
 
-let channel = Csv_reader.channel ~separator:','
-let recognizes = Csv_reader.recognizes ~separator:',' ~trim:false ~header
-
-let of_fields ~row_number fields =
-  Or_error.try_with (fun () ->
-    match fields with
-    | [ booked; value; amount; account_id; counterparty; name; description ] ->
-      let amount = String.substr_replace_all amount ~pattern:"\226\128\175" ~with_:" " in
-      if
-        not
-          (Re.execp
-             (Re.Perl.compile_pat "^-?([0-9]+|[0-9]{1,3}( [0-9]{3})+),[0-9]{2}$")
-             amount)
-      then failwith "invalid Bunq CSV amount";
-      let amount =
-        String.filter amount ~f:(fun c -> not (Char.equal c ' '))
-        |> fun s -> String.tr s ~target:',' ~replacement:'.' |> Quantity.of_string
-      in
-      let day s =
-        if not (Re.execp (Re.Perl.compile_pat "^[0-9]{4}-[0-9]{2}-[0-9]{2}$") s)
-        then failwith "invalid Bunq CSV date"
-        else Date.of_string s
-      in
-      let account_id =
-        Validation.token "Bunq CSV account" account_id |> Or_error.ok_exn
-      in
-      { row_number
-      ; account_id
-      ; booked_on = day booked
-      ; value_on = day value
-      ; amount
-      ; counterparty
-      ; name
-      ; description
-      ; fields
-      }
-    | _ -> failwith "expected seven Bunq CSV fields")
+let schema =
+  let open Csv_schema in
+  let date = Cell.iso_date ~message:"invalid Bunq CSV date" () in
+  make
+    (fun
+        row_number
+         booked_on
+         value_on
+         amount
+         account_id
+         counterparty
+         name
+         description
+         fields
+       ->
+       { row_number
+       ; account_id
+       ; booked_on
+       ; value_on
+       ; amount
+       ; counterparty
+       ; name
+       ; description
+       ; fields
+       })
+  |> row_number
+  |> col_name "Date" date
+  |> col_name "Interest Date" date
+  |> col_name "Amount" Cell.bunq_amount
+  |> col_name "Account" (Cell.token ~name:"Bunq CSV account" ())
+  |> col_name "Counterparty" Cell.string
+  |> col_name "Name" Cell.string
+  |> col_name "Description" Cell.string
+  |> raw_fields
+  |> create
+       ~name:"Bunq"
+       ~separator:','
+       ~header
+       ~trim_header:false
+       ~trim_cells:false
+       ~skip_blank_rows:false
+       ~columns_message:(fun _ _ -> "expected seven Bunq CSV fields")
 ;;
 
-let parse contents =
-  Or_error.try_with (fun () ->
-    Csv_reader.check_utf8 ~name:"Bunq" contents;
-    let input = channel contents in
-    Csv_reader.check_header
-      ~trim:false
-      ~header
-      ~message:"unsupported Bunq CSV header"
-      input;
-    Csv.input_all input
-    |> List.mapi ~f:(fun i fields ->
-      of_fields ~row_number:(i + 1) fields |> Or_error.ok_exn))
-;;
+let recognizes = Csv_schema.recognizes schema
+let of_fields = Csv_schema.of_fields schema
+let parse = Csv_schema.parse schema
 
 let key r =
   Bunq_transaction.key

@@ -1,7 +1,8 @@
 # Shared CSV decoding and format profiles
 
-Status: implementation started, 2026-10-28. The four formats share CSV reader,
-UTF-8 and header handling; typed row descriptions and policy integration remain.
+Status: implementation in progress, 2026-10-28. `Csv_reader` and `Csv_schema`
+provide shared reading, typed cells and row construction; BoursoBank and Bunq
+use typed schemas while Wise, Revolut and adapter profile integration remain.
 
 ## Goal
 
@@ -20,11 +21,12 @@ work, after the existing formats establish which operations are actually needed.
 
 ## What exists today
 
-The project already uses the `Csv` library for CSV syntax. The duplication is in
-the layer above it. `Csv_reader` now shares BOM removal, UTF-8 checks, reader
-options and header checks. Column selection, date/quantity conversion, blank-row
-handling and error context still live in format-specific code. `Adapter_support`
-shares adapter glue, but does not describe row schemas.
+The project already uses the `Csv` library for CSV syntax. The duplication was in
+the layer above it. `Csv_reader` shares BOM removal, UTF-8 checks, reader options
+and header checks; `Csv_schema` adds typed cells, compiled column selectors,
+blank-row policies and row/column diagnostics. BoursoBank and Bunq now decode
+rows through `Csv_schema`; Wise and Revolut still decode rows directly, and
+`Adapter_support` does not yet construct adapters from CSV profiles.
 
 The existing formats have different roles:
 
