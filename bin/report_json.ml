@@ -174,8 +174,26 @@ let review =
   |> field "currency" Json.currency (fun r -> r.transaction.account.currency)
   |> field "description" Jsont.string (fun r ->
     String.concat ~sep:" | " r.transaction.descriptions)
+  |> field "display_name" (Jsont.option Jsont.string) (fun r -> r.display_name)
+  |> field "movement_type" (Jsont.option Jsont.string) (fun r ->
+    Option.map r.movement_type ~f:Movement_type.to_string)
+  |> field "detail_sources" (Jsont.list Json.int64_codec) (fun r -> r.detail_sources)
   |> field "account" Jsont.string (fun r -> r.counter_account)
   |> field "reason" (Jsont.option Jsont.string) (fun r -> r.reason)
+  |> Jsont.Object.finish
+;;
+
+let category_similar =
+  let field name codec (enc : Category_similarity.t -> _) map =
+    Jsont.Object.mem name codec ~enc map
+  in
+  Jsont.Object.enc_only ()
+  |> field "match" Jsont.string (fun _ ->
+    "same institution and card merchant, or description; ignoring ASCII case and \
+     whitespace")
+  |> field "example" review (fun r -> r.seed)
+  |> field "candidates" (Jsont.list review) (fun r -> r.candidates)
+  |> field "conflicts" (Jsont.list review) (fun r -> r.conflicts)
   |> Jsont.Object.finish
 ;;
 
@@ -200,6 +218,11 @@ let transaction =
   |> field "currency" Json.currency (fun r -> r.review.transaction.account.currency)
   |> field "description" Jsont.string (fun r ->
     String.concat ~sep:" | " r.review.transaction.descriptions)
+  |> field "display_name" (Jsont.option Jsont.string) (fun r -> r.review.display_name)
+  |> field "movement_type" (Jsont.option Jsont.string) (fun r ->
+    Option.map r.review.movement_type ~f:Movement_type.to_string)
+  |> field "detail_sources" (Jsont.list Json.int64_codec) (fun r ->
+    r.review.detail_sources)
   |> field "counter_account" Jsont.string (fun r -> r.review.counter_account)
   |> field "reason" (Jsont.option Jsont.string) (fun r -> r.review.reason)
   |> Jsont.Object.finish

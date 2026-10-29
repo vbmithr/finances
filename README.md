@@ -286,12 +286,14 @@ or `Date of Date.t`.
 The `events` command prints an RFC 3339 `occurred_at` for instants, or
 `occurred_at: null` and a populated `occurred_on` for date-only OFX records.
 Wise records retain an instant and project using the local booking date.
-This experimental build supports only the current schema baseline (13). Fresh
+This experimental build supports only the current schema baseline (14). Fresh
 files initialize it atomically; other schema versions are rejected without changes.
 There are no historical migrations or schema fixtures. Reimport original statements
 and import exported account settings when resetting an experiment. Category and
 transfer review files use internal event IDs: inspect the new records before
 recreating those decisions instead of blindly reusing old numeric IDs.
+Follow the [schema rebuild recipe](docs/manual.md#rebuilding-after-a-schema-change)
+before upgrading, while the old executable can still read its database.
 Banks have no tables of their own: statements, companion observations, daily
 inventories and import contexts share generic tables keyed by institution and
 format.
@@ -521,6 +523,14 @@ List movements that still use `equity:unclassified`:
 fin bank review --json > personal/reports/bank-review.json
 fin bank review --all
 ```
+
+Use `fin transaction list` to find an event ID, then run
+`fin bank categories review EVENT_ID` to choose a category, select matching
+unclassified movements and confirm the proposed batch in a terminal.
+After reviewing a transaction, `fin bank categories similar EVENT_ID` previews
+unclassified movements with matching normalized card merchants or descriptions and flags conflicting
+reviewed categories. It does not apply decisions. See the
+[classification design](docs/classification.md) for its current limits.
 
 Use the reported `event_id` values to write a JSON decision file, for example
 `personal/reviews/categories.json`. The ID below is illustrative; select the actual

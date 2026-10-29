@@ -3,7 +3,7 @@ open Rel
 
 (** One current experimental baseline; older databases must be reimported. Banks
     have no tables of their own. *)
-let version = 13
+let version = 14
 
 let timestamp = `Expr "(strftime('%Y-%m-%dT%H:%M:%f','now') || '000000000Z')"
 
@@ -149,6 +149,7 @@ module Movements = struct
     ; principal_sign : string
     ; counterparty_iban : string option
     ; descriptions : string
+    ; movement_type : string option
     }
 
   let event_id = Col.make "event_id" Type.int64 (fun (r : t) -> r.event_id)
@@ -184,6 +185,10 @@ module Movements = struct
   (* A JSON array of strings, in source order. *)
   let descriptions = Col.make "descriptions" Type.text (fun (r : t) -> r.descriptions)
 
+  let movement_type =
+    Col.make "movement_type" Type.(option text) (fun (r : t) -> r.movement_type)
+  ;;
+
   let row =
     Row.(
       unit
@@ -205,6 +210,7 @@ module Movements = struct
              principal_sign
              counterparty_iban
              descriptions
+             movement_type
            ->
            { event_id
            ; venue
@@ -223,6 +229,7 @@ module Movements = struct
            ; principal_sign
            ; counterparty_iban
            ; descriptions
+           ; movement_type
            })
       * event_id
       * venue
@@ -240,7 +247,8 @@ module Movements = struct
       * principal_magnitude
       * principal_sign
       * counterparty_iban
-      * descriptions)
+      * descriptions
+      * movement_type)
   ;;
 
   let table =

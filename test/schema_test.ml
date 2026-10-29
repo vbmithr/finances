@@ -44,7 +44,7 @@ let initialize () =
          check "fresh database empty" 0 (List.length (ok (Store.events db)));
          Ok ()));
     raw path (fun db ->
-      check "latest baseline" 13 (scalar db "PRAGMA user_version");
+      check "latest baseline" 14 (scalar db "PRAGMA user_version");
       check
         "all tables are strict"
         25
@@ -228,7 +228,7 @@ let large_rowid () =
 ;;
 
 let rejects_old () =
-  List.iter [ 9; 12 ] ~f:(fun version ->
+  List.iter [ 9; 12; 13 ] ~f:(fun version ->
     workspace (fun path ->
       raw path (fun db ->
         sql

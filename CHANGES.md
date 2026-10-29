@@ -8,7 +8,52 @@ short line of their own.
 
 ## Unreleased
 
+### 2026-10-29
+
+- Add `fin bank list` to show built-in importers and their aliases.
+
+- Show separate bank and generic CSV forms in `fin import --help`. **Action
+  required:** replace `fin import csv FILE` with `fin import FILE`; directories
+  require an explicit bank name.
+
+- Accept registered institution aliases in `fin import`, including `bourso` and
+  `boursorama` for BoursoBank.
+
+- Store primary movement types at import. Show BoursoBank types derived from
+  explicit OFX description prefixes, including `PAIEMENT CARTE` on checking
+  accounts, without treating a reported transfer as a confirmed owned-account
+  transfer.
+
+  **Action required:** schema 14 requires rebuilding the database from statements.
+  Use the old executable to export account settings and back up the database before
+  upgrading. Review decisions
+  are tied to event IDs and must be inspected before reapplying them; see the manual.
+
+- Identify Bunq MT940 exports by their contents instead of treating every
+  `.mt940` file as Bunq. Wise MT940 files are reported as unsupported.
+
+- Show merchant names and movement types from uniquely matched Wise CSV rows in
+  transaction listings and review. Similarity review groups card purchases by
+  merchant when available. After rebuilding the database for schema 14, run
+  `fin bank match` if companion matches are not current.
+
+- Add `fin transaction list --order asc|desc`, sorting by source event date or
+  timestamp before applying the limit; descending remains the default.
+
+- Add interactive `fin bank categories review EVENT-ID` to classify a movement
+  and selected matching movements together after an explicit preview and
+  confirmation. Concurrent classifications are protected from overwrites.
+
+- Add `fin bank categories similar EVENT-ID` to preview unclassified matches
+  and conflicting reviewed classifications without applying decisions.
+
+- Record the category-and-tags model, first review workflow and requirement to
+  vendor Notty if it is selected.
+
 ### 2026-10-28
+
+- Document category design, similarity-based review, reusable rules and a
+  possible Notty terminal interface.
 
 - Show the institution in the readable transaction list.
 

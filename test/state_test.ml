@@ -156,7 +156,7 @@ let restore () =
             db
             (if String.equal kind "old schema"
              then "PRAGMA user_version=12"
-             else "PRAGMA user_version=13"));
+             else "PRAGMA user_version=14"));
       rejected invalid target;
       Alcotest.(check string)
         "existing destination preserved"

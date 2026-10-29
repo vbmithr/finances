@@ -301,6 +301,9 @@ let insert_movement =
         ; Value (principal_sign, if negative then "-" else "+")
         ; Value (counterparty_iban, Option.map m.counterparty_iban ~f:Iban.to_string)
         ; Value (descriptions, Json.encode (Jsont.list Jsont.string) m.descriptions)
+        ; Value
+            ( Db_schema.Movements.movement_type
+            , Option.map m.movement_type ~f:Movement_type.to_string )
         ]
 ;;
 
@@ -345,11 +348,12 @@ let movement_of_row (r : Db_schema.Movements.t) =
        ~amount
        ~fee
        ?counterparty_iban
+       ?movement_type:(Option.map r.movement_type ~f:Movement_type.of_string)
        descriptions)
 ;;
 
 let movement_columns =
-  "event_id,venue,account,bank_id,account_id,account_type,currency,own_iban_status,own_iban,booked_on,value_on,amount,fee,principal_magnitude,principal_sign,counterparty_iban,descriptions"
+  "event_id,venue,account,bank_id,account_id,account_type,currency,own_iban_status,own_iban,booked_on,value_on,amount,fee,principal_magnitude,principal_sign,counterparty_iban,descriptions,movement_type"
 ;;
 
 let occurrence_columns (e : Source_event.t) =
@@ -1846,7 +1850,7 @@ let statement_reconciliations ?institution db =
     statements
 ;;
 
-let set_bank_categories db decisions =
+let set_bank_categories ?(only_unclassified = false) db decisions =
   let* decisions =
     traverse
       (fun (d : Bank_category.t) ->
@@ -1879,6 +1883,13 @@ let set_bank_categories db decisions =
           else
             let* previous = db_result (Db.first db.conn (find_category d.event_id)) in
             if
+              only_unclassified
+              && Option.exists previous ~f:(fun (account, _) ->
+                not (String.equal account "equity:unclassified"))
+            then
+              Or_error.error_string
+                "a selected transaction is no longer unclassified; review it again"
+            else if
               Option.equal [%equal: string * string] previous (Some (d.account, d.reason))
             then apply changed rest
             else
@@ -1967,7 +1978,11 @@ let bank_category_history db =
 type bank_review =
   { event_id : int64
   ; institution : string
+  ; occurred : Temporal.t
   ; transaction : Movement.t
+  ; display_name : string option
+  ; movement_type : Movement_type.t option
+  ; detail_sources : int64 list
   ; counter_account : string
   ; reason : string option
   }
@@ -2010,16 +2025,37 @@ let review_metadata db =
            id, (first, second, reason))) )
 ;;
 
-let bank_review_from source table (categories, transfers) =
+let bank_review_from source table (categories, transfers) details =
   traverse
     (fun (event_id, (event : Source_event.t)) ->
        let* transaction = stored table event_id in
        let category = Hashtbl.find categories event_id in
        let transfer = Hashtbl.find transfers event_id in
+       let observations = Option.value (Hashtbl.find details event_id) ~default:[] in
+       let consensus ~compare f =
+         match
+           List.filter_map observations ~f:(fun (_, a) -> f a)
+           |> List.dedup_and_sort ~compare
+         with
+         | [ value ] -> Some value
+         | _ -> None
+       in
        Ok
          { event_id
          ; institution = event.venue
+         ; occurred = event.occurred
          ; transaction
+         ; display_name =
+             consensus ~compare:String.compare (fun (a : Companion.annotation) ->
+               a.display_name)
+         ; movement_type =
+             (match transaction.movement_type with
+              | Some _ as kind -> kind
+              | None ->
+                consensus ~compare:Poly.compare (fun (a : Companion.annotation) ->
+                  a.movement_type))
+         ; detail_sources =
+             List.map observations ~f:fst |> List.sort ~compare:Int64.compare
          ; counter_account =
              (match transfer with
               | Some (first, second, _) -> Bank_transfer.account first second
@@ -2041,7 +2077,29 @@ let bank_review db =
   let* source = movement_source db in
   let* table = movement_table db in
   let* metadata = review_metadata db in
-  bank_review_from source table metadata
+  let* observations = companion_observations db in
+  let companions = registered_companions db in
+  let details = Hashtbl.create (module Int64) in
+  let* () =
+    traverse
+      (fun (observation : companion_observation) ->
+         match observation.matching with
+         | Some { state = Matched; event_id = Some event_id; _ } ->
+           let row = observation.row in
+           let* companion =
+             List.find companions ~f:(fun (owner, (c : Companion.t)) ->
+               String.equal owner row.institution && String.equal c.format row.format)
+             |> Or_error.of_option
+                  ~error:(Error.of_string "unregistered companion format")
+           in
+           let* annotation = (snd companion).annotate row in
+           Hashtbl.add_multi details ~key:event_id ~data:(row.row_id, annotation);
+           Ok ()
+         | _ -> Ok ())
+      observations
+    |> Or_error.map ~f:ignore
+  in
+  bank_review_from source table metadata details
 ;;
 
 let find_account_iban =

@@ -4,9 +4,31 @@ open Base
 include Ofx_bank
 
 let institution = "boursobank"
-let aliases = [ "boursorama" ]
+let aliases = [ "boursorama"; "bourso" ]
 let csv = "csv"
 let formats = [ ofx; csv ]
+
+let movement_type (movement : Movement.t) =
+  let words text =
+    String.split_on_chars
+      (String.uppercase (String.strip text))
+      ~on:[ ' '; '\t'; '\n'; '\r' ]
+    |> List.filter ~f:(Fn.non String.is_empty)
+  in
+  match Option.value_map (List.hd movement.descriptions) ~default:[] ~f:words with
+  | "PAIEMENT" :: "CARTE" :: _ -> Some Movement_type.Card
+  | "CARTE" :: _ when String.equal movement.account.account_type "CREDITCRD" ->
+    Some Movement_type.Card
+  | ("VIR" | "VIREMENT") :: _ -> Some Transfer
+  | ("PRLV" | "PRELEVEMENT") :: _ -> Some Direct_debit
+  | "RETRAIT" :: _ -> Some Withdrawal
+  | _ -> None
+;;
+
+let decode event =
+  Or_error.map (Ofx_bank.decode event) ~f:(fun movement ->
+    Movement.with_movement_type movement (movement_type movement))
+;;
 
 let probe ~filename contents =
   match Ofx_bank.probe ~filename contents with
@@ -49,6 +71,8 @@ let companion : Companion.t =
     ~match_rows:Bank_csv_match.match_rows
     ~annotate:(fun row ->
       { Companion.value_on = row.value_on
+      ; display_name = None
+      ; movement_type = None
       ; tags =
           List.filter_opt
             [ Option.map row.category ~f:(fun s -> "bank-category", s)

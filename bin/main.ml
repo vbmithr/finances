@@ -109,9 +109,9 @@ let json_output =
     value & flag & info [ "json" ] ~doc:"Write JSON for scripts instead of readable text.")
 ;;
 
-let command name doc term =
+let command ?(man = []) name doc term =
   Cmd.v
-    (Cmd.info name ~doc)
+    (Cmd.info name ~doc ~man)
     Term.(
       const (fun result ->
         Result.map_error result ~f:(fun e -> `Msg (Error.to_string_hum e)))
@@ -1037,30 +1037,56 @@ let import_bank database institution paths journal max_mib account_id provider =
 
 let import_bank_cmd =
   command
+    ~man:
+      [ `S Manpage.s_synopsis
+      ; `P "$(b,fin import) [$(i,OPTION)]… $(i,BANK) $(i,PATH)…"
+      ; `P "$(b,fin import) [$(i,OPTION)]… $(i,CSV-FILE)"
+      ; `S Manpage.s_description
+      ; `P
+          "Import a supported bank's files or directories by naming the bank, for \
+           example $(b,fin import wise ~/statements/wise). Run $(b,fin bank list) to see \
+           the supported banks. To configure a generic card CSV, pass its filename \
+           directly, for example $(b,fin import statement.csv)."
+      ]
     "import"
     "Import a bank's statement files, apply mappings, and publish a bank journal."
     Term.(
       const (fun database first paths journal max_mib account_id provider ->
-        if Registry.is_registered Builtin.registry first
-        then
+        let institutions =
+          List.filter (Registry.institutions Builtin.registry) ~f:(fun institution ->
+            (not (String.equal institution "csv"))
+            && List.mem
+                 (Registry.aliases Builtin.registry institution)
+                 first
+                 ~equal:String.equal)
+        in
+        match institutions with
+        | [ institution ] ->
           if List.is_empty paths
           then Or_error.error_string "provide at least one statement path"
-          else import_bank database first paths journal max_mib account_id provider
-        else if Stdlib.Sys.file_exists first
-        then
+          else import_bank database institution paths journal max_mib account_id provider
+        | _ :: _ :: _ -> Or_error.errorf "ambiguous institution alias: %s" first
+        | [] when Stdlib.Sys.file_exists first && Stdlib.Sys.is_directory first ->
+          Or_error.error_string
+            "name the bank before a directory, for example: fin import wise DIRECTORY"
+        | [] when Stdlib.Sys.file_exists first ->
           import_bank database "csv" (first :: paths) journal max_mib account_id provider
-        else Or_error.errorf "unknown institution or file: %s" first)
+        | [] -> Or_error.errorf "unknown institution or file: %s" first)
       $ database
       $ Arg.(
           required
           & pos 0 (some string) None
           & info
               []
-              ~docv:"BANK-OR-CSV"
+              ~docv:"SOURCE"
               ~doc:
-                ("A CSV filename, or the bank that produced the files: "
-                 ^ String.concat ~sep:", " (Registry.institutions Builtin.registry)
-                 ^ ". Unknown CSV layouts are configured interactively."))
+                ("Bank name or generic CSV filename. Built-in banks: "
+                 ^ String.concat
+                     ~sep:", "
+                     (List.filter (Registry.institutions Builtin.registry) ~f:(fun name ->
+                        not (String.equal name "csv")))
+                 ^ ". Registered aliases are accepted (for example bourso and boursorama \
+                    for boursobank). Unknown CSV layouts are configured interactively."))
       $ Arg.(
           value
           & pos_right 0 string []
@@ -1068,7 +1094,7 @@ let import_bank_cmd =
               []
               ~docv:"PATH"
               ~doc:
-                "Statement files exported from $(i,BANK), or directories holding them. \
+                "When SOURCE is a bank, statement files or directories holding them. \
                  Directories are searched recursively; hidden and partially downloaded \
                  files inside them are skipped. Files are only read, never modified, and \
                  importing them again imports only what is new. ZIP files are opened \
@@ -1236,6 +1262,7 @@ let list_transactions
       to_date
       search
       limit
+      order
       json_output
   =
   let parse_date label = function
@@ -1301,15 +1328,22 @@ let list_transactions
         && Option.value_map to_date ~default:true ~f:(fun date ->
           Date.compare r.transaction.booked_on date <= 0)
         && Option.value_map search ~default:true ~f:(fun text ->
-          List.exists r.transaction.descriptions ~f:(fun d ->
+          Option.value_map r.display_name ~default:false ~f:(fun name ->
+            String.Caseless.is_substring name ~substring:text)
+          || List.exists r.transaction.descriptions ~f:(fun d ->
             String.Caseless.is_substring d ~substring:text)))
       |> List.sort
            ~compare:(fun (a : Report_json.transaction) (b : Report_json.transaction) ->
-             match
-               Date.compare b.review.transaction.booked_on a.review.transaction.booked_on
-             with
-             | 0 -> Int64.compare b.review.event_id a.review.event_id
-             | n -> n)
+             let compare (a : Report_json.transaction) (b : Report_json.transaction) =
+               match
+                 String.compare
+                   (Temporal.to_string a.review.occurred)
+                   (Temporal.to_string b.review.occurred)
+               with
+               | 0 -> Int64.compare a.review.event_id b.review.event_id
+               | n -> n
+             in
+             if order then compare a b else compare b a)
     in
     let rows = Option.value_map limit ~default:rows ~f:(List.take rows) in
     if json_output
@@ -1356,12 +1390,37 @@ let transaction_list_cmd =
           & info
               [ "search" ]
               ~docv:"TEXT"
-              ~doc:"ASCII case-insensitive description substring.")
+              ~doc:"ASCII case-insensitive display name or description substring.")
       $ Arg.(
           value
           & opt (some int) None
           & info [ "limit" ] ~docv:"COUNT" ~doc:"Maximum number of transactions.")
+      $ Arg.(
+          value
+          & opt (enum [ "asc", true; "desc", false ]) false
+          & info
+              [ "order" ]
+              ~docv:"ORDER"
+              ~doc:"Order by source event date or timestamp: asc or desc (default: desc).")
       $ json_output)
+;;
+
+let bank_list () =
+  List.iter (Registry.institutions Builtin.registry) ~f:(fun institution ->
+    if not (String.equal institution "csv")
+    then (
+      let aliases = Registry.aliases Builtin.registry institution |> List.tl_exn in
+      if List.is_empty aliases
+      then print_endline institution
+      else printf "%s (aliases: %s)\n" institution (String.concat ~sep:", " aliases)));
+  Ok ()
+;;
+
+let bank_list_cmd =
+  command
+    "list"
+    "List built-in bank importers and their aliases."
+    Term.(const bank_list $ const ())
 ;;
 
 let bank_review database all json_output =
@@ -1387,6 +1446,251 @@ let bank_review_cmd =
       $ Arg.(
           value & flag & info [ "all" ] ~doc:"Include movements with reviewed categories.")
       $ json_output)
+;;
+
+let category_similar database seed json_output =
+  with_database database (fun db ->
+    let%bind rows = Store.bank_review db in
+    let%bind preview = Category_similarity.find ~seed rows in
+    if json_output
+    then Report_json.print Report_json.category_similar preview
+    else (
+      printf
+        "Example and proposed category: %s\n"
+        (Terminal.text preview.seed.counter_account);
+      Terminal.review [ preview.seed ];
+      print_endline
+        "Matching unclassified transactions (same institution and card merchant or \
+         description, ignoring ASCII case and whitespace):";
+      Terminal.review preview.candidates;
+      if not (List.is_empty preview.conflicts)
+      then (
+        print_endline "Matching transactions classified differently:";
+        Terminal.review preview.conflicts));
+    Ok ())
+;;
+
+let category_similar_cmd =
+  command
+    "similar"
+    "Preview unclassified transactions similar to a reviewed example."
+    Term.(
+      const category_similar
+      $ database
+      $ Arg.(
+          required
+          & pos 0 (some int64) None
+          & info
+              []
+              ~docv:"EVENT-ID"
+              ~doc:"Reviewed transaction event ID from fin transaction list.")
+      $ json_output)
+;;
+
+let category_review database event_id =
+  if not (Unix.isatty Unix.stdin)
+  then Or_error.error_string "interactive category review requires a terminal"
+  else
+    with_database database (fun db ->
+      let%bind rows = Store.bank_review db in
+      let%bind seed =
+        List.find rows ~f:(fun (r : Store.bank_review) -> Int64.equal r.event_id event_id)
+        |> Or_error.of_option ~error:(Error.of_string "unknown transaction event ID")
+      in
+      if not (String.equal seed.counter_account "equity:unclassified")
+      then
+        Or_error.error_string
+          "transaction is already classified or belongs to a confirmed transfer"
+      else (
+        print_endline "Transaction to classify:";
+        Terminal.review [ seed ];
+        let categories =
+          List.filter_map rows ~f:(fun (r : Store.bank_review) ->
+            Option.some_if
+              (String.is_prefix r.counter_account ~prefix:"expenses:"
+               || String.is_prefix r.counter_account ~prefix:"income:")
+              r.counter_account)
+          |> List.dedup_and_sort ~compare:String.compare
+        in
+        if not (List.is_empty categories)
+        then (
+          print_endline "Previously used categories:";
+          List.iteri categories ~f:(fun i category ->
+            printf "  %d. %s\n" (i + 1) (Terminal.text category)));
+        let rec pick_category () =
+          match prompt "Category name or number (q to cancel): " with
+          | None -> Ok None
+          | Some input ->
+            let input = String.strip input in
+            if String.Caseless.equal input "q"
+            then Ok None
+            else (
+              let name =
+                match Option.try_with (fun () -> Int.of_string input) with
+                | Some n -> Option.value (List.nth categories (n - 1)) ~default:""
+                | None -> input
+              in
+              match
+                Bank_category.create
+                  ~event_id
+                  ~account:name
+                  ~reason:"Reviewed interactively"
+              with
+              | Ok _ when not (String.equal name "equity:unclassified") -> Ok (Some name)
+              | Ok _ ->
+                eprintf "Choose an income or expense category.\n";
+                pick_category ()
+              | Error e ->
+                eprintf "%s\n" (Error.to_string_hum e);
+                pick_category ())
+        in
+        let%bind category = pick_category () in
+        match category with
+        | None ->
+          print_endline "Nothing classified.";
+          Ok ()
+        | Some category ->
+          let example =
+            { seed with
+              counter_account = category
+            ; reason = Some "Reviewed interactively"
+            }
+          in
+          let%bind matches =
+            if
+              ((not (Poly.equal seed.movement_type (Some Movement_type.Card)))
+               || Option.value_map seed.display_name ~default:true ~f:(fun name ->
+                 String.is_empty (String.strip name)))
+              && List.for_all seed.transaction.descriptions ~f:(fun s ->
+                String.is_empty (String.strip s))
+            then
+              Ok Category_similarity.{ seed = example; candidates = []; conflicts = [] }
+            else
+              Category_similarity.find
+                ~seed:event_id
+                (example
+                 :: List.filter rows ~f:(fun r ->
+                   not (Int64.equal r.Store.event_id event_id)))
+          in
+          if not (List.is_empty matches.conflicts)
+          then (
+            print_endline "Similar transactions with different reviewed categories:";
+            Terminal.review matches.conflicts);
+          let candidates = matches.candidates in
+          if not (List.is_empty candidates)
+          then (
+            print_endline
+              "Similar unclassified transactions (same institution and normalized card \
+               merchant or description):";
+            List.iteri candidates ~f:(fun i (r : Store.bank_review) ->
+              printf
+                "  %d. #%Ld  %s  %s %s  %s\n"
+                (i + 1)
+                r.event_id
+                (Date.to_string r.transaction.booked_on)
+                (Quantity.to_string r.transaction.amount)
+                (Iso4217.to_alpha_code r.transaction.account.currency)
+                (Terminal.text
+                   (Option.value
+                      r.display_name
+                      ~default:(String.concat ~sep:" | " r.transaction.descriptions)))));
+          let rec select () =
+            if List.is_empty candidates
+            then Ok (Some [])
+            else (
+              match
+                prompt "Select matches (all, none, comma-separated numbers, or q): "
+              with
+              | None -> Ok None
+              | Some input ->
+                let input = String.strip input in
+                if String.Caseless.equal input "q"
+                then Ok None
+                else if String.Caseless.equal input "all"
+                then Ok (Some candidates)
+                else if String.Caseless.equal input "none"
+                then Ok (Some [])
+                else (
+                  let selected =
+                    String.split input ~on:','
+                    |> List.map ~f:(fun s ->
+                      Option.try_with (fun () -> Int.of_string (String.strip s))
+                      |> Option.bind ~f:(fun n ->
+                        if n <= 0 then None else List.nth candidates (n - 1)))
+                  in
+                  if List.is_empty selected || List.exists selected ~f:Option.is_none
+                  then (
+                    eprintf "Enter valid, comma-separated match numbers.\n";
+                    select ())
+                  else (
+                    let selected = List.filter_opt selected in
+                    if
+                      List.contains_dup
+                        (List.map selected ~f:(fun r -> r.Store.event_id))
+                        ~compare:Int64.compare
+                    then (
+                      eprintf "Select each match only once.\n";
+                      select ())
+                    else Ok (Some selected))))
+          in
+          let%bind selected = select () in
+          (match selected with
+           | None ->
+             print_endline "Nothing classified.";
+             Ok ()
+           | Some selected ->
+             let chosen = seed :: selected in
+             printf "Proposed category: %s\n" (Terminal.text category);
+             Terminal.review
+               (List.map chosen ~f:(fun r ->
+                  { r with Store.counter_account = category; reason = None }));
+             printf
+               "Apply to %d transaction(s)? Type yes to confirm: "
+               (List.length chosen);
+             Out_channel.flush stdout;
+             let confirmed =
+               Option.value_map
+                 (In_channel.input_line In_channel.stdin)
+                 ~default:false
+                 ~f:(fun answer -> String.equal (String.strip answer) "yes")
+             in
+             if not confirmed
+             then (
+               print_endline "Nothing classified.";
+               Ok ())
+             else (
+               let%bind decisions =
+                 List.map chosen ~f:(fun (r : Store.bank_review) ->
+                   Bank_category.create
+                     ~event_id:r.event_id
+                     ~account:category
+                     ~reason:
+                       (if Int64.equal r.event_id event_id
+                        then "Reviewed interactively"
+                        else Printf.sprintf "Reviewed as similar to event %Ld" event_id))
+                 |> Or_error.combine_errors
+               in
+               let%bind changed =
+                 Store.set_bank_categories ~only_unclassified:true db decisions
+               in
+               printf "category_changes=%d\n" changed;
+               Ok ()))))
+;;
+
+let category_review_cmd =
+  command
+    "review"
+    "Interactively classify a transaction and selected similar movements."
+    Term.(
+      const category_review
+      $ database
+      $ Arg.(
+          required
+          & pos 0 (some int64) None
+          & info
+              []
+              ~docv:"EVENT-ID"
+              ~doc:"Unclassified transaction ID from fin transaction list."))
 ;;
 
 let category_history database =
@@ -1846,13 +2150,18 @@ let () =
           ; group
               "bank"
               "Review banking records and reconcile statements."
-              [ project_bank_cmd
+              [ bank_list_cmd
+              ; project_bank_cmd
               ; bank_review_cmd
               ; import_history_cmd
               ; group
                   "categories"
                   "Manage reviewed bank categories."
-                  [ categorize_bank_cmd; category_history_cmd ]
+                  [ categorize_bank_cmd
+                  ; category_history_cmd
+                  ; category_similar_cmd
+                  ; category_review_cmd
+                  ]
               ; companions_cmd
               ; match_companions_cmd
               ; statements_cmd

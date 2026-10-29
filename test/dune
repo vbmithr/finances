@@ -350,7 +350,12 @@
 
 (rule
  (alias runtest)
- (deps import_cli_test.py fixtures/revolut.csv fixtures/bank.ofx)
+ (deps
+  import_cli_test.py
+  fixtures/revolut.csv
+  fixtures/bank.ofx
+  fixtures/wise.xml
+  fixtures/wise.csv)
  (action
   (run python3 %{dep:import_cli_test.py} %{exe:../bin/main.exe})))
 

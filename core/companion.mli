@@ -17,6 +17,8 @@ type row =
 (** What a matched row adds to its movement's journal entry. *)
 type annotation =
   { value_on : Date.t option
+  ; display_name : string option
+  ; movement_type : Movement_type.t option
   ; tags : (string * string) list (** Tag names and raw values, in order. *)
   }
 

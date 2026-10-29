@@ -139,8 +139,14 @@ val statement_reconciliations
 
 (** Atomically apply explicit category decisions and audit their reasons. Verify
     existing generated postings before changing only the counter-account.
-    Replays are idempotent. New decisions also apply before first projection. *)
-val set_bank_categories : t -> Bank_category.t list -> int Or_error.t
+    Replays are idempotent. New decisions also apply before first projection.
+    When [only_unclassified] is set, abort the batch if any selected movement
+    already has a classification, checking inside the transaction. *)
+val set_bank_categories
+  :  ?only_unclassified:bool
+  -> t
+  -> Bank_category.t list
+  -> int Or_error.t
 
 type category_change =
   { id : int64
@@ -156,7 +162,11 @@ val bank_category_history : t -> category_change list Or_error.t
 type bank_review =
   { event_id : int64
   ; institution : string
+  ; occurred : Temporal.t
   ; transaction : Movement.t
+  ; display_name : string option
+  ; movement_type : Movement_type.t option
+  ; detail_sources : int64 list
   ; counter_account : string
   ; reason : string option
   }

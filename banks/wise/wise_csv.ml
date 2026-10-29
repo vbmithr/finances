@@ -12,6 +12,7 @@ type row =
   ; payment_reference : string option
   ; merchant : string option
   ; payee : string option
+  ; details_type : string option
   ; fields : string list
   }
 
@@ -75,6 +76,7 @@ let schema =
          merchant
          fees
          direction
+         details_type
          fields
        ->
        if not (Date.equal day (Ptime.to_date ~tz_offset_s:0 booked_at))
@@ -95,6 +97,7 @@ let schema =
        ; payment_reference
        ; merchant
        ; payee
+       ; details_type
        ; fields
        })
   |> row_number
@@ -119,6 +122,7 @@ let schema =
        (Cell.one_of
           ~message:"invalid Wise CSV transaction direction"
           [ "DEBIT"; "CREDIT" ])
+  |> col_name "Transaction Details Type" (Cell.opt Cell.string)
   |> raw_fields
   |> create
        ~name:"Wise"

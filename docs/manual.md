@@ -140,15 +140,29 @@ exported account snapshots are never touched. In a script, `fin delete --yes`
 skips the question; without a terminal and without `--yes` it refuses.
 `--database FILE` selects which database and associated files to delete.
 
-This experimental release accepts schema version 13; it does not migrate older
-experimental databases, and refuses them without changing the file. After
-installing a release with a new schema, save an account snapshot as well as a
-full backup, then delete and rebuild:
+### Rebuilding after a schema change
+
+This experimental release accepts schema version 14; it does not migrate older
+databases and refuses them without changing the file. Before upgrading to a new
+schema, use the **old fin executable** to export account settings and save a
+full backup. Save the transaction list and review histories as reference when
+you have decisions to recreate:
 
 ```sh
 fin account export -o ~/fin-accounts.json
 fin backup ~/fin-backups
+fin transaction list --json > ~/fin-transactions-before-rebuild.json
+fin bank categories history > ~/fin-categories-before-rebuild.json
+fin transfers history > ~/fin-transfers-before-rebuild.json
 fin delete
+```
+
+Keep the old executable if you may need to inspect or restore the old backup;
+the new executable cannot open or restore a database from a different schema.
+After installing the new version, create a database and import your original
+statements. Replace these example paths and account labels with your own:
+
+```sh
 fin init
 fin import boursobank ~/Statements/boursobank
 fin import wise ~/Statements/wise
@@ -161,13 +175,22 @@ After importing all banks, restore account settings with
 discovered source accounts; it cannot create them. A full SQLite backup is for
 restoring a database of the same schema version; an account snapshot is for
 restoring settings into a rebuilt database.
-Review decisions contain database-specific event IDs, so inspect new IDs before
-reapplying decisions to a rebuilt database.
+Generic CSV files must also be reimported with their original provider and
+account labels; configure the CSV profile again if needed. Review decisions are
+not included in the account snapshot. Their event IDs are database-specific, so
+use the saved transaction list and histories to identify the new transactions
+and recreate decisions; do not blindly reuse old IDs. A backup preserves the old
+decisions, but cannot transfer them to the new schema.
 
 ## Importing statements
 
 Use `fin import BANK PATH...` to read bank exports. This replaces the former
 `fin bank sync` command; update existing scripts to use `fin import`.
+Run `fin bank list` to list built-in bank importers and their aliases.
+For BoursoBank, `bourso` and `boursorama` are accepted aliases for `boursobank`;
+all three import into the same institution.
+For a generic card CSV, use `fin import FILE.csv`;
+fin prompts for its provider and account details when needed.
 
 Keep a separate inbox for each bank. Supply the formats below:
 
@@ -215,6 +238,10 @@ fin import wise ~/statements/wise
 # Or name a ZIP file explicitly:
 fin import wise ~/statements/wise/statement.zip
 ```
+
+Wise MT940 exports are not supported; use Wise CAMT.053 and CSV. A directory
+may contain other formats: unsupported files are reported rather than identified
+as another bank solely from their filename extension.
 
 Files ending in `.zip` (case insensitive) are opened in memory with Zipc; nothing
 is extracted onto disk. Each member goes through the selected bank's usual
@@ -302,7 +329,10 @@ currency is fixed for the file. If there is a summary row, specify its label;
 fin skips it only when its date is empty. Review the preview and confirm to import.
 The preview shows each CSV amount beside the signed account movement; other
 CSV fields, such as local currency and exchange rate, retain their source signs.
-Only one generic CSV file can be imported per command. Raw fields are retained
+Only one generic CSV file can be imported per command. To import a directory of
+generic CSV files for the same account, invoke `fin import` for each file with
+the same provider and account label; use a different account label for each
+separate card. Review each file and its account before confirming. Raw fields are retained
 with the source evidence, including original currency amounts and exchange rates.
 The mapped account amount, not the local amount, is posted to the ledger.
 
@@ -404,9 +434,24 @@ fin transfers preview
 ```
 
 Unclassified movements initially use `equity:unclassified`. Imported bank
-categories are suggestions. Accepted categories and owned-account transfers
-require explicit review files; a transfer preview does not confirm anything.
-Transfer scores represent evidence, not calibrated probabilities.
+categories are suggestions. To classify a movement interactively, find its event
+ID in `fin transaction list`, then replace `123` below with that ID:
+
+```sh
+fin bank categories review 123
+```
+
+Choose a previously used category by number or enter an `expenses:...` or
+`income:...` account. The command shows matching unclassified movements and lets
+you select all, none, or individual numbered matches. It also shows conflicting
+reviewed classifications. Check the proposed batch and type `yes` to apply it;
+enter `q` at a selection prompt or decline confirmation to cancel. This command
+requires a terminal. It checks that all selected movements are still unclassified
+before saving the batch, so a concurrent decision cannot be overwritten.
+
+Owned-account transfers require explicit review files; a transfer preview does
+not confirm anything. Transfer scores represent evidence, not calibrated
+probabilities.
 
 After preparing review JSON using the examples in the
 [README](../README.md), apply it with:
@@ -418,6 +463,21 @@ fin bank project
 fin bank categories history
 fin transfers history
 ```
+
+After categorizing a transaction, preview similar unclassified movements with
+its event ID (replace `123` with a reviewed transaction ID):
+
+```sh
+fin bank categories similar 123
+fin bank categories similar 123 --json
+```
+
+The preview matches within the same institution, using the merchant for card
+movements when available, or otherwise the ordered descriptions. The two kinds
+of match do not mix. It ignores ASCII case and whitespace. It shows other
+unclassified movements and separately flags
+matches categorized differently. It never applies a category; use interactive
+review or an explicit decisions file to apply changes. Confirmed transfers are excluded.
 
 The filenames above are files you create, not files generated by the commands.
 Confirm a transfer only when both movements belong to your accounts. Registered
@@ -435,14 +495,28 @@ displayed event IDs can be used in review decisions; account IDs come from
 fin transaction list
 fin transaction list --from 2026-01-01 --to 2026-01-31
 fin transaction list --search coffee --limit 20
+fin transaction list --order asc
 fin transaction list --json
 ```
 
 Dates are inclusive booking dates. Use `--account ID` for one account or
-`--institution NAME` for a provider; `--search` matches description substrings using ASCII case-insensitive
-comparison. `--limit` must be positive. JSON includes amounts, fees,
-classification and review reason; CSV source fields and document provenance
-are not yet included. Use `fin bank review` for unclassified items and hledger
+`--institution NAME` for a provider; `--search` matches the display name or
+original description using ASCII case-insensitive comparison. `--order asc`
+lists oldest first; `--order desc` is the default.
+Sorting uses the source event's date or timestamp in UTC; date-only events sort
+before timed events on the same date, with event IDs breaking ties. Sorting
+precedes `--limit`, which must be positive. When a uniquely matched Wise CSV
+provides a merchant or movement type, the list shows those fields; otherwise it
+falls back to the source description. Conflicting values are omitted. JSON
+includes the original `description`, optional `display_name` and `movement_type`,
+and `detail_sources` companion row IDs, which can be inspected with
+`fin bank companions`. Provider-specific types are prefixed with the provider
+name. A reported transfer type does not confirm a transfer between your accounts.
+On import, fin determines BoursoBank movement types from explicit leading OFX
+description words: `PAIEMENT CARTE`, `CARTE` on a card account, `VIR` or
+`VIREMENT`, `PRLV` or `PRELEVEMENT`, and `RETRAIT`. Other descriptions remain
+untyped. The original description remains available for inspection.
+Use `fin bank review` for unclassified items and hledger
 for accounting reports and running balances.
 
 ## Exporting and querying accounting
@@ -470,7 +544,7 @@ belongs to hledger; `fin` tracks import evidence, account identity and review st
 ## Library and dependency changes
 
 This build uses Base, decimal, Ptime and Bos, with no Core or Bigdecimal
-dependency. Version 1 account snapshots remain compatible; databases use schema 13 and
+dependency. Version 1 account snapshots remain compatible; databases use schema 14 and
 are rebuilt from the original statements (see above).
 
 OCaml callers use `Quantity.t` (a `Decimal.t` alias) and `Date.t` (a `Ptime.date`

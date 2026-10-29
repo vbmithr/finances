@@ -191,12 +191,106 @@ let conflicts () =
          Ok ())))
 ;;
 
+let unclassified_batch_is_atomic () =
+  memory (fun db ->
+    project db;
+    let rows = ok (Store.bank_review db) in
+    let first = (List.nth_exn rows 0).event_id in
+    let second = (List.nth_exn rows 1).event_id in
+    ignore (classify db [ decision second "expenses:existing" ]);
+    let before = ok (Store.bank_category_history db) in
+    error
+      (Store.set_bank_categories
+         ~only_unclassified:true
+         db
+         [ decision first "expenses:new"; decision second "expenses:new" ]);
+    let after = ok (Store.bank_category_history db) in
+    check "no partial audit entries" (List.length before) (List.length after);
+    Alcotest.(check string)
+      "first remains unclassified"
+      "equity:unclassified"
+      (account db first);
+    Alcotest.(check string)
+      "existing classification retained"
+      "expenses:existing"
+      (account db second))
+;;
+
+let similarity () =
+  let currency = ok (Validation.currency "currency" "EUR") in
+  let movement description =
+    ok
+      (Movement.create
+         ~account:
+           { bank_id = "provider"
+           ; account_id = "main"
+           ; account_type = "current"
+           ; currency
+           }
+         ~own_iban:Unknown
+         ~booked_on:(Date.of_string "2026-10-01")
+         ~amount:(Quantity.of_string "-1")
+         [ description ])
+  in
+  let row event_id institution description counter_account reason : Store.bank_review =
+    { event_id
+    ; institution
+    ; occurred = Temporal.Date (Date.of_string "2026-10-01")
+    ; transaction = movement description
+    ; display_name = None
+    ; movement_type = None
+    ; detail_sources = []
+    ; counter_account
+    ; reason
+    }
+  in
+  let seed = row 1L "provider" "Coffee  SHOP" "expenses:food" (Some "reviewed") in
+  let candidate = row 2L "provider" " coffee\tshop " "equity:unclassified" None in
+  let conflict = row 3L "provider" "COFFEE SHOP" "expenses:work" (Some "reviewed") in
+  let other_provider = row 4L "other" "coffee shop" "equity:unclassified" None in
+  let transfer =
+    row 5L "provider" "coffee shop" "assets:transfers:pair" (Some "reviewed")
+  in
+  let no_match = row 6L "provider" "coffee shop two" "equity:unclassified" None in
+  let rows = [ seed; candidate; conflict; other_provider; transfer; no_match ] in
+  let result = ok (Category_similarity.find ~seed:1L rows) in
+  Alcotest.(check (list int64))
+    "unclassified matches"
+    [ 2L ]
+    (List.map result.candidates ~f:(fun r -> r.event_id));
+  Alcotest.(check (list int64))
+    "conflicting decisions"
+    [ 3L ]
+    (List.map result.conflicts ~f:(fun r -> r.event_id));
+  error (Category_similarity.find ~seed:2L rows);
+  error (Category_similarity.find ~seed:99L rows);
+  let empty = row 7L "provider" "   " "expenses:food" (Some "reviewed") in
+  error (Category_similarity.find ~seed:7L [ empty ]);
+  let card r name =
+    { r with Store.display_name = Some name; movement_type = Some Movement_type.Card }
+  in
+  let card_seed = card seed "Coffee Shop" in
+  let card_candidate =
+    card (row 8L "provider" "Different amount" "equity:unclassified" None) "coffee  shop"
+  in
+  let no_merchant = row 9L "provider" "Coffee  SHOP" "equity:unclassified" None in
+  let result =
+    ok (Category_similarity.find ~seed:1L [ card_seed; card_candidate; no_merchant ])
+  in
+  Alcotest.(check (list int64))
+    "merchant matches without amount and does not mix fallback"
+    [ 8L ]
+    (List.map result.candidates ~f:(fun r -> r.event_id))
+;;
+
 let () =
   Alcotest.run
     "Bank categories"
     [ ( "review"
       , List.map
-          [ "persistent replay and reset", replay
+          [ "unclassified batch is atomic", unclassified_batch_is_atomic
+          ; "similarity preview", similarity
+          ; "persistent replay and reset", replay
           ; "post-projection, multi-bank and mappings", after_projection
           ; "invalid atomic batches", invalid_batch
           ; "projection conflicts", conflicts

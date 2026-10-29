@@ -248,6 +248,34 @@ let csv_times () =
       (List.count results ~f:(fun row -> Poly.equal row.Bank_match.state Matched)))
 ;;
 
+let review_enrichment () =
+  memory (fun db ->
+    accepted (import db "wise.xml" (xml ()));
+    accepted (import db "wise.csv" (csv ()));
+    ignore (ok (Store.match_companions ~institution:"wise" db) : Store.companion_report);
+    let rows = ok (Store.bank_review db) in
+    List.iter rows ~f:(fun row ->
+      Alcotest.(check (option string)) "merchant" (Some "Synthetic shop") row.display_name;
+      Alcotest.(check (option string))
+        "type"
+        (Some "card")
+        (Option.map row.movement_type ~f:Movement_type.to_string);
+      check "source row recorded" 1 (List.length row.detail_sources));
+    accepted (import db "other.csv" (replace (csv ()) "Synthetic shop" "Other shop"));
+    ignore (ok (Store.match_companions ~institution:"wise" db) : Store.companion_report);
+    List.iter
+      (ok (Store.bank_review db))
+      ~f:(fun row ->
+        Alcotest.(check (option string))
+          "disagreeing merchant suppressed"
+          None
+          row.display_name;
+        Alcotest.(check (option string))
+          "agreeing type retained"
+          (Some "card")
+          (Option.map row.movement_type ~f:Movement_type.to_string)))
+;;
+
 let () =
   Alcotest.run
     "Wise and multiple banks"
@@ -259,6 +287,7 @@ let () =
           ; "two banks, replay, conflict", multi_bank
           ; "currency and fee conflicts", currencies
           ; "duplicate CSV claims", duplicate_rows
+          ; "review enrichment and conflicting observations", review_enrichment
           ]
           ~f:(fun (name, f) -> Alcotest.test_case name `Quick f) )
     ]

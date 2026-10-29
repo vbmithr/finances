@@ -207,6 +207,71 @@ class ImportOnboarding(unittest.TestCase):
         self.assertIn('shared documents', result.stderr)
         self.assertEqual(json.loads(self.run_fin('status', '--json').stdout)['movements'], before)
 
+    def test_interactive_classification_review(self):
+        self.run_fin('import', 'revolut', self.csv, '--account-id', 'main')
+        rows = json.loads(self.run_fin('transaction', 'list', '--json', '--search', 'Repeated').stdout)
+        first, second = (row['event_id'] for row in rows)
+        output = self.terminal(['bank', 'categories', 'review', str(first)], [
+            ('Category name or number', 'expenses:food'),
+            ('Select matches', 'all'),
+            ('Type yes to confirm:', 'yes'),
+        ])
+        self.assertIn('category_changes=2', output)
+        rows = json.loads(self.run_fin('transaction', 'list', '--json', '--search', 'Repeated').stdout)
+        self.assertEqual({x['counter_account'] for x in rows}, {'expenses:food'})
+        self.assertEqual(len(json.loads(self.run_fin('bank', 'categories', 'history').stdout)), 2)
+        self.assertNotEqual(self.run_fin('bank', 'categories', 'review', first, check=False).returncode, 0)
+        journal = self.run_fin('journal', 'export').stdout
+        self.assertIn('expenses:food', journal)
+
+    def test_interactive_classification_cancel_and_select_none(self):
+        self.run_fin('import', 'revolut', self.csv, '--account-id', 'main')
+        rows = json.loads(self.run_fin('transaction', 'list', '--json', '--search', 'Repeated').stdout)
+        first, second = (row['event_id'] for row in rows)
+        before = self.run_fin('bank', 'review', '--all', '--json').stdout
+        output = self.terminal(['bank', 'categories', 'review', str(first)], [
+            ('Category name or number', 'expenses:food'),
+            ('Select matches', 'none'),
+            ('Type yes to confirm:', 'no'),
+        ])
+        self.assertIn('Nothing classified.', output)
+        self.assertEqual(self.run_fin('bank', 'review', '--all', '--json').stdout, before)
+        output = self.terminal(['bank', 'categories', 'review', str(first)], [
+            ('Category name or number', 'expenses:food'),
+            ('Select matches', 'none'),
+            ('Type yes to confirm:', 'yes'),
+        ])
+        self.assertIn('category_changes=1', output)
+        rows = json.loads(self.run_fin('transaction', 'list', '--json', '--search', 'Repeated').stdout)
+        self.assertEqual({r['event_id']: r['counter_account'] for r in rows},
+                         {first: 'expenses:food', second: 'equity:unclassified'})
+
+    def test_category_similar_is_read_only_and_reports_conflicts(self):
+        self.run_fin('import', 'revolut', self.csv, '--account-id', 'main')
+        rows = json.loads(self.run_fin('transaction', 'list', '--json', '--search', 'Repeated').stdout)
+        self.assertEqual(len(rows), 2)
+        first, second = (row['event_id'] for row in rows)
+        self.assertNotEqual(self.run_fin('bank', 'categories', 'similar', first, check=False).returncode, 0)
+        decisions = self.root / 'decisions.json'
+        decisions.write_text(json.dumps([{'event_id': first, 'account': 'expenses:food', 'reason': 'Reviewed'}]))
+        self.run_fin('bank', 'categories', 'apply', decisions)
+        before = self.run_fin('bank', 'review', '--all', '--json').stdout
+        preview = json.loads(self.run_fin('bank', 'categories', 'similar', first, '--json').stdout)
+        self.assertEqual(preview['example']['account'], 'expenses:food')
+        self.assertEqual([r['event_id'] for r in preview['candidates']], [second])
+        self.assertEqual(preview['conflicts'], [])
+        text = self.run_fin('bank', 'categories', 'similar', first).stdout
+        self.assertIn('Matching unclassified transactions', text)
+        self.assertIn('expenses:food', text)
+        self.assertIn(str(second), text)
+        self.assertEqual(self.run_fin('bank', 'review', '--all', '--json').stdout, before)
+        decisions.write_text(json.dumps([{'event_id': second, 'account': 'expenses:other', 'reason': 'Reviewed'}]))
+        self.run_fin('bank', 'categories', 'apply', decisions)
+        preview = json.loads(self.run_fin('bank', 'categories', 'similar', first, '--json').stdout)
+        self.assertEqual(preview['candidates'], [])
+        self.assertEqual([r['event_id'] for r in preview['conflicts']], [second])
+        self.assertNotEqual(self.run_fin('bank', 'categories', 'similar', '999999', check=False).returncode, 0)
+
     def test_transaction_list_filters_and_reviewed_rows(self):
         self.run_fin('import', 'revolut', self.csv, '--account-id', 'main')
         accounts = json.loads(self.run_fin('account', 'list', '--json').stdout)
@@ -240,6 +305,89 @@ class ImportOnboarding(unittest.TestCase):
         reviewed = json.loads(self.run_fin('transaction', 'list', '--json', '--limit', '1').stdout)
         self.assertEqual(reviewed[0]['counter_account'], 'expenses:shopping')
         self.assertEqual(reviewed[0]['reason'], 'Reviewed')
+
+    def test_bank_list_reports_supported_importers(self):
+        result = self.run_fin('bank', 'list').stdout
+        self.assertIn('boursobank (aliases: boursorama, bourso)', result)
+        self.assertIn('wise', result)
+        self.assertIn('bunq', result)
+        self.assertIn('revolut', result)
+        self.assertNotIn('csv', result)
+
+    def test_import_help_shows_distinct_forms(self):
+        help_text = self.run_fin('import', '--help=plain').stdout
+        self.assertIn('fin import [OPTION]… BANK PATH…', help_text)
+        self.assertIn('fin import [OPTION]… CSV-FILE', help_text)
+        self.assertNotIn('fin import [OPTION]… csv CSV-FILE', help_text)
+        self.assertNotIn('BANK-OR-CSV', help_text)
+        rejected = self.run_fin('import', 'csv', self.csv, check=False)
+        self.assertNotEqual(rejected.returncode, 0)
+        directory = self.run_fin('import', self.root, check=False)
+        self.assertNotEqual(directory.returncode, 0)
+        self.assertIn('name the bank before a directory', directory.stderr)
+
+    def test_boursobank_import_aliases(self):
+        self.run_fin('import', 'bourso', 'fixtures/bank.ofx')
+        rows = json.loads(self.run_fin('transaction', 'list', '--json').stdout)
+        self.assertEqual(len(rows), 3)
+        self.assertTrue(all(r['institution'] == 'boursobank' for r in rows))
+        self.run_fin('import', 'boursorama', 'fixtures/bank.ofx')
+        self.assertEqual(len(json.loads(self.run_fin('transaction', 'list', '--json').stdout)), 3)
+
+    def test_boursobank_types_from_source_descriptions(self):
+        ofx = self.root / 'boursobank.ofx'
+        ofx.write_text(Path('fixtures/bank.ofx').read_text().replace(
+            'CAFÉ &amp; CO', 'VIR SEPA Example').replace(
+            'Synthetic precision example', 'PRLV Example').replace(
+            '<ACCTTYPE>SAVINGS</ACCTTYPE>', '<ACCTTYPE>CREDITCRD</ACCTTYPE>').replace(
+            'Synthetic debit', 'CARTE Example').replace(
+            '</BANKTRANLIST>', '<STMTTRN><DTPOSTED>20260103</DTPOSTED>'
+            '<TRNTYPE>DEBIT</TRNTYPE><TRNAMT>-10</TRNAMT><FITID>payment-card</FITID>'
+            '<NAME>PAIEMENT CARTE 021014 Example</NAME></STMTTRN></BANKTRANLIST>', 1))
+        self.run_fin('import', 'boursobank', ofx)
+        rows = json.loads(self.run_fin('transaction', 'list', '--json').stdout)
+        types = {r['description']: r['movement_type'] for r in rows}
+        self.assertEqual(types, {'VIR SEPA Example': 'transfer', 'PRLV Example': 'direct-debit',
+                                 'CARTE Example': 'card', 'PAIEMENT CARTE 021014 Example': 'card'})
+        self.assertTrue(all(r['counter_account'] == 'equity:unclassified' for r in rows))
+
+    def test_wise_enrichment_shows_merchant_and_matches_different_descriptions(self):
+        self.run_fin('import', 'wise', 'fixtures/wise.xml', 'fixtures/wise.csv')
+        rows = json.loads(self.run_fin('transaction', 'list', '--json').stdout)
+        self.assertEqual(len(rows), 3)
+        self.assertTrue(all(r['display_name'] == 'Synthetic shop' and
+                            r['movement_type'] == 'card' and r['detail_sources'] for r in rows))
+        self.assertGreater(len({r['description'] for r in rows}), 1)
+        output = self.run_fin('transaction', 'list').stdout
+        self.assertIn('Synthetic shop', output)
+        self.assertIn('card', output)
+        decisions = self.root / 'wise-category.json'
+        decisions.write_text(json.dumps([{'event_id': rows[0]['event_id'],
+                                          'account': 'expenses:shopping', 'reason': 'Reviewed'}]))
+        self.run_fin('bank', 'categories', 'apply', decisions)
+        result = json.loads(self.run_fin('bank', 'categories', 'similar', rows[0]['event_id'],
+                                         '--json').stdout)
+        self.assertEqual(len(result['candidates']), 2)
+
+    def test_transaction_list_order_uses_timestamp_before_limit(self):
+        csv = self.root / 'times.csv'
+        csv.write_text(self.csv.read_text().replace(
+            '2026-01-02 10:00:00,2026-01-02 10:00:01,Repeated transfer,10.00,0.00,EUR,COMPLETED,160.00',
+            '2026-01-02 10:00:00,2026-01-02 10:00:01,Earlier transfer,10.00,0.00,EUR,COMPLETED,160.00').replace(
+            '2026-01-02 10:00:00,2026-01-02 10:00:01,Repeated transfer,10.00,0.00,EUR,COMPLETED,170.00',
+            '2026-01-02 11:00:00,2026-01-02 11:00:01,Later transfer,10.00,0.00,EUR,COMPLETED,170.00'))
+        self.run_fin('import', 'revolut', csv, '--account-id', 'main')
+        asc = json.loads(self.run_fin('transaction', 'list', '--json', '--order', 'asc').stdout)
+        desc = json.loads(self.run_fin('transaction', 'list', '--json', '--order', 'desc').stdout)
+        self.assertEqual([r['event_id'] for r in asc], [r['event_id'] for r in reversed(desc)])
+        self.assertEqual([r['description'] for r in asc],
+                         ['Initial deposit', 'Earlier transfer', 'Later transfer',
+                          'Transfer to another bank'])
+        first = json.loads(self.run_fin('transaction', 'list', '--json', '--order', 'asc',
+                                        '--limit', '1').stdout)
+        self.assertEqual(first, asc[:1])
+        self.assertNotEqual(self.run_fin('transaction', 'list', '--order', 'invalid',
+                                         check=False).returncode, 0)
 
     def test_welcome_and_init_show_transaction_list(self):
         self.assertIn('fin transaction list', self.run_fin().stdout)

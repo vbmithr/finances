@@ -21,6 +21,7 @@ type t =
   ; fee : Quantity.t
   ; descriptions : string list
   ; counterparty_iban : Iban.t option
+  ; movement_type : Movement_type.t option
   }
 
 let create
@@ -31,6 +32,7 @@ let create
       ~amount
       ?(fee = Quantity.zero)
       ?counterparty_iban
+      ?movement_type
       descriptions
   =
   let open Or_error.Let_syntax in
@@ -49,7 +51,9 @@ let create
       ; fee
       ; descriptions
       ; counterparty_iban
+      ; movement_type
       }
 ;;
 
 let principal t = Quantity.(t.amount + t.fee)
+let with_movement_type t movement_type = { t with movement_type }

@@ -97,6 +97,9 @@ let review rows =
         (Quantity.to_string tx.fee)
         (text (Iso4217.to_alpha_code tx.account.currency));
       let description = String.concat ~sep:" | " tx.descriptions in
+      Option.iter r.display_name ~f:(fun name -> Stdio.printf "  Name: %s\n" (text name));
+      Option.iter r.movement_type ~f:(fun kind ->
+        Stdio.printf "  Type: %s\n" (text (Movement_type.to_string kind)));
       if not (String.is_empty description) then Stdio.printf "  %s\n" (text description);
       Stdio.printf "  Classification: %s\n" (text r.counter_account);
       Option.iter r.reason ~f:(fun reason -> Stdio.printf "  Reason: %s\n" (text reason));
@@ -113,6 +116,7 @@ let transactions rows =
       ; "CURRENCY"
       ; "INSTITUTION"
       ; "ACCOUNT ID"
+      ; "TYPE"
       ; "DESCRIPTION"
       ; "EVENT"
       ]
@@ -123,7 +127,10 @@ let transactions rows =
          ; Iso4217.to_alpha_code r.transaction.account.currency
          ; r.institution
          ; row.account_id
-         ; String.concat ~sep:" | " r.transaction.descriptions
+         ; Option.value_map r.movement_type ~default:"-" ~f:Movement_type.to_string
+         ; Option.value
+             r.display_name
+             ~default:(String.concat ~sep:" | " r.transaction.descriptions)
          ; Int64.to_string r.event_id
          ]))
 ;;

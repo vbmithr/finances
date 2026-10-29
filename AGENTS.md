@@ -18,5 +18,8 @@ clocks, and Bos for high-level OS operations. Keep accounting arithmetic exact
 through Quantity's local contexts. Do not reintroduce Core, Core_unix,
 Bigdecimal or a home-grown standard-library compatibility layer.
 
+Use OCaml variants rather than strings to represent low-cardinality data. For
+open-ended domains, use an explicit extensible case for provider-specific values.
+
 Every Git commit must include a detailed body describing what changed and how
 it was verified, followed by a `Co-Authored-By:` trailer.

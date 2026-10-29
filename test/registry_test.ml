@@ -101,7 +101,7 @@ let aliases () =
   let registry = ok (Registry.create (Builtin.adapters @ [ (module Example) ])) in
   Alcotest.(check (list string))
     "registered"
-    [ "boursobank"; "boursorama" ]
+    [ "boursobank"; "boursorama"; "bourso" ]
     (Registry.aliases registry "boursobank");
   Alcotest.(check (list string))
     "external"

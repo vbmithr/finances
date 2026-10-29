@@ -13,6 +13,7 @@ type row = private
   ; payment_reference : string option
   ; merchant : string option
   ; payee : string option
+  ; details_type : string option
   ; fields : string list
   }
 

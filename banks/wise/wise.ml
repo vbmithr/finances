@@ -90,6 +90,16 @@ let companion : Companion.t =
     ~match_rows:Wise_csv.match_rows
     ~annotate:(fun row ->
       { Companion.value_on = None
+      ; display_name = row.merchant
+      ; movement_type =
+          Option.bind row.details_type ~f:(function
+            | "CARD" -> Some Movement_type.Card
+            | "TRANSFER" -> Some Transfer
+            | "CONVERSION" -> Some Conversion
+            | "DIRECT_DEBIT" -> Some Direct_debit
+            | "DEPOSIT" -> Some Deposit
+            | "UNKNOWN" -> None
+            | other -> Some (Other ("wise:" ^ other)))
       ; tags =
           List.filter_opt
             [ Some ("wise-reported-fees", Quantity.to_string row.fees)
@@ -109,6 +119,7 @@ let companion : Companion.t =
         ; "payment_reference", row.payment_reference
         ; "merchant", row.merchant
         ; "payee", row.payee
+        ; "details_type", row.details_type
         ])
 ;;
 

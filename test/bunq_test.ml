@@ -208,6 +208,30 @@ let multibank () =
        |> List.length))
 ;;
 
+let mt940_identification () =
+  memory (fun db ->
+    let wise_style =
+      "{1:F01WISESYNTHETIC}\n\
+       :20:synthetic\n\
+       :25:account\n\
+       :28C:1\n\
+       :60F:C260101EUR0,00\n\
+       :62F:C260131EUR0,00\n\
+       -\n"
+    in
+    let other = import ~institution:"wise" db "wise.mt940" wise_style in
+    Alcotest.(check bool)
+      "non-Bunq MT940 is unsupported rather than claimed by Bunq"
+      true
+      (Poly.equal other.outcome Unsupported);
+    let bunq = import ~institution:"wise" db "bunq.mt940" (mt ()) in
+    Alcotest.(check bool)
+      "actual Bunq export is rejected"
+      true
+      (Poly.equal bunq.outcome Rejected);
+    accepted (import db "bunq.mt940" (mt ())))
+;;
+
 let () =
   Alcotest.run
     "Bunq"
@@ -218,6 +242,7 @@ let () =
           ; "changed day rejects atomically", conflicts
           ; "ambiguity and account scope", ambiguity
           ; "three banks", multibank
+          ; "MT940 identification", mt940_identification
           ]
           ~f:(fun (name, f) -> Alcotest.test_case name `Quick f) )
     ]

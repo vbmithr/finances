@@ -5,7 +5,7 @@ its status: tick off finished work, add discovered work, and refresh the "Where 
 are" figures when they move. History belongs in `CHANGES.md`; designs stay in the
 other documents, which this one links to rather than repeats.
 
-Last updated: 2026-10-28.
+Last updated: 2026-10-29.
 
 ## Where we are
 
@@ -15,7 +15,7 @@ Last updated: 2026-10-28.
   companion), Bunq (MT940, CSV companion) and Revolut (CSV). Each is an adapter behind
   one registry; the kernel names no bank. Shared OFX parsing takes an explicit
   institution parameter rather than instantiating a functor.
-- Storage is schema 13: generic tables for every bank, plus each movement stored
+- Storage is schema 14: generic tables for every bank, plus each movement stored
   normalized at import, so reads are SQL queries instead of payload decoding. No
   migrations; older databases are refused unchanged.
 - Event occurrences and statement boundaries share `Temporal.t` (`Date` or
@@ -50,11 +50,11 @@ Last updated: 2026-10-28.
   `fin backup` saves one
   consistent SQLite snapshot; `fin restore BACKUP` validates and restores it,
   with overwrite confirmation and automatic removal of stale generated files.
-- 164 tests (142 OCaml cases and 22 CLI cases), plus status performance and
+- 177 tests (146 OCaml cases and 31 CLI cases), plus status performance and
   package man-page checks. Selected import changes have also been compared by
   rebuilding a personal database and diffing reports and source payloads.
 - Issue #1 is implemented locally and awaits publication.
-- The installed Arch package is `finances 0.1.0-23`; the tree also uses schema 13.
+- The installed Arch package is `finances 0.1.0-23`; the tree uses schema 14.
 
 ### Personal data
 
@@ -106,9 +106,10 @@ The import side is done; turning movements into accounting is not.
 
 - [x] Folder ingestion and account mapping.
 - [x] CSV enrichment, with ambiguous matches visible.
-- [ ] Accounting rules and review: manual reviewed categories exist, but nothing is
-  categorized yet and there are no versioned categorization rules. This is the
-  largest gap: every movement still posts to `equity:unclassified`.
+- [ ] [Classification and review](classification.md): interactive review now
+  classifies a movement and selected normalized card-merchant or description matches in one
+  confirmed batch. User tags, richer similarity, reusable rules and a possible
+  vendored Notty review interface remain to be designed and implemented.
 - [ ] Transfer matching: the review workflow exists; the 4 candidates await
   decisions. FX and split transfers are not handled.
 - [ ] Reconciliation and reporting: Wise and Bunq statements reconcile; opening

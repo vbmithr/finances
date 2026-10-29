@@ -27,10 +27,8 @@ let decode event =
     [ tx.name; tx.description ]
 ;;
 
-let probe ~filename contents =
-  if
-    Bunq_mt940.recognizes contents
-    || String.equal (Adapter_support.extension filename) ".mt940"
+let probe ~filename:_ contents =
+  if Bunq_mt940.recognizes contents
   then Some mt940
   else if Bunq_csv.recognizes contents
   then Some csv
@@ -95,6 +93,8 @@ let companion : Companion.t =
     ~match_rows:Bunq_csv.match_rows
     ~annotate:(fun row ->
       { Companion.value_on = None
+      ; display_name = None
+      ; movement_type = None
       ; tags =
           (if String.is_empty row.counterparty
            then []

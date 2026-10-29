@@ -29,6 +29,7 @@ type t = private
   ; fee : Quantity.t (** Non-negative, posted separately. *)
   ; descriptions : string list (** Free texts, in source order. *)
   ; counterparty_iban : Iban.t option
+  ; movement_type : Movement_type.t option
   }
 
 val create
@@ -39,8 +40,12 @@ val create
   -> amount:Quantity.t
   -> ?fee:Quantity.t
   -> ?counterparty_iban:Iban.t
+  -> ?movement_type:Movement_type.t
   -> string list
   -> t Or_error.t
 
 (** Transfer amount excluding the separately recorded fee. *)
 val principal : t -> Quantity.t
+
+(** Attach a type derived from the primary source at import. *)
+val with_movement_type : t -> Movement_type.t option -> t
