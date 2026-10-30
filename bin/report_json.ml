@@ -177,8 +177,19 @@ let review =
   |> field "display_name" (Jsont.option Jsont.string) (fun r -> r.display_name)
   |> field "movement_type" (Jsont.option Jsont.string) (fun r ->
     Option.map r.movement_type ~f:Movement_type.to_string)
+  |> field "imported_movement_type" (Jsont.option Jsont.string) (fun r ->
+    Option.map r.imported_movement_type ~f:Movement_type.to_string)
+  |> field "movement_type_override" (Jsont.option Jsont.string) (fun r ->
+    Option.map r.movement_type_override ~f:Movement_type.to_string)
   |> field "detail_sources" (Jsont.list Json.int64_codec) (fun r -> r.detail_sources)
   |> field "account" Jsont.string (fun r -> r.counter_account)
+  |> field "classification" Jsont.string (fun r ->
+    match r.classification with
+    | Store.Unclassified -> "unclassified"
+    | Category -> "category"
+    | Transfer -> "transfer"
+    | Settlement -> "settlement"
+    | Reversal -> "reversal")
   |> field "reason" (Jsont.option Jsont.string) (fun r -> r.reason)
   |> Jsont.Object.finish
 ;;
@@ -221,6 +232,10 @@ let transaction =
   |> field "display_name" (Jsont.option Jsont.string) (fun r -> r.review.display_name)
   |> field "movement_type" (Jsont.option Jsont.string) (fun r ->
     Option.map r.review.movement_type ~f:Movement_type.to_string)
+  |> field "imported_movement_type" (Jsont.option Jsont.string) (fun r ->
+    Option.map r.review.imported_movement_type ~f:Movement_type.to_string)
+  |> field "movement_type_override" (Jsont.option Jsont.string) (fun r ->
+    Option.map r.review.movement_type_override ~f:Movement_type.to_string)
   |> field "detail_sources" (Jsont.list Json.int64_codec) (fun r ->
     r.review.detail_sources)
   |> field "counter_account" Jsont.string (fun r -> r.review.counter_account)
@@ -232,6 +247,22 @@ let transaction =
     | Settlement -> "settlement"
     | Reversal -> "reversal")
   |> field "reason" (Jsont.option Jsont.string) (fun r -> r.review.reason)
+  |> Jsont.Object.finish
+;;
+
+let movement_type_change =
+  let field name codec (enc : Store.movement_type_history_entry -> _) map =
+    Jsont.Object.mem name codec ~enc map
+  in
+  Jsont.Object.enc_only ()
+  |> field "id" Json.int64_codec (fun r -> r.id)
+  |> field "event_id" Json.int64_codec (fun r -> r.event_id)
+  |> field "previous_type" (Jsont.option Jsont.string) (fun r ->
+    Option.map r.previous_type ~f:Movement_type.to_string)
+  |> field "movement_type" (Jsont.option Jsont.string) (fun r ->
+    Option.map r.movement_type ~f:Movement_type.to_string)
+  |> field "reason" Jsont.string (fun r -> r.reason)
+  |> field "changed_at" timestamp (fun r -> r.changed_at)
   |> Jsont.Object.finish
 ;;
 
@@ -259,11 +290,15 @@ let classification_rule =
   in
   Jsont.Object.enc_only ()
   |> field "name" Jsont.string (fun r -> r.name)
-  |> field "pattern" Jsont.string (fun r -> r.pattern)
+  |> field "pattern" (Jsont.option Jsont.string) (fun r -> r.pattern)
   |> field "institution" (Jsont.option Jsont.string) (fun r -> r.institution)
+  |> field "match_type" (Jsont.option Jsont.string) (fun r ->
+    Option.map r.match_type ~f:Classification_rule.condition_name)
   |> field "case_sensitive" Jsont.bool (fun r -> r.case_sensitive)
   |> field "action" Jsont.string (fun r -> Classification_rule.action_name r.action)
   |> field "target" Jsont.string (fun r -> Classification_rule.action_target r.action)
+  |> field "set_type" (Jsont.option Jsont.string) (fun r ->
+    Option.map (Classification_rule.action_type r.action) ~f:Movement_type.to_string)
   |> Jsont.Object.finish
 ;;
 
@@ -274,6 +309,9 @@ let classification_rule_match =
   Jsont.Object.enc_only ()
   |> field "transaction" review (fun r -> r.transaction)
   |> field "eligible" Jsont.bool (fun r -> r.eligible)
+  |> field "apply_type" Jsont.bool (fun r -> r.apply_type)
+  |> field "apply_account" Jsont.bool (fun r -> r.apply_account)
+  |> field "settlement_ledger" (Jsont.option Jsont.string) (fun r -> r.settlement_ledger)
   |> field "explanation" (Jsont.option Jsont.string) (fun r -> r.explanation)
   |> Jsont.Object.finish
 ;;

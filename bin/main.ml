@@ -1613,6 +1613,134 @@ let refresh_transaction_types_cmd =
       $ Arg.(value & flag & info [ "yes" ] ~doc:"Apply the preview without prompting."))
 ;;
 
+let transaction_type_list database =
+  with_database database (fun db ->
+    let%map provider_types = Store.observed_provider_movement_types db in
+    print_endline "Common movement types:";
+    List.iter Movement_type.common ~f:(fun (kind, description) ->
+      printf "  %-18s %s\n" (Movement_type.to_string kind) description);
+    print_endline "\nProvider-specific types in imported data:";
+    if List.is_empty provider_types
+    then print_endline "  None."
+    else List.iter provider_types ~f:(fun name -> printf "  %s\n" (Terminal.text name));
+    print_endline
+      "\nUse --type unknown with fin tx list to find movements without a type.")
+;;
+
+let transaction_type_list_cmd =
+  command
+    "list"
+    "List common and observed provider-specific movement types."
+    Term.(const transaction_type_list $ database)
+;;
+
+let transaction_type_set database event_id value =
+  let%bind kind =
+    if String.is_empty (String.strip value) || String.equal value "unknown"
+    then
+      Or_error.error_string
+        "choose a type from fin tx type list; use fin tx type reset to remove an override"
+    else Ok (Movement_type.of_string value)
+  in
+  with_database database (fun db ->
+    let%map changed =
+      Store.set_movement_type_override db ~event_id ~movement_type:(Some kind)
+    in
+    print_endline
+      (if changed
+       then "Movement type override saved."
+       else "Movement type override already set."))
+;;
+
+let transaction_type_set_cmd =
+  command
+    "set"
+    "Set a manual movement type; see fin tx type list."
+    Term.(
+      const transaction_type_set
+      $ database
+      $ Arg.(
+          required
+          & pos 0 (some int64) None
+          & info [] ~docv:"EVENT-ID" ~doc:"Transaction event ID.")
+      $ Arg.(
+          required
+          & pos 1 (some string) None
+          & info [] ~docv:"TYPE" ~doc:"Type from fin tx type list."))
+;;
+
+let transaction_type_reset database event_id =
+  with_database database (fun db ->
+    let%map changed = Store.set_movement_type_override db ~event_id ~movement_type:None in
+    print_endline
+      (if changed then "Movement type override removed." else "No movement type override."))
+;;
+
+let transaction_type_reset_cmd =
+  command
+    "reset"
+    "Remove a manual type override and use the imported type."
+    Term.(
+      const transaction_type_reset
+      $ database
+      $ Arg.(
+          required
+          & pos 0 (some int64) None
+          & info [] ~docv:"EVENT-ID" ~doc:"Transaction event ID."))
+;;
+
+let transaction_type_show database event_id =
+  with_database database (fun db ->
+    let%bind rows = Store.bank_review db in
+    let%map row =
+      List.find rows ~f:(fun r -> Int64.equal r.Store.event_id event_id)
+      |> Or_error.of_option ~error:(Error.of_string "unknown transaction event ID")
+    in
+    Terminal.review [ row ];
+    if Option.is_none row.movement_type_override
+    then print_endline "Type source: imported evidence (no manual override).")
+;;
+
+let transaction_type_show_cmd =
+  command
+    "show"
+    "Show a transaction's movement type and its source."
+    Term.(
+      const transaction_type_show
+      $ database
+      $ Arg.(
+          required
+          & pos 0 (some int64) None
+          & info [] ~docv:"EVENT-ID" ~doc:"Transaction event ID."))
+;;
+
+let transaction_type_history database json_output =
+  with_database database (fun db ->
+    let%map rows = Store.movement_type_history db in
+    if json_output
+    then Report_json.print (Jsont.list Report_json.movement_type_change) rows
+    else if List.is_empty rows
+    then print_endline "No movement type changes."
+    else
+      List.iter rows ~f:(fun (r : Store.movement_type_history_entry) ->
+        let name = Option.value_map ~default:"no override" ~f:Movement_type.to_string in
+        printf
+          "#%Ld  event #%Ld  %s -> %s  %s  %s\n"
+          r.id
+          r.event_id
+          (name r.previous_type)
+          (name r.movement_type)
+          (Timestamp.to_rfc3339 r.changed_at)
+          (Terminal.text r.reason)))
+;;
+
+let transaction_type_history_cmd =
+  command
+    "history"
+    "Show audited manual movement type changes."
+    Term.(const transaction_type_history $ database $ json_output)
+;;
+
 let institution_list database =
   List.iter (Registry.institutions Builtin.registry) ~f:(fun institution ->
     if not (String.equal institution "csv")
@@ -2255,17 +2383,86 @@ let find_rule db name =
   |> Or_error.of_option ~error:(Error.of_string ("unknown rule: " ^ name))
 ;;
 
-let rule_add database name pattern target institution case_sensitive settlement =
-  let action =
-    if settlement then Classification_rule.Settlement target else Category target
+let rule_add
+      database
+      name
+      positional_pattern
+      positional_target
+      institution
+      case_sensitive
+      settlement
+      match_type
+      set_type
+      category
+      description
+  =
+  let%bind pattern =
+    match positional_pattern, description with
+    | Some _, Some _ ->
+      Or_error.error_string
+        "provide the description either positionally or with --description"
+    | Some p, None | None, Some p -> Ok (Some p)
+    | None, None -> Ok None
+  in
+  let%bind target =
+    match positional_target, category with
+    | Some _, Some _ ->
+      Or_error.error_string "provide the category either positionally or with --category"
+    | Some c, None | None, Some c -> Ok (Some c)
+    | None, None -> Ok None
+  in
+  let parse_type = function
+    | None -> Ok None
+    | Some value when String.is_empty (String.strip value) || String.equal value "unknown"
+      -> Or_error.error_string "choose a movement type from fin tx type list"
+    | Some value -> Ok (Some (Movement_type.of_string value))
+  in
+  let%bind match_type =
+    match match_type with
+    | Some "unknown" -> Ok (Some Classification_rule.Unknown)
+    | other ->
+      let%map kind = parse_type other in
+      Option.map kind ~f:(fun kind -> Classification_rule.Is kind)
+  in
+  let%bind set_type = parse_type set_type in
+  let%bind action =
+    match settlement, target, set_type with
+    | true, Some card, None -> Ok (Classification_rule.Settlement card)
+    | true, _, _ ->
+      Or_error.error_string
+        "settlement rules require a card ID and do not set a movement type"
+    | false, Some account, Some kind ->
+      Ok (Classification_rule.Type_and_category (kind, account))
+    | false, Some account, None -> Ok (Classification_rule.Category account)
+    | false, None, Some kind -> Ok (Classification_rule.Type kind)
+    | false, None, None -> Or_error.error_string "specify --set-type, --category, or both"
   in
   let%bind rule =
-    Classification_rule.create ~name ~pattern ~institution ~case_sensitive ~action
+    Classification_rule.create
+      ~name
+      ~pattern
+      ~institution
+      ~match_type
+      ~case_sensitive
+      ~action
   in
   with_database database (fun db ->
+    let%bind observed = Store.observed_provider_movement_types db in
+    let%bind () =
+      List.filter_opt
+        [ Option.bind match_type ~f:(function
+            | Is kind -> Some kind
+            | Unknown -> None)
+        ; set_type
+        ]
+      |> List.map ~f:(function
+        | Movement_type.Other name when not (List.mem observed name ~equal:String.equal)
+          -> Or_error.error_string "unknown movement type; see fin tx type list"
+        | _ -> Ok ())
+      |> Or_error.combine_errors_unit
+    in
     let%bind () =
       match action with
-      | Category _ -> Ok ()
       | Settlement id ->
         let%bind accounts = Store.bank_account_info db in
         (match
@@ -2280,6 +2477,7 @@ let rule_add database name pattern target institution case_sensitive settlement 
          | [ _ ] -> Or_error.error_string "settlement target must be a credit card"
          | [] -> Or_error.error_string "unknown card ID; see fin account list"
          | _ -> Or_error.error_string "card ID collision; rule is refused")
+      | _ -> Ok ()
     in
     let%bind () = Store.add_classification_rule db rule in
     printf
@@ -2290,11 +2488,82 @@ let rule_add database name pattern target institution case_sensitive settlement 
 ;;
 
 let rule_add_cmd ~settlement =
+  let pattern_arg =
+    if settlement
+    then
+      Term.(
+        const Option.some
+        $ Arg.(
+            required
+            & pos 1 (some string) None
+            & info [] ~docv:"REGEX" ~doc:"Description expression."))
+    else
+      Arg.(
+        value
+        & pos 1 (some string) None
+        & info
+            []
+            ~docv:"REGEX"
+            ~doc:"Optional description expression; alternatively use --description.")
+  in
+  let target_arg =
+    if settlement
+    then
+      Term.(
+        const Option.some
+        $ Arg.(
+            required
+            & pos 2 (some string) None
+            & info [] ~docv:"CARD-ID" ~doc:"Credit card ID from fin account list."))
+    else
+      Arg.(
+        value
+        & pos 2 (some string) None
+        & info [] ~docv:"CATEGORY" ~doc:"Optional category; alternatively use --category.")
+  in
+  let set_type_arg =
+    if settlement
+    then Term.const None
+    else
+      Arg.(
+        value
+        & opt (some string) None
+        & info
+            [ "set-type" ]
+            ~docv:"TYPE"
+            ~doc:"Propose this movement type; see fin tx type list.")
+  in
+  let category_arg =
+    if settlement
+    then Term.const None
+    else
+      Arg.(
+        value
+        & opt (some string) None
+        & info
+            [ "category" ]
+            ~docv:"ACCOUNT"
+            ~doc:"Propose this expense or income account.")
+  in
+  let description_arg =
+    if settlement
+    then Term.const None
+    else
+      Arg.(
+        value
+        & opt (some string) None
+        & info
+            [ "description" ]
+            ~docv:"REGEX"
+            ~doc:
+              "Perl-style expression matched against source descriptions and display \
+               names.")
+  in
   command
     (if settlement then "add-settlement" else "add")
     (if settlement
-     then "Save a regex rule for a linked card's settlements."
-     else "Save a regex rule for an expense or income category.")
+     then "Save a rule for a linked card's settlements."
+     else "Save a rule to assign a type, category, or both.")
     Term.(
       const rule_add
       $ database
@@ -2302,34 +2571,26 @@ let rule_add_cmd ~settlement =
           required
           & pos 0 (some string) None
           & info [] ~docv:"NAME" ~doc:"Unique rule name.")
-      $ Arg.(
-          required
-          & pos 1 (some string) None
-          & info
-              []
-              ~docv:"REGEX"
-              ~doc:
-                "Perl-style regular expression searched in original descriptions and \
-                 display names. To match asterisks literally, escape each one with a \
-                 backslash.")
-      $ Arg.(
-          required
-          & pos 2 (some string) None
-          & info
-              []
-              ~docv:(if settlement then "CARD-ID" else "CATEGORY")
-              ~doc:
-                (if settlement
-                 then "Credit card ID from fin account list."
-                 else "Expense or income account, for example expenses:food."))
+      $ pattern_arg
+      $ target_arg
       $ institution_filter
       $ Arg.(
           value
           & flag
+          & info [ "case-sensitive" ] ~doc:"Match descriptions case sensitively.")
+      $ const settlement
+      $ Arg.(
+          value
+          & opt (some string) None
           & info
-              [ "case-sensitive" ]
-              ~doc:"Match case sensitively; default is ASCII case-insensitive.")
-      $ const settlement)
+              [ "match-type" ]
+              ~docv:"TYPE"
+              ~doc:
+                "Match this effective movement type, or unknown for movements without a \
+                 type.")
+      $ set_type_arg
+      $ category_arg
+      $ description_arg)
 ;;
 
 let rule_list database json_output =
@@ -2342,18 +2603,26 @@ let rule_list database json_output =
     else
       List.iter rules ~f:(fun r ->
         printf
-          "%s  %s -> %s  /%s/  %s\n"
+          "%s  %s -> %s  /%s/  %s  match-type=%s  set-type=%s\n"
           (Terminal.text r.name)
           (Classification_rule.action_name r.action)
           (Terminal.text (Classification_rule.action_target r.action))
-          (Terminal.text r.pattern)
-          (Terminal.text (Option.value r.institution ~default:"all institutions"))))
+          (Terminal.text (Option.value r.pattern ~default:"any description"))
+          (Terminal.text (Option.value r.institution ~default:"all institutions"))
+          (Option.value_map
+             r.match_type
+             ~default:"any"
+             ~f:Classification_rule.condition_name)
+          (Option.value_map
+             (Classification_rule.action_type r.action)
+             ~default:"none"
+             ~f:Movement_type.to_string)))
 ;;
 
 let rule_list_cmd =
   command
     "list"
-    "List saved regular-expression rules."
+    "List saved transaction rules."
     Term.(const rule_list $ database $ json_output)
 ;;
 
@@ -2366,17 +2635,40 @@ let print_rule_preview (rule : Classification_rule.t) matches =
     (Terminal.text (Classification_rule.action_target rule.action))
     (List.length eligible)
     (List.length skipped);
+  let show_current m =
+    Terminal.review [ m.Store.transaction ];
+    if Option.is_none m.transaction.movement_type_override
+    then print_endline "  Type source: imported evidence (no manual override)."
+  in
   if not (List.is_empty eligible)
   then (
     print_endline "Eligible matches:";
-    Terminal.review (List.map eligible ~f:(fun m -> m.Store.transaction)));
+    List.iter eligible ~f:(fun m ->
+      show_current m;
+      if m.apply_type
+      then
+        Option.iter (Classification_rule.action_type rule.action) ~f:(fun kind ->
+          printf "  Proposed type: %s\n" (Movement_type.to_string kind));
+      if m.apply_account
+      then
+        printf
+          "  Proposed %s: %s\n"
+          (match rule.action with
+           | Settlement _ -> "settlement"
+           | _ -> "category")
+          (Terminal.text (Classification_rule.action_target rule.action));
+      Option.iter m.settlement_ledger ~f:(fun ledger ->
+        if m.apply_account then printf "  Settlement account: %s\n" (Terminal.text ledger));
+      Option.iter m.explanation ~f:(fun reason ->
+        printf "  Skipped action: %s\n" (Terminal.text reason));
+      print_endline ""));
   if not (List.is_empty skipped)
   then (
     print_endline "Skipped matches:";
     List.iter skipped ~f:(fun m ->
+      show_current m;
       printf
-        "  #%Ld: %s\n"
-        m.Store.transaction.event_id
+        "  Skipped: %s\n\n"
         (Terminal.text (Option.value m.explanation ~default:"ineligible"))))
 ;;
 
@@ -2408,11 +2700,8 @@ let rule_apply database name yes =
     let%bind rule = find_rule db name in
     let%bind matches = Store.preview_classification_rule db rule in
     print_rule_preview rule matches;
-    let ids =
-      List.filter_map matches ~f:(fun m ->
-        Option.some_if m.Store.eligible m.transaction.event_id)
-    in
-    if List.is_empty ids
+    let selected = List.filter matches ~f:(fun m -> m.Store.eligible) in
+    if List.is_empty selected
     then (
       print_endline "Nothing to apply.";
       Ok ())
@@ -2434,9 +2723,7 @@ let rule_apply database name yes =
         print_endline "Nothing changed.";
         Ok ())
       else (
-        let%bind changed =
-          Store.apply_classification_rule db ~expected:rule ~event_ids:ids
-        in
+        let%bind changed = Store.apply_classification_rule db ~expected:rule ~selected in
         printf "rule_changes=%d\n" changed;
         Ok ())))
 ;;
@@ -3639,7 +3926,7 @@ let () =
               ]
           ; group
               "rule"
-              "Manage preview-only regular-expression rules."
+              "Manage previewed transaction rules."
               [ rule_list_cmd
               ; rule_add_cmd ~settlement:false
               ; rule_add_cmd ~settlement:true
@@ -3669,6 +3956,15 @@ let () =
               "Inspect and classify imported transactions."
               [ transaction_list_cmd
               ; refresh_transaction_types_cmd
+              ; group
+                  "type"
+                  "Inspect and override transaction movement types."
+                  [ transaction_type_list_cmd
+                  ; transaction_type_show_cmd
+                  ; transaction_type_set_cmd
+                  ; transaction_type_reset_cmd
+                  ; transaction_type_history_cmd
+                  ]
               ; bank_review_cmd
               ; group
                   "category"

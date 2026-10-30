@@ -12,7 +12,9 @@ type t =
   | Interest
   | Fee
   | Cheque
+  | Bonus
   | Other of string
 
 val to_string : t -> string
 val of_string : string -> t
+val common : (t * string) list

@@ -195,6 +195,8 @@ type bank_review =
   ; transaction : Movement.t
   ; display_name : string option
   ; movement_type : Movement_type.t option
+  ; imported_movement_type : Movement_type.t option
+  ; movement_type_override : Movement_type.t option
   ; detail_sources : int64 list
   ; classification : review_classification
   ; counter_account : string
@@ -202,6 +204,24 @@ type bank_review =
   }
 
 val bank_review : t -> bank_review list Or_error.t
+val observed_provider_movement_types : t -> string list Or_error.t
+
+val set_movement_type_override
+  :  t
+  -> event_id:int64
+  -> movement_type:Movement_type.t option
+  -> bool Or_error.t
+
+type movement_type_history_entry =
+  { id : int64
+  ; event_id : int64
+  ; previous_type : Movement_type.t option
+  ; movement_type : Movement_type.t option
+  ; reason : string
+  ; changed_at : Ptime.t
+  }
+
+val movement_type_history : t -> movement_type_history_entry list Or_error.t
 
 type reversal_candidate =
   { original : bank_review
@@ -355,6 +375,9 @@ val card_settlement_history : t -> card_settlement_change list Or_error.t
 type classification_rule_match =
   { transaction : bank_review
   ; eligible : bool
+  ; apply_type : bool
+  ; apply_account : bool
+  ; settlement_ledger : string option
   ; explanation : string option
   }
 
@@ -367,7 +390,7 @@ val preview_classification_rule
 val apply_classification_rule
   :  t
   -> expected:Classification_rule.t
-  -> event_ids:int64 list
+  -> selected:classification_rule_match list
   -> int Or_error.t
 
 (** Account information, movement count, unclassified count and candidate count.

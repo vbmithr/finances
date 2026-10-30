@@ -112,6 +112,14 @@ let review rows =
       Option.iter r.display_name ~f:(fun name -> Stdio.printf "  Name: %s\n" (text name));
       Option.iter r.movement_type ~f:(fun kind ->
         Stdio.printf "  Type: %s\n" (text (Movement_type.to_string kind)));
+      Option.iter r.movement_type_override ~f:(fun _ ->
+        Stdio.printf
+          "  Type source: manual override; imported type: %s\n"
+          (text
+             (Option.value_map
+                r.imported_movement_type
+                ~default:"unknown"
+                ~f:Movement_type.to_string)));
       if not (String.is_empty description) then Stdio.printf "  %s\n" (text description);
       Stdio.printf "  Classification: %s\n" (text r.counter_account);
       Option.iter r.reason ~f:(fun reason -> Stdio.printf "  Reason: %s\n" (text reason));

@@ -290,7 +290,7 @@ or `Date of Date.t`.
 The `events` command prints an RFC 3339 `occurred_at` for instants, or
 `occurred_at: null` and a populated `occurred_on` for date-only OFX records.
 Wise records retain an instant and project using the local booking date.
-This experimental build supports only the current schema baseline (18). Fresh
+This experimental build supports only the current schema baseline (20). Fresh
 files initialize it atomically; other schema versions are rejected without changes.
 There are no historical migrations or schema fixtures. Reimport original statements
 and import exported account settings when resetting an experiment. Category and
@@ -527,6 +527,9 @@ classification. Terminal output uses `$PAGER` (default `less -FRX`); redirected
 and JSON output is not paged.
 Filter by movement type or accounting decision with, for example,
 `fin tx list --type interest` or `fin tx list --classification settlement`.
+Use `fin tx type list` to see available movement types, then run
+`fin tx type set EVENT-ID TYPE` to record a manual override. The imported type
+remains available, and `fin tx type reset EVENT-ID` removes the override.
 After importer improvements, `fin transaction refresh-types` previews updates
 to stored movement types and asks before applying them, without changing accounting
 decisions.
@@ -587,10 +590,11 @@ and source evidence remain intact. An invalid or conflicting decision rejects th
 whole batch. Each generated journal includes the latest decision ID and reason as
 tags. `transaction category apply` changes SQLite; regenerate the journal to publish it.
 
-Saved regex rules also support explicit preview and batch classification:
+Saved rules also support explicit preview and batch classification:
 `fin rule add cafes 'coffee|café' expenses:food`, then `fin rule preview cafes`
-and `fin rule apply cafes`. They can also record linked-card settlements; see the
-[manual](docs/manual.md#regular-expression-rules). Rules never run automatically
+and `fin rule apply cafes`. Rules can also match effective movement types and
+propose type overrides, categories or linked-card settlements; see the
+[manual](docs/manual.md#transaction-rules). Rules never run automatically
 on import. Bank CSV categories remain suggestions; split allocations are future work. Explicit
 owned-account transfer review is available below. Do not classify transfers as income or spending
 merely to remove them from the review queue.

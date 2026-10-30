@@ -151,7 +151,7 @@ skips the question; without a terminal and without `--yes` it refuses.
 
 ### Rebuilding after a schema change
 
-This experimental release accepts schema version 18; it does not migrate older
+This experimental release accepts schema version 20; it does not migrate older
 databases and refuses them without changing the file. Before upgrading to a new
 schema, use the **old fin executable** to export account settings and save a
 full backup. Save the transaction list and review histories as reference when
@@ -163,8 +163,13 @@ fin backup ~/fin-backups
 fin transaction list --json > ~/fin-transactions-before-rebuild.json
 fin transaction category history > ~/fin-categories-before-rebuild.json
 fin transfer history > ~/fin-transfers-before-rebuild.json
-fin delete
 ```
+
+Also save `fin settlement history`, `fin rule list --json`,
+`fin tx type history --json` and `fin reversal history` when those commands are
+available in the old executable.
+
+Then run `fin delete` with the old executable.
 
 Keep the old executable if you may need to inspect or restore the old backup;
 the new executable cannot open or restore a database from a different schema.
@@ -186,8 +191,8 @@ restoring a database of the same schema version; an account snapshot is for
 restoring settings into a rebuilt database.
 Generic CSV institutions must be added again and files reimported with their
 original institution and account labels; configure their CSV profiles again.
-Review decisions are
-not included in the account snapshot. Their event IDs are database-specific, so
+Rules, type overrides and review decisions are not included in the account
+snapshot and must be recreated. Their event IDs are database-specific, so
 use the saved transaction list and histories to identify the new transactions
 and recreate decisions; do not blindly reuse old IDs. A backup preserves the old
 decisions, but cannot transfer them to the new schema.
@@ -672,6 +677,26 @@ includes the original `description`, optional `display_name` and `movement_type`
 and `detail_sources` companion row IDs, which can be inspected with
 `fin statement companions`. Provider-specific types are prefixed with the provider
 name. A reported transfer type does not confirm a transfer between your accounts.
+
+To list types and correct an individual movement's type:
+
+```sh
+fin tx type list
+fin tx type show EVENT-ID
+fin tx type set EVENT-ID fee
+fin tx type set EVENT-ID bonus
+fin tx type history
+fin tx type reset EVENT-ID
+```
+
+`type list` shows common types and provider-specific types observed in imported
+data; use one of those values with `type set`. `unknown` is a list filter, not a
+type. Manual types are overrides: they do not change the source movement or its
+accounting classification, survive reimports and `refresh-types`, and take
+precedence over imported and companion types. `type show` and transaction-list
+JSON expose the imported type and any override. `type reset` removes the override
+and returns to the imported type. The append-only history records changes;
+`fin tx type history --json` is available for scripts.
 On import, fin determines BoursoBank movement types from explicit leading OFX
 description words: `PAIEMENT CARTE` and `AVOIR` (card refunds), `CARTE` on a card account, `VIR` or
 `VIREMENT`, `PRLV` or `PRELEVEMENT`, `RETRAIT` and `ANNUL RETRAIT DAB`. Other descriptions remain
@@ -700,9 +725,12 @@ from matched companion files are separate and are not changed by this command.
 Use `fin transaction review` for unclassified items and hledger
 for accounting reports and running balances.
 
-## Regular-expression rules
+## Transaction rules
 
-Rules let you reuse a classification without silently changing imported data.
+Rules let you reuse type and classification decisions without silently changing
+imported data. Conditions can match an institution, a description expression, an
+effective movement type, or a combination; all supplied conditions must match.
+The effective type includes a manual override when one exists.
 Create a rule, inspect its matches, then apply it explicitly:
 
 ```sh
@@ -711,6 +739,35 @@ fin rule preview cafes
 fin rule apply cafes
 fin rule list
 ```
+
+For Wise balance cashback, propose a type and an income account together:
+
+```sh
+fin rule add wise-cashback --institution wise --description '^Cashback$' \
+  --set-type interest --category income:interest:wise
+fin rule preview wise-cashback
+fin rule apply wise-cashback
+```
+
+To categorize movements already typed as interest, regardless of description:
+
+```sh
+fin rule add interest-income --match-type interest --category income:interest
+fin rule preview interest-income
+fin rule apply interest-income
+```
+
+An action can set a type, a category, or both; `--set-type` and `--match-type`
+accept the common or observed provider-specific types from `fin tx type list`.
+An institution, description or type condition is required. When both a type and
+category are proposed, each is assessed separately. Existing manual type overrides
+and reviewed accounting decisions are not overwritten: the preview explains any
+skipped action, while another eligible action on the same transaction can still
+be applied. A type already matching the proposal does not create a redundant
+override. Use `fin tx type reset` or the relevant accounting review workflow to
+change an earlier decision explicitly.
+Use `--match-type unknown` to select movements without an effective type;
+`unknown` cannot be used as a `--set-type` value.
 
 The expression uses Perl-style regular-expression syntax and is searched in
 the display name and each original description field. Matching ignores ASCII
@@ -729,15 +786,16 @@ fin rule preview card-payment
 fin rule apply card-payment
 ```
 
-The preview lists eligible matches and explains skipped ones. Previously reviewed
-transactions are not overwritten. Settlement matches must be debits from the
+The preview shows current type and classification, type provenance, proposed
+actions and skipped actions. JSON includes `apply_type` and `apply_account` for
+each match. Previously reviewed decisions are not overwritten. Settlement matches must be debits from the
 linked account in the card's currency, with a configured card liability; possible
 matching card-side payments are skipped to avoid recording a settlement twice.
 Application previews all eligible matches, asks for confirmation, and records
 the batch atomically. If the rule or eligibility changes while you review it,
 the batch is refused. Rules do not run automatically on import: preview and apply
 them again for new transactions. The decision history records the rule and
-expression. Use `fin rule rename OLD-NAME NEW-NAME` to rename a rule; existing
+expression in accounting and type history. Use `fin rule rename OLD-NAME NEW-NAME` to rename a rule; existing
 decisions retain the name recorded when they were made. Use `fin rule delete NAME` to remove a rule without undoing its
 decisions. `fin rule list --json` and `fin rule preview NAME --json` provide
 machine-readable output; `--yes` skips the confirmation for apply and delete.
@@ -768,7 +826,7 @@ belongs to hledger; `fin` tracks import evidence, account identity and review st
 ## Library and dependency changes
 
 This build uses Base, decimal, Ptime and Bos, with no Core or Bigdecimal
-dependency. Version 1 account snapshots remain compatible; databases use schema 18 and
+dependency. Version 1 account snapshots remain compatible; databases use schema 20 and
 are rebuilt from the original statements (see above).
 
 OCaml callers use `Quantity.t` (a `Decimal.t` alias) and `Date.t` (a `Ptime.date`

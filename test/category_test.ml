@@ -223,10 +223,11 @@ let rule_batch_is_atomic () =
       ok
         (Classification_rule.create
            ~name:"all"
-           ~pattern:"."
+           ~pattern:(Some ".")
            ~institution:None
+           ~match_type:None
            ~case_sensitive:false
-           ~action:(Category "expenses:food"))
+           ~action:(Type_and_category (Movement_type.Interest, "expenses:food")))
     in
     ok (Store.add_classification_rule db rule);
     let matches = ok (Store.preview_classification_rule db rule) in
@@ -238,24 +239,36 @@ let rule_batch_is_atomic () =
     let first = List.hd_exn ids
     and last = List.last_exn ids in
     ignore (classify db [ decision last "expenses:existing" ]);
-    error (Store.apply_classification_rule db ~expected:rule ~event_ids:ids);
+    error
+      (Store.apply_classification_rule
+         db
+         ~expected:rule
+         ~selected:(List.filter matches ~f:(fun m -> m.Store.eligible)));
     Alcotest.(check string)
       "no partial classification"
       "equity:unclassified"
       (account db first);
     check "no partial audit" 1 (List.length (ok (Store.bank_category_history db)));
+    check "no partial type changes" 0 (List.length (ok (Store.movement_type_history db)));
     ok (Store.delete_classification_rule db rule.name);
     let replacement =
       ok
         (Classification_rule.create
            ~name:"all"
-           ~pattern:"C"
+           ~pattern:(Some "C")
            ~institution:None
+           ~match_type:None
            ~case_sensitive:false
            ~action:(Category "expenses:food"))
     in
     ok (Store.add_classification_rule db replacement);
-    error (Store.apply_classification_rule db ~expected:rule ~event_ids:[ first ]);
+    error
+      (Store.apply_classification_rule
+         db
+         ~expected:rule
+         ~selected:
+           (List.filter matches ~f:(fun m ->
+              Int64.equal m.Store.transaction.event_id first)));
     Alcotest.(check string)
       "changed rule is refused"
       "equity:unclassified"
@@ -285,6 +298,8 @@ let similarity () =
     ; transaction = movement description
     ; display_name = None
     ; movement_type = None
+    ; imported_movement_type = None
+    ; movement_type_override = None
     ; detail_sources = []
     ; classification = Unclassified
     ; counter_account

@@ -3,7 +3,7 @@ open Rel
 
 (** One current experimental baseline; older databases must be reimported. Banks
     have no tables of their own. *)
-let version = 18
+let version = 20
 
 let timestamp = `Expr "(strftime('%Y-%m-%dT%H:%M:%f','now') || '000000000Z')"
 
@@ -1755,34 +1755,61 @@ end
 module Classification_rules = struct
   type t =
     { name : string
-    ; pattern : string
+    ; pattern : string option
     ; institution : string option
+    ; match_type : string option
     ; case_mode : string
     ; action_kind : string
     ; target : string
+    ; action_type : string option
     }
 
   let name = Col.make "name" Type.text (fun (r : t) -> r.name)
-  let pattern = Col.make "pattern" Type.text (fun (r : t) -> r.pattern)
+  let pattern = Col.make "pattern" Type.(option text) (fun (r : t) -> r.pattern)
 
   let institution =
     Col.make "institution" Type.(option text) (fun (r : t) -> r.institution)
   ;;
 
   let case_mode = Col.make "case_mode" Type.text (fun (r : t) -> r.case_mode)
+  let match_type = Col.make "match_type" Type.(option text) (fun (r : t) -> r.match_type)
   let action_kind = Col.make "action_kind" Type.text (fun (r : t) -> r.action_kind)
   let target = Col.make "target" Type.text (fun (r : t) -> r.target)
 
+  let action_type =
+    Col.make "action_type" Type.(option text) (fun (r : t) -> r.action_type)
+  ;;
+
   let row =
     Row.(
-      unit (fun name pattern institution case_mode action_kind target ->
-        { name; pattern; institution; case_mode; action_kind; target })
+      unit
+        (fun
+            name
+             pattern
+             institution
+             match_type
+             case_mode
+             action_kind
+             target
+             action_type
+           ->
+           { name
+           ; pattern
+           ; institution
+           ; match_type
+           ; case_mode
+           ; action_kind
+           ; target
+           ; action_type
+           })
       * name
       * pattern
       * institution
+      * match_type
       * case_mode
       * action_kind
-      * target)
+      * target
+      * action_type)
   ;;
 
   let table =
@@ -1797,7 +1824,7 @@ module Classification_rules = struct
       ~checks:
         Sqlite_schema.Check.
           [ one_of case_mode [ "sensitive"; "insensitive" ]
-          ; one_of action_kind [ "category"; "settlement" ]
+          ; one_of action_kind [ "category"; "settlement"; "type"; "type-category" ]
           ]
       table
   ;;
@@ -1908,6 +1935,97 @@ module Reversal_changes = struct
   ;;
 end
 
+module Movement_type_overrides = struct
+  type t =
+    { event_id : int64
+    ; movement_type : string
+    }
+
+  let event_id = Col.make "event_id" Type.int64 (fun (r : t) -> r.event_id)
+  let movement_type = Col.make "movement_type" Type.text (fun (r : t) -> r.movement_type)
+
+  let row =
+    Row.(
+      unit (fun event_id movement_type -> { event_id; movement_type })
+      * event_id
+      * movement_type)
+  ;;
+
+  let table =
+    Table.make
+      ~primary_key:(Table.Primary_key.make [ Col.Def event_id ])
+      ~foreign_keys:
+        [ Table.Foreign_key.make
+            ~cols:[ Col.Def event_id ]
+            ~parent:
+              (Table.Foreign_key.Table (Source_events.table, [ Col.Def Source_events.id ]))
+            ()
+        ]
+      "movement_type_overrides"
+      row
+  ;;
+
+  let definition = Sqlite_schema.table table
+end
+
+module Movement_type_changes = struct
+  type t =
+    { id : int64
+    ; event_id : int64
+    ; previous_type : string option
+    ; movement_type : string option
+    ; reason : string
+    ; changed_at : Ptime.t
+    }
+
+  let id = Col.make "id" Type.int64 (fun (r : t) -> r.id)
+  let event_id = Col.make "event_id" Type.int64 (fun (r : t) -> r.event_id)
+
+  let previous_type =
+    Col.make "previous_type" Type.(option text) (fun (r : t) -> r.previous_type)
+  ;;
+
+  let movement_type =
+    Col.make "movement_type" Type.(option text) (fun (r : t) -> r.movement_type)
+  ;;
+
+  let changed_at =
+    Col.make ~default:timestamp "changed_at" instant (fun (r : t) -> r.changed_at)
+  ;;
+
+  let reason = Col.make "reason" Type.text (fun (r : t) -> r.reason)
+
+  let row =
+    Row.(
+      unit (fun id event_id previous_type movement_type reason changed_at ->
+        { id; event_id; previous_type; movement_type; reason; changed_at })
+      * id
+      * event_id
+      * previous_type
+      * movement_type
+      * reason
+      * changed_at)
+  ;;
+
+  let table =
+    Table.make
+      ~primary_key:(Table.Primary_key.make [ Col.Def id ])
+      ~foreign_keys:
+        [ Table.Foreign_key.make
+            ~cols:[ Col.Def event_id ]
+            ~parent:
+              (Table.Foreign_key.Table (Source_events.table, [ Col.Def Source_events.id ]))
+            ()
+        ]
+      "movement_type_changes"
+      row
+  ;;
+
+  let definition =
+    Sqlite_schema.table ~immutable:"movement type history is append-only" table
+  ;;
+end
+
 let definitions =
   [ Source_events.definition
   ; Movements.definition
@@ -1940,6 +2058,8 @@ let definitions =
   ; Classification_rules.definition
   ; Reversal_pairs.definition
   ; Reversal_changes.definition
+  ; Movement_type_overrides.definition
+  ; Movement_type_changes.definition
   ]
 ;;
 

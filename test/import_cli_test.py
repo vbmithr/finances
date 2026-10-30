@@ -353,6 +353,73 @@ class ImportOnboarding(unittest.TestCase):
         self.assertEqual(len(json.loads(self.run_fin('tx', 'list', '--classification', 'unclassified', '--json').stdout)), 3)
         self.assertNotEqual(self.run_fin('tx', 'list', '--classification', 'invalid', check=False).returncode, 0)
 
+    def test_manual_movement_types_and_history(self):
+        self.run_fin('import', 'boursobank', 'fixtures/bank.ofx')
+        rows = json.loads(self.run_fin('tx', 'list', '--json').stdout)
+        event = rows[0]['event_id']
+        decisions = self.root / 'type-classification.json'
+        decisions.write_text(json.dumps([{'event_id': event, 'account': 'expenses:shopping', 'reason': 'Reviewed'}]))
+        self.run_fin('transaction', 'category', 'apply', decisions)
+        before = next(r for r in json.loads(self.run_fin('tx', 'list', '--json').stdout) if r['event_id'] == event)
+        journal = self.run_fin('journal', 'export').stdout
+        listing = self.run_fin('tx', 'type', 'list').stdout
+        self.assertIn('bonus', listing)
+        self.assertIn('fee', listing)
+        self.assertNotEqual(self.run_fin('tx', 'type', 'set', event, 'unknown', check=False).returncode, 0)
+        self.assertNotEqual(self.run_fin('tx', 'type', 'set', event, 'made-up', check=False).returncode, 0)
+        self.assertNotEqual(self.run_fin('tx', 'type', 'set', '9999999', 'bonus', check=False).returncode, 0)
+        self.run_fin('tx', 'type', 'set', event, 'bonus')
+        self.run_fin('tx', 'type', 'set', event, 'bonus')
+        row = next(r for r in json.loads(self.run_fin('tx', 'list', '--json').stdout) if r['event_id'] == event)
+        self.assertEqual(row['movement_type'], 'bonus')
+        self.assertEqual(row['imported_movement_type'], before['movement_type'])
+        self.assertEqual(row['movement_type_override'], 'bonus')
+        self.assertEqual(row['classification'], before['classification'])
+        self.assertEqual(self.run_fin('journal', 'export').stdout, journal)
+        self.assertIn('manual override', self.run_fin('tx', 'type', 'show', event).stdout)
+        self.assertEqual([r['event_id'] for r in json.loads(self.run_fin('tx', 'list', '--type', 'bonus', '--json').stdout)], [event])
+        self.run_fin('import', 'boursobank', 'fixtures/bank.ofx')
+        with sqlite3.connect(self.root / 'data/fin/fin.sqlite3') as db:
+            trigger = db.execute("SELECT sql FROM sqlite_schema WHERE name='movements_no_update'").fetchone()[0]
+            db.execute('DROP TRIGGER movements_no_update')
+            db.execute("UPDATE movements SET movement_type='fee' WHERE event_id=?", (event,))
+            db.execute(trigger)
+        self.assertIn('movement_types_changed=1', self.run_fin('tx', 'refresh-types', '--yes').stdout)
+        row = next(r for r in json.loads(self.run_fin('tx', 'list', '--json').stdout) if r['event_id'] == event)
+        self.assertEqual(row['movement_type_override'], 'bonus')
+        self.run_fin('tx', 'type', 'set', event, 'fee')
+        self.run_fin('tx', 'type', 'reset', event)
+        self.run_fin('tx', 'type', 'reset', event)
+        row = next(r for r in json.loads(self.run_fin('tx', 'list', '--json').stdout) if r['event_id'] == event)
+        self.assertEqual(row['movement_type'], before['movement_type'])
+        self.assertIsNone(row['movement_type_override'])
+        history = json.loads(self.run_fin('tx', 'type', 'history', '--json').stdout)
+        self.assertEqual([(r['previous_type'], r['movement_type']) for r in history],
+                         [(None, 'bonus'), ('bonus', 'fee'), ('fee', None)])
+        self.assertTrue(all(r['event_id'] == event for r in history))
+
+    def test_type_history_is_removed_with_account(self):
+        self.run_fin('import', 'revolut', self.csv, '--account-id', 'main')
+        row = json.loads(self.run_fin('tx', 'list', '--json').stdout)[0]
+        self.run_fin('tx', 'type', 'set', row['event_id'], 'bonus')
+        self.assertEqual(len(json.loads(self.run_fin('tx', 'type', 'history', '--json').stdout)), 1)
+        self.run_fin('account', 'delete', row['account_id'], '--yes')
+        self.assertEqual(json.loads(self.run_fin('tx', 'type', 'history', '--json').stdout), [])
+
+    def test_type_list_includes_observed_provider_types(self):
+        self.run_fin('import', 'boursobank', 'fixtures/bank.ofx')
+        rows = json.loads(self.run_fin('tx', 'list', '--json').stdout)
+        source, target = rows[0]['event_id'], rows[1]['event_id']
+        with sqlite3.connect(self.root / 'data/fin/fin.sqlite3') as db:
+            trigger = db.execute("SELECT sql FROM sqlite_schema WHERE name='movements_no_update'").fetchone()[0]
+            db.execute('DROP TRIGGER movements_no_update')
+            db.execute("UPDATE movements SET movement_type='example:reported' WHERE event_id=?", (source,))
+            db.execute(trigger)
+        self.assertIn('example:reported', self.run_fin('tx', 'type', 'list').stdout)
+        self.run_fin('tx', 'type', 'set', target, 'example:reported')
+        matches = json.loads(self.run_fin('tx', 'list', '--type', 'example:reported', '--json').stdout)
+        self.assertEqual({r['event_id'] for r in matches}, {source, target})
+
     def test_institution_list_reports_builtin_and_added(self):
         self.run_fin('institution', 'add', 'provider')
         result = self.run_fin('institution', 'list').stdout
@@ -669,6 +736,63 @@ class ImportOnboarding(unittest.TestCase):
         self.assertIn('rule_changes=1', self.run_fin('rule', 'apply', 'renamed', '--yes').stdout)
         self.run_fin('rule', 'delete', 'renamed', '--yes')
         self.assertEqual(len(json.loads(self.run_fin('transaction', 'category', 'history').stdout)), 3)
+
+    def test_rule_type_and_category_actions_are_independent(self):
+        self.run_fin('import', 'revolut', self.csv, '--account-id', 'main')
+        later = self.root / 'rule-extra.csv'
+        later.write_text('Type,Product,Started Date,Completed Date,Description,Amount,Fee,Currency,State,Balance\n'
+                         'Transfer,Current,2026-01-04 10:00:00,2026-01-04 10:00:01,Repeated transfer,10.00,0.00,EUR,COMPLETED,79.50\n')
+        self.run_fin('import', 'revolut', later, '--account-id', 'main')
+        rows = json.loads(self.run_fin('tx', 'list', '--search', 'Repeated transfer', '--json').stdout)
+        manual, categorized, fresh = [r['event_id'] for r in rows]
+        self.run_fin('tx', 'type', 'set', manual, 'bonus')
+        decisions = self.root / 'rule-existing.json'
+        decisions.write_text(json.dumps([{'event_id': categorized, 'account': 'expenses:shopping', 'reason': 'Already checked'}]))
+        self.run_fin('tx', 'category', 'apply', decisions)
+        self.run_fin('rule', 'add', 'wise-example', '--institution', 'revolut', '--description', '^Repeated transfer$',
+                     '--set-type', 'interest', '--category', 'income:interest:wise')
+        preview = json.loads(self.run_fin('rule', 'preview', 'wise-example', '--json').stdout)
+        by_id = {r['transaction']['event_id']: r for r in preview}
+        self.assertEqual((by_id[manual]['apply_type'], by_id[manual]['apply_account']), (False, True))
+        self.assertEqual((by_id[categorized]['apply_type'], by_id[categorized]['apply_account']), (True, False))
+        self.assertEqual((by_id[fresh]['apply_type'], by_id[fresh]['apply_account']), (True, True))
+        output = self.terminal(['rule', 'apply', 'wise-example'], [('Apply to these transactions?', 'n')])
+        self.assertIn('Nothing changed.', output)
+        self.assertIn('rule_changes=3', self.run_fin('rule', 'apply', 'wise-example', '--yes').stdout)
+        rows = {r['event_id']: r for r in json.loads(self.run_fin('tx', 'list', '--search', 'Repeated transfer', '--json').stdout)}
+        self.assertEqual((rows[manual]['movement_type'], rows[manual]['counter_account']), ('bonus', 'income:interest:wise'))
+        self.assertEqual((rows[categorized]['movement_type'], rows[categorized]['counter_account']), ('interest', 'expenses:shopping'))
+        self.assertEqual((rows[fresh]['movement_type'], rows[fresh]['counter_account']), ('interest', 'income:interest:wise'))
+        history = json.loads(self.run_fin('tx', 'type', 'history', '--json').stdout)
+        self.assertEqual(sum('Rule wise-example' in r['reason'] for r in history), 2)
+        self.run_fin('rule', 'add', 'interest-any', '--match-type', 'interest', '--category', 'income:interest')
+        preview = json.loads(self.run_fin('rule', 'preview', 'interest-any', '--json').stdout)
+        self.assertEqual({r['transaction']['event_id'] for r in preview}, {categorized, fresh})
+        self.assertTrue(all(not r['eligible'] for r in preview))
+        self.run_fin('rule', 'add', 'type-only', '--description', '^Initial deposit$', '--set-type', 'interest')
+        self.assertIn('rule_changes=1', self.run_fin('rule', 'apply', 'type-only', '--yes').stdout)
+        self.assertIn('Nothing to apply.', self.run_fin('rule', 'apply', 'type-only', '--yes').stdout)
+        preview = json.loads(self.run_fin('rule', 'preview', 'interest-any', '--json').stdout)
+        self.assertEqual(sum(r['eligible'] for r in preview), 1)
+        self.assertIn('rule_changes=1', self.run_fin('rule', 'apply', 'interest-any', '--yes').stdout)
+        future = self.root / 'rule-future.csv'
+        future.write_text('Type,Product,Started Date,Completed Date,Description,Amount,Fee,Currency,State,Balance\n'
+                          'Transfer,Current,2026-01-05 10:00:00,2026-01-05 10:00:01,Repeated transfer,10.00,0.00,EUR,COMPLETED,89.50\n')
+        self.run_fin('import', 'revolut', future, '--account-id', 'main')
+        new_row = next(r for r in json.loads(self.run_fin('tx', 'list', '--json').stdout) if r['booked_on'] == '2026-01-05')
+        self.assertIsNone(new_row['movement_type'])
+        self.assertEqual(new_row['classification'], 'unclassified')
+        self.assertEqual(sum(r['eligible'] for r in json.loads(self.run_fin('rule', 'preview', 'wise-example', '--json').stdout)), 1)
+        self.run_fin('rule', 'add', 'untyped', '--match-type', 'unknown', '--set-type', 'bonus')
+        untyped = json.loads(self.run_fin('rule', 'preview', 'untyped', '--json').stdout)
+        self.assertTrue(untyped)
+        self.assertTrue(all(r['transaction']['movement_type'] is None for r in untyped))
+        self.assertEqual(next(r for r in json.loads(self.run_fin('rule', 'list', '--json').stdout) if r['name'] == 'untyped')['match_type'], 'unknown')
+        self.run_fin('rule', 'add', 'institution-only', '--institution', 'revolut', '--category', 'expenses:misc')
+        self.assertEqual(len(json.loads(self.run_fin('rule', 'preview', 'institution-only', '--json').stdout)), 6)
+        self.assertNotEqual(self.run_fin('rule', 'add', 'no-condition', '--set-type', 'interest', check=False).returncode, 0)
+        self.assertNotEqual(self.run_fin('rule', 'add', 'no-action', '--match-type', 'interest', check=False).returncode, 0)
+        self.assertNotEqual(self.run_fin('rule', 'add', 'unknown-type', '--match-type', 'interest', '--set-type', 'unknown', check=False).returncode, 0)
 
     def test_regex_settlement_rule_preview_and_apply(self):
         ofx = self.root / 'rule-settlement.ofx'

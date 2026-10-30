@@ -10,6 +10,19 @@ short line of their own.
 
 ### 2026-10-30
 
+- Extend previewed rules with optional effective-type conditions and movement
+  type actions, independently or alongside category decisions. Preserve reviewed
+  overrides and classifications, and record type decisions in audited history.
+  **Action required:** schema 20 requires rebuilding the database; use the old
+  executable to back up and export settings before upgrading, then inspect and
+  recreate review decisions and rules.
+
+- Add `bonus` and `fin tx type list`, `show`, `set`, `reset` and `history`.
+  Manual type overrides are audited, preserve imported evidence and accounting
+  classifications, and survive reimports and type refreshes. **Action required:**
+  schema 20 requires rebuilding the database; back up and export account settings
+  with the old executable, then inspect and recreate review decisions.
+
 - Replace the copied Notty sources with a pinned Git submodule tracking a fork
   with its upstream history and OCaml compatibility fix. **Action required:**
   initialize submodules before building from a Git checkout.
@@ -23,7 +36,7 @@ short line of their own.
 
 - Add full ATM withdrawal reversal candidates, review, undo and audit history.
   BoursoBank `ANNUL RETRAIT DAB` movements receive a `withdrawal` type.
-  **Action required:** schema 18 requires rebuilding the database; back up and
+  **Action required:** schema 20 requires rebuilding the database; back up and
   export settings with the old executable before upgrading. Review decisions
   need to be inspected and recreated after reimport; see the manual.
 
@@ -111,7 +124,7 @@ short line of their own.
   former `fin bank list` has been removed. Deletion is limited to user-added
   institutions without imported transactions.
 
-  **Action required:** schema 18 requires a database rebuild; export settings and
+  **Action required:** schema 20 requires a database rebuild; export settings and
   back up with the old executable first. Recreate generic institutions and CSV
   layouts after rebuilding, and inspect review decisions before reapplying them.
 

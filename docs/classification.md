@@ -2,8 +2,9 @@
 
 Status: first implementation stage, 2026-10-29. Fin stores explicit reviewed
 category decisions, lists transactions and reviews normalized card-merchant or
-description matches. Saved regular-expression rules can be previewed and applied
-explicitly to categories or card settlements. An experimental full-screen
+description matches. Saved rules can match source descriptions and effective
+types, and can explicitly apply type overrides, categories or card settlements.
+An experimental full-screen
 settlement review is available; user-managed tags are not implemented.
 
 ## Purpose
@@ -109,8 +110,8 @@ and lets the user select exact matches and confirm a transactional batch. It
 shows conflicting classifications and leaves cancellation without changes. The
 event ID can be found with `fin transaction list`. This first interface uses
 terminal prompts; it does not yet provide tags or category search. Separately,
-`fin rule` saves regular expressions for explicit preview and batch application;
-see the [manual](manual.md#regular-expression-rules).
+`fin rule` saves conditions and actions for explicit preview and batch application;
+see the [manual](manual.md#transaction-rules).
 
 The fuller workflow should present one unclassified movement, let the user search
 or choose a category, add optional tags, inspect source details or skip it. After
