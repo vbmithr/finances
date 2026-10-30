@@ -9,12 +9,10 @@ let formats = [ ofx ]
 let takes_account_label = false
 let overlap = Adapter.Source_ids
 let companions = []
-let settlement_card_hint _ = None
-let withdrawal_reversal_hint _ = false
 
 let decode event =
   let open Or_error.Let_syntax in
-  let%bind (a : Bank_ofx.account), tx = Bank_ofx.source_transaction event in
+  let%bind (a : Ofx_source.account), tx = Ofx_source.source_transaction event in
   (* OFX credit-card accounts are card numbers, never IBANs. *)
   let own_iban : Movement.own_iban =
     if String.equal a.account_type "CREDITCRD"
@@ -45,13 +43,13 @@ let probe ~filename contents =
 
 let parse ~institution contents =
   let open Or_error.Let_syntax in
-  let%bind document = Bank_ofx.parse contents in
+  let%bind document = Ofx_source.parse contents in
   let%map events =
     List.concat_map document.statements ~f:(fun statement ->
       List.map statement.transactions ~f:(fun trn ->
         Source_event.create_dated
           ~venue:institution
-          ~account:(Bank_ofx.account_identity statement.account)
+          ~account:(Ofx_source.account_identity statement.account)
           ~kind:"bank-transaction"
           ~source_id:trn.fitid
           ~occurred_on:trn.booked_on
@@ -67,8 +65,6 @@ let make ~institution () : (module Adapter.S) =
     let aliases = []
     let kinds = kinds
     let decode = decode
-    let settlement_card_hint = settlement_card_hint
-    let withdrawal_reversal_hint = withdrawal_reversal_hint
     let formats = formats
     let probe = probe
     let takes_account_label = takes_account_label

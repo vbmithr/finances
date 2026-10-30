@@ -1,18 +1,23 @@
 open Base
 
-let make ~institution ~layout () : (module Adapter.S) =
+let make
+      ?(aliases = [])
+      ?(csv_format = "generic-companion-csv")
+      ?(policy = "csv-exact-v1")
+      ?(snapshot = true)
+      ~institution
+      ~layout
+      ()
+  : (module Adapter.S)
+  =
   let schema = Csv_companion_layout.schema layout in
-  let csv = "generic-companion-csv" in
-  let companion =
-    Csv_companion.make ~snapshot:true ~format:csv ~policy:"csv-exact-v1" ~layout
-  in
+  let csv = csv_format in
+  let companion = Csv_companion.make ~snapshot ~format:csv ~policy ~layout in
   (module struct
     let institution = institution
-    let aliases = []
+    let aliases = aliases
     let kinds = Ofx_bank.kinds
     let decode = Ofx_bank.decode
-    let settlement_card_hint = Ofx_bank.settlement_card_hint
-    let withdrawal_reversal_hint = Ofx_bank.withdrawal_reversal_hint
     let formats = [ Ofx_bank.ofx; csv ]
     let takes_account_label = false
     let overlap = Adapter.Source_ids
@@ -37,9 +42,13 @@ let make ~institution ~layout () : (module Adapter.S) =
             ~fields:(fun row -> row.fields)
             contents
         in
-        { document with
-          context = [ "companion_profile", Json.encode Csv_companion_layout.codec layout ]
-        }
+        if snapshot
+        then
+          { document with
+            context =
+              [ "companion_profile", Json.encode Csv_companion_layout.codec layout ]
+          }
+        else document
       else Or_error.errorf "unsupported statement format: %s" format
     ;;
   end)

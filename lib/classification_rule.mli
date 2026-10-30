@@ -5,6 +5,8 @@ type action =
   | Settlement of string
   | Type of Movement_type.t
   | Type_and_category of Movement_type.t * string
+  | Card_reference
+  | Withdrawal_reversal_hint
 
 type type_condition =
   | Unknown

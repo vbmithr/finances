@@ -151,7 +151,7 @@ skips the question; without a terminal and without `--yes` it refuses.
 
 ### Rebuilding after a schema change
 
-This experimental release accepts schema version 23; it does not migrate older
+This experimental release accepts schema version 24; it does not migrate older
 databases and refuses them without changing the file. If upgrading from schema 21
 with customized institution typing profiles, use the old executable to save each
 profile with `fin institution typing show INSTITUTION > profile.json` before
@@ -659,8 +659,9 @@ puts both counter-postings in a shared `assets:reversals:pair-...` clearing
 account. The balance clears when both movements are included. Undo restores both
 to review. `--yes` skips confirmation on `review` and `undo`. This workflow covers
 full ATM withdrawal reversals; partial reversals and fees need separate work.
-BoursoBank `ANNUL RETRAIT DAB` movements have type `withdrawal`; refresh
-older types with `fin tx refresh-types --institution boursobank`.
+BoursoBank `ANNUL RETRAIT DAB` movements have type `withdrawal` and recorded
+reversal evidence. Refresh older types with `fin tx refresh-types --institution
+boursobank` and source evidence with `fin tx refresh-evidence --institution boursobank`.
 
 To undo a confirmed transfer, use its two event IDs (shown by
 `fin transfer candidates --all` or `fin transfer history`):
@@ -827,6 +828,40 @@ from matched companion files are separate and are not changed by this command.
 Use `fin transaction review` for unclassified items and hledger
 for accounting reports and running balances.
 
+### Settlement and reversal evidence rules
+
+Automatic evidence rules record source clues at import without confirming an
+accounting decision. BoursoBank's built-in rules extract the card reference
+from deferred-card debits and identify withdrawal-reversal wording. Inspect
+them with `fin rule list`; they can be disabled or replaced like other rules.
+
+A user-added institution can define its own rules:
+
+```sh
+fin rule add-evidence card-id card-reference '^CARD PAYMENT (.+)$' \
+  --institution mybank
+fin rule add-evidence atm-refund withdrawal-reversal '^ATM REVERSAL ' \
+  --institution mybank
+fin tx refresh-evidence --institution mybank
+```
+
+The `card-reference` expression must contain a capture group; fin records group
+1 from the first trimmed source description when it is the only description.
+A withdrawal-reversal expression matches the first trimmed description. Rules
+can also restrict `--account-type` and `--match-type`; lower `--priority`
+values run first. Evidence `--match-type` tests the stored imported type, not a
+manual type override. `--case-sensitive` changes the default case-insensitive
+matching. Multiple matching reversal rules still produce one hint, while the
+first matching card-reference rule supplies the reference.
+
+A hint is only evidence: settlement and reversal candidates still need their
+normal account, amount and date checks and explicit confirmation. Changing,
+disabling or replacing a rule affects future imports. `fin tx refresh-evidence`
+previews changes to stored clues and asks before applying them; it does not
+change types, classifications or reviewed decisions. If type rules also
+changed, refresh types first. Transaction-list JSON exposes the recorded clues
+as `source_card_reference` and `source_withdrawal_reversal`.
+
 ## Transaction rules
 
 Rules let you reuse type and classification decisions. Review-mode rules
@@ -928,7 +963,7 @@ belongs to hledger; `fin` tracks import evidence, account identity and review st
 ## Library and dependency changes
 
 This build uses Base, decimal, Ptime and Bos, with no Core or Bigdecimal
-dependency. Version 1 account snapshots remain compatible; databases use schema 23 and
+dependency. Version 1 account snapshots remain compatible; databases use schema 24 and
 are rebuilt from the original statements (see above).
 
 OCaml callers use `Quantity.t` (a `Decimal.t` alias) and `Date.t` (a `Ptime.date`

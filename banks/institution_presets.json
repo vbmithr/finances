@@ -1,0 +1,49 @@
+[
+  {
+    "institution": "boursobank",
+    "aliases": [
+      "boursorama",
+      "bourso"
+    ],
+    "companion_format": "csv",
+    "matching_policy": "bourso-csv-exact-v1",
+    "snapshot": false,
+    "layout": {
+      "version": 1,
+      "name": "BoursoBank",
+      "header": [
+        "Date Opération",
+        "Date Valeur",
+        "Libellé",
+        "Libellé Suggéré",
+        "Catégorie",
+        "Catégorie Parente",
+        "Solde",
+        "Commentaire",
+        "Numéro Compte",
+        "Libellé Compte",
+        "Solde",
+        "Pointage"
+      ],
+      "separator": ";",
+      "trim_header": true,
+      "trim_cells": true,
+      "skip_blank_rows": true,
+      "account_id": 8,
+      "booked_on": 0,
+      "value_on": 1,
+      "amount": 6,
+      "description": 2,
+      "suggested_description": 3,
+      "category": 4,
+      "parent_category": 5,
+      "comment": 7,
+      "account_label": 9,
+      "reported_balance": 10,
+      "pointage": 11,
+      "date_format": "iso",
+      "amount_format": "comma",
+      "balance_format": "dot"
+    }
+  }
+]

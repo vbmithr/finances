@@ -44,10 +44,10 @@ let initialize () =
          check "fresh database empty" 0 (List.length (ok (Store.events db)));
          Ok ()));
     raw path (fun db ->
-      check "latest baseline" 23 (scalar db "PRAGMA user_version");
+      check "latest baseline" 24 (scalar db "PRAGMA user_version");
       check
         "all tables are strict"
-        33
+        34
         (scalar
            db
            "SELECT count(*) FROM pragma_table_list WHERE schema='main' AND name NOT LIKE \
@@ -228,7 +228,7 @@ let large_rowid () =
 ;;
 
 let rejects_old () =
-  List.iter [ 9; 12; 13; 14; 15; 16; 17; 18; 19; 20; 21; 22 ] ~f:(fun version ->
+  List.iter [ 9; 12; 13; 14; 15; 16; 17; 18; 19; 20; 21; 22; 23 ] ~f:(fun version ->
     workspace (fun path ->
       raw path (fun db ->
         sql

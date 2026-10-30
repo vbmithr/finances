@@ -12,10 +12,10 @@ Last updated: 2026-10-30.
 ### Code
 
 - All four banks import: BoursoBank (OFX, CSV companion), Wise (CAMT.053, CSV
-  companion), Bunq (MT940, CSV companion) and Revolut (CSV). Each is an adapter behind
-  one registry; the kernel names no bank. User-added institutions can import
-  OFX through the shared parser or configure a generic single-account CSV layout.
-- Storage is schema 23: generic tables for every bank, plus each movement stored
+  companion), Bunq (MT940, CSV companion) and Revolut (CSV). BoursoBank is a
+  data-driven preset; the others use adapters behind the registry. User-added
+  institutions can import OFX or configure a generic single-account CSV layout.
+- Storage is schema 24: generic tables for every bank, plus each movement stored
   normalized at import, so reads are SQL queries instead of payload decoding. No
   migrations; older databases are refused unchanged.
 - Event occurrences and statement boundaries share `Temporal.t` (`Date` or
@@ -50,11 +50,11 @@ Last updated: 2026-10-30.
   `fin backup` saves one
   consistent SQLite snapshot; `fin restore BACKUP` validates and restores it,
   with overwrite confirmation and automatic removal of stale generated files.
-- 213 tests (151 OCaml cases and 62 CLI cases), plus status performance and
+- 216 tests (151 OCaml cases and 65 CLI cases), plus status performance and
   package man-page checks. Selected import changes have also been compared by
   rebuilding a personal database and diffing reports and source payloads.
 - Issue #1 is implemented locally and awaits publication.
-- The installed Arch package is `finances 0.1.0-23`; the tree uses schema 23.
+- The installed Arch package is `finances 0.1.0-23`; the tree uses schema 24.
 
 ### Personal data
 
@@ -103,10 +103,10 @@ A prior database rebuilt from `personal/*/inbox` contained:
   documents, and require a fixed currency for generic companions.
 - [ ] Guide companion layout setup interactively, support currency columns and
   additional matching strategies, and add a workflow to remove companion evidence.
-- [ ] Express settlement-card references and withdrawal-reversal evidence through
-  reusable rules; preserve preview and ambiguity checks.
-- [ ] Compose a BoursoBank preset from generic OFX, companion configuration and
-  default rules, then remove its adapter after equivalence tests.
+- [x] Express settlement-card references and withdrawal-reversal evidence through
+  import-time rules, with previewed refresh and existing review checks.
+- [x] Compose the BoursoBank preset from generic OFX, companion configuration
+  and default rules; remove its dedicated adapter after equivalence tests.
 - [ ] Generalize the remaining Wise companion type mapping and other reusable
   format policies. Keep explicit source identity, overlap and correction policies.
 

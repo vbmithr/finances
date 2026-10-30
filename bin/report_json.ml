@@ -168,6 +168,10 @@ let review =
   |> field "event_id" Json.int64_codec (fun r -> r.event_id)
   |> field "institution" Jsont.string (fun r -> r.institution)
   |> field "source_account" Jsont.string (fun r -> r.transaction.account.account_id)
+  |> field "source_card_reference" (Jsont.option Jsont.string) (fun r ->
+    r.source_evidence.card_reference)
+  |> field "source_withdrawal_reversal" Jsont.bool (fun r ->
+    r.source_evidence.withdrawal_reversal)
   |> field "booked_on" Json.date (fun r -> r.transaction.booked_on)
   |> field "amount" Json.quantity (fun r -> r.transaction.amount)
   |> field "fee" Json.quantity (fun r -> r.transaction.fee)
@@ -223,6 +227,10 @@ let transaction =
   |> field "institution" Jsont.string (fun r -> r.review.institution)
   |> field "source_account" Jsont.string (fun r ->
     r.review.transaction.account.account_id)
+  |> field "source_card_reference" (Jsont.option Jsont.string) (fun r ->
+    r.review.source_evidence.card_reference)
+  |> field "source_withdrawal_reversal" Jsont.bool (fun r ->
+    r.review.source_evidence.withdrawal_reversal)
   |> field "booked_on" Json.date (fun r -> r.review.transaction.booked_on)
   |> field "amount" Json.quantity (fun r -> r.review.transaction.amount)
   |> field "fee" Json.quantity (fun r -> r.review.transaction.fee)

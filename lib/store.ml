@@ -6,6 +6,7 @@ type t =
   { conn : Db.t
   ; registry : Registry.t
   ; source_typing_cache : (string, Source_typing.t) Hashtbl.t
+  ; source_evidence_cache : (string, Source_evidence.rule list) Hashtbl.t
   }
 
 type ingest =
@@ -220,23 +221,55 @@ let initialize db =
              VALUES ('automatic',?,?,?,?,?,NULL,?,'type',?,NULL)"
             (option text @-> int @-> text @-> text @-> text @-> text @-> text @-> unit))
       in
-      Registry.institutions db.registry
-      |> List.concat_map ~f:(fun institution ->
-        match Registry.default_source_typing db.registry institution with
-        | None -> []
-        | Some profile ->
-          List.mapi (Source_typing.rules profile) ~f:(fun i rule ->
-            db_result
-              (Db.exec
-                 db.conn
-                 (sql
-                    rule.account_type
-                    i
-                    (Printf.sprintf "%s-default-%02d" institution (i + 1))
-                    rule.description
-                    institution
-                    (if rule.case_sensitive then "sensitive" else "insensitive")
-                    (Movement_type.to_string rule.kind)))))
+      let* () =
+        Registry.institutions db.registry
+        |> List.concat_map ~f:(fun institution ->
+          match Registry.default_source_typing db.registry institution with
+          | None -> []
+          | Some profile ->
+            List.mapi (Source_typing.rules profile) ~f:(fun i rule ->
+              db_result
+                (Db.exec
+                   db.conn
+                   (sql
+                      rule.account_type
+                      i
+                      (Printf.sprintf "%s-default-%02d" institution (i + 1))
+                      rule.description
+                      institution
+                      (if rule.case_sensitive then "sensitive" else "insensitive")
+                      (Movement_type.to_string rule.kind)))))
+        |> Or_error.combine_errors_unit
+      in
+      let evidence_sql =
+        Rel_sql.Stmt.(
+          func
+            "INSERT INTO \
+             classification_rules(mode,account_type,priority,name,pattern,institution,match_type,case_mode,action_kind,target,action_type) \
+             VALUES ('automatic',NULL,100,?,?,?,NULL,?,?,?,NULL)"
+            (text @-> text @-> text @-> text @-> text @-> text @-> unit))
+      in
+      Registry.default_source_evidence db.registry
+      |> List.map ~f:(fun (rule : Source_evidence.default) ->
+        let* _ =
+          Source_evidence.make_rule
+            ~action:rule.action
+            ~pattern:rule.pattern
+            ~case_sensitive:rule.case_sensitive
+            ~account_type:None
+            ~match_type:None
+        in
+        let kind = Source_evidence.action_name rule.action in
+        db_result
+          (Db.exec
+             db.conn
+             (evidence_sql
+                rule.name
+                rule.pattern
+                rule.institution
+                (if rule.case_sensitive then "sensitive" else "insensitive")
+                kind
+                kind)))
       |> Or_error.combine_errors_unit
     | Some version when version = Db_schema.version -> Ok ()
     | _ ->
@@ -269,7 +302,13 @@ let with_connection ~mode path f =
 
 let with_open ~registry path f =
   with_connection ~mode:Read_write_create path (fun conn ->
-    let db = { conn; registry; source_typing_cache = Hashtbl.create (module String) } in
+    let db =
+      { conn
+      ; registry
+      ; source_typing_cache = Hashtbl.create (module String)
+      ; source_evidence_cache = Hashtbl.create (module String)
+      }
+    in
     let* () = initialize db in
     f db)
 ;;
@@ -608,6 +647,68 @@ let source_typing_profile db institution =
     Ok profile
 ;;
 
+let source_evidence_rules db institution =
+  match Hashtbl.find db.source_evidence_cache institution with
+  | Some rules -> Ok rules
+  | None ->
+    let query =
+      Rel_sql.Stmt.(
+        func
+          "SELECT pattern,account_type,case_mode,action_kind,match_type FROM \
+           classification_rules WHERE mode='automatic' AND action_kind IN \
+           ('card-reference','withdrawal-reversal') AND (institution IS NULL OR \
+           institution=?) ORDER BY priority,name"
+          (text
+           @-> ret
+                 Row.(
+                   t5
+                     (text "pattern")
+                     (option Rel.Type.text "account_type")
+                     (text "case_mode")
+                     (text "action_kind")
+                     (option Rel.Type.text "match_type"))))
+    in
+    let* rows =
+      db_result (Db.fold db.conn (query institution) (fun row acc -> row :: acc) [])
+    in
+    let* rules =
+      List.rev rows
+      |> List.map ~f:(fun (pattern, account_type, case_mode, kind, match_type) ->
+        let action =
+          if String.equal kind "card-reference"
+          then Source_evidence.Card_reference
+          else Withdrawal_reversal
+        in
+        Source_evidence.make_rule
+          ~action
+          ~pattern
+          ~case_sensitive:(String.equal case_mode "sensitive")
+          ~account_type
+          ~match_type)
+      |> Or_error.combine_errors
+    in
+    Hashtbl.set db.source_evidence_cache ~key:institution ~data:rules;
+    Ok rules
+;;
+
+let write_source_evidence db event_id (evidence : Source_evidence.t) =
+  let query =
+    Rel_sql.Stmt.(
+      func
+        "INSERT INTO movement_evidence(event_id,card_reference,withdrawal_reversal) \
+         VALUES (?,?,?) ON CONFLICT(event_id) DO UPDATE SET \
+         card_reference=excluded.card_reference,withdrawal_reversal=excluded.withdrawal_reversal"
+        (int64 @-> option text @-> text @-> unit))
+  in
+  db_result
+    (Db.exec
+       db.conn
+       (query
+          event_id
+          evidence.card_reference
+          (if evidence.withdrawal_reversal then "yes" else "no")))
+;;
+
 let apply_automatic_category
       db
       event_id
@@ -733,6 +834,9 @@ let ingest_in_transaction db (e : Source_event.t) =
         let* raw = Registry.movement ~source_typing:raw_profile db.registry e in
         let m = Source_typing.apply profile raw in
         let* () = db_result (Db.exec db.conn (insert_movement id e m)) in
+        let* rules = source_evidence_rules db e.venue in
+        let evidence = Source_evidence.apply rules m in
+        let* () = write_source_evidence db id evidence in
         apply_automatic_category db id e raw m
       else Ok ()
     in
@@ -814,6 +918,7 @@ let add_classification_rule db (rule : Classification_rule.t) =
       ~action:rule.action
   in
   Hashtbl.clear db.source_typing_cache;
+  Hashtbl.clear db.source_evidence_cache;
   let open Db_schema.Classification_rules in
   let insert = Rel_sql.insert_into_cols Db.dialect table in
   db_result
@@ -848,6 +953,7 @@ let add_classification_rule db (rule : Classification_rule.t) =
 
 let delete_classification_rule db rule_name =
   Hashtbl.clear db.source_typing_cache;
+  Hashtbl.clear db.source_evidence_cache;
   transaction db (fun db ->
     let* rules = classification_rules db in
     if
@@ -868,6 +974,7 @@ let delete_classification_rule db rule_name =
 
 let replace_classification_rule db (rule : Classification_rule.t) =
   Hashtbl.clear db.source_typing_cache;
+  Hashtbl.clear db.source_evidence_cache;
   transaction db (fun db ->
     let* rules = classification_rules db in
     if
@@ -886,6 +993,7 @@ let replace_classification_rule db (rule : Classification_rule.t) =
 
 let set_classification_rule_mode db name mode =
   Hashtbl.clear db.source_typing_cache;
+  Hashtbl.clear db.source_evidence_cache;
   transaction db (fun db ->
     let* rules = classification_rules db in
     let* rule =
@@ -894,6 +1002,8 @@ let set_classification_rule_mode db name mode =
     in
     let* () =
       match mode, rule.action with
+      | Classification_rule.Review, (Card_reference | Withdrawal_reversal_hint) ->
+        Or_error.error_string "evidence rules must be automatic or disabled"
       | Classification_rule.Automatic, Settlement _ ->
         Or_error.error_string "settlement rules require review"
       | _ -> Ok ()
@@ -1617,6 +1727,76 @@ let events db =
        in
        Ok (id, e))
     rows
+;;
+
+type source_evidence_change =
+  { event_id : int64
+  ; institution : string
+  ; description : string
+  ; before : Source_evidence.t
+  ; after : Source_evidence.t
+  }
+
+let preview_source_evidence ?institution db =
+  let* source = events db in
+  let* table = movement_table db in
+  let* rows =
+    collect
+      db
+      (statement
+         "SELECT event_id,card_reference,withdrawal_reversal FROM movement_evidence"
+         Row.(
+           t3
+             (int64 "event_id")
+             (option Rel.Type.text "card_reference")
+             (text "withdrawal_reversal")))
+  in
+  let old = Hashtbl.create (module Int64) in
+  List.iter rows ~f:(fun (id, card_reference, reversal) ->
+    Hashtbl.set
+      old
+      ~key:id
+      ~data:
+        { Source_evidence.card_reference
+        ; withdrawal_reversal = String.equal reversal "yes"
+        });
+  source
+  |> List.filter ~f:(fun (_, e) ->
+    Registry.is_movement db.registry e
+    && Option.value_map institution ~default:true ~f:(String.equal e.Source_event.venue))
+  |> traverse (fun (event_id, event) ->
+    let* movement = stored table event_id in
+    let* rules = source_evidence_rules db event.Source_event.venue in
+    let after = Source_evidence.apply rules movement in
+    let before =
+      Option.value (Hashtbl.find old event_id) ~default:Source_evidence.empty
+    in
+    Ok
+      (Option.some_if
+         (not (Poly.equal before after))
+         { event_id
+         ; institution = event.venue
+         ; description = String.concat ~sep:" | " movement.descriptions
+         ; before
+         ; after
+         }))
+  |> Result.map ~f:List.filter_opt
+;;
+
+let refresh_source_evidence ?institution db ~expected =
+  transaction db (fun db ->
+    Hashtbl.clear db.source_evidence_cache;
+    let* current = preview_source_evidence ?institution db in
+    if not (Poly.equal current expected)
+    then Or_error.error_string "source evidence changed since preview; review it again"
+    else
+      let* () =
+        traverse
+          (fun change -> write_source_evidence db change.event_id change.after)
+          current
+        |> Result.map ~f:ignore
+      in
+      Ok (List.length current))
 ;;
 
 type movement_type_change =
@@ -2682,6 +2862,7 @@ type bank_review =
   ; movement_type : Movement_type.t option
   ; imported_movement_type : Movement_type.t option
   ; movement_type_override : Movement_type.t option
+  ; source_evidence : Source_evidence.t
   ; detail_sources : int64 list
   ; classification : review_classification
   ; counter_account : string
@@ -2758,6 +2939,7 @@ let bank_review_from
       (categories, transfers, settlements, reversals)
       details
       overrides
+      evidence
   =
   traverse
     (fun (event_id, (event : Source_event.t)) ->
@@ -2794,6 +2976,8 @@ let bank_review_from
          ; movement_type = Option.first_some movement_type_override imported_movement_type
          ; imported_movement_type
          ; movement_type_override
+         ; source_evidence =
+             Option.value (Hashtbl.find evidence event_id) ~default:Source_evidence.empty
          ; detail_sources =
              List.map observations ~f:fst |> List.sort ~compare:Int64.compare
          ; classification =
@@ -2867,7 +3051,27 @@ let bank_review db =
       observations
     |> Or_error.map ~f:ignore
   in
-  bank_review_from source table metadata details overrides
+  let* evidence_rows =
+    collect
+      db
+      (statement
+         "SELECT event_id,card_reference,withdrawal_reversal FROM movement_evidence"
+         Row.(
+           t3
+             (int64 "event_id")
+             (option Rel.Type.text "card_reference")
+             (text "withdrawal_reversal")))
+  in
+  let evidence = Hashtbl.create (module Int64) in
+  List.iter evidence_rows ~f:(fun (event_id, card_reference, reversal) ->
+    Hashtbl.set
+      evidence
+      ~key:event_id
+      ~data:
+        { Source_evidence.card_reference
+        ; withdrawal_reversal = String.equal reversal "yes"
+        });
+  bank_review_from source table metadata details overrides evidence
 ;;
 
 let observed_provider_movement_types db =
@@ -3156,10 +3360,7 @@ let reversal_candidates db =
       eligible r
       && Poly.equal r.movement_type (Some Movement_type.Withdrawal)
       && Quantity.(r.transaction.amount > zero)
-      && Option.value_map
-           (Registry.find db.registry r.institution)
-           ~default:false
-           ~f:(fun (module A : Adapter.S) -> A.withdrawal_reversal_hint r.transaction))
+      && r.source_evidence.withdrawal_reversal)
   in
   Ok
     (List.concat_map reversals ~f:(fun reversal ->
@@ -4219,7 +4420,7 @@ let preview_classification_rule db (rule : Classification_rule.t) =
        let account_requested =
          match rule.action with
          | Category _ | Settlement _ | Type_and_category _ -> true
-         | Type _ -> false
+         | Type _ | Card_reference | Withdrawal_reversal_hint -> false
        in
        let type_block = type_requested && Option.is_some row.movement_type_override in
        let already_reviewed =
@@ -4353,6 +4554,10 @@ let apply_classification_rule db ~expected ~selected =
             Option.some_if m.apply_account m.transaction.event_id)
         in
         match current.action with
+        | Card_reference | Withdrawal_reversal_hint ->
+          Or_error.error_string
+            "evidence rules apply during import; refresh stored evidence to update \
+             existing transactions"
         | Type _ -> Ok (List.length selected)
         | Category account | Type_and_category (_, account) ->
           let* decisions =
@@ -5131,6 +5336,7 @@ let delete_account ?(dry_run = false) db (mapping : Bank_account_mapping.t) =
           ; "DELETE FROM bank_import_attempts WHERE document_id IN (" ^ doc_ids ^ ")"
           ; "DELETE FROM document_contexts WHERE document_id IN (" ^ doc_ids ^ ")"
           ; "DELETE FROM import_documents WHERE id IN (" ^ doc_ids ^ ")"
+          ; "DELETE FROM movement_evidence WHERE event_id IN (" ^ event_ids ^ ")"
           ; "DELETE FROM movements WHERE event_id IN (" ^ event_ids ^ ")"
           ; "DELETE FROM source_events WHERE id IN (" ^ event_ids ^ ")"
           ; "DELETE FROM bank_account_mappings WHERE " ^ local

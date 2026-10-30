@@ -1744,6 +1744,61 @@ let refresh_transaction_types database institution yes =
         printf "movement_types_changed=%d\n" count)))
 ;;
 
+let refresh_transaction_evidence database institution yes =
+  with_database database (fun db ->
+    let%bind changes = Store.preview_source_evidence ?institution db in
+    let describe (e : Source_evidence.t) =
+      Printf.sprintf
+        "card=%s reversal=%s"
+        (Option.value_map e.card_reference ~default:"-" ~f:Terminal.text)
+        (if e.withdrawal_reversal then "yes" else "no")
+    in
+    if List.is_empty changes
+    then (
+      print_endline "No source evidence changes.";
+      Ok ())
+    else (
+      printf "Proposed source evidence changes: %d\n" (List.length changes);
+      List.iter changes ~f:(fun (change : Store.source_evidence_change) ->
+        printf
+          "  #%Ld  %s  %s -> %s  %s\n"
+          change.event_id
+          (Terminal.text change.institution)
+          (describe change.before)
+          (describe change.after)
+          (Terminal.text change.description));
+      let%bind confirmed =
+        if yes
+        then Ok true
+        else if Unix.isatty Unix.stdin
+        then
+          Ok
+            (Option.value_map
+               (prompt "Apply these source evidence changes? [Y/n]: ")
+               ~default:false
+               ~f:confirm_default_yes)
+        else Or_error.error_string "evidence refresh requires a terminal or --yes"
+      in
+      if not confirmed
+      then (
+        print_endline "Nothing changed.";
+        Ok ())
+      else (
+        let%map count = Store.refresh_source_evidence ?institution db ~expected:changes in
+        printf "source_evidence_changed=%d\n" count)))
+;;
+
+let refresh_transaction_evidence_cmd =
+  command
+    "refresh-evidence"
+    "Preview and refresh imported settlement and reversal evidence."
+    Term.(
+      const refresh_transaction_evidence
+      $ database
+      $ institution_filter
+      $ Arg.(value & flag & info [ "yes" ] ~doc:"Apply the preview without prompting."))
+;;
+
 let refresh_transaction_types_cmd =
   command
     "refresh-types"
@@ -1982,13 +2037,11 @@ let institution_add_cmd =
 ;;
 
 let institution_companion_show database name =
-  let builtin_aliases = Registry.aliases Builtin.registry Boursobank.institution in
-  if List.mem builtin_aliases name ~equal:String.equal
-  then (
-    print_endline
-      (Json.encode ~format:Jsont.Indent Csv_companion_layout.codec Bank_csv.profile);
-    Ok ())
-  else
+  match Builtin.companion_layout name with
+  | Some profile ->
+    print_endline (Json.encode ~format:Jsont.Indent Csv_companion_layout.codec profile);
+    Ok ()
+  | None ->
     with_database database (fun db ->
       let%bind profile = Store.institution_companion_profile db name in
       match profile with
@@ -2174,11 +2227,7 @@ let settlement_suggestions db =
   let suggestions =
     List.filter_map rows ~f:(fun (row : Store.bank_review) ->
       let movement = row.transaction in
-      let hint =
-        match Registry.find (Store.registry db) row.institution with
-        | Some (module A : Adapter.S) -> A.settlement_card_hint movement
-        | None -> None
-      in
+      let hint = row.source_evidence.card_reference in
       Option.bind hint ~f:(fun hint ->
         if
           (not (String.equal row.counter_account "equity:unclassified"))
@@ -2719,6 +2768,7 @@ let rule_add
     match automatic, action with
     | true, (Classification_rule.Type _ | Category _ | Type_and_category _) -> Ok ()
     | true, Settlement _ -> Or_error.error_string "settlement rules require review"
+    | true, (Card_reference | Withdrawal_reversal_hint) -> Ok ()
     | false, _ -> Ok ()
   in
   let%bind rule =
@@ -2905,6 +2955,97 @@ let rule_add_cmd ~settlement =
               ~doc:"Replace the named rule; existing transactions are unchanged."))
 ;;
 
+let rule_add_evidence
+      database
+      name
+      action
+      pattern
+      institution
+      case_sensitive
+      account_type
+      match_type
+      priority
+      replace
+  =
+  let%bind rule =
+    Classification_rule.create
+      ~mode:Automatic
+      ~account_type
+      ~priority
+      ~name
+      ~pattern:(Some pattern)
+      ~institution
+      ~match_type:(Option.map match_type ~f:Classification_rule.condition_of_string)
+      ~case_sensitive
+      ~action
+  in
+  with_database database (fun db ->
+    let%bind () =
+      if replace
+      then Store.replace_classification_rule db rule
+      else Store.add_classification_rule db rule
+    in
+    printf
+      "Saved evidence rule %s. It applies to future imports; run fin tx refresh-evidence \
+       to preview existing changes.\n"
+      (Terminal.text name);
+    Ok ())
+;;
+
+let rule_add_evidence_cmd =
+  command
+    "add-evidence"
+    "Add an automatic settlement-reference or withdrawal-reversal evidence rule."
+    Term.(
+      const rule_add_evidence
+      $ database
+      $ Arg.(
+          required
+          & pos 0 (some string) None
+          & info [] ~docv:"NAME" ~doc:"Unique rule name.")
+      $ Arg.(
+          required
+          & pos
+              1
+              (some
+                 (enum
+                    [ "card-reference", Classification_rule.Card_reference
+                    ; "withdrawal-reversal", Classification_rule.Withdrawal_reversal_hint
+                    ]))
+              None
+          & info
+              []
+              ~docv:"KIND"
+              ~doc:"Evidence kind: card-reference or withdrawal-reversal.")
+      $ Arg.(
+          required
+          & pos 2 (some string) None
+          & info
+              []
+              ~docv:"REGEX"
+              ~doc:
+                "Match the first source description; card-reference requires a single \
+                 description and uses capture group 1.")
+      $ institution_filter
+      $ Arg.(value & flag & info [ "case-sensitive" ] ~doc:"Match case sensitively.")
+      $ Arg.(
+          value
+          & opt (some string) None
+          & info [ "account-type" ] ~docv:"TYPE" ~doc:"Match this source account type.")
+      $ Arg.(
+          value
+          & opt (some string) None
+          & info
+              [ "match-type" ]
+              ~docv:"TYPE"
+              ~doc:"Match the stored imported type, or unknown.")
+      $ Arg.(
+          value
+          & opt int 1000
+          & info [ "priority" ] ~docv:"NUMBER" ~doc:"Lower numbers run first.")
+      $ Arg.(value & flag & info [ "replace" ] ~doc:"Replace an existing rule."))
+;;
+
 let rule_list database json_output =
   with_database database (fun db ->
     let%map rules = Store.classification_rules db in
@@ -3021,6 +3162,13 @@ let print_rule_preview (rule : Classification_rule.t) matches =
 let rule_preview database name json_output =
   with_database database (fun db ->
     let%bind rule = find_rule db name in
+    let%bind () =
+      match rule.action with
+      | Card_reference | Withdrawal_reversal_hint ->
+        Or_error.error_string
+          "use fin tx refresh-evidence to preview automatic evidence changes"
+      | _ -> Ok ()
+    in
     let%map matches = Store.preview_classification_rule db rule in
     if json_output
     then Report_json.print (Jsont.list Report_json.classification_rule_match) matches
@@ -3044,6 +3192,13 @@ let rule_preview_cmd =
 let rule_apply database name yes =
   with_database database (fun db ->
     let%bind rule = find_rule db name in
+    let%bind () =
+      match rule.action with
+      | Card_reference | Withdrawal_reversal_hint ->
+        Or_error.error_string
+          "use fin tx refresh-evidence to preview and apply evidence changes"
+      | _ -> Ok ()
+    in
     let%bind matches = Store.preview_classification_rule db rule in
     print_rule_preview rule matches;
     let selected = List.filter matches ~f:(fun m -> m.Store.eligible) in
@@ -4284,6 +4439,7 @@ let () =
               ; rule_mode_cmd
               ; rule_add_cmd ~settlement:false
               ; rule_add_cmd ~settlement:true
+              ; rule_add_evidence_cmd
               ; rule_preview_cmd
               ; rule_apply_cmd
               ; rule_delete_cmd
@@ -4310,6 +4466,7 @@ let () =
               "Inspect and classify imported transactions."
               [ transaction_list_cmd
               ; refresh_transaction_types_cmd
+              ; refresh_transaction_evidence_cmd
               ; group
                   "type"
                   "Inspect and override transaction movement types."

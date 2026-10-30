@@ -26,12 +26,6 @@ module type S = sig
 
   val decode : Source_event.t -> Movement.t Base.Or_error.t
 
-  (** Provider-specific evidence identifying the card in a settlement debit. *)
-  val settlement_card_hint : Movement.t -> string option
-
-  (** Provider-specific evidence that a withdrawal credit reverses a withdrawal. *)
-  val withdrawal_reversal_hint : Movement.t -> bool
-
   (** Format identifiers, recorded in import history. *)
   val formats : string list
 

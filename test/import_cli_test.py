@@ -779,6 +779,86 @@ class ImportOnboarding(unittest.TestCase):
         self.assertIn('Remaining candidates are left for later review.', output)
         self.assertEqual(len(json.loads(self.run_fin('transfer', 'history').stdout)), 0)
 
+    def test_evidence_rules_apply_at_import_and_refresh_explicitly(self):
+        ofx = self.root / 'reversal-evidence.ofx'
+        data = Path('fixtures/bank.ofx').read_text().replace('Synthetic debit', 'RETRAIT DAB example')
+        data = data.replace('</BANKTRANLIST></STMTRS>\n</STMTTRNRS>',
+            '<STMTTRN><DTPOSTED>20260105</DTPOSTED><TRNTYPE>CREDIT</TRNTYPE>'
+            '<TRNAMT>42.95</TRNAMT><FITID>atm-reversal</FITID>'
+            '<NAME>ANNUL RETRAIT DAB example</NAME></STMTTRN>'
+            '</BANKTRANLIST></STMTRS>\n</STMTTRNRS>')
+        ofx.write_text(data)
+        rules = json.loads(self.run_fin('rule', 'list', '--json').stdout)
+        self.assertTrue(any(r['name'] == 'boursobank-withdrawal-reversal' and r['mode'] == 'automatic' for r in rules))
+        self.run_fin('rule', 'mode', 'boursobank-withdrawal-reversal', 'disabled')
+        self.run_fin('import', 'boursobank', ofx)
+        rows = json.loads(self.run_fin('tx', 'list', '--json').stdout)
+        reversal = next(r for r in rows if r['description'] == 'ANNUL RETRAIT DAB example')
+        self.assertFalse(reversal['source_withdrawal_reversal'])
+        self.assertNotIn('atm-reversal', self.run_fin('reversal', 'candidates').stdout)
+        self.run_fin('rule', 'mode', 'boursobank-withdrawal-reversal', 'automatic')
+        self.assertFalse(next(r for r in json.loads(self.run_fin('tx', 'list', '--json').stdout) if r['event_id'] == reversal['event_id'])['source_withdrawal_reversal'])
+        journal = self.run_fin('journal', 'export').stdout
+        preview = self.terminal(['tx', 'refresh-evidence', '--institution', 'boursobank'], [
+            ('Apply these source evidence changes? [Y/n]:', 'n')])
+        self.assertIn('Nothing changed.', preview)
+        self.assertFalse(next(r for r in json.loads(self.run_fin('tx', 'list', '--json').stdout) if r['event_id'] == reversal['event_id'])['source_withdrawal_reversal'])
+        self.assertIn('source_evidence_changed=1', self.run_fin('tx', 'refresh-evidence', '--institution', 'boursobank', '--yes').stdout)
+        reversal = next(r for r in json.loads(self.run_fin('tx', 'list', '--json').stdout) if r['event_id'] == reversal['event_id'])
+        self.assertTrue(reversal['source_withdrawal_reversal'])
+        self.assertIn(str(reversal['event_id']), self.run_fin('reversal', 'candidates').stdout)
+        self.assertEqual(journal, self.run_fin('journal', 'export').stdout)
+
+    def test_evidence_refresh_rechecks_changed_rules(self):
+        self.run_fin('import', 'boursobank', 'fixtures/bank.ofx')
+        self.run_fin('rule', 'add-evidence', 'example-evidence', 'withdrawal-reversal', '^CAFÉ', '--institution', 'boursobank')
+        master, slave = pty.openpty()
+        child = subprocess.Popen([FIN, 'tx', 'refresh-evidence', '--institution', 'boursobank'], env=self.env,
+                                 stdin=slave, stdout=slave, stderr=slave)
+        os.close(slave)
+        transcript = b''
+        deadline = time.monotonic() + 20
+        try:
+            while b'Apply these source evidence changes? [Y/n]:' not in transcript:
+                if time.monotonic() >= deadline or child.poll() is not None:
+                    self.fail(transcript.decode(errors='replace'))
+                if select.select([master], [], [], 0.1)[0]:
+                    transcript += os.read(master, 65536)
+            self.run_fin('rule', 'mode', 'example-evidence', 'disabled')
+            os.write(master, b'y\n')
+            child.wait(timeout=max(0.1, deadline - time.monotonic()))
+            while select.select([master], [], [], 0)[0]:
+                try:
+                    transcript += os.read(master, 65536)
+                except OSError:
+                    break
+            self.assertNotEqual(child.returncode, 0)
+            self.assertIn('changed since preview', transcript.decode(errors='replace'))
+        finally:
+            if child.poll() is None:
+                child.kill()
+                child.wait()
+            os.close(master)
+        row = next(r for r in json.loads(self.run_fin('tx', 'list', '--json').stdout) if r['description'] == 'CAFÉ & CO')
+        self.assertFalse(row['source_withdrawal_reversal'])
+
+    def test_custom_card_reference_evidence_rule(self):
+        self.run_fin('institution', 'add', 'provider')
+        invalid = self.run_fin('rule', 'add-evidence', 'bad', 'card-reference', '^CARD$', '--institution', 'provider', check=False)
+        self.assertNotEqual(invalid.returncode, 0)
+        self.assertIn('capturing group', invalid.stderr)
+        self.run_fin('rule', 'add-evidence', 'card-id', 'card-reference', r'^CARD (.+)$', '--institution', 'provider')
+        ofx = self.root / 'card-ref.ofx'
+        ofx.write_text(Path('fixtures/bank.ofx').read_text().replace('CAFÉ &amp; CO', 'CARD masked123'))
+        self.run_fin('import', 'provider', ofx)
+        rows = json.loads(self.run_fin('tx', 'list', '--json').stdout)
+        found = next(r for r in rows if r['description'] == 'CARD masked123')
+        self.assertEqual(found['source_card_reference'], 'masked123')
+        self.run_fin('rule', 'mode', 'card-id', 'disabled')
+        self.assertEqual(next(r for r in json.loads(self.run_fin('tx', 'list', '--json').stdout) if r['event_id'] == found['event_id'])['source_card_reference'], 'masked123')
+        self.run_fin('tx', 'refresh-evidence', '--institution', 'provider', '--yes')
+        self.assertIsNone(next(r for r in json.loads(self.run_fin('tx', 'list', '--json').stdout) if r['event_id'] == found['event_id'])['source_card_reference'])
+
     def test_withdrawal_reversal_review_and_undo(self):
         ofx = self.root / 'reversal.ofx'
         data = Path('fixtures/bank.ofx').read_text().replace('Synthetic debit', 'RETRAIT DAB example')

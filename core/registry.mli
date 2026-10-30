@@ -13,6 +13,7 @@ val create
   -> ?fallbacks:(string * (Source_event.t -> Movement.t Or_error.t)) list
   -> ?fallback_institutions:string list
   -> ?source_typing:Source_typing.t list
+  -> ?source_evidence:Source_evidence.default list
   -> (module Adapter.S) list
   -> t Or_error.t
 
@@ -31,6 +32,8 @@ val is_movement : t -> Source_event.t -> bool
 
 (** Look up a bundled automatic source-typing profile. *)
 val default_source_typing : t -> string -> Source_typing.t option
+
+val default_source_evidence : t -> Source_evidence.default list
 
 (** Decode with the venue adapter or an applicable format fallback. *)
 val movement

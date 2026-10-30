@@ -72,7 +72,7 @@ context is changed. Canonical plain decimal rendering preserves existing SQLite
 text, source identities and journal precision. Non-finite decimals are rejected
 at construction. `Date` delegates validation and day differences to Ptime.
 
-`Bank_ofx.balance.as_of` is a Ptime instant from `Ofx.instant`, which applies
+`Ofx_source.balance.as_of` is a Ptime instant from `Ofx.instant`, which applies
 OFX's midnight/GMT defaults and explicit decimal-hour offsets. The lossless OFX
 reader retains raw strings and trees at the format boundary. Invalid `DTUSER`
 metadata is explicitly named `user_date_source` in the bank view.
@@ -191,7 +191,7 @@ for reliable fill replay.
 
 ## Bank source ingestion
 
-`Bank_ofx` parses XML using Xmlm and uses `Quantity.of_string` directly on source
+`Ofx_source` parses XML using Xmlm and uses `Quantity.of_string` directly on source
 amounts. It handles multiple statements under one response, as seen in the
 BoursoBank export, and keeps account identities, booking dates, names/memos, raw
 `DTUSER`, and optional available/ledger balance observations distinct. Unsupported
@@ -223,7 +223,7 @@ implemented separately below.
 
 ## Bank accounting and journal export
 
-`Bank_ofx.source_transaction` reconstructs a typed bank transaction from the
+`Ofx_source.source_transaction` reconstructs a typed bank transaction from the
 canonical source payload. It validates the payload's account identity, FITID, and
 booking date against the enclosing source event, so journal generation can work
 entirely from the database without reopening source files.
@@ -292,18 +292,19 @@ subset is published and reported.
 
 ## CSV enrichment
 
-Bank_csv parses the observed BoursoBank layout with the OCaml CSV library. Exact
+`Csv_companion_layout` parses the BoursoBank preset layout through the shared
+CSV reader. Exact
 amounts and dates are validated before any row commits. Original decoded fields
 and normalized observation columns are stored under document ID and logical row
 number, with the archived input retaining the original bytes.
 
-Bank_csv_match indexes OFX movements by institution/account/date/exact amount and
+`Csv_exact_match` indexes OFX movements by institution/account/date/exact amount and
 requires a normalized original-description match. It never uses suggested labels
 or row ordering to invent an identity. Repeated identical CSV rows in one document
 cannot claim a single OFX movement. Nonempty metadata disagreements across linked
 observations are conflicts. All observations remain immutable.
 
-Store.match_bank_csv recomputes derived links transactionally, retaining candidate
+`Store.match_companions` recomputes derived links transactionally, retaining candidate
 IDs and reasons and auditing only changed results. It runs after all files are
 scanned, so CSV/OFX filename order does not affect results. Matching can become
 ambiguous when more OFX evidence arrives. The review API exposes pending or
@@ -374,9 +375,9 @@ Three libraries separate the kernel from the banks:
 
 - `finances.core` (`core/`): quantities, dates, source events, `Movement`, the
   `Adapter.S` signature and `Registry`. No database access.
-- `finances.banks` (`banks/`): one directory per bank with its parsers and an
-  adapter module (`Boursobank`, `Bunq`, `Revolut`, `Wise`); `Builtin` lists them.
-  The library cannot depend on Rel or SQLite.
+- `finances.banks` (`banks/`): shared format importers, data-driven institution
+  presets and the remaining Bunq, Revolut and Wise adapters. `Builtin` assembles
+  the registry. The library cannot depend on Rel or SQLite.
 - `finances` (`lib/`): Store, projection, transfer review and account
   configuration.
 
@@ -400,9 +401,9 @@ described by their adapter, while the kernel stores everything in its generic
 tables (`docs/bank-adapters.md`). The kernel library does not depend on
 `finances.banks`.
 
-The adapters share `Bank_match` for matching states and results; Wise does not
-depend on the BoursoBank matcher. `Bank_csv_match` re-exports these types for
-compatibility. Source events, database persistence, account mappings,
+The adapters share `Bank_match` for matching states and results. Exact CSV
+companion matching is implemented in `Csv_exact_match`; Wise uses its own
+reference and clock matching. Source events, database persistence, account mappings,
 the common bank transaction view, and accounting projection stay in `lib/`.
 Folder scanning and import orchestration remain in `bank/`, and journal rendering
 remains in `journal/`. This is source organization within one library; adding a

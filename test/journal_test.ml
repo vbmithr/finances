@@ -175,7 +175,7 @@ let masked_accounts () =
     let contents =
       String.substr_replace_all (fixture ()) ~pattern:"SAVINGS" ~with_:source_id
     in
-    let statement = List.last_exn (ok (Bank_ofx.parse contents)).statements in
+    let statement = List.last_exn (ok (Ofx_source.parse contents)).statements in
     let a = statement.account in
     ok
       (Bank_projection.ledger_account

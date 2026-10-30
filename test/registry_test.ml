@@ -16,8 +16,6 @@ module Example = struct
   let parse ~context:_ ~format:_ _ = Ok Document.empty
   let overlap = Adapter.Source_ids
   let companions = []
-  let settlement_card_hint _ = None
-  let withdrawal_reversal_hint _ = false
 
   let decode (event : Source_event.t) =
     Movement.create

@@ -306,6 +306,7 @@ let similarity () =
     ; movement_type = None
     ; imported_movement_type = None
     ; movement_type_override = None
+    ; source_evidence = Source_evidence.empty
     ; detail_sources = []
     ; classification = Unclassified
     ; counter_account

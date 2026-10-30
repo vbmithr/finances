@@ -7,6 +7,14 @@ let ok = Or_error.ok_exn
 let error value = Alcotest.(check bool) "rejected" true (Result.is_error value)
 let ofx () = In_channel.read_all "fixtures/bank.ofx"
 let csv () = In_channel.read_all "fixtures/bank.csv"
+
+module Bank_csv = struct
+  let profile = Option.value_exn (Builtin.companion_layout "boursobank")
+  let schema = Csv_companion_layout.schema profile
+  let parse = Csv_schema.parse schema
+  let recognizes = Csv_schema.recognizes schema
+end
+
 let fields () = List.map (ok (Bank_csv.parse (csv ()))) ~f:(fun r -> r.fields)
 
 let set row column value =

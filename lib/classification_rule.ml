@@ -5,6 +5,8 @@ type action =
   | Settlement of string
   | Type of Movement_type.t
   | Type_and_category of Movement_type.t * string
+  | Card_reference
+  | Withdrawal_reversal_hint
 
 type type_condition =
   | Unknown
@@ -42,16 +44,20 @@ let action_name = function
   | Settlement _ -> "settlement"
   | Type _ -> "type"
   | Type_and_category _ -> "type-category"
+  | Card_reference -> "card-reference"
+  | Withdrawal_reversal_hint -> "withdrawal-reversal"
 ;;
 
 let action_target = function
   | Category value | Settlement value | Type_and_category (_, value) -> value
   | Type value -> Movement_type.to_string value
+  | Card_reference -> "capture-group-1"
+  | Withdrawal_reversal_hint -> "withdrawal-reversal"
 ;;
 
 let action_type = function
   | Type value | Type_and_category (value, _) -> Some value
-  | Category _ | Settlement _ -> None
+  | Category _ | Settlement _ | Card_reference | Withdrawal_reversal_hint -> None
 ;;
 
 let action_of_fields kind value type_value =
@@ -59,6 +65,8 @@ let action_of_fields kind value type_value =
   | "category", None -> Ok (Category value)
   | "settlement", None -> Ok (Settlement value)
   | "type", None -> Ok (Type (Movement_type.of_string value))
+  | "card-reference", None -> Ok Card_reference
+  | "withdrawal-reversal", None -> Ok Withdrawal_reversal_hint
   | "type-category", Some name ->
     Ok (Type_and_category (Movement_type.of_string name, value))
   | _ -> Or_error.error_string "invalid rule action"
@@ -80,6 +88,8 @@ let create
   let%bind () =
     match mode, action with
     | Automatic, Settlement _ -> Or_error.error_string "settlement rules require review"
+    | Review, (Card_reference | Withdrawal_reversal_hint) ->
+      Or_error.error_string "evidence rules must be automatic or disabled"
     | _ -> Ok ()
   in
   let%bind () =
@@ -127,6 +137,24 @@ let create
     | Settlement card_id ->
       let%map _ = Validation.token "card ID" card_id in
       ()
+    | Card_reference | Withdrawal_reversal_hint ->
+      (match pattern with
+       | None -> Or_error.error_string "evidence rules require a description expression"
+       | Some pattern ->
+         let action =
+           match action with
+           | Card_reference -> Source_evidence.Card_reference
+           | _ -> Withdrawal_reversal
+         in
+         let%map _ =
+           Source_evidence.make_rule
+             ~action
+             ~pattern
+             ~case_sensitive
+             ~account_type
+             ~match_type:None
+         in
+         ())
     | Type _ -> Ok ()
   in
   Ok

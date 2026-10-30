@@ -8,8 +8,6 @@ let csv = "wise_csv"
 let formats = [ camt; csv ]
 let takes_account_label = false
 let overlap = Adapter.Source_ids
-let settlement_card_hint _ = None
-let withdrawal_reversal_hint _ = false
 
 let decode event =
   let open Or_error.Let_syntax in

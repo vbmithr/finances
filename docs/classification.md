@@ -12,7 +12,8 @@ settlement review is available; user-managed tags are not implemented.
 Bundled BoursoBank typing defaults and user rules share one ordered rule set.
 Rules can run automatically on import, require review, or be disabled. Automatic
 type and category actions apply to new movements; settlement actions require
-review. Manual overrides and reviewed accounting decisions take precedence.
+review. Manual overrides and reviewed accounting decisions take precedence. Automatic evidence rules also record card references and
+withdrawal-reversal clues without confirming a settlement or reversal.
 Changing a rule never silently rewrites previously imported movements: type
 refresh and rule application preview historical changes and apply atomically.
 See the [manual](manual.md#transaction-rules) for the current workflow.

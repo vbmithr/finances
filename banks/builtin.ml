@@ -3,12 +3,22 @@ open Base
 (** The banks built into [fin]. External adapters are added by building a
     custom executable with a longer list. *)
 let adapters : (module Adapter.S) list =
-  [ (module Boursobank)
-  ; (module Bunq)
-  ; (module Revolut)
-  ; (module Wise)
-  ; (module Csv_adapter)
-  ]
+  let presets =
+    List.map Institution_preset.all ~f:(fun (p : Institution_preset.t) ->
+      Csv_ofx_adapter.make
+        ~institution:p.institution
+        ~aliases:p.aliases
+        ~csv_format:p.companion_format
+        ~policy:p.matching_policy
+        ~snapshot:p.snapshot
+        ~layout:p.layout
+        ())
+  in
+  presets @ [ (module Bunq); (module Revolut); (module Wise); (module Csv_adapter) ]
+;;
+
+let companion_layout name =
+  Option.map (Institution_preset.find name) ~f:(fun p -> p.layout)
 ;;
 
 let fallback = "csv-movement", Csv_movement.decode
@@ -19,8 +29,14 @@ let source_typing =
   |> Or_error.ok_exn
 ;;
 
+let source_evidence =
+  Json.decode (Jsont.list Source_evidence.default_codec) Source_evidence_defaults.json
+  |> Or_error.ok_exn
+;;
+
 let registry =
-  Registry.create ~fallback ~fallbacks ~source_typing adapters |> Or_error.ok_exn
+  Registry.create ~fallback ~fallbacks ~source_typing ~source_evidence adapters
+  |> Or_error.ok_exn
 ;;
 
 let registry_with_companions profiles =
@@ -32,6 +48,7 @@ let registry_with_companions profiles =
     ~fallback
     ~fallbacks
     ~source_typing
+    ~source_evidence
     ~fallback_institutions:(List.map profiles ~f:fst)
     (dynamic @ adapters)
   |> Or_error.ok_exn
@@ -52,6 +69,7 @@ let registry_with_csv_profile ?(companions = []) ?(institution = "csv") profile 
     ~fallback
     ~fallbacks
     ~source_typing
+    ~source_evidence
     ~fallback_institutions:(institution :: List.map companions ~f:fst)
     ((Csv_adapter.make ~institution ~profile () :: dynamic) @ adapters)
   |> Or_error.ok_exn
@@ -75,6 +93,7 @@ let registry_with_ofx ?(companions = []) ~institution () =
     ~fallback
     ~fallbacks
     ~source_typing
+    ~source_evidence
     ~fallback_institutions:(institution :: List.map companions ~f:fst)
     (extra @ dynamic @ adapters)
   |> Or_error.ok_exn

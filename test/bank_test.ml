@@ -6,7 +6,7 @@ open Finances
 let ok = Or_error.ok_exn
 let error result = Alcotest.(check bool) "rejected" true (Result.is_error result)
 let fixture () = In_channel.read_all "fixtures/bank.ofx"
-let parse contents = ok (Bank_ofx.parse contents)
+let parse contents = ok (Ofx_source.parse contents)
 
 let replace s old replacement =
   String.substr_replace_first s ~pattern:old ~with_:replacement
@@ -123,7 +123,7 @@ let parser_rejections () =
     ; "OFXHEADER:100\n\n<OFX>"
     ; original ^ "<OFX/>"
     ]
-    ~f:(fun contents -> error (Bank_ofx.parse contents))
+    ~f:(fun contents -> error (Ofx_source.parse contents))
 ;;
 
 let timestamp_date () =
@@ -232,7 +232,7 @@ let balance_times () =
       ~pattern:"20260105123000"
       ~with_:"20260105003000.123[5.5:IST]"
   in
-  let parsed = ok (Bank_ofx.parse document) in
+  let parsed = ok (Ofx_source.parse document) in
   let balance = (List.hd_exn parsed.statements).available_balance |> Option.value_exn in
   Alcotest.(check string)
     "balance time uses numeric OFX offset"
@@ -247,7 +247,7 @@ let balance_times () =
   Alcotest.(check bool)
     "invalid balance clock rejected"
     true
-    (Result.is_error (Bank_ofx.parse malformed))
+    (Result.is_error (Ofx_source.parse malformed))
 ;;
 
 let () =

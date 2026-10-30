@@ -6,6 +6,7 @@ type t =
   ; fallbacks : (string * (Source_event.t -> Movement.t Or_error.t)) list
   ; fallback_institutions : Set.M(String).t
   ; source_typing : Source_typing.t Map.M(String).t
+  ; source_evidence : Source_evidence.default list
   }
 
 let create
@@ -13,6 +14,7 @@ let create
       ?(fallbacks = [])
       ?(fallback_institutions = [])
       ?(source_typing = [])
+      ?(source_evidence = [])
       adapters
   =
   let fallback_institutions = Set.of_list (module String) fallback_institutions in
@@ -53,7 +55,14 @@ let create
      with
      | `Duplicate_key name -> Or_error.errorf "duplicate source typing profile: %s" name
      | `Ok source_typing ->
-       Ok { adapters; kinds; fallbacks; fallback_institutions; source_typing })
+       Ok
+         { adapters
+         ; kinds
+         ; fallbacks
+         ; fallback_institutions
+         ; source_typing
+         ; source_evidence
+         })
 ;;
 
 let institutions t = Map.keys t.adapters
@@ -67,6 +76,7 @@ let aliases t institution =
 
 let is_movement t (event : Source_event.t) = Set.mem t.kinds event.kind
 let default_source_typing t institution = Map.find t.source_typing institution
+let default_source_evidence t = t.source_evidence
 
 let movement ?source_typing t (event : Source_event.t) =
   let result =

@@ -3,7 +3,7 @@ open Rel
 
 (** One current experimental baseline; older databases must be reimported. Banks
     have no tables of their own. *)
-let version = 23
+let version = 24
 
 let timestamp = `Expr "(strftime('%Y-%m-%dT%H:%M:%f','now') || '000000000Z')"
 
@@ -379,6 +379,53 @@ module Postings = struct
 
   let definition =
     Sqlite_schema.table ~checks:Sqlite_schema.Check.[ nonnegative ordinal ] table
+  ;;
+end
+
+module Movement_evidence = struct
+  type t =
+    { event_id : int64
+    ; card_reference : string option
+    ; withdrawal_reversal : string
+    }
+
+  let event_id = Col.make "event_id" Type.int64 (fun (r : t) -> r.event_id)
+
+  let card_reference =
+    Col.make "card_reference" Type.(option text) (fun (r : t) -> r.card_reference)
+  ;;
+
+  let withdrawal_reversal =
+    Col.make "withdrawal_reversal" Type.text (fun (r : t) -> r.withdrawal_reversal)
+  ;;
+
+  let row =
+    Row.(
+      unit (fun event_id card_reference withdrawal_reversal ->
+        { event_id; card_reference; withdrawal_reversal })
+      * event_id
+      * card_reference
+      * withdrawal_reversal)
+  ;;
+
+  let table =
+    Table.make
+      ~primary_key:(Table.Primary_key.make [ Col.Def event_id ])
+      ~foreign_keys:
+        [ Table.Foreign_key.make
+            ~cols:[ Col.Def event_id ]
+            ~parent:
+              (Table.Foreign_key.Table (Source_events.table, [ Col.Def Source_events.id ]))
+            ()
+        ]
+      "movement_evidence"
+      row
+  ;;
+
+  let definition =
+    Sqlite_schema.table
+      ~checks:Sqlite_schema.Check.[ one_of withdrawal_reversal [ "yes"; "no" ] ]
+      table
   ;;
 end
 
@@ -1844,7 +1891,15 @@ module Classification_rules = struct
         Sqlite_schema.Check.
           [ one_of mode [ "automatic"; "review"; "disabled" ]
           ; one_of case_mode [ "sensitive"; "insensitive" ]
-          ; one_of action_kind [ "category"; "settlement"; "type"; "type-category" ]
+          ; one_of
+              action_kind
+              [ "category"
+              ; "settlement"
+              ; "type"
+              ; "type-category"
+              ; "card-reference"
+              ; "withdrawal-reversal"
+              ]
           ]
       table
   ;;
@@ -2061,6 +2116,7 @@ end
 let definitions =
   [ Source_events.definition
   ; Movements.definition
+  ; Movement_evidence.definition
   ; Journal_entries.definition
   ; Postings.definition
   ; Import_documents.definition

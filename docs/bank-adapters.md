@@ -1,10 +1,9 @@
 # Bank adapters and format libraries
 
-Status: design, not implemented. Today Store dispatches explicitly to four
-built-in banks, and 18 SQLite tables are specific to one bank. This document
-fixes the target: banks become adapters behind one interface, standard file
-formats become independent libraries, and the schema has no bank-specific
-tables.
+Status: the registry and generic schema are implemented. BoursoBank is a
+data-driven preset using the shared OFX and CSV companion importers; Bunq,
+Revolut and Wise still have adapters. Further format-library extraction and
+external adapter conformance work remain.
 
 ## Rules
 
@@ -137,8 +136,7 @@ written and each STMTTRN tree; `calendar_date` reads OFX dates without moving
 them across time zones. `instant` provides a Ptime view of OFX datetimes, applying
 midnight and GMT defaults and explicit decimal-hour offsets per section 3.2.8 of
 the [OFX specification](https://www.financialdataexchange.org/common/Uploaded%20files/OFX%20files/OFX%202.2.pdf).
-BoursoBank's `Bank_ofx` exposes balance observation instants as Ptime and keeps the
-bank's rules on top:
+`Ofx_source` exposes balance observation instants as Ptime and applies:
 exact quantities, the `DTUSER` exclusion, correction refusal and the canonical
 payload, whose bytes are unchanged (an inbox replay re-imports every stored
 movement as existing).
@@ -168,8 +166,6 @@ module type S = sig
   val aliases : string list         (* names in other banks' descriptions *)
   val kinds : string list           (* event kinds it decodes *)
   val decode : Source_event.t -> Movement.t Or_error.t
-  val settlement_card_hint : Movement.t -> string option
-  val withdrawal_reversal_hint : Movement.t -> bool
   val formats : string list         (* recorded in import history *)
   val probe : filename:string -> string -> string option
   val takes_account_label : bool    (* exports that do not name their account *)
@@ -179,9 +175,8 @@ module type S = sig
 end
 ```
 
-The hint functions expose provider-specific statement evidence for review;
-return `None` or `false` when the source does not supply it. They do not
-confirm an accounting decision.
+Automatic evidence rules record card references and reversal clues at import.
+Review workflows consume those stored clues and still require confirmation.
 
 - The kernel probes every registered adapter. A file is parsed by the requested
   institution's adapter when exactly one of its formats recognizes it; a file
@@ -206,9 +201,11 @@ confirm an accounting decision.
 
 `Ofx_bank` shares OFX decoding, probing and adapter defaults. Parsing takes the
 institution explicitly: `Ofx_bank.parse ~institution contents`. User-added
-institutions can use a generic OFX adapter, while BoursoBank adds its CSV
-companion and source-evidence hints. A user-added OFX institution can configure
-an exact-match CSV companion; its layout is stored with each document. Generic
+institutions can use a generic OFX adapter. BoursoBank composes that importer,
+its CSV companion and aliases from `banks/institution_presets.json`; source
+evidence and typing come from ordinary default rules. A user-added OFX
+institution can configure an exact-match CSV companion; its layout is stored
+with each document. Generic
 primary CSV remains a separate source and cannot be mixed with OFX.
 
 ### Normalized movement

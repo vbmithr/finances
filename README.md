@@ -270,7 +270,7 @@ transactions and preserve their separate statement observations. The complete
 import is atomic: conflicting transaction evidence rolls back new events and the
 new document together. No accounting entries are generated automatically.
 
-`Bank_ofx.parse` supplies typed statements, exact amounts, booking dates, optional
+`Ofx_source.parse` supplies typed statements, exact amounts, booking dates, optional
 names/memos, and separately identified available and ledger balance observations.
 Balance observations expose `as_of : Ptime.t`, parsed through `Ofx.instant`. OFX's omitted
 clock and timezone default to midnight and GMT; explicit numeric offsets are
@@ -292,7 +292,7 @@ or `Date of Date.t`.
 The `events` command prints an RFC 3339 `occurred_at` for instants, or
 `occurred_at: null` and a populated `occurred_on` for date-only OFX records.
 Wise records retain an instant and project using the local booking date.
-This experimental build supports only the current schema baseline (23). Fresh
+This experimental build supports only the current schema baseline (24). Fresh
 files initialize it atomically; other schema versions are rejected without changes.
 There are no historical migrations or schema fixtures. Reimport original statements
 and import exported account settings when resetting an experiment. Category and
@@ -529,7 +529,8 @@ classification. Terminal output uses `$PAGER` (default `less -FRX`); redirected
 and JSON output is not paged.
 Filter by movement type or accounting decision with, for example,
 `fin tx list --type interest` or `fin tx list --classification settlement`.
-Inspect automatic and reviewed rules with `fin rule list`; see the
+Inspect automatic and reviewed rules with `fin rule list`; evidence rules can
+also record card references and withdrawal reversals at import. See the
 [manual](docs/manual.md#automatic-rules-at-import).
 
 Use `fin tx type list` to see available movement types, then run

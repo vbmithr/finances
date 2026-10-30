@@ -222,6 +222,7 @@ type bank_review =
   ; movement_type : Movement_type.t option
   ; imported_movement_type : Movement_type.t option
   ; movement_type_override : Movement_type.t option
+  ; source_evidence : Source_evidence.t
   ; detail_sources : int64 list
   ; classification : review_classification
   ; counter_account : string
@@ -275,6 +276,25 @@ type reversal_history_entry =
   }
 
 val reversal_history : t -> reversal_history_entry list Or_error.t
+
+type source_evidence_change =
+  { event_id : int64
+  ; institution : string
+  ; description : string
+  ; before : Source_evidence.t
+  ; after : Source_evidence.t
+  }
+
+val preview_source_evidence
+  :  ?institution:string
+  -> t
+  -> source_evidence_change list Or_error.t
+
+val refresh_source_evidence
+  :  ?institution:string
+  -> t
+  -> expected:source_evidence_change list
+  -> int Or_error.t
 
 type movement_type_change =
   { event_id : int64

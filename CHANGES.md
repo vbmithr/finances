@@ -10,6 +10,17 @@ short line of their own.
 
 ### 2026-10-30
 
+- Compose BoursoBank from a data-driven preset, the generic OFX importer and
+  CSV companion engine. Preserve aliases, source identities, matching policy
+  and existing evidence behavior while removing the dedicated adapter.
+
+- Move BoursoBank card-settlement and withdrawal-reversal hints into automatic
+  evidence rules, and add `fin rule add-evidence` and `fin tx refresh-evidence`.
+  Store clues at import; refreshing existing clues previews and confirms changes
+  without altering reviewed decisions. **Action required:** schema 24 requires
+  rebuilding the database; back up and export settings with the old executable,
+  then reimport statements and recreate review decisions and rules.
+
 - Add configurable CSV companions for user-added OFX institutions, with exact
   account, date, amount, currency and description matching. Store the selected
   layout with each document; ambiguous rows and metadata conflicts remain for
