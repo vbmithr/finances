@@ -10,8 +10,16 @@ type type_condition =
   | Unknown
   | Is of Movement_type.t
 
+type mode =
+  | Automatic
+  | Review
+  | Disabled
+
 type t = private
-  { name : string
+  { mode : mode
+  ; account_type : string option
+  ; priority : int
+  ; name : string
   ; pattern : string option
   ; institution : string option
   ; match_type : type_condition option
@@ -20,7 +28,10 @@ type t = private
   }
 
 val create
-  :  name:string
+  :  mode:mode
+  -> account_type:string option
+  -> priority:int
+  -> name:string
   -> pattern:string option
   -> institution:string option
   -> match_type:type_condition option

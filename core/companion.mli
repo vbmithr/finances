@@ -12,6 +12,7 @@ type row =
   ; format : string
   ; row_number : int
   ; fields : string list
+  ; context : (string * string) list
   }
 
 (** What a matched row adds to its movement's journal entry. *)

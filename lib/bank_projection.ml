@@ -26,6 +26,10 @@ let ledger_account ~institution (account : Movement.account) =
       && String.equal account.bank_id institution
       && String.equal account.account_type "credit-card"
     then [ "liabilities"; "cards"; institution; account.account_id ]
+    else if
+      String.equal account.bank_id institution
+      && List.mem [ "current"; "savings" ] account.account_type ~equal:String.equal
+    then [ "assets"; "bank"; institution; account.account_type; account.account_id ]
     else
       [ "assets"
       ; "bank"

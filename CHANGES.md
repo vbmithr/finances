@@ -10,7 +10,36 @@ short line of their own.
 
 ### 2026-10-30
 
-- Make BoursoBank import-time source typing configurable, with bundled defaults
+- Add configurable CSV companions for user-added OFX institutions, with exact
+  account, date, amount, currency and description matching. Store the selected
+  layout with each document; ambiguous rows and metadata conflicts remain for
+  review. BoursoBank uses the same layout and matching engine. **Action required:**
+  schema 23 requires rebuilding the database. Back up and export settings with
+  the old executable, then reimport statements and recreate review decisions.
+
+- Extend generic CSV setup to current and savings accounts, with explicit
+  outgoing-amount signs, optional IBANs and bank-account ledger defaults. Saved
+  profiles cover one account and fixed currency; setup also supports day-first
+  and month-first dates and comma-decimal amounts, with explicit format choices.
+  Existing saved profiles retain their original ISO and dot-decimal defaults.
+
+- Allow user-added institutions to import OFX 2.x using the shared parser and
+  stable source IDs. `fin institution list` labels them as generic rather than
+  CSV-only. To avoid duplicate movements, fin refuses mixing generic primary CSV
+  and OFX sources for the same institution; configured CSV companions can
+  enrich OFX without creating a second transaction stream.
+
+- Unify automatic source typing and reviewed transaction rules. BoursoBank
+  defaults now appear in `fin rule list`; `fin rule add --automatic` creates
+  import-time type and category rules, and `fin rule mode` changes application
+  mode. Existing movements change only through previewed operations. Settlement
+  rules continue to require review. **Action required:** schema 22 requires a
+  rebuild. Back up and export settings using the old executable, then reimport
+  statements and recreate rules and review decisions. Before upgrading from
+  schema 21, export customized typing profiles with the old executable; the
+  former institution typing commands and profiles have been removed.
+
+- (Superseded by the unified rules above.) Make BoursoBank import-time source typing configurable, with bundled defaults
   and `fin institution typing show`, `set` and `reset`. User-added institutions
   can define profiles too. Changes apply to new imports; preview and confirm
   `fin tx refresh-types` to update existing source types. Manual overrides and

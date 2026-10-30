@@ -49,6 +49,7 @@ type ('f, 'res) step
 type 'row t
 
 val make : 'f -> ('f, 'f) step
+val constant : 'a -> ('f, 'a -> 'g) step -> ('f, 'g) step
 val col : ?pos:int -> ?name:string -> 'a Cell.t -> ('f, 'a -> 'g) step -> ('f, 'g) step
 val col_pos : ?name:string -> int -> 'a Cell.t -> ('f, 'a -> 'g) step -> ('f, 'g) step
 val col_name : string -> 'a Cell.t -> ('f, 'a -> 'g) step -> ('f, 'g) step

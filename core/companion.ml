@@ -7,6 +7,7 @@ type row =
   ; format : string
   ; row_number : int
   ; fields : string list
+  ; context : (string * string) list
   }
 
 type annotation =

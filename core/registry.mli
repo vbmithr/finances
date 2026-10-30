@@ -5,10 +5,13 @@ open Base
 type t
 
 (** Rejects invalid or duplicate institutions, adapters without kinds, repeated
-    formats and companions for formats the adapter does not declare. An optional
-    fallback decodes the specified kind for otherwise unregistered institutions. *)
+    formats and companions for formats the adapter does not declare. Fallbacks
+    decode specified kinds for unregistered institutions and for explicitly
+    named fallback institutions whose current adapter does not claim that kind. *)
 val create
   :  ?fallback:string * (Source_event.t -> Movement.t Or_error.t)
+  -> ?fallbacks:(string * (Source_event.t -> Movement.t Or_error.t)) list
+  -> ?fallback_institutions:string list
   -> ?source_typing:Source_typing.t list
   -> (module Adapter.S) list
   -> t Or_error.t
@@ -26,10 +29,10 @@ val aliases : t -> string -> string list
     future sources) are not bank movements. *)
 val is_movement : t -> Source_event.t -> bool
 
-(** Decodes with the venue adapter, or the explicitly configured fallback for
-    an unregistered venue. All other unknown bank kinds are errors. *)
+(** Look up a bundled automatic source-typing profile. *)
 val default_source_typing : t -> string -> Source_typing.t option
 
+(** Decode with the venue adapter or an applicable format fallback. *)
 val movement
   :  ?source_typing:Source_typing.t
   -> t

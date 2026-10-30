@@ -205,9 +205,11 @@ confirm an accounting decision.
   and listing are the kernel's.
 
 `Ofx_bank` shares OFX decoding, probing and adapter defaults. Parsing takes the
-institution explicitly: `Ofx_bank.parse ~institution contents`. Each adapter
-supplies its own institution and aliases, wrapping the parser to match
-`Adapter.S`; no functor is needed. BoursoBank adds its CSV companion.
+institution explicitly: `Ofx_bank.parse ~institution contents`. User-added
+institutions can use a generic OFX adapter, while BoursoBank adds its CSV
+companion and source-evidence hints. A user-added OFX institution can configure
+an exact-match CSV companion; its layout is stored with each document. Generic
+primary CSV remains a separate source and cannot be mixed with OFX.
 
 ### Normalized movement
 
@@ -340,12 +342,10 @@ Changing any of these requires a schema version bump and a rebuild:
 - Wise fees: the observed CAMT has no `Chrgs`. Whether the CSV fee column should
   ever become a posted fee, or stay a journal tag.
 
-## Source typing profiles
+## Transaction rules
 
-The registry applies an institution's ordered source typing profile to decoded
-primary movements at import. Bundled BoursoBank defaults live in
-`banks/source_type_defaults.json`; database overrides also work for user-added
-institutions. Profile changes do not modify existing movements until the user
-previews and confirms a type refresh. Wise companion type-code mappings remain
-in its adapter and are not affected by primary source typing profiles. Source
-typing is independent of reviewed accounting rules and manual overrides.
+Fresh databases install bundled BoursoBank defaults into the same ordered rule
+table as user rules. Store applies automatic type and category actions to new
+movements; changing a rule does not rewrite existing movements. Type refresh and
+rule application preview historical changes. Wise companion type-code mappings
+remain in its adapter and are not affected by the automatic source rules.

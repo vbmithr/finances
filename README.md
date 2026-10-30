@@ -251,11 +251,13 @@ to whitespace. `events` prints metadata as JSON without printing source payloads
 dune exec fin -- import boursobank /path/to/statements
 ```
 
-Every statement import goes through `fin import BANK PATH...`, replacing the old
-`fin bank sync` command. `BANK` is required and must name a
-registered bank (`boursobank`, `bunq`, `revolut` or `wise`); files imported under
-any other identifier are rejected, with the attempt recorded. The institution's
-adapter recognizes each file's format; a file another bank recognizes is rejected
+Import statements with `fin import BANK PATH...`, replacing the old
+`fin bank sync` command. A generic CSV can also be passed directly as
+`fin import FILE.csv`. `BANK` names a built-in institution (`boursobank`,
+`bunq`, `revolut` or `wise`) or one added with `fin institution add NAME`.
+User-added institutions support generic OFX 2.x, configurable account or card
+CSVs, and CSV companions for OFX; see the [manual](docs/manual.md#configure-a-csv-companion).
+The institution's adapter recognizes each file's format; a file another bank recognizes is rejected
 with the institution to use instead. Keep this identifier consistent across
 imports. Each file's outcome lists inserted and existing movements; all accounts
 in a file are imported.
@@ -290,7 +292,7 @@ or `Date of Date.t`.
 The `events` command prints an RFC 3339 `occurred_at` for instants, or
 `occurred_at: null` and a populated `occurred_on` for date-only OFX records.
 Wise records retain an instant and project using the local booking date.
-This experimental build supports only the current schema baseline (21). Fresh
+This experimental build supports only the current schema baseline (23). Fresh
 files initialize it atomically; other schema versions are rejected without changes.
 There are no historical migrations or schema fixtures. Reimport original statements
 and import exported account settings when resetting an experiment. Category and
@@ -397,9 +399,9 @@ evidence and entries. Input files are never modified or moved.
 The summary distinguishes imported documents, unchanged documents, rejected inputs,
 unsupported formats, unreadable files, and ignored paths. The observed BoursoBank
 CSV layout, Wise 23-column CSV and Bunq seven-column CSV are companion observations.
-Revolut ten-column CSV supplies primary movements. Other card CSV layouts can be
-configured interactively with `fin import card.csv --provider PROVIDER --account-id CARD`; see the
-[manual](docs/manual.md#configure-another-card-csv). Excel and QIF are unsupported. Companion CSV observations never create a second
+Revolut ten-column CSV supplies primary movements. Other account or card CSV
+layouts can be configured interactively with `fin import statement.csv` and
+provider and account options; see the [manual](docs/manual.md#configure-another-csv). Excel and QIF are unsupported. Companion CSV observations never create a second
 transaction stream; Revolut CSV is its own primary movement source.
 
 Successful files commit independently. Import generates a journal from successfully
@@ -527,8 +529,8 @@ classification. Terminal output uses `$PAGER` (default `less -FRX`); redirected
 and JSON output is not paged.
 Filter by movement type or accounting decision with, for example,
 `fin tx list --type interest` or `fin tx list --classification settlement`.
-Inspect and customize import-time source typing with `fin institution typing show`,
-`set` and `reset`; see the [manual](docs/manual.md#configuring-import-time-typing).
+Inspect automatic and reviewed rules with `fin rule list`; see the
+[manual](docs/manual.md#automatic-rules-at-import).
 
 Use `fin tx type list` to see available movement types, then run
 `fin tx type set EVENT-ID TYPE` to record a manual override. The imported type

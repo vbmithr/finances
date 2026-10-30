@@ -82,7 +82,12 @@ let decode (source : Source_event.t) =
        && String.equal source.source_id expected.source_id
        && Poly.equal source.occurred expected.occurred)
   then Or_error.error_string "CSV source identity disagrees with payload"
-  else
+  else (
+    let own_iban =
+      match t.account_type with
+      | "prepaid-card" | "credit-card" -> Movement.Not_applicable
+      | _ -> Movement.Unknown
+    in
     Movement.create
       ~account:
         { bank_id = source.venue
@@ -90,10 +95,10 @@ let decode (source : Source_event.t) =
         ; account_type = t.account_type
         ; currency = t.currency
         }
-      ~own_iban:Not_applicable
+      ~own_iban
       ~booked_on:t.date
       ~amount:t.amount
-      [ t.description ]
+      [ t.description ])
 ;;
 
 let events ?(institution = "csv") ~account_id rows =

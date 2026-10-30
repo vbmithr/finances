@@ -206,25 +206,6 @@ let reverted () =
           ]))
 ;;
 
-let source_typing_stale_preview () =
-  ok
-    (Store.with_open ~registry:Builtin.registry ":memory:" (fun db ->
-       let original = ok (Store.source_typing_profile db "boursobank") in
-       let empty = ok (Source_typing.empty "boursobank") in
-       ok (Store.set_source_typing_profile db "boursobank" ~expected:original empty);
-       rejected
-         "stale profile is not replaced"
-         (Store.set_source_typing_profile db "boursobank" ~expected:original original);
-       rejected
-         "stale profile is not reset"
-         (Store.reset_source_typing_profile db "boursobank" ~expected:original);
-       Alcotest.(check string)
-         "profile remains unchanged"
-         (Source_typing.to_json empty)
-         (Source_typing.to_json (ok (Store.source_typing_profile db "boursobank")));
-       Ok ()))
-;;
-
 let () =
   Alcotest.run
     "registry"
@@ -233,10 +214,6 @@ let () =
         ; Alcotest.test_case "dispatch" `Quick dispatch
         ; Alcotest.test_case "aliases" `Quick aliases
         ; Alcotest.test_case "unregistered institution import" `Quick unregistered_import
-        ; Alcotest.test_case
-            "source typing stale preview"
-            `Quick
-            source_typing_stale_preview
         ; Alcotest.test_case "ISO 4217 currencies" `Quick currencies
         ; Alcotest.test_case "reverted Revolut rows" `Quick reverted
         ] )

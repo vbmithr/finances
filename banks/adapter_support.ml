@@ -21,10 +21,18 @@ let companion_document parse ~number ~fields contents =
     { Document.empty with companion_rows })
 ;;
 
-let companion ~format ~policy ~of_fields ~input ~candidate ~match_rows ~annotate ~describe
+let companion_with_row
+      ~decode_row
+      ~format
+      ~policy
+      ~input
+      ~candidate
+      ~match_rows
+      ~annotate
+      ~describe
   : Companion.t
   =
-  let row (r : Companion.row) = of_fields ~row_number:r.row_number r.fields in
+  let row = decode_row in
   { format
   ; policy
   ; match_rows =
@@ -52,6 +60,19 @@ let companion ~format ~policy ~of_fields ~input ~candidate ~match_rows ~annotate
         let%map decoded = row r in
         describe decoded)
   }
+;;
+
+let companion ~format ~policy ~of_fields ~input ~candidate ~match_rows ~annotate ~describe
+  =
+  companion_with_row
+    ~format
+    ~policy
+    ~input
+    ~candidate
+    ~match_rows
+    ~annotate
+    ~describe
+    ~decode_row:(fun (r : Companion.row) -> of_fields ~row_number:r.row_number r.fields)
 ;;
 
 let csv_adapter

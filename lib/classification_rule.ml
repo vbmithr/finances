@@ -20,8 +20,16 @@ let condition_of_string = function
   | value -> Is (Movement_type.of_string value)
 ;;
 
+type mode =
+  | Automatic
+  | Review
+  | Disabled
+
 type t =
-  { name : string
+  { mode : mode
+  ; account_type : string option
+  ; priority : int
+  ; name : string
   ; pattern : string option
   ; institution : string option
   ; match_type : type_condition option
@@ -56,9 +64,31 @@ let action_of_fields kind value type_value =
   | _ -> Or_error.error_string "invalid rule action"
 ;;
 
-let create ~name ~pattern ~institution ~match_type ~case_sensitive ~action =
+let create
+      ~mode
+      ~account_type
+      ~priority
+      ~name
+      ~pattern
+      ~institution
+      ~match_type
+      ~case_sensitive
+      ~action
+  =
   let open Or_error.Let_syntax in
   let%bind name = Validation.token "rule name" name in
+  let%bind () =
+    match mode, action with
+    | Automatic, Settlement _ -> Or_error.error_string "settlement rules require review"
+    | _ -> Ok ()
+  in
+  let%bind () =
+    match account_type with
+    | None -> Ok ()
+    | Some value ->
+      let%map _ = Validation.text "account type" value in
+      ()
+  in
   let%bind () =
     match pattern with
     | None when Option.is_none match_type && Option.is_none institution ->
@@ -99,5 +129,15 @@ let create ~name ~pattern ~institution ~match_type ~case_sensitive ~action =
       ()
     | Type _ -> Ok ()
   in
-  Ok { name; pattern; institution; match_type; case_sensitive; action }
+  Ok
+    { mode
+    ; account_type
+    ; priority
+    ; name
+    ; pattern
+    ; institution
+    ; match_type
+    ; case_sensitive
+    ; action
+    }
 ;;

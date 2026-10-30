@@ -354,6 +354,7 @@
   import_cli_test.py
   fixtures/revolut.csv
   fixtures/bank.ofx
+  fixtures/bank.csv
   fixtures/wise.xml
   fixtures/wise.csv)
  (action

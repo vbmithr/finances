@@ -142,6 +142,47 @@ class ImportOnboarding(unittest.TestCase):
         self.assertIn('inserted=1', output)
         self.assertEqual(self.accounts()[0]['institution'], 'provider')
 
+    def test_generic_bank_csv_localized_formats(self):
+        csv_path = self.root / 'localized.csv'
+        csv_path.write_text('Date;Description;EUR\n03/04/2026;Rent;-123,45\n14/04/2026;Salary;950,50\n')
+        output = self.terminal(['import', str(csv_path), '--account-id', 'main', '--provider', 'localbank'], [
+            ('Use these columns?', '1'),
+            ('Date format:', '2'),
+            ('Amount decimal mark:', '2'),
+            ('Account type:', '3'),
+            ('Are outgoing amounts positive in the file?', '2'),
+            ('Skip a summary row with an empty date?', '2'),
+            ('Import these transactions?', '1'),
+            ('IBAN (Enter to skip):', ''),
+        ])
+        self.assertIn('account movement: -123.45 EUR', output)
+        rows = json.loads(self.run_fin('tx', 'list', '--json').stdout)
+        rent = next(row for row in rows if row['description'] == 'Rent')
+        self.assertEqual((rent['booked_on'], rent['amount']), ('2026-04-03', '-123.45'))
+        self.assertIn('inserted=0', self.run_fin('import', csv_path, '--account-id', 'main', '--provider', 'localbank').stdout)
+
+    def test_generic_bank_csv_setup_and_reimport(self):
+        csv_path = self.root / 'checking.csv'
+        csv_path.write_text('Date,Description,EUR\n2026-10-01,Rent,-120.00\n2026-10-02,Salary,950.00\n')
+        output = self.terminal(['import', str(csv_path), '--account-id', 'main', '--provider', 'mybank'], [
+            ('Use these columns?', '1'),
+            ('Account type:', '3'),
+            ('Are outgoing amounts positive in the file?', '2'),
+            ('Skip a summary row with an empty date?', '2'),
+            ('Import these transactions?', '1'),
+            ('IBAN (Enter to skip):', ''),
+        ])
+        self.assertIn('3. Current account', output)
+        self.assertIn('account movement: -120 EUR', output)
+        self.assertIn('inserted=2', output)
+        rows = json.loads(self.run_fin('tx', 'list', '--json').stdout)
+        self.assertEqual({(r['description'], r['amount']) for r in rows}, {('Rent', '-120'), ('Salary', '950')})
+        account = self.accounts()[0]
+        self.assertEqual(account['ledger_account'], 'assets:bank:mybank:current:main')
+        self.assertEqual(account['account_type'], 'current')
+        self.assertIn('inserted=0', self.run_fin('import', csv_path, '--account-id', 'main', '--provider', 'mybank').stdout)
+        self.assertEqual(len(json.loads(self.run_fin('tx', 'list', '--json').stdout)), 2)
+
     def test_generic_csv_setup_and_reimport(self):
         csv_path = self.root / 'card.csv'
         csv_path.write_text('Merchant,Category,Date,Local currency,Local amount,Exchange rate,USD\n'
@@ -420,76 +461,154 @@ class ImportOnboarding(unittest.TestCase):
         matches = json.loads(self.run_fin('tx', 'list', '--type', 'example:reported', '--json').stdout)
         self.assertEqual({r['event_id'] for r in matches}, {source, target})
 
-    def test_configurable_institution_source_types(self):
+    def test_automatic_typing_rules(self):
+        rules = json.loads(self.run_fin('rule', 'list', '--json').stdout)
+        self.assertTrue(any(r['institution'] == 'boursobank' and r['mode'] == 'automatic' for r in rules))
+        self.run_fin('rule', 'add', 'my-card', '^CAFÉ & CO$', '--institution', 'boursobank', '--set-type', 'card', '--automatic', '--priority=-1')
         self.run_fin('import', 'boursobank', 'fixtures/bank.ofx')
         rows = json.loads(self.run_fin('tx', 'list', '--json').stdout)
-        original = next(r for r in rows if r['description'] == 'CAFÉ & CO')
-        event = original['event_id']
-        self.run_fin('tx', 'type', 'set', event, 'fee')
-        decisions = self.root / 'source-rule-category.json'
-        decisions.write_text(json.dumps([{'event_id': event, 'account': 'expenses:shopping', 'reason': 'reviewed'}]))
-        self.run_fin('tx', 'category', 'apply', decisions)
-        before_journal = self.run_fin('journal', 'export').stdout
-        defaults = json.loads(self.run_fin('institution', 'typing', 'show', 'bourso').stdout)
-        self.assertEqual(defaults['institution'], 'boursobank')
-        custom = dict(defaults)
-        custom['rules'] = [{'description': '^CAFÉ & CO$', 'account_type': None,
-                            'case_sensitive': False, 'type': 'bonus'}] + defaults['rules']
-        profile = self.root / 'source-types.json'
-        profile.write_text(json.dumps(custom, ensure_ascii=False))
-        output = self.terminal(['institution', 'typing', 'set', 'boursobank', profile],
-            [('Save this configuration? [Y/n]:', 'n')])
-        self.assertIn('Nothing changed.', output)
-        self.assertEqual(json.loads(self.run_fin('institution', 'typing', 'show', 'boursobank').stdout), defaults)
-        self.run_fin('institution', 'typing', 'set', 'boursobank', profile, '--yes')
-        row = next(r for r in json.loads(self.run_fin('tx', 'list', '--json').stdout) if r['event_id'] == event)
-        self.assertEqual(row['movement_type'], 'fee')
-        self.assertEqual(row['imported_movement_type'], original['movement_type'])
-        self.assertIn('movement_types_changed=1', self.run_fin('tx', 'refresh-types', '--institution', 'boursobank', '--yes').stdout)
-        row = next(r for r in json.loads(self.run_fin('tx', 'list', '--json').stdout) if r['event_id'] == event)
-        self.assertEqual((row['imported_movement_type'], row['movement_type'], row['counter_account']),
-                         ('bonus', 'fee', 'expenses:shopping'))
-        self.assertEqual(self.run_fin('journal', 'export').stdout, before_journal)
-        fresh = self.root / 'another.ofx'
-        fresh.write_text(Path('fixtures/bank.ofx').read_text().replace('<FITID>shared-id</FITID>', '<FITID>new-id</FITID>', 1))
-        self.run_fin('import', 'boursobank', fresh)
-        rows = json.loads(self.run_fin('tx', 'list', '--json', '--search', 'CAFÉ').stdout)
-        self.assertEqual({r['imported_movement_type'] for r in rows}, {'bonus'})
-        bad = self.root / 'bad-source-types.json'
-        bad.write_text(json.dumps({'version': 1, 'institution': 'boursobank', 'rules': [
-            {'description': '[', 'account_type': None, 'case_sensitive': False, 'type': 'fee'}]}))
-        self.assertNotEqual(self.run_fin('institution', 'typing', 'set', 'boursobank', bad, '--yes', check=False).returncode, 0)
-        self.assertEqual(json.loads(self.run_fin('institution', 'typing', 'show', 'boursobank').stdout), custom)
-        self.run_fin('institution', 'typing', 'reset', 'boursobank', '--yes')
-        self.assertEqual(json.loads(self.run_fin('institution', 'typing', 'show', 'boursobank').stdout), defaults)
-        self.assertEqual(next(r for r in json.loads(self.run_fin('tx', 'list', '--json').stdout) if r['event_id'] == event)['imported_movement_type'], 'bonus')
+        row = next(r for r in rows if r['description'] == 'CAFÉ & CO')
+        self.assertEqual(row['movement_type'], 'card')
+        self.run_fin('tx', 'type', 'set', row['event_id'], 'fee')
+        self.run_fin('rule', 'delete', 'my-card', '--yes')
         self.run_fin('tx', 'refresh-types', '--institution', 'boursobank', '--yes')
-        row = next(r for r in json.loads(self.run_fin('tx', 'list', '--json').stdout) if r['event_id'] == event)
-        self.assertIsNone(row['imported_movement_type'])
+        row = next(r for r in json.loads(self.run_fin('tx', 'list', '--json').stdout) if r['event_id'] == row['event_id'])
         self.assertEqual(row['movement_type'], 'fee')
-        self.assertNotEqual(self.run_fin('institution', 'typing', 'show', 'no-such-provider', check=False).returncode, 0)
+        self.assertIsNone(row['imported_movement_type'])
 
-    def test_configurable_typing_for_generic_institution(self):
+    def test_automatic_rule_categories_and_modes(self):
+        self.run_fin('rule', 'add', 'shop', '^CAFÉ & CO$', '--institution', 'boursobank', '--match-type', 'unknown', '--set-type', 'card', '--category', 'expenses:shopping', '--automatic')
+        self.run_fin('rule', 'mode', 'shop', 'disabled')
+        rules = json.loads(self.run_fin('rule', 'list', '--json').stdout)
+        self.assertEqual(next(r for r in rules if r['name'] == 'shop')['mode'], 'disabled')
+        self.run_fin('rule', 'mode', 'shop', 'automatic')
+        self.run_fin('import', 'boursobank', 'fixtures/bank.ofx')
+        row = next(r for r in json.loads(self.run_fin('tx', 'list', '--json').stdout) if r['description'] == 'CAFÉ & CO')
+        self.assertEqual(row['movement_type'], 'card')
+        self.assertEqual(row['counter_account'], 'expenses:shopping')
+        self.assertIn('Automatic rule shop', self.run_fin('tx', 'category', 'history').stdout)
+        preview = json.loads(self.run_fin('rule', 'preview', 'shop', '--json').stdout)
+        self.assertIn(row['event_id'], [m['transaction']['event_id'] for m in preview])
+        self.run_fin('rule', 'add', 'shop', '^CAFÉ & CO$', '--institution', 'boursobank', '--set-type', 'fee', '--automatic', '--replace')
+        self.run_fin('rule', 'mode', 'shop', 'disabled')
+        self.run_fin('import', 'boursobank', 'fixtures/bank.ofx')
+        row2 = next(r for r in json.loads(self.run_fin('tx', 'list', '--json').stdout) if r['event_id'] == row['event_id'])
+        self.assertEqual(row2['counter_account'], 'expenses:shopping')
+        self.assertEqual(row2['movement_type'], 'card')
+
+    def test_user_institution_imports_generic_ofx(self):
         self.run_fin('institution', 'add', 'provider')
-        profile = json.loads(self.run_fin('institution', 'typing', 'show', 'provider').stdout)
-        self.assertEqual(profile, {'version': 1, 'institution': 'provider', 'rules': []})
-        profile['rules'].append({'description': '^Shop$', 'account_type': None,
-                                 'case_sensitive': False, 'type': 'card'})
-        path = self.root / 'generic-types.json'
-        path.write_text(json.dumps(profile))
-        self.run_fin('institution', 'typing', 'set', 'provider', path, '--yes')
-        csv_path = self.root / 'generic.csv'
-        csv_path.write_text('Merchant,Date,USD\nShop,2026-10-01,11.00\n')
-        self.terminal(['import', 'provider', csv_path, '--account-id', 'card'], [
+        result = self.run_fin('import', 'provider', 'fixtures/bank.ofx')
+        self.assertIn('imported=1', result.stdout)
+        rows = json.loads(self.run_fin('tx', 'list', '--json').stdout)
+        self.assertTrue(rows)
+        self.assertTrue(all(row['institution'] == 'provider' for row in rows))
+        self.assertTrue(json.loads(self.run_fin('account', 'export').stdout)['accounts'])
+        self.run_fin('status')
+        self.run_fin('tx', 'refresh-types', '--institution', 'provider', '--yes')
+        self.assertIn('unchanged=1', self.run_fin('import', 'provider', 'fixtures/bank.ofx').stdout)
+        directory = self.root / 'generic-ofx'
+        directory.mkdir()
+        (directory / 'again.ofx').write_bytes(Path('fixtures/bank.ofx').read_bytes())
+        self.assertIn('unchanged=1', self.run_fin('import', 'provider', directory).stdout)
+        self.assertEqual(len(json.loads(self.run_fin('tx', 'list', '--json').stdout)), len(rows))
+        mixed = self.run_fin('import', 'provider', 'fixtures/bank.ofx', self.csv, check=False)
+        self.assertNotEqual(mixed.returncode, 0)
+        self.assertIn('separate movement sources', mixed.stderr)
+        sequential = self.run_fin('import', 'provider', self.csv, check=False)
+        self.assertNotEqual(sequential.returncode, 0)
+        self.assertIn('another generic format', sequential.stderr)
+
+    def test_generic_ofx_csv_companion_profile(self):
+        self.run_fin('institution', 'add', 'provider')
+        template = json.loads(self.run_fin('institution', 'companion', 'show', 'boursobank').stdout)
+        template['currency'] = 'EUR'
+        path = self.root / 'companion.json'
+        path.write_text(json.dumps(template, ensure_ascii=False))
+        self.run_fin('institution', 'companion', 'set', 'provider', path, '--yes')
+        self.assertEqual(json.loads(self.run_fin('institution', 'companion', 'show', 'provider').stdout), template)
+        csv_result = self.run_fin('import', 'provider', 'fixtures/bank.csv')
+        self.assertIn('inserted=0', csv_result.stdout)
+        self.assertEqual(json.loads(self.run_fin('tx', 'list', '--json').stdout), [])
+        self.run_fin('import', 'provider', 'fixtures/bank.ofx')
+        rows = json.loads(self.run_fin('tx', 'list', '--json').stdout)
+        self.assertEqual(len(rows), 3)
+        observations = json.loads(self.run_fin('statement', 'companions', '--institution', 'provider').stdout)
+        self.assertEqual(len(observations), 3)
+        self.assertTrue(all(row['state'] == 'matched' for row in observations))
+        clear = self.run_fin('institution', 'companion', 'clear', 'provider', '--yes', check=False)
+        self.assertNotEqual(clear.returncode, 0)
+        self.assertIn('while companion rows exist', clear.stderr)
+        self.assertIn('matched=3', self.run_fin('statement', 'match', '--institution', 'provider').stdout)
+        self.assertIn('unchanged=2', self.run_fin('import', 'provider', 'fixtures/bank.csv', 'fixtures/bank.ofx').stdout)
+        template['category'] = None
+        path.write_text(json.dumps(template, ensure_ascii=False))
+        self.run_fin('institution', 'companion', 'set', 'provider', path, '--yes')
+        self.assertIn('matched=3', self.run_fin('statement', 'match', '--institution', 'provider').stdout)
+        observations2 = json.loads(self.run_fin('statement', 'companions', '--institution', 'provider').stdout)
+        self.assertEqual(observations, observations2)
+        refused = self.run_fin('import', 'provider', 'fixtures/bank.csv', check=False)
+        self.assertNotEqual(refused.returncode, 0)
+        self.assertIn('different context', refused.stdout)
+        self.assertNotEqual(self.run_fin('import', self.csv, '--provider', 'provider', '--account-id', 'main', check=False).returncode, 0)
+        template.update({
+            'name': 'Another layout', 'header': ['Date', 'Account', 'Text', 'Amount', 'Category'],
+            'separator': ';', 'account_id': 1, 'booked_on': 0, 'amount': 3, 'description': 2,
+            'value_on': None, 'suggested_description': None, 'category': 4,
+            'parent_category': None, 'comment': None, 'account_label': None,
+            'reported_balance': None, 'pointage': None, 'date_format': 'day-first',
+            'amount_format': 'comma', 'balance_format': 'dot',
+        })
+        path.write_text(json.dumps(template, ensure_ascii=False))
+        self.run_fin('institution', 'companion', 'set', 'provider', path, '--yes')
+        newer = self.root / 'another-layout.csv'
+        newer.write_text('Date;Account;Text;Amount;Category\n03/01/2026;CHECKING;CAFÉ & CO;-0,10;Food, drinks\n')
+        self.run_fin('import', 'provider', newer)
+        self.assertIn('matched=4', self.run_fin('statement', 'match', '--institution', 'provider').stdout)
+        self.assertEqual(len(json.loads(self.run_fin('statement', 'companions', '--institution', 'provider').stdout)), 4)
+        self.assertEqual(len(json.loads(self.run_fin('tx', 'list', '--json').stdout)), 3)
+        primary = self.root / 'primary.csv'
+        primary.write_text('Date,Description,EUR\n2026-02-01,Shop,5.00\n')
+        self.terminal(['import', str(primary), '--account-id', 'card', '--provider', 'other'], [
             ('Use these columns?', '1'), ('Account type:', '1'),
             ('Are purchases positive amounts in the file?', '1'),
             ('Skip a summary row with an empty date?', '2'), ('Import these transactions?', '1')])
-        row = json.loads(self.run_fin('tx', 'list', '--json').stdout)[0]
-        self.assertEqual((row['movement_type'], row['classification']), ('card', 'unclassified'))
-        self.run_fin('account', 'delete', row['account_id'], '--yes')
-        self.run_fin('institution', 'delete', 'provider', '--yes')
+        self.assertEqual(len(json.loads(self.run_fin('tx', 'list', '--json').stdout)), 4)
+        self.assertIn('matched=4', self.run_fin('statement', 'match', '--institution', 'provider').stdout)
+
+    def test_companion_currency_prevents_wrong_match(self):
         self.run_fin('institution', 'add', 'provider')
-        self.assertEqual(json.loads(self.run_fin('institution', 'typing', 'show', 'provider').stdout)['rules'], [])
+        template = json.loads(self.run_fin('institution', 'companion', 'show', 'boursobank').stdout)
+        path = self.root / 'companion.json'
+        invalid = dict(template, account_id=999)
+        path.write_text(json.dumps(invalid, ensure_ascii=False))
+        invalid_result = self.run_fin('institution', 'companion', 'set', 'provider', path, '--yes', check=False)
+        self.assertNotEqual(invalid_result.returncode, 0)
+        self.assertIn('outside the header', invalid_result.stderr)
+        path.write_text(json.dumps(template, ensure_ascii=False))
+        missing = self.run_fin('institution', 'companion', 'set', 'provider', path, '--yes', check=False)
+        self.assertNotEqual(missing.returncode, 0)
+        self.assertIn('must specify its ISO currency', missing.stderr)
+        template['currency'] = 'USD'
+        path.write_text(json.dumps(template, ensure_ascii=False))
+        self.run_fin('institution', 'companion', 'set', 'provider', path, '--yes')
+        self.run_fin('import', 'provider', 'fixtures/bank.ofx', 'fixtures/bank.csv')
+        observations = json.loads(self.run_fin('statement', 'companions', '--institution', 'provider').stdout)
+        self.assertEqual(len(observations), 3)
+        self.assertTrue(all(row['state'] == 'unmatched' for row in observations))
+
+    def test_unused_companion_institution_can_be_deleted(self):
+        self.run_fin('institution', 'add', 'tempbank')
+        template = json.loads(self.run_fin('institution', 'companion', 'show', 'boursobank').stdout)
+        template['currency'] = 'EUR'
+        path = self.root / 'companion.json'
+        path.write_text(json.dumps(template, ensure_ascii=False))
+        self.run_fin('institution', 'companion', 'set', 'tempbank', path, '--yes')
+        self.run_fin('institution', 'companion', 'clear', 'tempbank', '--yes')
+        self.assertNotEqual(self.run_fin('institution', 'companion', 'show', 'tempbank', check=False).returncode, 0)
+        self.run_fin('institution', 'companion', 'set', 'tempbank', path, '--yes')
+        self.run_fin('institution', 'delete', 'tempbank', '--yes')
+        self.assertNotIn('tempbank', self.run_fin('institution', 'list').stdout)
 
     def test_institution_list_reports_builtin_and_added(self):
         self.run_fin('institution', 'add', 'provider')
@@ -498,7 +617,7 @@ class ImportOnboarding(unittest.TestCase):
         self.assertIn('wise', result)
         self.assertIn('bunq', result)
         self.assertIn('revolut', result)
-        self.assertIn('provider (generic CSV)', result)
+        self.assertIn('provider (generic)', result)
         self.assertNotEqual(self.run_fin('institution', 'add', 'provider', check=False).returncode, 0)
         self.assertNotEqual(self.run_fin('institution', 'add', 'bourso', check=False).returncode, 0)
 
@@ -535,10 +654,10 @@ class ImportOnboarding(unittest.TestCase):
         self.assertNotEqual(self.run_fin('institution', 'delete', '--yes', check=False).returncode, 0)
         output = self.terminal(['institution', 'delete', 'provider'], [('Delete this institution? [Y/n]:', 'no')])
         self.assertIn('Nothing deleted.', output)
-        self.assertIn('provider (generic CSV)', self.run_fin('institution', 'list').stdout)
+        self.assertIn('provider (generic)', self.run_fin('institution', 'list').stdout)
         self.run_fin('institution', 'delete', 'provider', '--yes')
         result = self.run_fin('institution', 'list').stdout
-        self.assertNotIn('provider (generic CSV)', result)
+        self.assertNotIn('provider (generic)', result)
         self.assertIn('wise (built-in)', result)
 
     def test_institution_first_import_saves_profile(self):

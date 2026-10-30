@@ -5,6 +5,7 @@ type rule =
   ; account_type : string option
   ; case_sensitive : bool
   ; kind : Movement_type.t
+  ; match_type : string option
   ; compiled : Re.re
   }
 
@@ -39,6 +40,7 @@ let make_rule description account_type case_sensitive kind =
     ; account_type
     ; case_sensitive
     ; kind = Movement_type.of_string kind
+    ; match_type = None
     ; compiled
     }
 ;;
@@ -69,6 +71,9 @@ let codec =
 let of_json text = Json.decode codec text
 let to_json t = Json.encode ~format:Jsont.Indent codec t
 let institution t = t.institution
+let rules t = t.rules
+let with_match_type r match_type = { r with match_type }
+let create ~institution rules = { institution; rules }
 
 let empty institution =
   Or_error.map (Validation.token "institution" institution) ~f:(fun institution ->
@@ -85,6 +90,12 @@ let apply t movement =
         r.account_type
         ~default:true
         ~f:(String.equal movement.account.account_type)
+      && Option.value_map r.match_type ~default:true ~f:(fun expected ->
+        match expected, movement.movement_type with
+        | "unknown", None -> true
+        | "unknown", Some _ -> false
+        | _, Some kind -> String.equal expected (Movement_type.to_string kind)
+        | _, None -> false)
       && Re.execp r.compiled description)
   with
   | None -> movement

@@ -240,6 +240,14 @@ let resolve_column ~trim_header ~header ?pos ?name () =
   | None, None -> failwith "column selector must specify pos or name"
 ;;
 
+let constant value prev =
+  { compile =
+      (fun ~trim_header ~header ctx ->
+        let apply = prev.compile ~trim_header ~header ctx in
+        apply value)
+  }
+;;
+
 let col ?pos ?name (cell : _ Cell.t) prev =
   { compile =
       (fun ~trim_header ~header ->

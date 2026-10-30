@@ -222,6 +222,9 @@ let rule_batch_is_atomic () =
     let rule =
       ok
         (Classification_rule.create
+           ~mode:Review
+           ~account_type:None
+           ~priority:1000
            ~name:"all"
            ~pattern:(Some ".")
            ~institution:None
@@ -254,6 +257,9 @@ let rule_batch_is_atomic () =
     let replacement =
       ok
         (Classification_rule.create
+           ~mode:Review
+           ~account_type:None
+           ~priority:1000
            ~name:"all"
            ~pattern:(Some "C")
            ~institution:None

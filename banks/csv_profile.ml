@@ -1,14 +1,78 @@
 open Base
 
 (* A user-selected layout; account identity and overlap remain import policy. *)
+type account_type =
+  | Prepaid_card
+  | Credit_card
+  | Current
+  | Savings
+
+let account_type_name = function
+  | Prepaid_card -> "prepaid-card"
+  | Credit_card -> "credit-card"
+  | Current -> "current"
+  | Savings -> "savings"
+;;
+
+let account_type_codec =
+  Jsont.enum
+    [ "prepaid-card", Prepaid_card
+    ; "credit-card", Credit_card
+    ; "current", Current
+    ; "savings", Savings
+    ]
+;;
+
+type date_format =
+  | Iso
+  | Day_first
+  | Month_first
+
+type amount_format =
+  | Dot_decimal
+  | Comma_decimal
+
+let date_format_codec =
+  Jsont.enum [ "iso", Iso; "day-first", Day_first; "month-first", Month_first ]
+;;
+
+let amount_format_codec = Jsont.enum [ "dot", Dot_decimal; "comma", Comma_decimal ]
+
+let date_cell format =
+  let pattern = Re.Perl.compile_pat "^[0-9]{2}[/-][0-9]{2}[/-][0-9]{4}$" in
+  match format with
+  | Iso -> Csv_schema.Cell.iso_date ()
+  | Day_first | Month_first ->
+    Csv_schema.Cell.create ~name:"date" (fun value ->
+      if (not (Re.execp pattern value)) || not (Char.equal value.[2] value.[5])
+      then failwith "expected a date with two-digit day and month and a four-digit year";
+      let first = String.prefix value 2 in
+      let second = String.sub value ~pos:3 ~len:2 in
+      let year = String.sub value ~pos:6 ~len:4 in
+      let month, day =
+        match format with
+        | Day_first -> second, first
+        | Month_first -> first, second
+        | Iso -> assert false
+      in
+      Date.of_string (year ^ "-" ^ month ^ "-" ^ day))
+;;
+
+let amount_cell = function
+  | Dot_decimal -> Csv_schema.Cell.decimal_balance
+  | Comma_decimal -> Csv_schema.Cell.french_amount
+;;
+
 type t =
   { separator : char
   ; header : string list
   ; date_column : string
+  ; date_format : date_format
+  ; amount_format : amount_format
   ; description_column : string
   ; amount_column : string
   ; currency : Iso4217.t
-  ; account_type : string
+  ; account_type : account_type
   ; invert_amount : bool
   ; skip_when : (string * string) option
   }
@@ -51,13 +115,13 @@ let parse profile contents =
         ; description
         ; amount = (if profile.invert_amount then Quantity.neg amount else amount)
         ; currency = profile.currency
-        ; account_type = profile.account_type
+        ; account_type = account_type_name profile.account_type
         })
       |> row_number
       |> raw_fields
-      |> col_pos date (Cell.iso_date ())
+      |> col_pos date (date_cell profile.date_format)
       |> col_pos description (Cell.text ~name:"description" ())
-      |> col_pos amount Cell.decimal_balance
+      |> col_pos amount (amount_cell profile.amount_format)
       |> create
            ~name:"CSV"
            ~separator:profile.separator
@@ -92,6 +156,8 @@ let codec =
         separator
          header
          date_column
+         date_format
+         amount_format
          description_column
          amount_column
          currency
@@ -110,6 +176,8 @@ let codec =
        { separator = separator.[0]
        ; header
        ; date_column
+       ; date_format
+       ; amount_format
        ; description_column
        ; amount_column
        ; currency
@@ -121,11 +189,19 @@ let codec =
     String.of_char t.separator)
   |> Jsont.Object.mem "header" (Jsont.list Jsont.string) ~enc:(fun (t : t) -> t.header)
   |> Jsont.Object.mem "date" Jsont.string ~enc:(fun (t : t) -> t.date_column)
+  |> Jsont.Object.mem "date_format" date_format_codec ~dec_absent:Iso ~enc:(fun (t : t) ->
+    t.date_format)
+  |> Jsont.Object.mem
+       "amount_format"
+       amount_format_codec
+       ~dec_absent:Dot_decimal
+       ~enc:(fun (t : t) -> t.amount_format)
   |> Jsont.Object.mem "description" Jsont.string ~enc:(fun (t : t) ->
     t.description_column)
   |> Jsont.Object.mem "amount" Jsont.string ~enc:(fun (t : t) -> t.amount_column)
   |> Jsont.Object.mem "currency" Json.currency ~enc:(fun (t : t) -> t.currency)
-  |> Jsont.Object.mem "account_type" Jsont.string ~enc:(fun (t : t) -> t.account_type)
+  |> Jsont.Object.mem "account_type" account_type_codec ~enc:(fun (t : t) ->
+    t.account_type)
   |> Jsont.Object.mem "invert_amount" Jsont.bool ~enc:(fun (t : t) -> t.invert_amount)
   |> Jsont.Object.mem "skip_column" (Jsont.option Jsont.string) ~enc:(fun (t : t) ->
     Option.map t.skip_when ~f:fst)

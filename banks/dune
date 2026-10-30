@@ -8,6 +8,14 @@
    %{targets}
    "let json = {fin|%{read:source_type_defaults.json}|fin}")))
 
+(rule
+ (targets boursobank_companion_default.ml)
+ (deps boursobank_companion.json)
+ (action
+  (write-file
+   %{targets}
+   "let json = {fin|%{read:boursobank_companion.json}|fin}")))
+
 ; Adapters are pure: no Rel or SQLite dependency, enforced here.
 
 (library

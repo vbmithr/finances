@@ -48,9 +48,21 @@ let create_database path f =
   Store.with_open ~registry:Builtin.registry path f
 ;;
 
+let companion_profiles path =
+  let%bind profiles =
+    Store.with_open ~registry:Builtin.registry path Store.institution_companion_profiles
+  in
+  profiles
+  |> List.map ~f:(fun (institution, json) ->
+    let%map profile = Json.decode Csv_companion_layout.codec json in
+    institution, profile)
+  |> Or_error.combine_errors
+;;
+
 let with_database path f =
   let%bind () = require_database path in
-  Store.with_open ~registry:Builtin.registry path f
+  let%bind profiles = companion_profiles path in
+  Store.with_open ~registry:(Builtin.registry_with_companions profiles) path f
 ;;
 
 let write_file path contents =
@@ -797,8 +809,8 @@ let csv_import_profile ?(setup_only = false) database path max_mib ~institution 
             if not (List.is_empty other)
             then eprintf "  Other source details: %s\n" (String.concat ~sep:", " other);
             eprintf
-              "These columns describe when and where you spent money, and the amount \
-               charged to the card.\n";
+              "These columns describe the transaction date, description, and amount in \
+               the account currency.\n";
             if yes_no "Use these columns?"
             then Some (date, description, amount, currency)
             else None
@@ -813,7 +825,7 @@ let csv_import_profile ?(setup_only = false) database path max_mib ~institution 
             let column question =
               choose question (List.map header ~f:(fun h -> h, [], h))
             in
-            let date = column "Column containing the transaction date (YYYY-MM-DD):" in
+            let date = column "Column containing the transaction date:" in
             let description = column "Column containing the merchant or description:" in
             let amount = column "Column containing the amount charged to the account:" in
             let currency =
@@ -823,18 +835,73 @@ let csv_import_profile ?(setup_only = false) database path max_mib ~institution 
             in
             date, description, amount, currency
         in
+        let sample_rows = Csv_reader.channel ~separator contents in
+        ignore (Csv.next sample_rows : string list);
+        let sample_rows = Csv.input_all sample_rows in
+        let values column =
+          match List.findi header ~f:(fun _ value -> String.equal value column) with
+          | None -> []
+          | Some (index, _) ->
+            List.filter_map sample_rows ~f:(fun row ->
+              Option.bind (List.nth row index) ~f:(fun value ->
+                let value = String.strip value in
+                Option.some_if (not (String.is_empty value)) value))
+        in
+        let date_values = values date_column in
+        let iso_date = Re.Perl.compile_pat "^[0-9]{4}-[0-9]{2}-[0-9]{2}$" in
+        let date_format =
+          if
+            (not (List.is_empty date_values))
+            && List.for_all date_values ~f:(Re.execp iso_date)
+          then Csv_profile.Iso
+          else (
+            eprintf
+              "Dates must be interpreted consistently; examples: %s\n"
+              (String.concat ~sep:", " (List.take date_values 3));
+            choose
+              "Date format:"
+              [ "YYYY-MM-DD", [], Csv_profile.Iso
+              ; "DD/MM/YYYY or DD-MM-YYYY", [ "day-first" ], Csv_profile.Day_first
+              ; "MM/DD/YYYY or MM-DD-YYYY", [ "month-first" ], Csv_profile.Month_first
+              ])
+        in
+        let amount_values = values amount_column in
+        let amount_format =
+          if List.exists amount_values ~f:(fun value -> String.contains value ',')
+          then (
+            eprintf
+              "Check the decimal mark in amounts; examples: %s\n"
+              (String.concat ~sep:", " (List.take amount_values 3));
+            choose
+              "Amount decimal mark:"
+              [ "Dot (e.g. 1234.56)", [ "dot" ], Csv_profile.Dot_decimal
+              ; "Comma (e.g. 1234,56)", [ "comma" ], Csv_profile.Comma_decimal
+              ])
+          else Csv_profile.Dot_decimal
+        in
         eprintf "A prepaid card holds money you add; a credit card is paid later.\n";
         let account_type =
           choose
             "Account type:"
-            [ "Prepaid card", [ "prepaid-card" ], "prepaid-card"
-            ; "Credit card", [ "credit-card" ], "credit-card"
+            [ "Prepaid card", [ "prepaid-card" ], Csv_profile.Prepaid_card
+            ; "Credit card", [ "credit-card" ], Csv_profile.Credit_card
+            ; "Current account", [ "current"; "checking" ], Csv_profile.Current
+            ; "Savings account", [ "savings" ], Csv_profile.Savings
             ]
         in
-        eprintf
-          "A purchase should reduce the card balance. Check how your file writes \
-           purchases.\n";
-        let invert_amount = yes_no "Are purchases positive amounts in the file?" in
+        let invert_amount =
+          match account_type with
+          | Csv_profile.Prepaid_card | Credit_card ->
+            eprintf
+              "A purchase should reduce the card balance. Check how your file writes \
+               purchases.\n";
+            yes_no "Are purchases positive amounts in the file?"
+          | Current | Savings ->
+            eprintf
+              "Money leaving the account should be negative. Check how your file writes \
+               withdrawals or payments.\n";
+            yes_no "Are outgoing amounts positive in the file?"
+        in
         let raw = Csv_reader.channel ~separator contents in
         ignore (Csv.next raw : string list);
         let records = Csv.input_all raw in
@@ -874,6 +941,8 @@ let csv_import_profile ?(setup_only = false) database path max_mib ~institution 
           { separator
           ; header
           ; date_column
+          ; date_format
+          ; amount_format
           ; description_column
           ; amount_column
           ; currency
@@ -888,7 +957,7 @@ let csv_import_profile ?(setup_only = false) database path max_mib ~institution 
     eprintf
       "Preview: %d transactions; %s account.\n"
       (List.length rows)
-      profile.account_type;
+      (Csv_profile.account_type_name profile.account_type);
     List.take rows 5
     |> List.iter ~f:(fun (r : Csv_profile.row) ->
       eprintf "  %s  %s\n" (Date.to_string r.date) r.description;
@@ -937,6 +1006,30 @@ let builtin_institution_name name =
     List.mem (Registry.aliases Builtin.registry institution) name ~equal:String.equal)
 ;;
 
+let ensure_generic_source database institution expected_kind =
+  with_database database (fun db ->
+    let%bind companion = Store.institution_companion_profile db institution in
+    let%bind () =
+      if String.equal expected_kind "csv-movement" && Option.is_some companion
+      then
+        Or_error.error_string
+          "this institution uses a CSV companion; import it with fin import INSTITUTION \
+           PATH"
+      else Ok ()
+    in
+    let%bind events = Store.events db in
+    if
+      List.exists events ~f:(fun (_, event) ->
+        String.equal event.Source_event.venue institution
+        && List.mem [ "csv-movement"; "bank-transaction" ] event.kind ~equal:String.equal
+        && not (String.equal event.kind expected_kind))
+    then
+      Or_error.error_string
+        "this institution already has imports in another generic format; CSV and OFX are \
+         separate movement sources and may duplicate transactions"
+    else Ok ())
+;;
+
 let import_bank database institution paths journal max_mib account_id provider =
   if max_mib < 1 || max_mib > 1024
   then Or_error.error_string "max-file-mib must be between 1 and 1024"
@@ -950,6 +1043,7 @@ let import_bank database institution paths journal max_mib account_id provider =
           (Stdlib.Filename.concat (Stdlib.Filename.dirname database) "bank.journal")
     in
     let selected_profile = ref None in
+    let%bind companion_profiles = companion_profiles database in
     let%bind institution, registry =
       if String.equal institution "csv"
       then (
@@ -979,19 +1073,29 @@ let import_bank database institution paths journal max_mib account_id provider =
         if builtin_institution_name provider
         then Or_error.error_string "CSV provider must not be a built-in institution name"
         else (
+          let%bind () = ensure_generic_source database provider "csv-movement" in
           match paths with
           | [ path ] ->
             let%map profile =
               csv_import_profile database path max_mib ~institution:provider
             in
             selected_profile := Some (Json.encode Csv_profile.codec profile);
-            provider, Builtin.registry_with_csv_profile ~institution:provider profile
+            ( provider
+            , Builtin.registry_with_csv_profile
+                ~companions:companion_profiles
+                ~institution:provider
+                profile )
           | _ ->
             Or_error.error_string
               "generic CSV import currently accepts one file at a time"))
       else if Option.is_some provider
       then Or_error.error_string "--provider applies only to generic CSV imports"
-      else Ok (institution, Builtin.registry)
+      else if Registry.is_registered Builtin.registry institution
+      then Ok (institution, Builtin.registry_with_companions companion_profiles)
+      else
+        Ok
+          ( institution
+          , Builtin.registry_with_ofx ~companions:companion_profiles ~institution () )
     in
     let%bind report =
       Finances_bank.Sync.run
@@ -1075,15 +1179,19 @@ let import_bank database institution paths journal max_mib account_id provider =
     else Ok ())
 ;;
 
-let csv_files paths =
+let generic_statement_files paths =
   let rec walk path =
     Or_error.try_with (fun () -> Unix.lstat path)
     |> Result.bind ~f:(fun stat ->
       match stat.Unix.st_kind with
       | Unix.S_REG ->
-        if String.Caseless.equal (Stdlib.Filename.extension path) ".csv"
+        if
+          List.mem
+            [ ".csv"; ".ofx"; ".zip" ]
+            (String.lowercase (Stdlib.Filename.extension path))
+            ~equal:String.equal
         then Ok [ path ]
-        else Or_error.errorf "not a CSV file: %s" path
+        else Or_error.errorf "unsupported statement file: %s" path
       | Unix.S_DIR ->
         let%bind children =
           Bos.OS.Dir.contents (Fpath.v path)
@@ -1099,18 +1207,22 @@ let csv_files paths =
           match Unix.lstat child with
           | { st_kind = S_DIR; _ } -> walk child
           | { st_kind = S_REG; _ }
-            when String.Caseless.equal (Stdlib.Filename.extension child) ".csv" ->
-            Ok [ child ]
+            when List.mem
+                   [ ".csv"; ".ofx"; ".zip" ]
+                   (String.lowercase (Stdlib.Filename.extension child))
+                   ~equal:String.equal -> Ok [ child ]
           | _ -> Ok [])
         |> Or_error.combine_errors
         |> Result.map ~f:List.concat
-      | _ -> Or_error.errorf "not a regular CSV file or directory: %s" path)
+      | _ -> Or_error.errorf "not a regular statement file or directory: %s" path)
   in
   let%bind files =
     List.map paths ~f:walk |> Or_error.combine_errors |> Result.map ~f:List.concat
   in
   let files = List.dedup_and_sort files ~compare:String.compare in
-  if List.is_empty files then Or_error.error_string "no CSV files found" else Ok files
+  if List.is_empty files
+  then Or_error.error_string "no CSV, OFX or ZIP files found"
+  else Ok files
 ;;
 
 let import_bank_cmd =
@@ -1123,8 +1235,9 @@ let import_bank_cmd =
       ; `P
           "Import an institution's files or directories by naming it, for example \
            $(b,fin import wise ~/statements/wise). Run $(b,fin institution list) to see \
-           institutions. To configure a generic card CSV, pass its filename directly, \
-           for example $(b,fin import statement.csv)."
+           institutions. User-added institutions support OFX 2.x or generic CSV; these \
+           are separate primary sources and cannot be mixed. To configure a generic CSV, \
+           pass its filename directly."
       ]
     "import"
     "Import a bank's statement files, apply mappings, and publish a bank journal."
@@ -1153,17 +1266,46 @@ let import_bank_cmd =
         | _ :: _ :: _ -> Or_error.errorf "ambiguous institution alias: %s" first
         | [] when List.mem user_institutions first ~equal:String.equal ->
           if List.is_empty paths
-          then Or_error.error_string "provide at least one CSV file or directory"
+          then Or_error.error_string "provide at least one statement file or directory"
           else if Option.is_some provider
           then
             Or_error.error_string
               "--provider is unnecessary when the institution is named"
           else (
-            let%bind files = csv_files paths in
-            List.fold_result files ~init:() ~f:(fun () path ->
-              printf "CSV file: %s\n" path;
-              Out_channel.flush stdout;
-              import_bank database "csv" [ path ] journal max_mib account_id (Some first)))
+            let%bind files = generic_statement_files paths in
+            let%bind companion =
+              with_database database (fun db ->
+                Store.institution_companion_profile db first)
+            in
+            if Option.is_some companion
+            then import_bank database first files journal max_mib account_id None
+            else (
+              let csv, ofx =
+                List.partition_tf files ~f:(fun path ->
+                  String.Caseless.equal (Stdlib.Filename.extension path) ".csv")
+              in
+              if (not (List.is_empty csv)) && not (List.is_empty ofx)
+              then
+                Or_error.error_string
+                  "generic CSV and OFX are separate movement sources; import one format \
+                   to avoid duplicate transactions"
+              else if not (List.is_empty ofx)
+              then (
+                let%bind () = ensure_generic_source database first "bank-transaction" in
+                import_bank database first ofx journal max_mib account_id None)
+              else (
+                let%bind () = ensure_generic_source database first "csv-movement" in
+                List.fold_result csv ~init:() ~f:(fun () path ->
+                  printf "CSV file: %s\n" path;
+                  Out_channel.flush stdout;
+                  import_bank
+                    database
+                    "csv"
+                    [ path ]
+                    journal
+                    max_mib
+                    account_id
+                    (Some first)))))
         | [] when Stdlib.Sys.file_exists first && Stdlib.Sys.is_directory first ->
           Or_error.error_string
             "name the bank before a directory, for example: fin import wise DIRECTORY"
@@ -1192,13 +1334,13 @@ let import_bank_cmd =
               []
               ~docv:"PATH"
               ~doc:
-                "When SOURCE is an institution, statement files or directories holding \
-                 them. Directories are searched recursively; hidden files are skipped. \
-                 Generic CSV institutions select .csv files and review each separately. \
-                 Built-in importers also accept ZIPs in memory; nested ZIPs and \
-                 encrypted archives are unsupported. Files are only read, never \
-                 modified; repeated imports add only new records. Revolut and Wise CSV \
-                 clocks are assumed UTC; Wise matching retains CAMT source-local clocks.")
+                "Statement files or directories for the named institution. Directories \
+                 are searched recursively; hidden files are skipped. Generic \
+                 institutions accept CSV or OFX files and OFX ZIPs, without mixing CSV \
+                 and OFX. ZIPs are read in memory; nested ZIPs and encrypted archives \
+                 are unsupported. Files are only read, never modified; repeated imports \
+                 add only new records. Revolut and Wise CSV clocks are assumed UTC; Wise \
+                 matching retains CAMT source-local clocks.")
       $ Arg.(
           value
           & opt (some string) None
@@ -1228,7 +1370,7 @@ let import_bank_cmd =
           & opt (some string) None
           & info
               [ "provider" ]
-              ~doc:"Provider name for a generic CSV card; prompted on a terminal."))
+              ~doc:"Institution name for a generic CSV; prompted on a terminal."))
 ;;
 
 let institution_filter =
@@ -1755,7 +1897,7 @@ let institution_list database =
           (String.concat ~sep:", " aliases)));
   with_database database (fun db ->
     let%map names = Store.institutions db in
-    List.iter names ~f:(fun name -> printf "%s (generic CSV)\n" (Terminal.text name)))
+    List.iter names ~f:(fun name -> printf "%s (generic)\n" (Terminal.text name)))
 ;;
 
 let institution_list_cmd =
@@ -1763,159 +1905,6 @@ let institution_list_cmd =
     "list"
     "List built-in and user-added institutions."
     Term.(const institution_list $ database)
-;;
-
-let resolve_typing_institution db name =
-  let registry = Store.registry db in
-  let built_in =
-    Registry.institutions registry
-    |> List.find ~f:(fun institution ->
-      (not (String.equal institution "csv"))
-      && List.mem (Registry.aliases registry institution) name ~equal:String.equal)
-  in
-  match built_in with
-  | Some name -> Ok name
-  | None ->
-    let%bind names = Store.institutions db in
-    if List.mem names name ~equal:String.equal
-    then Ok name
-    else Or_error.error_string "unknown institution; see fin institution list"
-;;
-
-let institution_typing_show database name =
-  with_database database (fun db ->
-    let%bind name = resolve_typing_institution db name in
-    let%map profile = Store.source_typing_profile db name in
-    print_endline (Source_typing.to_json profile))
-;;
-
-let institution_typing_show_cmd =
-  command
-    "show"
-    "Show the effective source typing configuration as JSON."
-    Term.(
-      const institution_typing_show
-      $ database
-      $ Arg.(
-          required
-          & pos 0 (some string) None
-          & info [] ~docv:"INSTITUTION" ~doc:"Institution name."))
-;;
-
-let institution_typing_set database name path yes =
-  let%bind contents = read_file path in
-  let%bind proposed = Source_typing.of_json contents in
-  with_database database (fun db ->
-    let%bind name = resolve_typing_institution db name in
-    let%bind () =
-      if String.equal name (Source_typing.institution proposed)
-      then Ok ()
-      else
-        Or_error.error_string
-          "profile institution does not match the selected institution"
-    in
-    let%bind current = Store.source_typing_profile db name in
-    printf
-      "Proposed source typing configuration for %s:\n%s\n"
-      (Terminal.text name)
-      (Source_typing.to_json proposed);
-    print_endline
-      "This affects future imports; use fin tx refresh-types to preview changes to \
-       existing transactions.";
-    let%bind confirmed =
-      if yes
-      then Ok true
-      else if Unix.isatty Unix.stdin
-      then
-        Ok
-          (Option.value_map
-             (prompt "Save this configuration? [Y/n]: ")
-             ~default:false
-             ~f:confirm_default_yes)
-      else
-        Or_error.error_string
-          "saving source typing configuration requires a terminal or --yes"
-    in
-    if not confirmed
-    then (
-      print_endline "Nothing changed.";
-      Ok ())
-    else (
-      let%map () = Store.set_source_typing_profile db name ~expected:current proposed in
-      print_endline "Source typing configuration saved."))
-;;
-
-let institution_typing_set_cmd =
-  command
-    "set"
-    "Replace an institution's source typing configuration from JSON."
-    Term.(
-      const institution_typing_set
-      $ database
-      $ Arg.(
-          required
-          & pos 0 (some string) None
-          & info [] ~docv:"INSTITUTION" ~doc:"Institution name.")
-      $ Arg.(
-          required
-          & pos 1 (some string) None
-          & info
-              []
-              ~docv:"FILE"
-              ~doc:"JSON configuration from fin institution typing show.")
-      $ Arg.(value & flag & info [ "yes" ] ~doc:"Save without prompting."))
-;;
-
-let institution_typing_reset database name yes =
-  with_database database (fun db ->
-    let%bind name = resolve_typing_institution db name in
-    let%bind current = Store.source_typing_profile db name in
-    let%bind default =
-      match Registry.default_source_typing (Store.registry db) name with
-      | Some profile -> Ok profile
-      | None -> Source_typing.empty name
-    in
-    printf
-      "Restore the default source typing configuration for %s:\n%s\n"
-      (Terminal.text name)
-      (Source_typing.to_json default);
-    print_endline
-      "Existing transaction types change only if you run fin tx refresh-types.";
-    let%bind confirmed =
-      if yes
-      then Ok true
-      else if Unix.isatty Unix.stdin
-      then
-        Ok
-          (Option.value_map
-             (prompt "Restore this configuration? [Y/n]: ")
-             ~default:false
-             ~f:confirm_default_yes)
-      else
-        Or_error.error_string
-          "resetting source typing configuration requires a terminal or --yes"
-    in
-    if not confirmed
-    then (
-      print_endline "Nothing changed.";
-      Ok ())
-    else (
-      let%map () = Store.reset_source_typing_profile db name ~expected:current in
-      print_endline "Source typing configuration reset."))
-;;
-
-let institution_typing_reset_cmd =
-  command
-    "reset"
-    "Restore an institution's default source typing configuration."
-    Term.(
-      const institution_typing_reset
-      $ database
-      $ Arg.(
-          required
-          & pos 0 (some string) None
-          & info [] ~docv:"INSTITUTION" ~doc:"Institution name.")
-      $ Arg.(value & flag & info [ "yes" ] ~doc:"Reset without prompting."))
 ;;
 
 let institution_add database name sample =
@@ -1965,14 +1954,14 @@ let institution_add database name sample =
           (Terminal.text name)
           (if Option.is_some profile
            then ""
-           else " Import a CSV file to configure its layout.");
+           else " Import an OFX file or a CSV file to configure its layout.");
         Ok ())))
 ;;
 
 let institution_add_cmd =
   command
     "add"
-    "Add an institution using generic CSV statements."
+    "Add an institution for generic CSV or OFX statements."
     Term.(
       const institution_add
       $ database
@@ -1990,6 +1979,138 @@ let institution_add_cmd =
               []
               ~docv:"SAMPLE.csv"
               ~doc:"Sample CSV for layout setup; no transactions are imported."))
+;;
+
+let institution_companion_show database name =
+  let builtin_aliases = Registry.aliases Builtin.registry Boursobank.institution in
+  if List.mem builtin_aliases name ~equal:String.equal
+  then (
+    print_endline
+      (Json.encode ~format:Jsont.Indent Csv_companion_layout.codec Bank_csv.profile);
+    Ok ())
+  else
+    with_database database (fun db ->
+      let%bind profile = Store.institution_companion_profile db name in
+      match profile with
+      | None ->
+        Or_error.error_string "no companion profile configured for this institution"
+      | Some json ->
+        let%map profile = Json.decode Csv_companion_layout.codec json in
+        print_endline
+          (Json.encode ~format:Jsont.Indent Csv_companion_layout.codec profile))
+;;
+
+let institution_companion_show_cmd =
+  command
+    "show"
+    "Show the institution's CSV companion layout as JSON."
+    Term.(
+      const institution_companion_show
+      $ database
+      $ Arg.(required & pos 0 (some string) None & info [] ~docv:"INSTITUTION"))
+;;
+
+let institution_companion_set database name path yes =
+  let%bind contents = read_file path in
+  let%bind profile = Json.decode Csv_companion_layout.codec contents in
+  let%bind () =
+    if Option.is_none profile.currency
+    then Or_error.error_string "a generic companion profile must specify its ISO currency"
+    else Ok ()
+  in
+  let json = Json.encode Csv_companion_layout.codec profile in
+  with_database database (fun db ->
+    let%bind current = Store.institution_companion_profile db name in
+    let%bind () =
+      Store.set_institution_companion_profile ~dry_run:true db name ~expected:current json
+    in
+    printf
+      "CSV companion profile for %s:\n%s\n"
+      (Terminal.text name)
+      (Json.encode ~format:Jsont.Indent Csv_companion_layout.codec profile);
+    print_endline
+      "CSV rows will enrich matching OFX movements. Previously imported rows keep their \
+       original layout.";
+    let%bind confirmed =
+      if yes
+      then Ok true
+      else if Unix.isatty Unix.stdin
+      then
+        Ok
+          (Option.value_map
+             (prompt "Save this companion profile? [Y/n]: ")
+             ~default:false
+             ~f:confirm_default_yes)
+      else
+        Or_error.error_string "profile changes require confirmation; use --yes in scripts"
+    in
+    if not confirmed
+    then (
+      print_endline "Nothing changed.";
+      Ok ())
+    else (
+      let%map () =
+        Store.set_institution_companion_profile db name ~expected:current json
+      in
+      printf "Saved companion profile for %s.\n" (Terminal.text name)))
+;;
+
+let institution_companion_set_cmd =
+  command
+    "set"
+    "Configure an institution's OFX companion CSV layout."
+    Term.(
+      const institution_companion_set
+      $ database
+      $ Arg.(required & pos 0 (some string) None & info [] ~docv:"INSTITUTION")
+      $ Arg.(required & pos 1 (some string) None & info [] ~docv:"FILE")
+      $ Arg.(value & flag & info [ "yes" ] ~doc:"Save without prompting."))
+;;
+
+let institution_companion_clear database name yes =
+  with_database database (fun db ->
+    let%bind expected =
+      Store.institution_companion_profile db name
+      |> Or_error.bind ~f:(function
+        | Some profile -> Ok profile
+        | None -> Or_error.error_string "no companion profile configured")
+    in
+    let%bind () =
+      Store.clear_institution_companion_profile ~dry_run:true db name ~expected
+    in
+    printf "Remove the CSV companion profile for %s?\n" (Terminal.text name);
+    let%bind confirmed =
+      if yes
+      then Ok true
+      else if Unix.isatty Unix.stdin
+      then
+        Ok
+          (Option.value_map
+             (prompt "Remove this companion profile? [Y/n]: ")
+             ~default:false
+             ~f:confirm_default_yes)
+      else
+        Or_error.error_string
+          "profile removal requires confirmation; use --yes in scripts"
+    in
+    if not confirmed
+    then (
+      print_endline "Nothing changed.";
+      Ok ())
+    else (
+      let%map () = Store.clear_institution_companion_profile db name ~expected in
+      printf "Removed companion profile for %s.\n" (Terminal.text name)))
+;;
+
+let institution_companion_clear_cmd =
+  command
+    "clear"
+    "Remove a companion profile before importing companion rows."
+    Term.(
+      const institution_companion_clear
+      $ database
+      $ Arg.(required & pos 0 (some string) None & info [] ~docv:"INSTITUTION")
+      $ Arg.(value & flag & info [ "yes" ] ~doc:"Remove without prompting."))
 ;;
 
 let institution_delete database name yes =
@@ -2548,6 +2669,10 @@ let rule_add
       set_type
       category
       description
+      automatic
+      account_type
+      priority
+      replace
   =
   let%bind pattern =
     match positional_pattern, description with
@@ -2590,8 +2715,17 @@ let rule_add
     | false, None, Some kind -> Ok (Classification_rule.Type kind)
     | false, None, None -> Or_error.error_string "specify --set-type, --category, or both"
   in
+  let%bind () =
+    match automatic, action with
+    | true, (Classification_rule.Type _ | Category _ | Type_and_category _) -> Ok ()
+    | true, Settlement _ -> Or_error.error_string "settlement rules require review"
+    | false, _ -> Ok ()
+  in
   let%bind rule =
     Classification_rule.create
+      ~mode:(if automatic then Automatic else Review)
+      ~account_type
+      ~priority
       ~name
       ~pattern
       ~institution
@@ -2632,10 +2766,15 @@ let rule_add
          | _ -> Or_error.error_string "card ID collision; rule is refused")
       | _ -> Ok ()
     in
-    let%bind () = Store.add_classification_rule db rule in
+    let%bind () =
+      if replace
+      then Store.replace_classification_rule db rule
+      else Store.add_classification_rule db rule
+    in
     printf
-      "Saved rule %s. Run fin rule preview %s to review matches.\n"
+      "Saved rule %s (%s). Run fin rule preview %s to review existing matches.\n"
       (Terminal.text name)
+      (if automatic then "automatic on import" else "review")
       (Terminal.text name);
     Ok ())
 ;;
@@ -2709,8 +2848,8 @@ let rule_add_cmd ~settlement =
             [ "description" ]
             ~docv:"REGEX"
             ~doc:
-              "Perl-style expression matched against source descriptions and display \
-               names.")
+              "Perl-style expression: automatic rules match the first source \
+               description; reviewed rules also match display names.")
   in
   command
     (if settlement then "add-settlement" else "add")
@@ -2739,11 +2878,31 @@ let rule_add_cmd ~settlement =
               [ "match-type" ]
               ~docv:"TYPE"
               ~doc:
-                "Match this effective movement type, or unknown for movements without a \
-                 type.")
+                "Match a movement type or unknown; automatic type actions match the \
+                 parser type, while category-only rules match the imported type.")
       $ set_type_arg
       $ category_arg
-      $ description_arg)
+      $ description_arg
+      $ Arg.(
+          value
+          & flag
+          & info
+              [ "automatic" ]
+              ~doc:"Apply this rule on import (settlements require review).")
+      $ Arg.(
+          value
+          & opt (some string) None
+          & info [ "account-type" ] ~docv:"TYPE" ~doc:"Match this source account type.")
+      $ Arg.(
+          value
+          & opt int 1000
+          & info [ "priority" ] ~docv:"NUMBER" ~doc:"Rule order; lower numbers run first.")
+      $ Arg.(
+          value
+          & flag
+          & info
+              [ "replace" ]
+              ~doc:"Replace the named rule; existing transactions are unchanged."))
 ;;
 
 let rule_list database json_output =
@@ -2756,12 +2915,19 @@ let rule_list database json_output =
     else
       List.iter rules ~f:(fun r ->
         printf
-          "%s  %s -> %s  /%s/  %s  match-type=%s  set-type=%s\n"
+          "%s  mode=%s  priority=%d  %s -> %s  /%s/  %s  account-type=%s  match-type=%s  \
+           set-type=%s\n"
           (Terminal.text r.name)
+          (match r.mode with
+           | Automatic -> "automatic"
+           | Review -> "review"
+           | Disabled -> "disabled")
+          r.priority
           (Classification_rule.action_name r.action)
           (Terminal.text (Classification_rule.action_target r.action))
           (Terminal.text (Option.value r.pattern ~default:"any description"))
           (Terminal.text (Option.value r.institution ~default:"all institutions"))
+          (Terminal.text (Option.value r.account_type ~default:"any"))
           (Option.value_map
              r.match_type
              ~default:"any"
@@ -2777,6 +2943,33 @@ let rule_list_cmd =
     "list"
     "List saved transaction rules."
     Term.(const rule_list $ database $ json_output)
+;;
+
+let rule_mode database name value =
+  let%bind mode =
+    match value with
+    | "automatic" -> Ok Classification_rule.Automatic
+    | "review" -> Ok Classification_rule.Review
+    | "disabled" -> Ok Classification_rule.Disabled
+    | _ -> Or_error.error_string "mode must be automatic, review, or disabled"
+  in
+  with_database database (fun db ->
+    let%map () = Store.set_classification_rule_mode db name mode in
+    printf
+      "Rule %s is now %s. Existing transactions are unchanged.\n"
+      (Terminal.text name)
+      value)
+;;
+
+let rule_mode_cmd =
+  command
+    "mode"
+    "Set a rule to automatic, review, or disabled."
+    Term.(
+      const rule_mode
+      $ database
+      $ Arg.(required & pos 0 (some string) None & info [] ~docv:"NAME")
+      $ Arg.(required & pos 1 (some string) None & info [] ~docv:"MODE"))
 ;;
 
 let print_rule_preview (rule : Classification_rule.t) matches =
@@ -4061,11 +4254,11 @@ let () =
               ; institution_delete_cmd
               ; import_history_cmd
               ; group
-                  "typing"
-                  "Inspect and configure import-time movement typing."
-                  [ institution_typing_show_cmd
-                  ; institution_typing_set_cmd
-                  ; institution_typing_reset_cmd
+                  "companion"
+                  "Configure CSV enrichment layouts."
+                  [ institution_companion_show_cmd
+                  ; institution_companion_set_cmd
+                  ; institution_companion_clear_cmd
                   ]
               ]
           ; group
@@ -4086,8 +4279,9 @@ let () =
               ]
           ; group
               "rule"
-              "Manage previewed transaction rules."
+              "Manage automatic and reviewed transaction rules."
               [ rule_list_cmd
+              ; rule_mode_cmd
               ; rule_add_cmd ~settlement:false
               ; rule_add_cmd ~settlement:true
               ; rule_preview_cmd

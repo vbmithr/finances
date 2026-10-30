@@ -3,7 +3,7 @@ open Rel
 
 (** One current experimental baseline; older databases must be reimported. Banks
     have no tables of their own. *)
-let version = 21
+let version = 23
 
 let timestamp = `Expr "(strftime('%Y-%m-%dT%H:%M:%f','now') || '000000000Z')"
 
@@ -1754,7 +1754,10 @@ end
 
 module Classification_rules = struct
   type t =
-    { name : string
+    { mode : string
+    ; account_type : string option
+    ; priority : int
+    ; name : string
     ; pattern : string option
     ; institution : string option
     ; match_type : string option
@@ -1764,6 +1767,13 @@ module Classification_rules = struct
     ; action_type : string option
     }
 
+  let mode = Col.make "mode" Type.text (fun (r : t) -> r.mode)
+
+  let account_type =
+    Col.make "account_type" Type.(option text) (fun (r : t) -> r.account_type)
+  ;;
+
+  let priority = Col.make "priority" Type.int (fun (r : t) -> r.priority)
   let name = Col.make "name" Type.text (fun (r : t) -> r.name)
   let pattern = Col.make "pattern" Type.(option text) (fun (r : t) -> r.pattern)
 
@@ -1784,7 +1794,10 @@ module Classification_rules = struct
     Row.(
       unit
         (fun
-            name
+            mode
+             account_type
+             priority
+             name
              pattern
              institution
              match_type
@@ -1793,7 +1806,10 @@ module Classification_rules = struct
              target
              action_type
            ->
-           { name
+           { mode
+           ; account_type
+           ; priority
+           ; name
            ; pattern
            ; institution
            ; match_type
@@ -1802,6 +1818,9 @@ module Classification_rules = struct
            ; target
            ; action_type
            })
+      * mode
+      * account_type
+      * priority
       * name
       * pattern
       * institution
@@ -1823,7 +1842,8 @@ module Classification_rules = struct
     Sqlite_schema.table
       ~checks:
         Sqlite_schema.Check.
-          [ one_of case_mode [ "sensitive"; "insensitive" ]
+          [ one_of mode [ "automatic"; "review"; "disabled" ]
+          ; one_of case_mode [ "sensitive"; "insensitive" ]
           ; one_of action_kind [ "category"; "settlement"; "type"; "type-category" ]
           ]
       table
@@ -1834,11 +1854,23 @@ module Institutions = struct
   type t =
     { name : string
     ; profile : string option
+    ; companion_profile : string option
     }
 
   let name = Col.make "name" Type.text (fun (r : t) -> r.name)
   let profile = Col.make "profile" Type.(option text) (fun (r : t) -> r.profile)
-  let row = Row.(unit (fun name profile -> { name; profile }) * name * profile)
+
+  let companion_profile =
+    Col.make "companion_profile" Type.(option text) (fun (r : t) -> r.companion_profile)
+  ;;
+
+  let row =
+    Row.(
+      unit (fun name profile companion_profile -> { name; profile; companion_profile })
+      * name
+      * profile
+      * companion_profile)
+  ;;
 
   let table =
     Table.make ~primary_key:(Table.Primary_key.make [ Col.Def name ]) "institutions" row
@@ -2026,30 +2058,6 @@ module Movement_type_changes = struct
   ;;
 end
 
-module Source_typing_profiles = struct
-  type t =
-    { institution : string
-    ; profile : string
-    }
-
-  let institution = Col.make "institution" Type.text (fun (r : t) -> r.institution)
-  let profile = Col.make "profile" Type.text (fun (r : t) -> r.profile)
-
-  let row =
-    Row.(
-      unit (fun institution profile -> { institution; profile }) * institution * profile)
-  ;;
-
-  let table =
-    Table.make
-      ~primary_key:(Table.Primary_key.make [ Col.Def institution ])
-      "source_typing_profiles"
-      row
-  ;;
-
-  let definition = Sqlite_schema.table table
-end
-
 let definitions =
   [ Source_events.definition
   ; Movements.definition
@@ -2084,7 +2092,6 @@ let definitions =
   ; Reversal_changes.definition
   ; Movement_type_overrides.definition
   ; Movement_type_changes.definition
-  ; Source_typing_profiles.definition
   ]
 ;;
 

@@ -13,9 +13,9 @@ Last updated: 2026-10-30.
 
 - All four banks import: BoursoBank (OFX, CSV companion), Wise (CAMT.053, CSV
   companion), Bunq (MT940, CSV companion) and Revolut (CSV). Each is an adapter behind
-  one registry; the kernel names no bank. Shared OFX parsing takes an explicit
-  institution parameter rather than instantiating a functor.
-- Storage is schema 21: generic tables for every bank, plus each movement stored
+  one registry; the kernel names no bank. User-added institutions can import
+  OFX through the shared parser or configure a generic single-account CSV layout.
+- Storage is schema 23: generic tables for every bank, plus each movement stored
   normalized at import, so reads are SQL queries instead of payload decoding. No
   migrations; older databases are refused unchanged.
 - Event occurrences and statement boundaries share `Temporal.t` (`Date` or
@@ -46,15 +46,15 @@ Last updated: 2026-10-30.
 - Movements project to balanced entries against `equity:unclassified`, unless a
   reviewed category or confirmed transfer says otherwise. `fin journal export`
   writes a reproducible hledger journal.
-- Statement ingestion is `fin import BANK PATH...` or a configured card CSV.
+- Statement ingestion is `fin import BANK PATH...` or a configured generic CSV.
   `fin backup` saves one
   consistent SQLite snapshot; `fin restore BACKUP` validates and restores it,
   with overwrite confirmation and automatic removal of stale generated files.
-- 206 tests (150 OCaml cases and 56 CLI cases), plus status performance and
+- 213 tests (151 OCaml cases and 62 CLI cases), plus status performance and
   package man-page checks. Selected import changes have also been compared by
   rebuilding a personal database and diffing reports and source payloads.
 - Issue #1 is implemented locally and awaits publication.
-- The installed Arch package is `finances 0.1.0-23`; the tree uses schema 21.
+- The installed Arch package is `finances 0.1.0-23`; the tree uses schema 23.
 
 ### Personal data
 
@@ -87,6 +87,29 @@ A prior database rebuilt from `personal/*/inbox` contained:
 
 ## Workstreams
 
+### Generic institutions and reusable import formats
+
+- [x] Allow a user-added institution to import supported OFX 2.x without an
+  institution-specific adapter; preserve account identity and FITID deduplication.
+- [x] Extend single-account generic CSV profiles to current and savings accounts,
+  including signed amounts, optional IBANs and distinct bank ledger defaults.
+- [x] Support ISO, day-first and month-first dates and dot/comma decimal amounts,
+  asking about ambiguous formats and preserving old saved profile defaults.
+- [ ] Extend generic CSV profiles to multiple currencies and accounts, debit/credit
+  columns, additional date and number formats, identifiers and pending or reversed states.
+  Suggest settings from samples and preview them.
+- [x] Generalize exact-match CSV companions and configurable layouts; move the
+  BoursoBank layout and matching onto the shared engine. Store layouts with
+  documents, and require a fixed currency for generic companions.
+- [ ] Guide companion layout setup interactively, support currency columns and
+  additional matching strategies, and add a workflow to remove companion evidence.
+- [ ] Express settlement-card references and withdrawal-reversal evidence through
+  reusable rules; preserve preview and ambiguity checks.
+- [ ] Compose a BoursoBank preset from generic OFX, companion configuration and
+  default rules, then remove its adapter after equivalence tests.
+- [ ] Generalize the remaining Wise companion type mapping and other reusable
+  format policies. Keep explicit source identity, overlap and correction policies.
+
 ### 1. Bank adapters (`docs/bank-adapters.md`)
 
 - [x] Baseline, `iban` library, kernel types and registry, schema 11, import behind
@@ -112,6 +135,10 @@ The import side is done; turning movements into accounting is not.
 - [x] Match rules on effective type and preview type and category actions together.
 - [x] Move BoursoBank source typing to editable per-institution profiles, with
   previewed changes and explicit refresh of existing movements.
+- [x] Replace source typing profiles and reviewed transaction rules with one
+  ordered rule set, automatic defaults and previewed historical changes.
+- [ ] Extend automatic rules to settlements after designing safe import-time
+  card matching and reversal handling.
 - [ ] Move Wise companion type-code mappings into configurable source typing,
   preserving companion matching and explicit refresh semantics.
 - [x] Undo confirmed transfer pairs by event ID, with an audited confirmation.
@@ -171,8 +198,8 @@ The import side is done; turning movements into accounting is not.
 - [x] Require a valid provider name and retry empty or invalid terminal input.
 - [x] Show CSV amounts and source details alongside signed account movements
   in the generic CSV preview.
-- [ ] Extend generic CSV setup beyond ISO dates, dot decimals, fixed currency
-  and one card file; support pending states and more flexible layout selection.
+- [ ] Extend generic CSV setup beyond one fixed-currency account and a single
+  signed amount column; support pending states and more flexible layout selection.
 - [x] Allow asset and liability ledger mappings; new generic prepaid and credit
   cards default to their respective card hierarchies.
 - [x] [Personal accounting guide](personal-accounting.md): a first-month workflow
@@ -206,7 +233,7 @@ The import side is done; turning movements into accounting is not.
 - [x] `fin account import FILE` names the configured accounts that have no imported
   statements, instead of repeating "unknown source account".
 - [x] `fin import BANK PATH...` accepts named bank files or directories; a
-  generic card CSV can also be passed directly and configured interactively.
+  generic CSV can also be passed directly and configured interactively.
 - [x] `fin account import FILE` requires a snapshot filename and offers a dry run;
   there is no default file to confuse with active settings.
 - [ ] `fin paths` prints only JSON, like `statement list` and `statement companions`.

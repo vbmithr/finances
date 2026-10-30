@@ -32,6 +32,24 @@ val registry : t -> Registry.t
 (** User-added institutions using generic CSV layouts. *)
 val institutions : t -> string list Or_error.t
 
+val institution_companion_profiles : t -> (string * string) list Or_error.t
+val institution_companion_profile : t -> string -> string option Or_error.t
+
+val set_institution_companion_profile
+  :  ?dry_run:bool
+  -> t
+  -> string
+  -> expected:string option
+  -> string
+  -> unit Or_error.t
+
+val clear_institution_companion_profile
+  :  ?dry_run:bool
+  -> t
+  -> string
+  -> expected:string
+  -> unit Or_error.t
+
 val add_institution : ?profile:string -> t -> string -> unit Or_error.t
 val institution_profile : t -> string -> string option Or_error.t
 val set_institution_profile_if_missing : t -> string -> string -> unit Or_error.t
@@ -43,7 +61,14 @@ val delete_institution : ?dry_run:bool -> t -> string -> unit Or_error.t
 val classification_rules : t -> Classification_rule.t list Or_error.t
 
 val add_classification_rule : t -> Classification_rule.t -> unit Or_error.t
+val replace_classification_rule : t -> Classification_rule.t -> unit Or_error.t
 val delete_classification_rule : t -> string -> unit Or_error.t
+
+val set_classification_rule_mode
+  :  t
+  -> string
+  -> Classification_rule.mode
+  -> unit Or_error.t
 
 val rename_classification_rule
   :  t
@@ -56,20 +81,6 @@ val rename_classification_rule
 val ingest : t -> Source_event.t -> ingest Or_error.t
 
 val events : t -> (int64 * Source_event.t) list Or_error.t
-val source_typing_profile : t -> string -> Source_typing.t Or_error.t
-
-val set_source_typing_profile
-  :  t
-  -> string
-  -> expected:Source_typing.t
-  -> Source_typing.t
-  -> unit Or_error.t
-
-val reset_source_typing_profile
-  :  t
-  -> string
-  -> expected:Source_typing.t
-  -> unit Or_error.t
 
 (** Every bank event with its decoded movement, in event order. *)
 val movements : t -> (int64 * Source_event.t * Movement.t) list Or_error.t

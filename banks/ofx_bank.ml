@@ -60,3 +60,26 @@ let parse ~institution contents =
   in
   { Document.empty with events }
 ;;
+
+let make ~institution () : (module Adapter.S) =
+  (module struct
+    let institution = institution
+    let aliases = []
+    let kinds = kinds
+    let decode = decode
+    let settlement_card_hint = settlement_card_hint
+    let withdrawal_reversal_hint = withdrawal_reversal_hint
+    let formats = formats
+    let probe = probe
+    let takes_account_label = takes_account_label
+
+    let parse ~context:_ ~format contents =
+      if String.equal format ofx
+      then parse ~institution contents
+      else Or_error.errorf "unsupported OFX format: %s" format
+    ;;
+
+    let overlap = overlap
+    let companions = companions
+  end)
+;;

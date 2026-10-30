@@ -6,11 +6,20 @@ type state = Bank_match.state =
   | Ambiguous
   | Conflict
 
+type row =
+  { account_id : string
+  ; booked_on : Date.t
+  ; amount : Quantity.t
+  ; currency : Iso4217.t option
+  ; description : string
+  ; metadata : (string * string option) list
+  }
+
 type input =
   { row_id : int64
   ; document_id : int64
   ; institution : string
-  ; row : Bank_csv.row
+  ; row : row
   }
 
 type candidate =
@@ -19,6 +28,7 @@ type candidate =
   ; account_id : string
   ; booked_on : Date.t
   ; amount : Quantity.t
+  ; currency : Iso4217.t option
   ; descriptions : string list
   }
 
@@ -30,7 +40,6 @@ type result = Bank_match.result =
   ; candidates : int64 list
   }
 
-let policy = "bourso-csv-exact-v1"
 let state_name = Bank_match.state_name
 let state_of_string = Bank_match.state_of_string
 
@@ -88,6 +97,9 @@ let match_rows inputs candidates =
                 input.row.booked_on
                 input.row.amount))
           ~default:[]
+        |> List.filter ~f:(fun candidate ->
+          Option.value_map input.row.currency ~default:true ~f:(fun currency ->
+            Option.value_map candidate.currency ~default:false ~f:(Iso4217.equal currency)))
       in
       let exact =
         List.filter base ~f:(fun c ->
@@ -113,7 +125,10 @@ let match_rows inputs candidates =
           ; state = Unmatched
           ; reason =
               (if List.is_empty base
-               then "no matching OFX account/date/amount"
+               then
+                 if Option.is_some input.row.currency
+                 then "no matching OFX account/date/amount/currency"
+                 else "no matching OFX account/date/amount"
                else "original description does not match OFX")
           ; candidates = ids base
           }
@@ -150,17 +165,15 @@ let match_rows inputs candidates =
   let conflicts = Hashtbl.create (module Int64) in
   Hashtbl.iteri observations ~f:(fun ~key:event ~data:rows ->
     let fields =
-      [ ("value date", fun (r : Bank_csv.row) -> Option.map r.value_on ~f:Date.to_string)
-      ; ("suggested description", fun r -> r.suggested_description)
-      ; ("category", fun r -> r.category)
-      ; ("parent category", fun r -> r.parent_category)
-      ; ("comment", fun r -> r.comment)
-      ]
+      match rows with
+      | [] -> []
+      | first :: _ -> List.map first.metadata ~f:fst
     in
     let differing =
-      List.filter_map fields ~f:(fun (name, field) ->
+      List.filter_map fields ~f:(fun name ->
         let values =
-          List.filter_map rows ~f:field
+          List.filter_map rows ~f:(fun row ->
+            List.Assoc.find row.metadata name ~equal:String.equal |> Option.join)
           |> List.map ~f:normalized
           |> List.dedup_and_sort ~compare:String.compare
         in

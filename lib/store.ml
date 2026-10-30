@@ -47,6 +47,97 @@ let institution_profile db name =
   db_result (Db.first db.conn (query name)) |> Result.map ~f:Option.join
 ;;
 
+let institution_companion_profiles db =
+  let row = Row.(t2 (text "name") (text "companion_profile")) in
+  db_result
+    (Db.fold
+       db.conn
+       (statement
+          "SELECT name,companion_profile FROM institutions WHERE companion_profile IS \
+           NOT NULL ORDER BY name"
+          row)
+       (fun item acc -> item :: acc)
+       [])
+  |> Result.map ~f:List.rev
+;;
+
+let institution_companion_profile db name =
+  let query =
+    Rel_sql.Stmt.(
+      func
+        "SELECT companion_profile FROM institutions WHERE name=?"
+        (text @-> ret Row.(t1 (option Rel.Type.text "companion_profile"))))
+  in
+  db_result (Db.first db.conn (query name)) |> Result.map ~f:Option.join
+;;
+
+let set_institution_companion_profile ?(dry_run = false) db name ~expected profile =
+  transaction db (fun db ->
+    let* names = institutions db in
+    if not (List.mem names name ~equal:String.equal)
+    then Or_error.error_string "unknown user-added institution"
+    else
+      let* current = institution_companion_profile db name in
+      if not (Option.equal String.equal current expected)
+      then
+        Or_error.error_string "companion profile changed since preview; review it again"
+      else if Option.equal String.equal current (Some profile)
+      then Ok ()
+      else (
+        let csv =
+          Rel_sql.Stmt.(
+            func
+              "SELECT count(*) FROM source_events WHERE venue=? AND kind='csv-movement'"
+              (text @-> ret integer))
+        in
+        let* count = db_result (Db.first db.conn (csv name)) in
+        if Option.value count ~default:0 > 0
+        then
+          Or_error.error_string
+            "institution has primary CSV movements; delete those accounts before \
+             configuring CSV enrichment"
+        else if dry_run
+        then Ok ()
+        else (
+          let update =
+            Rel_sql.Stmt.(
+              func
+                "UPDATE institutions SET companion_profile=? WHERE name=?"
+                (text @-> text @-> unit))
+          in
+          db_result (Db.exec db.conn (update profile name)))))
+;;
+
+let clear_institution_companion_profile ?(dry_run = false) db name ~expected =
+  transaction db (fun db ->
+    let* current = institution_companion_profile db name in
+    if not (Option.equal String.equal current (Some expected))
+    then Or_error.error_string "companion profile changed since preview; review it again"
+    else (
+      let count =
+        Rel_sql.Stmt.(
+          func
+            "SELECT count(*) FROM companion_rows WHERE institution=?"
+            (text @-> ret integer))
+      in
+      let* count = db_result (Db.first db.conn (count name)) in
+      if Option.value count ~default:0 > 0
+      then
+        Or_error.error_string
+          "cannot remove the profile while companion rows exist; they need it for \
+           matching and display"
+      else if dry_run
+      then Ok ()
+      else (
+        let update =
+          Rel_sql.Stmt.(
+            func
+              "UPDATE institutions SET companion_profile=NULL WHERE name=?"
+              (text @-> unit))
+        in
+        db_result (Db.exec db.conn (update name)))))
+;;
+
 let add_institution ?profile db name =
   let* name = Validation.token "institution name" name in
   if
@@ -80,33 +171,37 @@ let delete_institution ?(dry_run = false) db name =
   let open Rel_sql.Stmt in
   transaction db (fun db ->
     let* name = Validation.token "institution name" name in
-    if
-      List.exists (Registry.institutions db.registry) ~f:(fun institution ->
-        List.mem (Registry.aliases db.registry institution) name ~equal:String.equal)
-    then Or_error.error_string "built-in institutions cannot be deleted"
-    else
-      let* names = institutions db in
-      if not (List.mem names name ~equal:String.equal)
-      then Or_error.errorf "unknown institution: %s" name
+    let* names = institutions db in
+    if not (List.mem names name ~equal:String.equal)
+    then
+      if
+        List.exists (Registry.institutions db.registry) ~f:(fun institution ->
+          List.mem (Registry.aliases db.registry institution) name ~equal:String.equal)
+      then Or_error.error_string "built-in institutions cannot be deleted"
+      else Or_error.errorf "unknown institution: %s" name
+    else (
+      let count =
+        func "SELECT count(*) FROM source_events WHERE venue=?" (text @-> ret integer)
+      in
+      let* count = db_result (Db.first db.conn (count name)) in
+      if Option.value count ~default:0 > 0
+      then
+        Or_error.error_string
+          "institution has imported transactions; delete its accounts first"
       else (
-        let count =
-          func "SELECT count(*) FROM source_events WHERE venue=?" (text @-> ret integer)
+        let companions =
+          func
+            "SELECT count(*) FROM companion_rows WHERE institution=?"
+            (text @-> ret integer)
         in
-        let* count = db_result (Db.first db.conn (count name)) in
+        let* count = db_result (Db.first db.conn (companions name)) in
         if Option.value count ~default:0 > 0
-        then
-          Or_error.error_string
-            "institution has imported transactions; delete its accounts first"
+        then Or_error.error_string "institution has imported companion rows"
         else if dry_run
         then Ok ()
         else (
-          let delete_typing =
-            func "DELETE FROM source_typing_profiles WHERE institution=?" (text @-> unit)
-          in
-          let* () = db_result (Db.exec db.conn (delete_typing name)) in
-          Hashtbl.remove db.source_typing_cache name;
           let delete = func "DELETE FROM institutions WHERE name=?" (text @-> unit) in
-          db_result (Db.exec db.conn (delete name)))))
+          db_result (Db.exec db.conn (delete name))))))
 ;;
 
 let initialize db =
@@ -115,7 +210,34 @@ let initialize db =
       db_result (Db.first db.conn (statement "PRAGMA user_version" integer))
     in
     match version with
-    | Some 0 -> db_result (Db.exec_sql db.conn Db_schema.create)
+    | Some 0 ->
+      let* () = db_result (Db.exec_sql db.conn Db_schema.create) in
+      let sql =
+        Rel_sql.Stmt.(
+          func
+            "INSERT INTO \
+             classification_rules(mode,account_type,priority,name,pattern,institution,match_type,case_mode,action_kind,target,action_type) \
+             VALUES ('automatic',?,?,?,?,?,NULL,?,'type',?,NULL)"
+            (option text @-> int @-> text @-> text @-> text @-> text @-> text @-> unit))
+      in
+      Registry.institutions db.registry
+      |> List.concat_map ~f:(fun institution ->
+        match Registry.default_source_typing db.registry institution with
+        | None -> []
+        | Some profile ->
+          List.mapi (Source_typing.rules profile) ~f:(fun i rule ->
+            db_result
+              (Db.exec
+                 db.conn
+                 (sql
+                    rule.account_type
+                    i
+                    (Printf.sprintf "%s-default-%02d" institution (i + 1))
+                    rule.description
+                    institution
+                    (if rule.case_sensitive then "sensitive" else "insensitive")
+                    (Movement_type.to_string rule.kind)))))
+      |> Or_error.combine_errors_unit
     | Some version when version = Db_schema.version -> Ok ()
     | _ ->
       Or_error.errorf
@@ -452,78 +574,131 @@ let source_typing_profile db institution =
     let query =
       Rel_sql.Stmt.(
         func
-          "SELECT profile FROM source_typing_profiles WHERE institution=?"
-          (text @-> ret Row.(t1 (text "profile"))))
+          "SELECT pattern,account_type,case_mode,CASE WHEN action_kind='type-category' \
+           THEN action_type ELSE target END,match_type FROM classification_rules WHERE \
+           mode='automatic' AND action_kind IN ('type','type-category') AND (institution \
+           IS NULL OR institution=?) ORDER BY priority,name"
+          (text
+           @-> ret
+                 Row.(
+                   t5
+                     (option Rel.Type.text "pattern")
+                     (option Rel.Type.text "account_type")
+                     (text "case_mode")
+                     (text "target")
+                     (option Rel.Type.text "match_type"))))
     in
-    let* stored = db_result (Db.first db.conn (query institution)) in
-    let* profile =
-      match stored with
-      | Some json -> Source_typing.of_json json
-      | None ->
-        (match Registry.default_source_typing db.registry institution with
-         | Some profile -> Ok profile
-         | None -> Source_typing.empty institution)
+    let* rows =
+      db_result (Db.fold db.conn (query institution) (fun row acc -> row :: acc) [])
     in
-    if not (String.equal (Source_typing.institution profile) institution)
-    then Or_error.error_string "source typing profile institution does not match its key"
-    else (
-      Hashtbl.set db.source_typing_cache ~key:institution ~data:profile;
-      Ok profile)
+    let* rules =
+      List.rev rows
+      |> List.map ~f:(fun (pattern, account_type, case_mode, target, match_type) ->
+        Result.map
+          (Source_typing.make_rule
+             (Option.value pattern ~default:".*")
+             account_type
+             (String.equal case_mode "sensitive")
+             target)
+          ~f:(fun r -> Source_typing.with_match_type r match_type))
+      |> Or_error.combine_errors
+    in
+    let profile = Source_typing.create ~institution rules in
+    Hashtbl.set db.source_typing_cache ~key:institution ~data:profile;
+    Ok profile
 ;;
 
-let set_source_typing_profile db institution ~expected profile =
-  if not (String.equal institution (Source_typing.institution profile))
-  then Or_error.error_string "profile institution does not match the selected institution"
-  else
-    let* custom = institutions db in
-    if
-      not
-        (Registry.is_registered db.registry institution
-         || List.mem custom institution ~equal:String.equal)
-    then Or_error.error_string "unknown institution; see fin institution list"
-    else
-      transaction db (fun db ->
-        Hashtbl.remove db.source_typing_cache institution;
-        let* current = source_typing_profile db institution in
-        if
-          not
-            (String.equal
-               (Source_typing.to_json current)
-               (Source_typing.to_json expected))
-        then
-          Or_error.error_string
-            "source typing profile changed since preview; review it again"
-        else (
-          let query =
-            Rel_sql.Stmt.(
-              func
-                "INSERT INTO source_typing_profiles(institution,profile) VALUES (?,?) ON \
-                 CONFLICT(institution) DO UPDATE SET profile=excluded.profile"
-                (text @-> text @-> unit))
-          in
-          let* () =
-            db_result
-              (Db.exec db.conn (query institution (Source_typing.to_json profile)))
-          in
-          Hashtbl.remove db.source_typing_cache institution;
-          Ok ()))
-;;
-
-let reset_source_typing_profile db institution ~expected =
-  transaction db (fun db ->
-    Hashtbl.remove db.source_typing_cache institution;
-    let* current = source_typing_profile db institution in
-    if not (String.equal (Source_typing.to_json current) (Source_typing.to_json expected))
-    then
-      Or_error.error_string "source typing profile changed since preview; review it again"
-    else (
-      let query =
-        Rel_sql.Stmt.(
-          func "DELETE FROM source_typing_profiles WHERE institution=?" (text @-> unit))
+let apply_automatic_category
+      db
+      event_id
+      (event : Source_event.t)
+      (raw : Movement.t)
+      (movement : Movement.t)
+  =
+  let query =
+    Rel_sql.Stmt.(
+      func
+        "SELECT name,pattern,account_type,case_mode,target,match_type,action_kind FROM \
+         classification_rules WHERE mode='automatic' AND action_kind IN \
+         ('category','type-category') AND (institution IS NULL OR institution=?) ORDER \
+         BY priority,name"
+        (text
+         @-> ret
+               Row.(
+                 unit (fun a b c d e f g -> a, b, c, d, e, f, g)
+                 * text "name"
+                 * option Rel.Type.text "pattern"
+                 * option Rel.Type.text "account_type"
+                 * text "case_mode"
+                 * text "target"
+                 * option Rel.Type.text "match_type"
+                 * text "action_kind")))
+  in
+  let* rows =
+    db_result (Db.fold db.conn (query event.venue) (fun row acc -> row :: acc) [])
+  in
+  let description =
+    Option.value_map (List.hd movement.descriptions) ~default:"" ~f:String.strip
+  in
+  let rec select = function
+    | [] -> Ok ()
+    | (name, pattern, account_type, case_mode, target, match_type, action_kind) :: rest ->
+      let* pattern_matches =
+        match pattern with
+        | None -> Ok true
+        | Some text ->
+          Result.map
+            (Transaction_pattern.compile
+               ~case_sensitive:(String.equal case_mode "sensitive")
+               text)
+            ~f:(fun p ->
+              Transaction_pattern.matches
+                p
+                ~display_name:None
+                ~descriptions:[ description ])
       in
-      let* () = db_result (Db.exec db.conn (query institution)) in
-      Hashtbl.remove db.source_typing_cache institution;
-      Ok ()))
+      let matched_type =
+        if String.equal action_kind "type-category"
+        then raw.movement_type
+        else movement.movement_type
+      in
+      let type_matches =
+        Option.value_map match_type ~default:true ~f:(fun expected ->
+          match expected, matched_type with
+          | "unknown", None -> true
+          | "unknown", Some _ -> false
+          | _, Some kind -> String.equal expected (Movement_type.to_string kind)
+          | _, None -> false)
+      in
+      if
+        not
+          (pattern_matches
+           && type_matches
+           && Option.value_map
+                account_type
+                ~default:true
+                ~f:(String.equal movement.account.account_type))
+      then select rest
+      else (
+        let reason = "Automatic rule " ^ name in
+        let insert =
+          Rel_sql.Stmt.(
+            func
+              "INSERT INTO bank_categories(event_id,account,reason) VALUES (?,?,?)"
+              (int64 @-> text @-> text @-> unit))
+        in
+        let audit =
+          Rel_sql.Stmt.(
+            func
+              "INSERT INTO \
+               bank_category_changes(event_id,previous_account,account,reason) VALUES \
+               (?,NULL,?,?)"
+              (int64 @-> text @-> text @-> unit))
+        in
+        let* () = db_result (Db.exec db.conn (insert event_id target reason)) in
+        db_result (Db.exec db.conn (audit event_id target reason)))
+  in
+  select (List.rev rows)
 ;;
 
 let ingest_in_transaction db (e : Source_event.t) =
@@ -554,8 +729,11 @@ let ingest_in_transaction db (e : Source_event.t) =
       if Registry.is_movement db.registry e
       then
         let* profile = source_typing_profile db e.venue in
-        let* m = Registry.movement ~source_typing:profile db.registry e in
-        db_result (Db.exec db.conn (insert_movement id e m))
+        let raw_profile = Source_typing.create ~institution:e.venue [] in
+        let* raw = Registry.movement ~source_typing:raw_profile db.registry e in
+        let m = Source_typing.apply profile raw in
+        let* () = db_result (Db.exec db.conn (insert_movement id e m)) in
+        apply_automatic_category db id e raw m
       else Ok ()
     in
     Ok (Inserted id)
@@ -587,8 +765,8 @@ let classification_rules db =
       db
       (statement
          "SELECT \
-          name,pattern,institution,match_type,case_mode,action_kind,target,action_type \
-          FROM classification_rules ORDER BY name"
+          mode,account_type,priority,name,pattern,institution,match_type,case_mode,action_kind,target,action_type \
+          FROM classification_rules ORDER BY priority,name"
          Db_schema.Classification_rules.row)
   in
   traverse
@@ -602,7 +780,17 @@ let classification_rules db =
        let* action =
          Classification_rule.action_of_fields r.action_kind r.target r.action_type
        in
+       let* mode =
+         match r.mode with
+         | "automatic" -> Ok Classification_rule.Automatic
+         | "review" -> Ok Classification_rule.Review
+         | "disabled" -> Ok Classification_rule.Disabled
+         | _ -> Or_error.error_string "unknown rule application mode"
+       in
        Classification_rule.create
+         ~mode
+         ~account_type:r.account_type
+         ~priority:r.priority
          ~name:r.name
          ~pattern:r.pattern
          ~institution:r.institution
@@ -615,6 +803,9 @@ let classification_rules db =
 let add_classification_rule db (rule : Classification_rule.t) =
   let* rule =
     Classification_rule.create
+      ~mode:rule.mode
+      ~account_type:rule.account_type
+      ~priority:rule.priority
       ~name:rule.name
       ~pattern:rule.pattern
       ~institution:rule.institution
@@ -622,6 +813,7 @@ let add_classification_rule db (rule : Classification_rule.t) =
       ~case_sensitive:rule.case_sensitive
       ~action:rule.action
   in
+  Hashtbl.clear db.source_typing_cache;
   let open Db_schema.Classification_rules in
   let insert = Rel_sql.insert_into_cols Db.dialect table in
   db_result
@@ -629,7 +821,15 @@ let add_classification_rule db (rule : Classification_rule.t) =
        db.conn
        (insert
           Col.
-            [ Value (Db_schema.Classification_rules.name, rule.name)
+            [ Value
+                ( mode
+                , match rule.mode with
+                  | Automatic -> "automatic"
+                  | Review -> "review"
+                  | Disabled -> "disabled" )
+            ; Value (account_type, rule.account_type)
+            ; Value (priority, rule.priority)
+            ; Value (Db_schema.Classification_rules.name, rule.name)
             ; Value (pattern, rule.pattern)
             ; Value (institution, rule.institution)
             ; Value
@@ -647,6 +847,7 @@ let add_classification_rule db (rule : Classification_rule.t) =
 ;;
 
 let delete_classification_rule db rule_name =
+  Hashtbl.clear db.source_typing_cache;
   transaction db (fun db ->
     let* rules = classification_rules db in
     if
@@ -665,6 +866,51 @@ let delete_classification_rule db rule_name =
       db_result (Db.exec db.conn query))
 ;;
 
+let replace_classification_rule db (rule : Classification_rule.t) =
+  Hashtbl.clear db.source_typing_cache;
+  transaction db (fun db ->
+    let* rules = classification_rules db in
+    if
+      not
+        (List.exists rules ~f:(fun existing ->
+           String.equal existing.Classification_rule.name rule.name))
+    then Or_error.errorf "unknown rule: %s" rule.name
+    else (
+      let query =
+        Rel_sql.Stmt.(
+          func "DELETE FROM classification_rules WHERE name=?" (text @-> unit))
+      in
+      let* () = db_result (Db.exec db.conn (query rule.name)) in
+      add_classification_rule db rule))
+;;
+
+let set_classification_rule_mode db name mode =
+  Hashtbl.clear db.source_typing_cache;
+  transaction db (fun db ->
+    let* rules = classification_rules db in
+    let* rule =
+      List.find rules ~f:(fun rule -> String.equal rule.Classification_rule.name name)
+      |> Or_error.of_option ~error:(Error.of_string "unknown rule")
+    in
+    let* () =
+      match mode, rule.action with
+      | Classification_rule.Automatic, Settlement _ ->
+        Or_error.error_string "settlement rules require review"
+      | _ -> Ok ()
+    in
+    let value =
+      match mode with
+      | Automatic -> "automatic"
+      | Review -> "review"
+      | Disabled -> "disabled"
+    in
+    let query =
+      Rel_sql.Stmt.(
+        func "UPDATE classification_rules SET mode=? WHERE name=?" (text @-> text @-> unit))
+    in
+    db_result (Db.exec db.conn (query value name)))
+;;
+
 let rename_classification_rule db ~old_name ~new_name =
   transaction db (fun db ->
     let* rules = classification_rules db in
@@ -680,6 +926,9 @@ let rename_classification_rule db ~old_name ~new_name =
       else
         let* renamed =
           Classification_rule.create
+            ~mode:rule.mode
+            ~account_type:rule.account_type
+            ~priority:rule.priority
             ~name:new_name
             ~pattern:rule.pattern
             ~institution:rule.institution
@@ -1914,16 +2163,6 @@ type companion_report =
   ; changed : int
   }
 
-let csv_row id document_id institution row_number fields_json =
-  Row.(
-    t5
-      (read_column id)
-      (read_column document_id)
-      (read_column institution)
-      (read_column row_number)
-      (read_column fields_json))
-;;
-
 let csv_match_row row_id event_id state reason candidates_json policy =
   Row.(
     unit (fun row_id event_id state reason candidates policy ->
@@ -1951,20 +2190,42 @@ let companion_rows db ~institution ~format =
       db
       (Rel_sql.Stmt.(
          func
-           "SELECT id,document_id,institution,row_number,fields_json FROM companion_rows \
-            WHERE institution=? AND format=? ORDER BY document_id,row_number"
+           "SELECT \
+            r.id,r.document_id,r.institution,r.row_number,r.fields_json,c.context_json \
+            FROM companion_rows r LEFT JOIN document_contexts c ON \
+            c.document_id=r.document_id WHERE r.institution=? AND r.format=? ORDER BY \
+            r.document_id,r.row_number"
            (text
             @-> text
             @-> ret
-                  Db_schema.Companion_rows.(
-                    csv_row id document_id institution row_number fields_json)))
+                  Row.(
+                    t6
+                      (int64 "id")
+                      (int64 "document_id")
+                      (text "institution")
+                      (int "row_number")
+                      (text "fields_json")
+                      (option Rel.Type.text "context_json"))))
          institution
          format)
   in
   traverse
-    (fun (row_id, document_id, institution, row_number, fields) ->
+    (fun (row_id, document_id, institution, row_number, fields, context) ->
        let* fields = decode_fields fields in
-       Ok { Companion.row_id; document_id; institution; format; row_number; fields })
+       let* context =
+         match context with
+         | None -> Ok []
+         | Some json -> Json.decode Json.string_map json
+       in
+       Ok
+         { Companion.row_id
+         ; document_id
+         ; institution
+         ; format
+         ; row_number
+         ; fields
+         ; context
+         })
     rows
 ;;
 
@@ -3906,18 +4167,49 @@ let preview_classification_rule db (rule : Classification_rule.t) =
       else Ok (Some card)
     | _ -> Ok None
   in
+  let* raw_types =
+    match rule.mode, rule.action, rule.match_type with
+    | Automatic, (Type _ | Type_and_category _), Some _ ->
+      let* source = events db in
+      source
+      |> List.filter ~f:(fun (_, event) -> Registry.is_movement db.registry event)
+      |> traverse (fun (id, event) ->
+        let profile = Source_typing.create ~institution:event.Source_event.venue [] in
+        let* movement = Registry.movement ~source_typing:profile db.registry event in
+        Ok (id, movement.movement_type))
+    | _ -> Ok []
+  in
   let matched =
     List.filter rows ~f:(fun row ->
+      let matched_type =
+        match rule.mode, rule.action, rule.match_type with
+        | Automatic, (Type _ | Type_and_category _), Some _ ->
+          Option.value
+            (List.Assoc.find raw_types row.event_id ~equal:Int64.equal)
+            ~default:None
+        | _ -> row.movement_type
+      in
       Option.value_map rule.institution ~default:true ~f:(String.equal row.institution)
+      && Option.value_map
+           rule.account_type
+           ~default:true
+           ~f:(String.equal row.transaction.account.account_type)
       && Option.value_map rule.match_type ~default:true ~f:(function
-        | Classification_rule.Unknown -> Option.is_none row.movement_type
-        | Is kind ->
-          Option.value_map row.movement_type ~default:false ~f:(Poly.equal kind))
+        | Classification_rule.Unknown -> Option.is_none matched_type
+        | Is kind -> Option.value_map matched_type ~default:false ~f:(Poly.equal kind))
       && Option.value_map pattern ~default:true ~f:(fun p ->
-        Transaction_pattern.matches
-          p
-          ~display_name:row.display_name
-          ~descriptions:row.transaction.descriptions))
+        let display_name, descriptions =
+          match rule.mode with
+          | Automatic ->
+            ( None
+            , [ Option.value_map
+                  (List.hd row.transaction.descriptions)
+                  ~default:""
+                  ~f:String.strip
+              ] )
+          | Review | Disabled -> row.display_name, row.transaction.descriptions
+        in
+        Transaction_pattern.matches p ~display_name ~descriptions))
   in
   Ok
     (List.map matched ~f:(fun row ->

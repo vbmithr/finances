@@ -5,10 +5,12 @@ let profile : Csv_profile.t =
   { separator = ','
   ; header = [ "Merchant"; "Date"; "USD" ]
   ; date_column = "Date"
+  ; date_format = Csv_profile.Iso
+  ; amount_format = Csv_profile.Dot_decimal
   ; description_column = "Merchant"
   ; amount_column = "USD"
   ; currency = Iso4217.of_alpha_code "USD" |> Option.value_exn
-  ; account_type = "prepaid-card"
+  ; account_type = Csv_profile.Prepaid_card
   ; invert_amount = true
   ; skip_when = Some ("Merchant", "Total")
   }
@@ -70,7 +72,73 @@ let profile_roundtrip () =
   let input = "Merchant,Date,USD\nTotal,2026-10-01,3.00\nTotal,,3.00\n" in
   let rows = Csv_profile.parse decoded input |> Or_error.ok_exn in
   Alcotest.(check int) "merchant named Total is retained" 1 (List.length rows);
-  Alcotest.(check string) "account type survives" "prepaid-card" decoded.account_type
+  Alcotest.(check string)
+    "account type survives"
+    "prepaid-card"
+    (Csv_profile.account_type_name decoded.account_type)
+;;
+
+let localized_formats () =
+  let profile =
+    { profile with
+      date_format = Csv_profile.Month_first
+    ; amount_format = Csv_profile.Comma_decimal
+    ; invert_amount = false
+    ; skip_when = None
+    }
+  in
+  let profile =
+    Json.decode Csv_profile.codec (Json.encode Csv_profile.codec profile)
+    |> Or_error.ok_exn
+  in
+  let rows =
+    Csv_profile.parse profile "Merchant,Date,USD\nShop,04/03/2026,\"1 234,50\"\n"
+    |> Or_error.ok_exn
+  in
+  let row = List.hd_exn rows in
+  Alcotest.(check string) "month-first date" "2026-04-03" (Date.to_string row.date);
+  Alcotest.(check string) "exact amount" "1234.5" (Quantity.to_string row.amount);
+  Alcotest.(check bool)
+    "invalid dates rejected"
+    true
+    (Result.is_error (Csv_profile.parse profile "Merchant,Date,USD\nShop,02/31/2026,5\n"));
+  let legacy =
+    {|{"separator":",","header":["Merchant","Date","USD"],"date":"Date","description":"Merchant","amount":"USD","currency":"USD","account_type":"prepaid-card","invert_amount":true,"skip_column":null,"skip_value":null}|}
+  in
+  let legacy = Json.decode Csv_profile.codec legacy |> Or_error.ok_exn in
+  Alcotest.(check bool)
+    "legacy profile defaults"
+    true
+    (Poly.equal legacy.date_format Csv_profile.Iso
+     && Poly.equal legacy.amount_format Csv_profile.Dot_decimal)
+;;
+
+let bank_account () =
+  let profile =
+    { profile with account_type = Csv_profile.Savings; invert_amount = false }
+  in
+  let encoded = Json.encode Csv_profile.codec profile in
+  let profile = Json.decode Csv_profile.codec encoded |> Or_error.ok_exn in
+  let rows =
+    Csv_profile.parse profile "Merchant,Date,USD\nDeposit,2026-10-01,12.50\n"
+    |> Or_error.ok_exn
+  in
+  let source =
+    Csv_movement.events ~institution:"mybank" ~account_id:"reserve" rows
+    |> Or_error.ok_exn
+    |> List.hd_exn
+  in
+  let movement = Csv_movement.decode source |> Or_error.ok_exn in
+  Alcotest.(check string) "savings" "savings" movement.account.account_type;
+  Alcotest.(check bool)
+    "IBAN may be applicable"
+    true
+    (Poly.equal movement.own_iban Movement.Unknown);
+  Alcotest.(check string)
+    "bank ledger"
+    "assets:bank:mybank:savings:reserve"
+    (Finances.Bank_projection.ledger_account ~institution:"mybank" movement.account
+     |> Or_error.ok_exn)
 ;;
 
 let integration () =
@@ -178,6 +246,8 @@ let () =
     [ ( "rows"
       , [ Alcotest.test_case "decode" `Quick rows
         ; Alcotest.test_case "identities" `Quick identities
+        ; Alcotest.test_case "bank account" `Quick bank_account
+        ; Alcotest.test_case "localized formats" `Quick localized_formats
         ; Alcotest.test_case "import and overlap" `Quick integration
         ; Alcotest.test_case "profile roundtrip" `Quick profile_roundtrip
         ; Alcotest.test_case "provider identity" `Quick provider_identity

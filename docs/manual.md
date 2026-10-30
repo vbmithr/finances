@@ -151,8 +151,11 @@ skips the question; without a terminal and without `--yes` it refuses.
 
 ### Rebuilding after a schema change
 
-This experimental release accepts schema version 21; it does not migrate older
-databases and refuses them without changing the file. Before upgrading to a new
+This experimental release accepts schema version 23; it does not migrate older
+databases and refuses them without changing the file. If upgrading from schema 21
+with customized institution typing profiles, use the old executable to save each
+profile with `fin institution typing show INSTITUTION > profile.json` before
+rebuilding. Recreate those customizations as rules after reimport. Before upgrading to a new
 schema, use the **old fin executable** to export account settings and save a
 full backup. Save the transaction list and review histories as reference when
 you have decisions to recreate:
@@ -209,12 +212,67 @@ CSV to configure its layout without importing it: `fin institution add NAME SAMP
 Remove an unused user-added institution and its saved layout with
 `fin institution delete NAME` (or `--yes` for scripts). Delete its accounts first
 if it has imported movements. Built-in institutions cannot be deleted.
-Then import a file or directory with `fin import NAME PATH`. Generic CSVs do
-not identify their account, so fin asks for an account label for each file unless
-`--account-id` is supplied. Only use the same label for files from the same card.
-Directory imports process CSV files in name order; earlier files remain imported
-if a later file fails. For a generic card CSV, you can also use `fin import FILE.csv`;
+Then import a file or directory with `fin import NAME PATH`. A user-added
+institution can import OFX 2.x XML statements, including all accounts present in
+the file, or configure a generic account or card CSV layout. For example:
+
+```sh
+fin institution add mybank
+fin import mybank ~/Statements/mybank/statement.ofx
+```
+
+Generic OFX uses the same parser and source transaction IDs as the BoursoBank
+OFX importer. It does not automatically use BoursoBank rules or CSV enrichment.
+A generic primary CSV and OFX cannot be mixed for one institution: both create
+movements and could duplicate them. Instead, configure a CSV as an OFX companion
+as described below; companion rows enrich movements without creating new ones.
+
+Generic CSVs do not identify their account, so fin asks for an account label for each file unless
+`--account-id` is supplied. Only use the same label for files from the same account or card balance.
+Without a companion profile, generic directory imports process primary CSV files
+in name order or import OFX/ZIP files; mixing these sources is refused. With a
+companion profile, a directory can contain both OFX and companion CSV files.
+Earlier files remain imported if a later file fails. For a generic CSV, you can also use `fin import FILE.csv`;
 fin prompts for its provider and account details when needed.
+
+### Configure a CSV companion
+
+If an institution supplies both OFX and a CSV with additional transaction
+fields, configure the CSV as a companion before importing it. A companion does
+not create transactions. For example, use the bundled BoursoBank layout as a
+starting point for a user-added institution:
+
+```sh
+fin institution companion show boursobank > companion.json
+$EDITOR companion.json
+fin institution companion set mybank companion.json
+fin import mybank ~/Statements/mybank
+fin statement companions --institution mybank --review
+```
+
+Replace the template's `name`, `header`, separator and column positions with
+those of your CSV, and set `currency` to the file's ISO currency, such as
+`"EUR"`. Positions are **zero-based**. `account_id`, `booked_on`, `amount`
+and `description` are required positions; optional metadata positions may be
+`null`. Positions distinguish repeated header names. `date_format` is `iso`,
+`day-first` or `month-first`; `amount_format` and `balance_format` are `dot`
+or `comma`. The header must match the profile. Boolean settings control header
+and cell trimming and blank-row skipping. Profile changes are previewed and
+require confirmation; `--yes` accepts them for scripts.
+
+Rows match only a unique OFX transaction in the same institution and account,
+on booking date, exact signed amount, currency and whitespace-normalized
+original description. Ambiguous rows and conflicting metadata remain visible
+for review. CSV bank categories are retained as source metadata; they are not
+automatic accounting classifications. Companion rows may arrive before OFX.
+
+Each imported CSV retains the layout used to read it. Changing the profile
+applies to later files and does not reinterpret existing observations. Reimporting the same file under a different profile is rejected, including
+when its stored source context differs.
+`fin institution companion clear mybank` removes an unused profile; once
+companion rows exist, fin keeps the profile available to display and match them.
+A user-added institution with primary generic CSV movements cannot be switched
+to companion mode until those accounts are removed.
 
 Keep a separate inbox for each bank. Supply the formats below:
 
@@ -334,12 +392,12 @@ See [Bank import and review reference](../README.md#folder-workflow) for
 additional detail, or use `fin import --help` for current options.
 
 
-### Configure another card CSV
+### Configure another CSV
 
-For a CSV that describes card transactions, initialize fin and run:
+For a CSV that describes an account or card, initialize fin and run:
 
 ```sh
-fin import card.csv --provider my-provider --account-id my-card
+fin import statement.csv --provider my-provider --account-id main
 ```
 
 The first import must run in a terminal. Fin detects a comma or semicolon
@@ -347,9 +405,11 @@ separator from the header when unambiguous, and asks if it cannot decide. It
 then proposes date, description and account amount columns when it recognizes
 them. Accept the proposal or choose columns yourself. For questions with
 numbered choices, enter the number; empty and invalid choices are retried. It
-also explains the account type and asks whether purchases have positive amounts. Dates
-must be ISO `YYYY-MM-DD`, amounts must use a dot decimal mark, and the account
-currency is fixed for the file. If there is a summary row, specify its label;
+also asks for an account type (current, savings, prepaid card or credit card)
+and whether outgoing amounts are positive. ISO dates and dot-decimal amounts
+are recognized directly; for other supported dates and comma-decimal amounts,
+fin shows examples and asks which format to use. The account currency is fixed
+for the file. If there is a summary row, specify its label;
 fin skips it only when its date is empty. Review the preview and confirm to import.
 The preview shows each CSV amount beside the signed account movement; other
 CSV fields, such as local currency and exchange rate, retain their source signs.
@@ -360,7 +420,7 @@ The mapped account amount, not the local amount, is posted to the ledger.
 The provider name identifies the institution; fin prompts for a nonempty name
 when omitted on a terminal and retries invalid answers. The layout is saved with the accepted document in the database
 and reused for later files with the same header and provider. Supply the same `--account-id` for the same
-card, and different labels for separate card balances. A known layout can be
+account, and different labels for separate account or card balances. A known layout can be
 imported without a terminal. Reimports are safe: repeated identical rows are
 preserved as distinct occurrences, and a changed or partial overlapping day is
 rejected for review. Layouts with the same header but different settings are
@@ -370,6 +430,14 @@ cards or from card top-ups.
 For generic imports recorded under the former `csv` institution, delete the
 old account and import its files under the provider name. See account deletion
 below; reviews and account settings associated with the deleted account are lost.
+
+Current and savings accounts default to `assets:bank:PROVIDER:TYPE:ACCOUNT`.
+Fin can record an optional IBAN for them. A generic CSV profile still covers
+one account and one fixed currency. Supported dates are ISO `YYYY-MM-DD`,
+day-first `DD/MM/YYYY` or `DD-MM-YYYY`, and month-first `MM/DD/YYYY` or
+`MM-DD-YYYY`. Amounts use a dot decimal mark without grouping, or a comma
+with optional space grouping. Separate debit/credit columns, multiple currencies
+and other date or number formats are not yet supported.
 
 Prepaid card balances are assets. Select `prepaid-card` for a separately funded
 card and `credit-card` for a card paid later. New generic prepaid cards default
@@ -711,41 +779,39 @@ inspection. An interest type is source information, not an income classification
 The settlement type likewise describes the statement; confirming a settlement
 is a separate accounting decision.
 
-### Configuring import-time typing
+### Automatic rules at import
 
-Each institution has a source typing profile. BoursoBank starts with the
-built-in rules described above; a user-added CSV institution starts with an
-empty profile. Inspect and edit a profile as JSON, then install it:
+BoursoBank's typing defaults are ordinary automatic rules. Inspect them and
+any user rules with `fin rule list` (or `--json`). Add your own rules and
+choose whether they apply automatically to new imports:
 
 ```sh
-fin institution typing show boursobank > boursobank-types.json
-$EDITOR boursobank-types.json
-fin institution typing set boursobank boursobank-types.json
-fin tx refresh-types --institution boursobank
+fin rule add cafes --institution boursobank --description 'CAFE' \
+  --set-type card --category expenses:food --automatic
+fin rule mode cafes disabled
+fin rule mode cafes review
+fin rule mode cafes automatic
 ```
 
-The version 1 profile names its institution and contains an ordered `rules`
-array. Each rule has a `description` regular expression, `account_type` (an
-exact source account type, or `null` for any account), `case_sensitive` (a
-boolean), and `type`. The expression matches the first trimmed source
-statement description; the first matching rule wins. Use a type from
-`fin tx type list` or a provider-specific type; `unknown` is not a type.
-The file replaces the whole profile, so retain any default rules you need.
-The supplied BoursoBank defaults are in
+Rules are ordered by priority (lower first), then name. Set the order on
+creation with `--priority`; the first matching type action and first matching
+category action win independently. Automatic typing is determined before
+automatic categories. Automatic rules match the first trimmed source
+description and can constrain the source account type with `--account-type`.
+Rules with a type action match `--match-type` against the type reported by
+the parser; category-only rules match it against the resulting imported type.
+Manual overrides and reviewed accounting decisions remain authoritative.
+Settlement rules require review and cannot run automatically.
+
+Replace a rule with `fin rule add NAME ... --replace`, supplying its complete
+new conditions, action, mode and priority. Changing, disabling or deleting a
+rule affects future imports, not existing transactions. Run `fin tx refresh-types --institution boursobank` to preview
+and refresh imported types. Use `fin rule preview NAME` and `fin rule apply
+NAME` to review and apply decisions to existing transactions. Reimporting the
+same source does not rerun automatic rules. The database and backups contain
+rules; the bundled defaults are installed for a fresh database from
 [`banks/source_type_defaults.json`](../banks/source_type_defaults.json).
-
-Setting a profile previews it and asks for confirmation (`--yes` accepts it).
-It affects subsequent imports. Existing movements change only when you run and
-confirm `refresh-types` as above. Manual type overrides and accounting decisions
-are preserved. `fin institution typing reset boursobank` previews and restores
-the bundled defaults; for a user-added institution it restores an empty profile.
-Deleting a user-added institution also deletes its profile. Profiles are stored
-in the database and included in database backups.
-
-These source rules are separate from reviewed transaction rules: they assign
-source types at import and do not categorize transactions. Wise's type codes
-from matched companion CSV rows are still handled by its adapter and are not
-changed by this profile or by `refresh-types`.
+Wise companion CSV type codes still come from its adapter.
 
 Refresh existing types from stored source evidence after importer improvements:
 
@@ -763,8 +829,8 @@ for accounting reports and running balances.
 
 ## Transaction rules
 
-Rules let you reuse type and classification decisions without silently changing
-imported data. Conditions can match an institution, a description expression, an
+Rules let you reuse type and classification decisions. Review-mode rules
+require an explicit preview and application; automatic rules apply on import. Conditions can match an institution, a description expression, an
 effective movement type, or a combination; all supplied conditions must match.
 The effective type includes a manual override when one exists.
 Create a rule, inspect its matches, then apply it explicitly:
@@ -862,7 +928,7 @@ belongs to hledger; `fin` tracks import evidence, account identity and review st
 ## Library and dependency changes
 
 This build uses Base, decimal, Ptime and Bos, with no Core or Bigdecimal
-dependency. Version 1 account snapshots remain compatible; databases use schema 21 and
+dependency. Version 1 account snapshots remain compatible; databases use schema 23 and
 are rebuilt from the original statements (see above).
 
 OCaml callers use `Quantity.t` (a `Decimal.t` alias) and `Date.t` (a `Ptime.date`
@@ -914,7 +980,7 @@ above; no automatic migration runs.
 | `fin status` | Import coverage and outstanding review work |
 | `fin paths` | Resolved storage paths |
 | `fin account --help` | Account listing, config and history |
-| `fin institution --help` | Institution list and generic CSV setup |
+| `fin institution --help` | Institution list and generic import setup |
 | `fin transaction --help` | Imported transaction listing |
 | `fin statement --help` | Statement reconciliation and companion files |
 | `fin reversal --help` | Withdrawal reversal candidates and review |

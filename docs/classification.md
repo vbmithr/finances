@@ -7,6 +7,16 @@ types, and can explicitly apply type overrides, categories or card settlements.
 An experimental full-screen
 settlement review is available; user-managed tags are not implemented.
 
+## Unified rules
+
+Bundled BoursoBank typing defaults and user rules share one ordered rule set.
+Rules can run automatically on import, require review, or be disabled. Automatic
+type and category actions apply to new movements; settlement actions require
+review. Manual overrides and reviewed accounting decisions take precedence.
+Changing a rule never silently rewrites previously imported movements: type
+refresh and rule application preview historical changes and apply atomically.
+See the [manual](manual.md#transaction-rules) for the current workflow.
+
 ## Purpose
 
 Turn imported movements into useful personal accounts without requiring the same
@@ -110,8 +120,8 @@ and lets the user select exact matches and confirm a transactional batch. It
 shows conflicting classifications and leaves cancellation without changes. The
 event ID can be found with `fin transaction list`. This first interface uses
 terminal prompts; it does not yet provide tags or category search. Separately,
-`fin rule` saves conditions and actions for explicit preview and batch application;
-see the [manual](manual.md#transaction-rules).
+`fin rule` saves conditions and actions for automatic import or explicit preview
+and batch application; see the [manual](manual.md#transaction-rules).
 
 The fuller workflow should present one unclassified movement, let the user search
 or choose a category, add optional tags, inspect source details or skip it. After

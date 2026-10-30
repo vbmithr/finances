@@ -290,6 +290,13 @@ let classification_rule =
   in
   Jsont.Object.enc_only ()
   |> field "name" Jsont.string (fun r -> r.name)
+  |> field "mode" Jsont.string (fun r ->
+    match r.mode with
+    | Automatic -> "automatic"
+    | Review -> "review"
+    | Disabled -> "disabled")
+  |> field "account_type" (Jsont.option Jsont.string) (fun r -> r.account_type)
+  |> field "priority" Jsont.int (fun r -> r.priority)
   |> field "pattern" (Jsont.option Jsont.string) (fun r -> r.pattern)
   |> field "institution" (Jsont.option Jsont.string) (fun r -> r.institution)
   |> field "match_type" (Jsont.option Jsont.string) (fun r ->

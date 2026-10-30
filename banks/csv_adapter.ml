@@ -7,7 +7,7 @@ let make ?(institution = "csv") ?profile () =
     ~kind:"csv-movement"
     ~overlap:Adapter.Day_inventory
     ~takes_account_label:true
-    ~account_label_error:"CSV imports require a card label with --account-id"
+    ~account_label_error:"CSV imports require an account label with --account-id"
     ~recognizes:(fun contents ->
       Option.value_map profile ~default:false ~f:(fun (p : Csv_profile.t) ->
         Csv_reader.recognizes ~separator:p.separator ~trim:false ~header:p.header contents))

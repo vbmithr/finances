@@ -1,6 +1,6 @@
 # Shared CSV decoding and format profiles
 
-Status: shared engine and initial interactive card CSV import implemented, 2026-10-28. All four bank CSV formats decode rows through
+Status: shared engine and interactive single-account CSV import implemented, 2026-10-30. All four bank CSV formats decode rows through
 `Csv_reader` and `Csv_schema`, and `Adapter_support` shares companion wiring and
 CSV adapter construction.
 
@@ -16,8 +16,10 @@ hooks where a bank needs them. A profile still describes the format: arbitrary
 CSV cannot reliably supply its own account identity, amount interpretation or
 accounting meaning.
 
-Interactive setup now saves a limited card CSV profile with imported evidence.
-A general user-editable configuration language is later work.
+Interactive setup saves a limited current-account, savings-account or card CSV
+profile with imported evidence. User-added OFX institutions can also store an
+editable JSON companion layout; each imported companion document retains its
+layout, and exact matching includes a required fixed currency.
 
 ## What exists today
 
