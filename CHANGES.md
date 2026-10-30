@@ -8,7 +8,112 @@ short line of their own.
 
 ## Unreleased
 
+### 2026-10-30
+
+- Replace the copied Notty sources with a pinned Git submodule tracking a fork
+  with its upstream history and OCaml compatibility fix. **Action required:**
+  initialize submodules before building from a Git checkout.
+
+- Align the pre-commit formatting check with Dune's vendored-source exclusion.
+
+- Type BoursoBank `AVOIR` card refunds as `card` and ATM withdrawal reversals
+  as `withdrawal`, retaining their positive amounts. Reversal suggestions use
+  the provider's source wording as evidence; refresh stored types with
+  `fin tx refresh-types`.
+
+- Add full ATM withdrawal reversal candidates, review, undo and audit history.
+  BoursoBank `ANNUL RETRAIT DAB` movements receive a `withdrawal` type.
+  **Action required:** schema 18 requires rebuilding the database; back up and
+  export settings with the old executable before upgrading. Review decisions
+  need to be inspected and recreated after reimport; see the manual.
+
+- Add `fee` and `cheque` movement types and recognize BoursoBank card fees,
+  fee refunds, issued cheques, cheque deposits, additional interest labels and
+  malformed deferred-card labels found in exports.
+  Run `fin transaction refresh-types` to update previously imported movements.
+
+- Add `fin transaction list --type` and `--classification` filters; use
+  `--type unknown` to find transactions without a movement type.
+
+- Record BoursoBank deferred-card statements as `card-settlement` movement types.
+  Add `fin transaction refresh-types` to preview and refresh existing types from
+  stored source evidence without deleting transactions or review decisions; decline
+  the confirmation to preview without applying changes.
+
+- Add `tx` and `txn` aliases for `transaction`, `acc` for `account`, and `inst`
+  for `institution`.
+
 ### 2026-10-29
+
+- Add `fin transfer undo FIRST-EVENT-ID SECOND-EVENT-ID` to preview and undo a
+  confirmed transfer, retaining audit history and returning both movements to review.
+
+- In transfer review, selecting all supported pairs now goes directly to the
+  batch preview; remaining candidates are left for later review.
+
+- Show each transfer pair before asking for a choice, and distinguish choices
+  for the current pair from actions on the pending batch.
+
+- Stage transfer review decisions in a guided batch, including a shortcut for
+  supported pairs and a single final confirmation. Cancellation leaves no changes.
+
+- Combine transfer ranking and candidates in `fin transfer candidates`, with
+  `--all` for reviewed and excluded pairs. `fin transfer review` can now confirm
+  a pair interactively using event IDs; JSON batches remain supported. **Action
+  required:** replace `fin transfer preview` and update scripts for the new
+  candidates JSON structure.
+
+- Rename `fin transfers` to `fin transfer` for consistency with other command
+  groups. **Action required:** update scripts using the old command name.
+
+- Add an `interest` movement type and recognize BoursoBank interest descriptions
+  at import. Existing stored types can now be refreshed with
+  `fin transaction refresh-types`.
+
+- Show accounting classifications, including card settlements, in transaction
+  listings and page interactive tables. Avoid reloading all movements for each
+  settlement in a rule batch.
+
+- Replace the `fin bank` command group with `fin transaction review`,
+  `fin transaction category`, `fin institution history`, `fin statement list`,
+  `fin statement companions`, `fin statement match`, and `fin journal project`.
+  **Action required:** update scripts that use the old command paths.
+
+- Add `fin rule rename OLD-NAME NEW-NAME`, preserving existing decision history.
+
+- Explain literal regex metacharacters in rule help and invalid-expression errors.
+
+- Use `[Y/n]` confirmations throughout the CLI; Enter accepts the displayed
+  proposal and `n` declines it, including for deletion and restore.
+
+- Add reusable `fin rule` regular-expression rules for income and expense
+  categories and linked-card settlements. Preview matches and explicitly confirm
+  each atomic batch; importing transactions never applies rules automatically.
+
+- Add `fin account link-card` and guided settlement discovery for unambiguous
+  BoursoBank deferred-card debits. Card setup and each settlement require review;
+  matching card-side payments suppress single-movement suggestions. The guided
+  review selects by event ID and applies setup and the selected settlement in a
+  single transaction after confirmation; interruption before confirmation leaves
+  both unchanged.
+
+- Add an experimental `fin settlement review --tui` full-screen queue using
+  vendored Notty. It shows pending changes before confirmation, and Ctrl-C or
+  quitting leaves unapplied changes untouched.
+
+- Add `fin settlement review EVENT-ID` to confirm a single bank debit against
+  its linked card liability, plus `settlement undo` and audited history. Document
+  the credit-card setup and settlement workflow with an account settings example.
+
+- Add `fin institution list`, `add` and `delete`, and allow named generic
+  institutions to import CSV files or directories, reviewing account labels per
+  file. Update welcome and initialization guidance to explain institutions. The
+  former `fin bank list` has been removed. Deletion is limited to user-added
+  institutions without imported transactions.
+
+  **Action required:** schema 18 requires a database rebuild; export settings and
+  back up with the old executable first. Recreate generic institutions and CSV
+  layouts after rebuilding, and inspect review decisions before reapplying them.
 
 - Add `fin bank list` to show built-in importers and their aliases.
 

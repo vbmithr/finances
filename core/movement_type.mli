@@ -3,11 +3,15 @@
     a confirmed transfer between owned accounts. *)
 type t =
   | Card
+  | Card_settlement
   | Transfer
   | Conversion
   | Direct_debit
   | Deposit
   | Withdrawal
+  | Interest
+  | Fee
+  | Cheque
   | Other of string
 
 val to_string : t -> string

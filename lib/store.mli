@@ -29,6 +29,28 @@ val document_contexts : t -> institution:string -> string list Or_error.t
 
 val registry : t -> Registry.t
 
+(** User-added institutions using generic CSV layouts. *)
+val institutions : t -> string list Or_error.t
+
+val add_institution : ?profile:string -> t -> string -> unit Or_error.t
+val institution_profile : t -> string -> string option Or_error.t
+val set_institution_profile_if_missing : t -> string -> string -> unit Or_error.t
+
+(** Delete a user-added institution only when it has no imported movements. *)
+val delete_institution : ?dry_run:bool -> t -> string -> unit Or_error.t
+
+(** Saved, explicitly reviewed regular-expression rules. *)
+val classification_rules : t -> Classification_rule.t list Or_error.t
+
+val add_classification_rule : t -> Classification_rule.t -> unit Or_error.t
+val delete_classification_rule : t -> string -> unit Or_error.t
+
+val rename_classification_rule
+  :  t
+  -> old_name:string
+  -> new_name:string
+  -> unit Or_error.t
+
 (** Identical retries return [Existing]; changed evidence for the same identity
     returns an error rather than silently overwriting the original. *)
 val ingest : t -> Source_event.t -> ingest Or_error.t
@@ -159,6 +181,13 @@ type category_change =
 
 val bank_category_history : t -> category_change list Or_error.t
 
+type review_classification =
+  | Unclassified
+  | Category
+  | Transfer
+  | Settlement
+  | Reversal
+
 type bank_review =
   { event_id : int64
   ; institution : string
@@ -167,17 +196,70 @@ type bank_review =
   ; display_name : string option
   ; movement_type : Movement_type.t option
   ; detail_sources : int64 list
+  ; classification : review_classification
   ; counter_account : string
   ; reason : string option
   }
 
 val bank_review : t -> bank_review list Or_error.t
 
+type reversal_candidate =
+  { original : bank_review
+  ; reversal : bank_review
+  }
+
+val reversal_candidates : t -> reversal_candidate list Or_error.t
+
+val reversal_change
+  :  t
+  -> original:int64
+  -> reversal:int64
+  -> undo:bool
+  -> unit Or_error.t
+
+type reversal_action =
+  | Reversal_confirmed
+  | Reversal_undone
+
+type reversal_history_entry =
+  { id : int64
+  ; original : int64
+  ; reversal : int64
+  ; action : reversal_action
+  ; changed_at : Ptime.t
+  }
+
+val reversal_history : t -> reversal_history_entry list Or_error.t
+
+type movement_type_change =
+  { event_id : int64
+  ; institution : string
+  ; description : string
+  ; before : Movement_type.t option
+  ; after : Movement_type.t option
+  }
+
+val preview_movement_types
+  :  ?institution:string
+  -> t
+  -> movement_type_change list Or_error.t
+
+val refresh_movement_types
+  :  ?institution:string
+  -> t
+  -> expected:movement_type_change list
+  -> int Or_error.t
+
 (** Explicit same-currency transfer decisions; a confirmation asserts ownership
     of both accounts. Each movement can have at most one confirmed counterpart.
     Rejection of a confirmed pair restores its prior category. All projection
     changes and audit rows commit atomically after verifying stored entries. *)
-val set_bank_transfers : t -> Bank_transfer.decision list -> int Or_error.t
+val set_bank_transfers
+  :  ?require_unreviewed:bool
+  -> ?expected_previous:Bank_transfer.decision
+  -> t
+  -> Bank_transfer.decision list
+  -> int Or_error.t
 
 val bank_transfer_decisions : t -> Bank_transfer.decision list Or_error.t
 
@@ -226,6 +308,67 @@ type bank_account_info =
   }
 
 val bank_account_info : t -> bank_account_info list Or_error.t
+
+(** Preview and confirm a single bank debit against its linked credit card. *)
+val card_settlement_preview
+  :  ?card_id:string
+  -> t
+  -> int64
+  -> (bank_review * bank_account_info) Or_error.t
+
+val confirm_card_settlement
+  :  ?card_id:string
+  -> ?expected_ledger:string
+  -> t
+  -> int64
+  -> unit Or_error.t
+
+(** Apply a reviewed card setup and settlement in one transaction, checking the
+    setup still matches the preview before changing anything. *)
+val confirm_card_settlement_with_setup
+  :  t
+  -> event_id:int64
+  -> card_id:string
+  -> expected_ledger:string
+  -> expected_link:Bank_account_config.reference option
+  -> setup:Bank_account_config.t
+  -> unit Or_error.t
+
+val undo_card_settlement : t -> int64 -> unit Or_error.t
+
+type card_settlement_action =
+  | Confirmed
+  | Undone
+
+type card_settlement_change =
+  { id : int64
+  ; event_id : int64
+  ; card_institution : string
+  ; card_source_account : string
+  ; ledger_account : string
+  ; action : card_settlement_action
+  ; changed_at : Ptime.t
+  }
+
+val card_settlement_history : t -> card_settlement_change list Or_error.t
+
+type classification_rule_match =
+  { transaction : bank_review
+  ; eligible : bool
+  ; explanation : string option
+  }
+
+val preview_classification_rule
+  :  t
+  -> Classification_rule.t
+  -> classification_rule_match list Or_error.t
+
+(** Recheck the saved rule and every selected match, then apply atomically. *)
+val apply_classification_rule
+  :  t
+  -> expected:Classification_rule.t
+  -> event_ids:int64 list
+  -> int Or_error.t
 
 (** Account information, movement count, unclassified count and candidate count.
     SQL computes counts and date ranges; only candidate legs and representative

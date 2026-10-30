@@ -168,6 +168,8 @@ module type S = sig
   val aliases : string list         (* names in other banks' descriptions *)
   val kinds : string list           (* event kinds it decodes *)
   val decode : Source_event.t -> Movement.t Or_error.t
+  val settlement_card_hint : Movement.t -> string option
+  val withdrawal_reversal_hint : Movement.t -> bool
   val formats : string list         (* recorded in import history *)
   val probe : filename:string -> string -> string option
   val takes_account_label : bool    (* exports that do not name their account *)
@@ -176,6 +178,10 @@ module type S = sig
   val companions : Companion.t list
 end
 ```
+
+The hint functions expose provider-specific statement evidence for review;
+return `None` or `false` when the source does not supply it. They do not
+confirm an accounting decision.
 
 - The kernel probes every registered adapter. A file is parsed by the requested
   institution's adapter when exactly one of its formats recognizes it; a file
@@ -195,7 +201,7 @@ end
   sorted payloads must agree across documents).
 - A `Companion.t` matches rows of one format against the institution's own
   events, annotates matched rows for the journal (a value date and named tags)
-  and describes rows for `fin bank companions`. Storage, audit, journal emission
+  and describes rows for `fin statement companions`. Storage, audit, journal emission
   and listing are the kernel's.
 
 `Ofx_bank` shares OFX decoding, probing and adapter defaults. Parsing takes the
@@ -289,8 +295,8 @@ rebuilt with the previous build against one rebuilt with the new build.
 5. **Import behind the adapters.** Done: probing, parsing, overlap policy and
    companions are adapter members; Store, the journal exporter and the CLI name
    no bank, and the kernel library does not depend on `finances.banks`. The
-   per-bank commands became `fin bank statements`, `fin bank companions` and
-   `fin bank match`; `Bank_import.format` is the adapter's format text. A
+   per-bank commands became `fin statement list`, `fin statement companions` and
+   `fin statement match`; `Bank_import.format` is the adapter's format text. A
    rebuild from the personal inboxes gives the same events, entries, match
    states and reconciliations; journal provenance is one `companion-row-ids`
    tag.

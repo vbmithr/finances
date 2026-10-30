@@ -361,9 +361,9 @@ reference, local millisecond clock, amount and currency. Multiple balance accoun
 with indistinguishable candidates remain ambiguous. Separate observation and match
 tables keep BoursoBank's account/date/description matching policy independent.
 Both adapters share matching-state persistence and append-only decision history.
-The folder workflow recomputes both match sets before generic bank projection.
+The folder workflow recomputes both match sets before generic journal projection.
 
-`bank statements` recomputes statement reconciliation from stored event memberships
+`statement list` recomputes statement reconciliation from stored event memberships
 using exact decimal quantities and exposes every Wise CSV row's match state. The journal adds
 uncontested merchant, payment reference and reported-fee metadata, without fee or
 FX postings. Real samples currently validate EUR movements with zero fees.
@@ -419,7 +419,7 @@ value for slower machines. This is a regression guard for that workload, not a
 guarantee for every database; compare its results on the same machine and SQLite
 version, and tighten the budget after improving transfer-pair searches.
 
-## Reviewed bank categories
+## Reviewed transaction category
 
 `Bank_category` validates explicit per-event decisions with an expense/income
 counter-account and a nonempty reason; `equity:unclassified` resets a decision.
@@ -495,7 +495,7 @@ categories require an explicit reset before confirmation. Rejection of a confirm
 pair restores its unclassified counters. Unrelated rejection leaves other links intact.
 
 Effective counter-account resolution checks confirmed transfer membership before
-manual categories. Projection, account remapping and bank review all use that view.
+manual categories. Projection, account remapping and transaction review all use that view.
 Journal generation includes active pair/reason tags. The immutable evidence and
 stable projection identity are preserved; no transfer duplicates a bank movement.
 
@@ -552,7 +552,7 @@ contradictions are hard exclusions. Numeric scores are not calibrated probabilit
 The graph solver computes exact maximum-weight matchings with unmatched vertices
 allowed, independently per connected component. Edge inclusion/exclusion solves
 identify forced edges, equal alternatives and score margins without arbitrary tie
-breaking. Components above 18 vertices remain unevaluated. `transfers preview`
+breaking. Components above 18 vertices remain unevaluated. `transfer candidates`
 returns evidence, confidence bands, assignment diagnostics, excluded pairs and
 review-required proposals; it never mutates transfer decisions or journal entries.
 

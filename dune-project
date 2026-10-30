@@ -38,6 +38,7 @@
   (jsont
    (>= 0.2.0))
   bytesrw
+  uutf
   xmlm
   re
   digestif

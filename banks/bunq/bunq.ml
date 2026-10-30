@@ -8,6 +8,8 @@ let csv = "bunq_csv"
 let formats = [ mt940; csv ]
 let takes_account_label = false
 let overlap = Adapter.Day_inventory
+let settlement_card_hint _ = None
+let withdrawal_reversal_hint _ = false
 
 let decode event =
   let open Or_error.Let_syntax in

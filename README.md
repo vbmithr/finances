@@ -56,13 +56,13 @@ fin status
 fin paths
 fin account list
 fin transaction list
-fin bank statements --institution bunq
-fin transfers preview
+fin statement list --institution bunq
+fin transfer candidates
 ```
 
 Running `fin` without arguments shows a welcome and useful first steps, exits
 successfully, and creates no files. `fin init` creates the database and prints its
-location and an import example. It is the
+location and guidance for choosing or adding an institution and importing. It is the
 only command that creates a database; the others fail with "fin is not
 initialized" until it has run. It is safe to repeat and preserves existing data and
 account settings. Use `fin init --database FILE` to initialize a different database.
@@ -73,10 +73,10 @@ The lower-level `fin db init` remains available for quiet database initializatio
 unclassified movements, unreviewed transfer candidate pairs and the latest inbox
 attempt. It creates no database when none exists. Date ranges are observations,
 not proof of complete coverage; financial reports come from the exported hledger
-journal. `account list`, `bank review`, `transfers candidates` and
-`transfers preview` now display readable text by default. Add `--json` to those
+journal. `account list`, `transaction review` and
+`transfer candidates` display readable text by default. Add `--json` to those
 commands or `status` for scripts; the existing inspection JSON shapes are retained.
-`bank history` also displays readable file import attempts by default, with
+`institution history` also displays readable file import attempts by default, with
 `--json` for scripts. Other history and provider reconciliation commands emit JSON.
 
 The [XDG Base Directory specification](https://specifications.freedesktop.org/basedir/latest/)
@@ -120,7 +120,7 @@ Build the current checkout using a prepared opam switch, and install it:
 make install OPAM_SWITCH=5.5.0
 fin --version
 fin account list
-fin bank statements --institution bunq
+fin statement list --institution bunq
 ```
 
 `make install` builds the package as `make package` does, then installs it with
@@ -159,7 +159,7 @@ with grouped commands under `db`, `account`, `bank`, `transfers`, and `journal`:
 ```sh
 fin db init
 fin import bunq personal/bunq/inbox
-fin transfers preview
+fin transfer candidates
 fin journal export
 ```
 
@@ -180,6 +180,7 @@ From this directory, in your chosen switch:
 ```sh
 mkdir -p "$HOME/.cache/codex/scratch/finances"
 export TMPDIR="$HOME/.cache/codex/scratch/finances"
+git submodule update --init --recursive
 opam pin add --no-action rel \
   'git+https://github.com/dbuenzli/rel.git#f196804c51031870327ecc482d0b97f052941081'
 opam pin add --no-action hledger \
@@ -199,7 +200,7 @@ such as `csv`, check that installation and execution use the same switch:
 ```sh
 opam switch show
 opam install --switch=5.5.0 . --deps-only --with-test
-opam exec --switch=5.5.0 -- dune exec fin -- bank statements --institution bunq
+opam exec --switch=5.5.0 -- dune exec fin -- statement list --institution bunq
 ```
 
 Replace `5.5.0` with your chosen switch. To use plain `dune` commands in your shell,
@@ -219,7 +220,10 @@ Enable the version-controlled pre-commit formatting check in each checkout:
 git config --local core.hooksPath .githooks
 ```
 
-The hook checks all staged OCaml sources with ocamlformat using the repository's
+The hook checks staged project OCaml sources; vendored sources follow the same
+exclusion as Dune's formatting rules.
+
+The hook checks staged project OCaml sources with ocamlformat using the repository's
 configuration. It never rewrites files. If it blocks a commit, run `opam exec --
 dune fmt`, stage the formatted files, and retry. Opam and the pinned ocamlformat
 version must be installed. The hook is enabled in this checkout.
@@ -286,7 +290,7 @@ or `Date of Date.t`.
 The `events` command prints an RFC 3339 `occurred_at` for instants, or
 `occurred_at: null` and a populated `occurred_on` for date-only OFX records.
 Wise records retain an instant and project using the local booking date.
-This experimental build supports only the current schema baseline (14). Fresh
+This experimental build supports only the current schema baseline (18). Fresh
 files initialize it atomically; other schema versions are rejected without changes.
 There are no historical migrations or schema fixtures. Reimport original statements
 and import exported account settings when resetting an experiment. Category and
@@ -314,12 +318,12 @@ financial data, not scratch files.
 mkdir -p personal
 dune exec fin -- init
 dune exec fin -- import boursobank /path/to/statements
-dune exec fin -- bank project
+dune exec fin -- journal project
 dune exec fin -- journal export > personal/bank.journal
 hledger --no-conf -f personal/bank.journal check --strict
 ```
 
-`bank project` reads the stored canonical source events; it does not need the OFX
+`journal project` reads the stored canonical source events; it does not need the OFX
 file again. It creates one balanced entry per bank transaction, with the signed
 amount posted to the bank account and its opposite to `equity:unclassified`.
 Reimporting or projecting again creates no duplicate entries. A projection conflict
@@ -379,7 +383,7 @@ mkdir -p personal/{boursobank,wise,bunq,revolut}/inbox personal/reviews personal
 dune exec fin -- init
 dune exec fin -- import boursobank personal/boursobank/inbox \
   --journal personal/bank.journal
-dune exec fin -- bank history --limit 100
+dune exec fin -- institution history --limit 100
 ~~~
 
 Import traverses regular files recursively in path order and detects OFX content
@@ -404,7 +408,7 @@ rejected or unreadable inputs. Unsupported companions are visible in the summary
 without failing import. The CSV summary separately counts matched, unmatched,
 ambiguous, and conflicting observations; review items do not prevent valid OFX
 entries from being exported. Import history is readable text, newest attempt
-first; use `fin bank history --json` for the original JSON layout. It lists file
+first; use `fin institution history --json` for the original JSON layout. It lists file
 import attempts, rather than individual bank movements. Use `--limit N` to choose
 how many recent attempts to display (100 by default).
 
@@ -446,6 +450,15 @@ fin account import ~/fin-accounts.json --dry-run
 fin account import ~/fin-accounts.json
 fin account history
 ```
+
+Use `fin account link-card CARD-ID CHECKING-ID` to link a credit card and its
+settlement account. For BoursoBank, `fin settlement review` also suggests
+unambiguous settlements and can guide you through that setup. The command
+previews and confirms the posting; `fin settlement undo`
+reverses the decision. See the [manual](docs/manual.md#reviewing-transactions-and-transfers)
+for the prerequisites and limitations.
+
+Try `fin settlement review --tui` for the experimental full-screen review.
 
 `list` displays source identifiers, ledger account, IBAN and its provenance,
 currency, movement count, first/last imported movement dates, and settlement links.
@@ -509,7 +522,14 @@ Existing version 1 JSON exports remain accepted by `fin account import FILE`.
 
 ## List imported transactions
 
-Use `fin transaction list` to see imported movements, including reviewed ones.
+Use `fin transaction list` to see imported movements, including their accounting
+classification. Terminal output uses `$PAGER` (default `less -FRX`); redirected
+and JSON output is not paged.
+Filter by movement type or accounting decision with, for example,
+`fin tx list --type interest` or `fin tx list --classification settlement`.
+After importer improvements, `fin transaction refresh-types` previews updates
+to stored movement types and asks before applying them, without changing accounting
+decisions.
 Filter by `--account ID`, `--institution NAME`, inclusive `--from` and `--to`
 dates, `--search TEXT`, or `--limit COUNT`; add `--json` for scripts. See the
 [manual](docs/manual.md#list-transactions) for examples. Use hledger for
@@ -520,14 +540,14 @@ accounting reports and running balances.
 List movements that still use `equity:unclassified`:
 
 ```sh
-fin bank review --json > personal/reports/bank-review.json
-fin bank review --all
+fin transaction review --json > personal/reports/bank-review.json
+fin transaction review --all
 ```
 
 Use `fin transaction list` to find an event ID, then run
-`fin bank categories review EVENT_ID` to choose a category, select matching
+`fin transaction category review EVENT_ID` to choose a category, select matching
 unclassified movements and confirm the proposed batch in a terminal.
-After reviewing a transaction, `fin bank categories similar EVENT_ID` previews
+After reviewing a transaction, `fin transaction category similar EVENT_ID` previews
 unclassified movements with matching normalized card merchants or descriptions and flags conflicting
 reviewed categories. It does not apply decisions. See the
 [classification design](docs/classification.md) for its current limits.
@@ -546,10 +566,10 @@ Apply the entire batch atomically, then regenerate the accounting projection and
 journal:
 
 ```sh
-fin bank categories apply personal/reviews/categories.json
-fin bank project
+fin transaction category apply personal/reviews/categories.json
+fin journal project
 fin journal export > personal/bank.journal
-fin bank categories history
+fin transaction category history
 hledger -f personal/bank.journal --strict check
 hledger -f personal/bank.journal balance expenses --monthly
 ```
@@ -565,10 +585,13 @@ account renames, and can precede first projection. Existing generated entries ar
 verified before updating only their counter-account; dates, bank postings, amounts
 and source evidence remain intact. An invalid or conflicting decision rejects the
 whole batch. Each generated journal includes the latest decision ID and reason as
-tags. `bank categories apply` changes SQLite; regenerate the journal to publish it.
+tags. `transaction category apply` changes SQLite; regenerate the journal to publish it.
 
-This first review step uses explicit decisions. Bank CSV categories remain
-suggestions; automatic category rules and split allocations are future work. Explicit
+Saved regex rules also support explicit preview and batch classification:
+`fin rule add cafes 'coffee|café' expenses:food`, then `fin rule preview cafes`
+and `fin rule apply cafes`. They can also record linked-card settlements; see the
+[manual](docs/manual.md#regular-expression-rules). Rules never run automatically
+on import. Bank CSV categories remain suggestions; split allocations are future work. Explicit
 owned-account transfer review is available below. Do not classify transfers as income or spending
 merely to remove them from the review queue.
 
@@ -600,7 +623,7 @@ fin import boursobank personal/boursobank/inbox \
   --journal personal/bank.journal
 fin import wise personal/wise/inbox \
   --journal personal/bank.journal
-fin bank statements --institution wise
+fin statement list --institution wise
 hledger -f personal/bank.journal --strict check
 hledger -f personal/bank.journal register assets:bank:wise
 ```
@@ -618,7 +641,7 @@ existing identity rejects the whole import. Indistinguishable duplicate movement
 within a statement are rejected rather than collapsed. Original bytes remain archived.
 
 The parser requires booked entries and exact reconciliation of opening balance
-plus signed movements with closing balance. `bank statements` independently computes
+plus signed movements with closing balance. `statement list` independently computes
 that difference from stored statement/event links and lists CSV matching states.
 Statement balances are observations; the journal contains movements without
 inferred opening-balance entries.
@@ -647,7 +670,7 @@ optional seven-column CSV into `personal/bunq/inbox/`:
 ```sh
 fin import bunq personal/bunq/inbox \
   --journal personal/bank.journal
-fin bank statements --institution bunq
+fin statement list --institution bunq
 ```
 
 The MT940 reader supports the observed Bunq layout: a BUNQ header, account/currency,
@@ -656,7 +679,7 @@ entries with `NONREF`, and IBAN/name/remittance metadata. It reads exact comma
 decimals, handles multiline descriptions, preserves booking and interest dates,
 and rejects unsupported fields, date ranges, currencies or unbalanced statements.
 Amounts never pass through floating point. Interest dates become journal secondary
-dates. `bank statements` independently reconciles persisted statement/event links.
+dates. `statement list` independently reconciles persisted statement/event links.
 
 Bunq supplies no movement IDs in these exports. Identity uses normalized account,
 currency, booking/interest dates, signed amount, counterparty, name and description,
@@ -714,11 +737,16 @@ reuse movements, including identical repeated payments.
 
 ## Review transfers between your accounts
 
+For a failed ATM withdrawal followed by its full refund, use
+`fin reversal candidates`, then `fin reversal review ORIGINAL-ID REVERSAL-ID`.
+See the [manual](docs/manual.md#reviewing-transactions-and-transfers) for the
+clearing account and undo workflow.
+
 List candidate pairs with both movements, fees, dates, currencies and descriptions:
 
 ```sh
-fin transfers candidates --json > personal/reports/transfer-candidates.json
-fin transfers candidates --all
+fin transfer candidates --json > personal/reports/transfer-candidates.json
+fin transfer candidates --all
 ```
 
 Candidates require distinct source accounts, equal opposite principal amounts in
@@ -727,7 +755,9 @@ remain visible; uniqueness is only an amount/date observation. Confirm only afte
 checking that both accounts belong to you and that the movements describe the same
 transfer. Imported records or a familiar counterparty name alone do not prove that.
 
-Write explicit decisions to a private JSON file, using actual event IDs from the
+Run `fin transfer review` to inspect candidates and stage confirmations or
+rejections. Use `a` to stage all supported pairs and go directly to the final
+batch preview; other candidates remain for later review. Alternatively, write explicit decisions to a private JSON file, using actual event IDs from the
 candidate report. These IDs are illustrative:
 
 ```json
@@ -738,10 +768,10 @@ candidate report. These IDs are illustrative:
 ```
 
 ```sh
-fin transfers review personal/reviews/transfers.json
-fin bank project
+fin transfer review personal/reviews/transfers.json
+fin journal project
 fin journal export > personal/bank.journal
-fin transfers history
+fin transfer history
 hledger -f personal/bank.journal --strict check
 hledger -f personal/bank.journal register assets:transfers
 ```
@@ -755,7 +785,8 @@ extra accounting entry is created. Journal tags record the pair and review reaso
 Each movement can belong to only one confirmed pair. A substantive expense/income
 category must first be reset to `equity:unclassified`; confirmation never overwrites
 it silently. Confirmed legs cannot be categorized until their transfer is rejected.
-Use `"decision": "reject"` to hide a proposed pair or undo a confirmation. Undo
+Use `fin transfer undo FIRST-EVENT-ID SECOND-EVENT-ID` to undo a confirmation,
+or `"decision": "reject"` in a JSON batch to hide a proposed pair. Undo
 restores each leg's unclassified counter-account and retains the full audit history.
 Identical decisions are idempotent, and batches commit atomically after verifying
 existing projections. Account remapping, import and reimports preserve decisions.
@@ -766,16 +797,16 @@ outside the seven-day window need a future explicit policy.
 ## Transfer evidence and assignment preview
 
 ```sh
-fin transfers preview --json > personal/reports/transfer-preview.json
-fin transfers candidates --all
+fin transfer candidates --all --json > personal/reports/transfer-evidence.json
+fin transfer candidates --all
 ```
 
 Structured counterparty IBAN evidence currently comes from Bunq. It is compared
 with imported account IBANs and registered identities. A counterparty IBAN belonging
 to another known account, or differing from the proposed counterpart's IBAN, rules
 out that pair. Such contradictions are excluded from default candidates, retained
-with reasons under `--all`, and block confirmation. The preview lists excluded
-pairs separately. Missing identity data is unknown evidence, not a contradiction.
+with reasons under `--all`, and block confirmation. With `--all`, JSON lists
+excluded pairs separately. Missing identity data is unknown evidence, not a contradiction.
 
 The versioned `transfer-evidence-v1` score is an explainable heuristic, not a
 calibrated probability or percentage. Its additive points are:
@@ -809,7 +840,7 @@ are explicitly `not_evaluated` and yield no proposed confirmations.
 Supported pairs score `high` when score ≥65 and exclusion margin ≥15, with same-day,
 IBAN or shared-reference support; other supported pairs are `medium`. Alternatives
 and unevaluated pairs remain `ambiguous`. The proposed pairs are a preview requiring
-review, never automatic confirmations. Use the existing `transfers review` workflow
+review, never automatic confirmations. Use the existing `transfer review` workflow
 after checking identities and evidence.
 
 ## Optional CSV enrichment
@@ -838,10 +869,10 @@ conversion. CSV-only observations wait for OFX.
 
 ~~~sh
 # Recompute automatically during import, or explicitly after other imports:
-dune exec fin -- bank match
+dune exec fin -- statement match
 # Inspect all observations or just those still needing review:
-dune exec fin -- bank companions --institution boursobank
-dune exec fin -- bank companions --institution boursobank --review
+dune exec fin -- statement companions --institution boursobank
+dune exec fin -- statement companions --institution boursobank --review
 ~~~
 
 Matching states and their changes are saved in SQLite. Overlapping CSV files can

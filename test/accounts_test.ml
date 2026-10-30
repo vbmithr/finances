@@ -180,6 +180,131 @@ let clear_and_patch () =
     Alcotest.(check bool) "cleared IBAN absent" true (Option.is_none info.iban))
 ;;
 
+let settlement_setup_rolls_back () =
+  memory (fun db ->
+    let rows = config db in
+    let cash = checking rows
+    and credit = card rows in
+    let before = Bank_account_config.to_json rows in
+    let info =
+      List.find_exn
+        (ok (Store.bank_account_info db))
+        ~f:(fun a -> String.equal a.Store.mapping.account_type "CREDITCRD")
+    in
+    let setup =
+      { credit with
+        ledger_account = Some "liabilities:cards:test"
+      ; settlement_account = Set cash.reference
+      }
+    in
+    error
+      (Store.confirm_card_settlement_with_setup
+         db
+         ~event_id:999999L
+         ~card_id:(Bank_account_mapping.id info.mapping)
+         ~expected_ledger:"liabilities:cards:stale"
+         ~expected_link:info.settlement_account
+         ~setup);
+    error
+      (Store.confirm_card_settlement_with_setup
+         db
+         ~event_id:999999L
+         ~card_id:(Bank_account_mapping.id info.mapping)
+         ~expected_ledger:info.mapping.ledger_account
+         ~expected_link:info.settlement_account
+         ~setup);
+    Alcotest.(check string)
+      "failed settlement rolls back all setup"
+      before
+      (Bank_account_config.to_json (config db));
+    check
+      "failed settlement writes no account history"
+      0
+      (List.length (ok (Store.bank_account_history db)));
+    check
+      "failed settlement writes no settlement history"
+      0
+      (List.length (ok (Store.card_settlement_history db))))
+;;
+
+let card_settlement () =
+  memory (fun db ->
+    let rows = config db in
+    let cash = checking rows
+    and credit = card rows in
+    let event =
+      List.find_exn
+        (ok (Store.bank_review db))
+        ~f:(fun r ->
+          String.equal r.transaction.account.account_type "CHECKING"
+          && Quantity.(r.transaction.amount < zero))
+    in
+    error (Store.card_settlement_preview db event.event_id);
+    ignore
+      (ok
+         (Store.apply_bank_accounts
+            db
+            [ { credit with
+                ledger_account = Some "liabilities:cards:test"
+              ; settlement_account = Set cash.reference
+              }
+            ]));
+    let before = ok (Store.bank_overview db) in
+    ignore (ok (Store.card_settlement_preview db event.event_id));
+    error
+      (Store.confirm_card_settlement
+         ~expected_ledger:"liabilities:cards:stale"
+         db
+         event.event_id);
+    ok (Store.confirm_card_settlement db event.event_id);
+    let reviewed =
+      List.find_exn
+        (ok (Store.bank_review db))
+        ~f:(fun r -> Int64.equal r.event_id event.event_id)
+    in
+    Alcotest.(check string)
+      "settlement counter account"
+      "liabilities:cards:test"
+      reviewed.counter_account;
+    let _, _, before_count, _ = before in
+    let _, _, after_count, _ = ok (Store.bank_overview db) in
+    check "no longer unclassified" (before_count - 1) after_count;
+    let _, _, entry =
+      List.find_exn
+        (ok (Store.entries db))
+        ~f:(fun (id, _, _) -> Int64.equal id event.event_id)
+    in
+    Alcotest.(check string)
+      "posting uses liability"
+      "liabilities:cards:test"
+      (List.nth_exn entry.postings 1).account;
+    error (Store.confirm_card_settlement db event.event_id);
+    let decision =
+      ok
+        (Bank_category.create
+           ~event_id:event.event_id
+           ~account:"expenses:food"
+           ~reason:"test")
+    in
+    error (Store.set_bank_categories db [ decision ]);
+    error
+      (Store.apply_bank_accounts
+         db
+         [ { credit with ledger_account = Some "liabilities:cards:new" } ]);
+    ok (Store.undo_card_settlement db event.event_id);
+    let restored =
+      List.find_exn
+        (ok (Store.bank_review db))
+        ~f:(fun r -> Int64.equal r.event_id event.event_id)
+    in
+    Alcotest.(check string)
+      "undo restores unclassified"
+      "equity:unclassified"
+      restored.counter_account;
+    error (Store.undo_card_settlement db event.event_id);
+    ignore (ok (Store.project_bank db)))
+;;
+
 let () =
   Alcotest.run
     "Unified bank accounts"
@@ -189,6 +314,8 @@ let () =
           ; "dry run and apply", dry_run
           ; "atomic multi-field rollback", rollback
           ; "clear and patch semantics", clear_and_patch
+          ; "card settlement confirmation and undo", card_settlement
+          ; "settlement setup rolls back on failure", settlement_setup_rolls_back
           ]
           ~f:(fun (name, f) -> Alcotest.test_case name `Quick f) )
     ]

@@ -11,10 +11,20 @@ is the command and storage reference.
 
 ## Getting started
 
+Building from a Git checkout requires the pinned Notty submodule. Run
+`git submodule update --init --recursive` after cloning or updating the checkout.
+
+Confirmation prompts use `[Y/n]`: press Enter or enter `y` to accept, or `n`
+to decline. This also applies to deletion and restore prompts.
+
 Run `fin` for a short welcome, or `fin --help` for the command reference. Neither
 command creates a database. Every command supports `--help`, including nested
 commands such as `fin import --help`. The installed package also provides
 `man fin` and subcommand man pages.
+
+`tx` and `txn` are shortcuts for `transaction`; `acc` is a shortcut for
+`account`; `inst` is a shortcut for `institution`. For example, `fin tx list` and `fin acc list` use the same commands
+as their full names. Help displays the canonical command name.
 
 Start with:
 
@@ -35,33 +45,32 @@ quiet initialization for scripts, and `fin paths` shows where everything lives.
 fin status
 fin account list
 fin transaction list
-fin bank review
-fin transfers preview
+fin transaction review
+fin transfer candidates
 ```
 
 `fin status` shows discovered banks and accounts, per-account observed date
 ranges, movement counts, unclassified movements, unreviewed transfer candidate
 pairs, and the latest inbox import attempt (including failures). Candidate pairs can overlap: their count is not a
 count of distinct transfers. The latest attempt is not a summary of all unresolved
-import failures; use `fin bank history` to inspect earlier attempts.
+import failures; use `fin institution history` to inspect earlier attempts.
 
 Dates describe the earliest and latest observed records, not continuous or
 complete statement coverage. Status does not calculate bank balances or spending.
 Use hledger for financial reports after exporting the journal.
 
-Status, account listing, transaction review and transfer candidates/preview show
+Status, account listing, transaction review and transfer candidates show
 readable text by default. Add `--json` for machine-readable output:
 
 ```sh
 fin status --json
 fin account list --json
-fin bank review --json > bank-review.json
-fin transfers candidates --json > transfer-candidates.json
-fin transfers preview --json > transfer-preview.json
+fin transaction review --json > bank-review.json
+fin transfer candidates --json > transfer-candidates.json
 ```
 
-The existing JSON layouts of the four inspection commands are unchanged; scripts
-that previously parsed their default output now need `--json`. Bank import
+Transfer candidates JSON includes ranking and evidence; `--all` also includes
+reviewed and excluded pairs. Institution import
 history is readable too, with `--json` retaining its existing JSON layout. Other
 history and provider reconciliation commands still output JSON. Account snapshot export remains
 JSON, and journal export remains hledger text.
@@ -142,7 +151,7 @@ skips the question; without a terminal and without `--yes` it refuses.
 
 ### Rebuilding after a schema change
 
-This experimental release accepts schema version 14; it does not migrate older
+This experimental release accepts schema version 18; it does not migrate older
 databases and refuses them without changing the file. Before upgrading to a new
 schema, use the **old fin executable** to export account settings and save a
 full backup. Save the transaction list and review histories as reference when
@@ -152,8 +161,8 @@ you have decisions to recreate:
 fin account export -o ~/fin-accounts.json
 fin backup ~/fin-backups
 fin transaction list --json > ~/fin-transactions-before-rebuild.json
-fin bank categories history > ~/fin-categories-before-rebuild.json
-fin transfers history > ~/fin-transfers-before-rebuild.json
+fin transaction category history > ~/fin-categories-before-rebuild.json
+fin transfer history > ~/fin-transfers-before-rebuild.json
 fin delete
 ```
 
@@ -175,8 +184,9 @@ After importing all banks, restore account settings with
 discovered source accounts; it cannot create them. A full SQLite backup is for
 restoring a database of the same schema version; an account snapshot is for
 restoring settings into a rebuilt database.
-Generic CSV files must also be reimported with their original provider and
-account labels; configure the CSV profile again if needed. Review decisions are
+Generic CSV institutions must be added again and files reimported with their
+original institution and account labels; configure their CSV profiles again.
+Review decisions are
 not included in the account snapshot. Their event IDs are database-specific, so
 use the saved transaction list and histories to identify the new transactions
 and recreate decisions; do not blindly reuse old IDs. A backup preserves the old
@@ -184,12 +194,21 @@ decisions, but cannot transfer them to the new schema.
 
 ## Importing statements
 
-Use `fin import BANK PATH...` to read bank exports. This replaces the former
+Use `fin import INSTITUTION PATH...` to read exports. This replaces the former
 `fin bank sync` command; update existing scripts to use `fin import`.
-Run `fin bank list` to list built-in bank importers and their aliases.
+Run `fin institution list` to list built-in and user-added institutions.
 For BoursoBank, `bourso` and `boursorama` are accepted aliases for `boursobank`;
 all three import into the same institution.
-For a generic card CSV, use `fin import FILE.csv`;
+Add an institution with `fin institution add NAME`; optionally supply a sample
+CSV to configure its layout without importing it: `fin institution add NAME SAMPLE.csv`.
+Remove an unused user-added institution and its saved layout with
+`fin institution delete NAME` (or `--yes` for scripts). Delete its accounts first
+if it has imported movements. Built-in institutions cannot be deleted.
+Then import a file or directory with `fin import NAME PATH`. Generic CSVs do
+not identify their account, so fin asks for an account label for each file unless
+`--account-id` is supplied. Only use the same label for files from the same card.
+Directory imports process CSV files in name order; earlier files remain imported
+if a later file fails. For a generic card CSV, you can also use `fin import FILE.csv`;
 fin prompts for its provider and account details when needed.
 
 Keep a separate inbox for each bank. Supply the formats below:
@@ -204,7 +223,7 @@ Keep a separate inbox for each bank. Supply the formats below:
 Companion CSV files enrich the primary records; they do not create a second
 transaction stream. Currencies must be ISO 4217 alphabetic codes such as `EUR`;
 a file using any other code, or a lowercase one, is rejected and appears in
-`fin bank history`. Other CSV layouts can be configured as described below. Excel, PDF and QIF
+`fin institution history`. Other CSV layouts can be configured as described below. Excel, PDF and QIF
 are not supported imports.
 
 For example, put your BoursoBank exports in `~/Statements/boursobank`, then run:
@@ -212,7 +231,7 @@ For example, put your BoursoBank exports in `~/Statements/boursobank`, then run:
 ```sh
 fin import boursobank ~/Statements/boursobank
 fin account list
-fin bank review
+fin transaction review
 ```
 
 Use the corresponding institution for your other inboxes:
@@ -229,7 +248,7 @@ and MT940 that may be shared by several banks. The arguments after it are files 
 them. Directories are searched recursively, skipping hidden and partially
 downloaded files; a file you name is always processed, and fails the command if
 no bank recognizes it. A file that clearly comes from another bank is rejected
-and appears in `fin bank history`.
+and appears in `fin institution history`.
 
 ZIP exports can be passed directly, including Wise's CAMT.053 downloads:
 
@@ -287,23 +306,23 @@ Successful files remain imported even if another file fails. Inspect the summary
 and history when import reports an error:
 
 ```sh
-fin bank history
-fin bank statements
-fin bank companions --review
+fin institution history
+fin statement list
+fin statement companions --review
 ```
 
-`fin bank statements` compares each bank statement's stated balances with the
-movements it lists. `fin bank companions` lists the enrichment exports (the
+`fin statement list` compares each bank statement's stated balances with the
+movements it lists. `fin statement companions` lists the enrichment exports (the
 BoursoBank, Wise and Bunq CSV files) with their fields and match state;
 `--review` keeps the rows that still need attention. Both accept
-`--institution` to show one bank. `fin bank match` recomputes the matches;
+`--institution` to show one bank. `fin statement match` recomputes the matches;
 `fin import` already does this.
 
-`fin bank history` is a log of file import attempts, not a list of transactions.
+`fin institution history` is a log of file import attempts, not a list of transactions.
 It shows the bank, timestamp, filename, outcome, new/existing movement counts and
 any diagnostic. Attempts appear newest first; an unchanged file can appear more
-than once because each attempt is recorded. Use `fin bank history --limit 10` for
-the ten latest attempts, or `fin bank history --json` for machine-readable output.
+than once because each attempt is recorded. Use `fin institution history --limit 10` for
+the ten latest attempts, or `fin institution history --json` for machine-readable output.
 Use `fin transaction list` to browse individual movements instead.
 
 See [Bank import and review reference](../README.md#folder-workflow) for
@@ -329,10 +348,7 @@ currency is fixed for the file. If there is a summary row, specify its label;
 fin skips it only when its date is empty. Review the preview and confirm to import.
 The preview shows each CSV amount beside the signed account movement; other
 CSV fields, such as local currency and exchange rate, retain their source signs.
-Only one generic CSV file can be imported per command. To import a directory of
-generic CSV files for the same account, invoke `fin import` for each file with
-the same provider and account label; use a different account label for each
-separate card. Review each file and its account before confirming. Raw fields are retained
+Generic CSV directory imports review each file separately. Raw fields are retained
 with the source evidence, including original currency amounts and exchange rates.
 The mapped account amount, not the local amount, is posted to the ledger.
 
@@ -427,10 +443,103 @@ there is no default account JSON path.
 
 ## Reviewing transactions and transfers
 
+For a credit card paid from a checking account, start with:
+
 ```sh
-fin bank review
-fin transfers candidates
-fin transfers preview
+fin settlement candidates
+fin settlement review
+```
+
+For the experimental full-screen review, run `fin settlement review --tui`.
+Use the up and down arrows (or `j` and `k`) to choose a suggestion, Enter to
+review it, and `y` to apply. Press `n` or Escape to return to the list; `q` or
+Ctrl-C exits without applying a pending proposal. Resize the terminal if it is
+too small to show all proposed changes. The full-screen mode requires a terminal
+and cannot be combined with `--yes`.
+
+For BoursoBank, fin recognizes its deferred-card debit description and proposes
+a match only when the complete masked card identifier uniquely matches a card
+at the same institution and bank, in the same currency. It excludes suggestions
+when an opposite payment on that card is already present within seven days, or
+the card is already linked to a different checking account. These are suggestions,
+not automatic accounting decisions. Select a transaction by its event ID. If
+needed, fin proposes mapping the card to a liability account and linking it to
+the checking account alongside the settlement. One final confirmation applies
+the entire proposal atomically; declining or interrupting before confirmation
+leaves both the setup and settlement unchanged. Only the selected settlement is
+recorded; similar suggestions remain for review.
+
+For other institutions, or where no suggestion is available, use
+`fin account list` to find the IDs and link the accounts explicitly:
+
+```sh
+fin account link-card CARD-ID CHECKING-ID
+```
+
+This previews the relationship and a liability account when needed. It requires
+confirmation (`[Y/n]`, with Enter accepting); `--yes` accepts the proposal in a script. Alternatively, `fin
+account edit` lets you map the card to a `liabilities:...` account and set its
+`settlement_account` to the checking account. For example, the following is a
+fictional pair of entries
+in the editor's `accounts` array:
+
+```json
+{
+  "institution": "boursobank",
+  "bank_id": "example-bank",
+  "account_id": "checking-example",
+  "account_type": "CHECKINGS",
+  "ledger_account": "assets:bank:checking"
+}
+```
+
+```json
+{
+  "institution": "boursobank",
+  "bank_id": "example-bank",
+  "account_id": "card-example",
+  "account_type": "CREDITCRD",
+  "ledger_account": "liabilities:cards:boursobank",
+  "settlement_account": {
+    "institution": "boursobank",
+    "bank_id": "example-bank",
+    "account_id": "checking-example",
+    "account_type": "CHECKINGS"
+  }
+}
+```
+
+Use your existing entries and copy the checking account's four identity fields
+exactly into the card's `settlement_account`; keep the other accounts and source
+identity fields unchanged. Save and exit the editor. Categorize individual card
+purchases as expenses, and treat the monthly repayment as settlement, so it is
+not counted as spending a second time.
+
+Find the bank debit's event ID with `fin transaction list`, then replace `123`
+with that ID:
+
+```sh
+fin settlement review 123
+fin settlement history
+fin settlement undo 123
+```
+
+Review shows the bank movement, linked card and proposed liability repayment;
+type `yes` to confirm. If several cards link to the same checking account, use
+`--card ID` with the ID from `fin account list`. The movement must be an
+unclassified, fee-free debit in the card's currency. Fin does not check that the
+debit equals a particular set of purchases; check the statement yourself. If the
+card statement already contains the other side of the payment, use transfer
+review instead. A confirmed settlement cannot also be categorized or confirmed
+as a transfer. Undo it before correcting that decision, changing the card's
+ledger account or deleting either account. Review and undo accept `--yes` for
+scripts; automatic card setup still requires a terminal. `fin settlement history`
+reports both actions as JSON. Export a fresh
+journal after review changes, for example `fin journal export > my-finances.journal`.
+
+```sh
+fin transaction review
+fin transfer candidates
 ```
 
 Unclassified movements initially use `equity:unclassified`. Imported bank
@@ -438,7 +547,7 @@ categories are suggestions. To classify a movement interactively, find its event
 ID in `fin transaction list`, then replace `123` below with that ID:
 
 ```sh
-fin bank categories review 123
+fin transaction category review 123
 ```
 
 Choose a previously used category by number or enter an `expenses:...` or
@@ -449,27 +558,66 @@ enter `q` at a selection prompt or decline confirmation to cancel. This command
 requires a terminal. It checks that all selected movements are still unclassified
 before saving the batch, so a concurrent decision cannot be overwritten.
 
-Owned-account transfers require explicit review files; a transfer preview does
-not confirm anything. Transfer scores represent evidence, not calibrated
-probabilities.
+`fin transfer candidates` shows possible pairs, their evidence and ranking;
+scores are not calibrated probabilities. Run `fin transfer review` to inspect
+each pair and choose `c` to confirm, `r` to reject, or `s` to skip that pair. `a` stages
+all supported pairs and finishes selection, leaving other candidates for later review;
+`d` finishes selection. Fin shows the pending pairs and asks once before applying
+the batch. Confirm only if both accounts are yours and the movements represent
+the same transfer. `q`, EOF, Ctrl-C, or declining the final confirmation leaves
+the batch unchanged. A conflicting or stale decision refuses the whole batch.
+For scripted batches, supply a JSON review file as shown below.
+
+For a failed ATM withdrawal followed by its full refund, review a reversal pair:
+
+```sh
+fin reversal candidates
+fin reversal review ORIGINAL-ID REVERSAL-ID
+fin reversal history
+fin reversal undo ORIGINAL-ID REVERSAL-ID
+```
+
+Candidates require two unreviewed `withdrawal` movements on the same account,
+with a negative original and a positive movement whose source label indicates a
+reversal, equal opposite amounts in the same currency, no fees,
+and a reversal booked no earlier than the original. Matching amounts are only
+evidence: check the descriptions and both event IDs before confirming. Confirmation
+puts both counter-postings in a shared `assets:reversals:pair-...` clearing
+account. The balance clears when both movements are included. Undo restores both
+to review. `--yes` skips confirmation on `review` and `undo`. This workflow covers
+full ATM withdrawal reversals; partial reversals and fees need separate work.
+BoursoBank `ANNUL RETRAIT DAB` movements have type `withdrawal`; refresh
+older types with `fin tx refresh-types --institution boursobank`.
+
+To undo a confirmed transfer, use its two event IDs (shown by
+`fin transfer candidates --all` or `fin transfer history`):
+
+```sh
+fin transfer undo FIRST-EVENT-ID SECOND-EVENT-ID
+```
+
+The command previews both movements and asks for confirmation; `--yes` skips
+the prompt. Undo returns both movements to unclassified, records a rejection
+in the audit history, and hides that pair from default candidates. You can
+then classify either movement separately. Regenerate the journal afterward.
 
 After preparing review JSON using the examples in the
 [README](../README.md), apply it with:
 
 ```sh
-fin bank categories apply categories.json
-fin transfers review transfers.json
-fin bank project
-fin bank categories history
-fin transfers history
+fin transaction category apply categories.json
+fin transfer review transfers.json
+fin journal project
+fin transaction category history
+fin transfer history
 ```
 
 After categorizing a transaction, preview similar unclassified movements with
 its event ID (replace `123` with a reviewed transaction ID):
 
 ```sh
-fin bank categories similar 123
-fin bank categories similar 123 --json
+fin transaction category similar 123
+fin transaction category similar 123 --json
 ```
 
 The preview matches within the same institution, using the merchant for card
@@ -491,10 +639,18 @@ newest first, with the institution and account ID for each movement. The
 displayed event IDs can be used in review decisions; account IDs come from
 `fin account list`.
 
+The table shows the source movement type separately from its accounting
+classification, including confirmed settlements. On a terminal, the table opens
+in `$PAGER` (default `less -FRX`); an empty `PAGER` disables paging. Redirected
+output and `--json` go directly to stdout.
+
 ```sh
 fin transaction list
 fin transaction list --from 2026-01-01 --to 2026-01-31
 fin transaction list --search coffee --limit 20
+fin tx list --type interest
+fin tx list --type card-settlement --classification settlement
+fin tx list --type unknown --classification unclassified
 fin transaction list --order asc
 fin transaction list --json
 ```
@@ -503,6 +659,10 @@ Dates are inclusive booking dates. Use `--account ID` for one account or
 `--institution NAME` for a provider; `--search` matches the display name or
 original description using ASCII case-insensitive comparison. `--order asc`
 lists oldest first; `--order desc` is the default.
+`--type` matches the displayed movement type, including provider-specific values;
+`--type unknown` selects movements without a type. `--classification` accepts
+`unclassified`, `category`, `transfer`, `settlement` or `reversal`. Filters combine, and
+are applied before sorting and `--limit`.
 Sorting uses the source event's date or timestamp in UTC; date-only events sort
 before timed events on the same date, with event IDs breaking ties. Sorting
 precedes `--limit`, which must be positive. When a uniquely matched Wise CSV
@@ -510,14 +670,78 @@ provides a merchant or movement type, the list shows those fields; otherwise it
 falls back to the source description. Conflicting values are omitted. JSON
 includes the original `description`, optional `display_name` and `movement_type`,
 and `detail_sources` companion row IDs, which can be inspected with
-`fin bank companions`. Provider-specific types are prefixed with the provider
+`fin statement companions`. Provider-specific types are prefixed with the provider
 name. A reported transfer type does not confirm a transfer between your accounts.
 On import, fin determines BoursoBank movement types from explicit leading OFX
-description words: `PAIEMENT CARTE`, `CARTE` on a card account, `VIR` or
-`VIREMENT`, `PRLV` or `PRELEVEMENT`, and `RETRAIT`. Other descriptions remain
-untyped. The original description remains available for inspection.
-Use `fin bank review` for unclassified items and hledger
+description words: `PAIEMENT CARTE` and `AVOIR` (card refunds), `CARTE` on a card account, `VIR` or
+`VIREMENT`, `PRLV` or `PRELEVEMENT`, `RETRAIT` and `ANNUL RETRAIT DAB`. Other descriptions remain
+untyped, except `INTERETS`, `INTÉRÊTS`, `*INTER.BRUTS` and `*INT DEB`
+interest descriptions; `REM CHQ` cheque deposits; `CHQ.` issued cheques;
+card commissions, fees and fee refunds (`*CION CB`, `*FRAIS CB`,
+`*RETROC *FRAIS CB`); and `Relevé différé Carte …` card settlements (including
+the malformed `Relev{ diff{r{ Carte …` form found in some exports). These
+map to `interest`, `deposit`, `cheque`, `fee` and `card-settlement`, respectively.
+Fee refunds retain their positive amount. The original description remains available for
+inspection. An interest type is source information, not an income classification.
+The settlement type likewise describes the statement; confirming a settlement
+is a separate accounting decision.
+
+Refresh existing types from stored source evidence after importer improvements:
+
+```sh
+fin transaction refresh-types --institution boursobank
+```
+
+The command previews changed stored types and asks for confirmation; `--yes`
+applies the preview without prompting. Omit `--institution` for all institutions.
+It does not change event IDs, transactions, accounting classifications or review
+history. It rechecks the preview and applies the type changes atomically. Types
+from matched companion files are separate and are not changed by this command.
+Use `fin transaction review` for unclassified items and hledger
 for accounting reports and running balances.
+
+## Regular-expression rules
+
+Rules let you reuse a classification without silently changing imported data.
+Create a rule, inspect its matches, then apply it explicitly:
+
+```sh
+fin rule add cafes 'coffee|café' expenses:food --institution boursobank
+fin rule preview cafes
+fin rule apply cafes
+fin rule list
+```
+
+The expression uses Perl-style regular-expression syntax and is searched in
+the display name and each original description field. Matching ignores ASCII
+letter case by default; pass `--case-sensitive` when creating the rule to
+change that. `--institution` restricts it to the exact institution name; omit
+it to search all institutions. Quote expressions to protect them from the shell.
+Regex metacharacters must be escaped to match them literally: for example,
+`'4810\*{8}2573'` matches the masked card number `4810********2573`.
+
+For a deferred credit card, first link the card to its settlement account with
+`fin account link-card`, then use its ID from `fin account list`:
+
+```sh
+fin rule add-settlement card-payment '^Relevé différé Carte' CARD-ID --institution boursobank
+fin rule preview card-payment
+fin rule apply card-payment
+```
+
+The preview lists eligible matches and explains skipped ones. Previously reviewed
+transactions are not overwritten. Settlement matches must be debits from the
+linked account in the card's currency, with a configured card liability; possible
+matching card-side payments are skipped to avoid recording a settlement twice.
+Application previews all eligible matches, asks for confirmation, and records
+the batch atomically. If the rule or eligibility changes while you review it,
+the batch is refused. Rules do not run automatically on import: preview and apply
+them again for new transactions. The decision history records the rule and
+expression. Use `fin rule rename OLD-NAME NEW-NAME` to rename a rule; existing
+decisions retain the name recorded when they were made. Use `fin rule delete NAME` to remove a rule without undoing its
+decisions. `fin rule list --json` and `fin rule preview NAME --json` provide
+machine-readable output; `--yes` skips the confirmation for apply and delete.
+Regenerate the journal after applying decisions.
 
 ## Exporting and querying accounting
 
@@ -544,7 +768,7 @@ belongs to hledger; `fin` tracks import evidence, account identity and review st
 ## Library and dependency changes
 
 This build uses Base, decimal, Ptime and Bos, with no Core or Bigdecimal
-dependency. Version 1 account snapshots remain compatible; databases use schema 14 and
+dependency. Version 1 account snapshots remain compatible; databases use schema 18 and
 are rebuilt from the original statements (see above).
 
 OCaml callers use `Quantity.t` (a `Decimal.t` alias) and `Date.t` (a `Ptime.date`
@@ -592,13 +816,16 @@ above; no automatic migration runs.
 | Command | Purpose |
 | --- | --- |
 | `fin init` | Create the database, with first-import guidance |
-| `fin import BANK PATH...` | Import bank statement files and publish the journal |
+| `fin import INSTITUTION PATH...` | Import statement files and publish the journal |
 | `fin status` | Import coverage and outstanding review work |
 | `fin paths` | Resolved storage paths |
 | `fin account --help` | Account listing, config and history |
+| `fin institution --help` | Institution list and generic CSV setup |
 | `fin transaction --help` | Imported transaction listing |
-| `fin bank --help` | Import history, reconciliation and category review |
-| `fin transfers --help` | Candidates, preview and explicit decisions |
+| `fin statement --help` | Statement reconciliation and companion files |
+| `fin reversal --help` | Withdrawal reversal candidates and review |
+| `fin transaction --help` | Transaction listing, review and categories |
+| `fin transfer --help` | Candidates, preview and explicit decisions |
 | `fin journal --help` | hledger journal export |
 | `fin backup` | Copy the database, including account settings |
 | `fin restore BACKUP` | Restore a complete database snapshot |

@@ -8,7 +8,7 @@ let text s =
   String.map s ~f:(fun c -> if Char.to_int c < 32 || Char.to_int c = 127 then ' ' else c)
 ;;
 
-let table headers rows =
+let table ?(out = stdout) headers rows =
   let rows = List.map (headers :: rows) ~f:(List.map ~f:text) in
   let widths =
     List.fold
@@ -20,12 +20,24 @@ let table headers rows =
   List.iteri rows ~f:(fun i row ->
     if i = 1
     then
-      print_endline
+      Out_channel.output_string
+        out
         (String.concat ~sep:"  " (List.map widths ~f:(fun n -> String.make n '-')));
-    print_endline
+    if i = 1 then Out_channel.output_char out '\n';
+    Out_channel.output_string
+      out
       (String.concat
          ~sep:"  "
-         (List.map2_exn widths row ~f:(fun width cell -> String.pad_right cell ~len:width))))
+         (List.map2_exn widths row ~f:(fun width cell -> String.pad_right cell ~len:width)));
+    Out_channel.output_char out '\n')
+;;
+
+let classification = function
+  | Store.Unclassified -> "unclassified"
+  | Category -> "category"
+  | Transfer -> "transfer"
+  | Settlement -> "settlement"
+  | Reversal -> "reversal"
 ;;
 
 let account (a : Store.bank_account_info) =
@@ -106,17 +118,19 @@ let review rows =
       print_endline "")
 ;;
 
-let transactions rows =
+let transactions ?(out = stdout) rows =
   if List.is_empty rows
-  then print_endline "No transactions found."
+  then Out_channel.output_string out "No transactions found.\n"
   else
     table
+      ~out
       [ "DATE"
       ; "AMOUNT"
       ; "CURRENCY"
       ; "INSTITUTION"
       ; "ACCOUNT ID"
       ; "TYPE"
+      ; "CLASSIFICATION"
       ; "DESCRIPTION"
       ; "EVENT"
       ]
@@ -128,6 +142,7 @@ let transactions rows =
          ; r.institution
          ; row.account_id
          ; Option.value_map r.movement_type ~default:"-" ~f:Movement_type.to_string
+         ; classification r.classification
          ; Option.value
              r.display_name
              ~default:(String.concat ~sep:" | " r.transaction.descriptions)

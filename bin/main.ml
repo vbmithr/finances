@@ -4,6 +4,10 @@ open Finances
 open Cmdliner
 open Or_error.Let_syntax
 
+let confirm_default_yes value =
+  List.mem [ ""; "y"; "yes" ] (String.lowercase (String.strip value)) ~equal:String.equal
+;;
+
 let paths =
   let home =
     match Sys.getenv "HOME" with
@@ -221,13 +225,13 @@ let restore database backup yes =
       List.iter existing ~f:(fun path -> printf "  %s\n" path);
       if Unix.isatty Unix.stdin
       then (
-        Out_channel.output_string stdout "Type yes to restore: ";
+        Out_channel.output_string stdout "Restore? [Y/n]: ";
         Out_channel.flush stdout;
         Ok
           (Option.value_map
              (In_channel.input_line In_channel.stdin)
              ~default:false
-             ~f:(fun answer -> String.equal (String.strip answer) "yes")))
+             ~f:confirm_default_yes))
       else
         Or_error.error_string
           "refusing to replace existing state without confirmation: run fin restore in a \
@@ -291,13 +295,13 @@ let delete database yes =
       then Ok true
       else if Unix.isatty Unix.stdin
       then (
-        Out_channel.output_string stdout "Type yes to delete these files: ";
+        Out_channel.output_string stdout "Delete these files? [Y/n]: ";
         Out_channel.flush stdout;
         Ok
           (Option.value_map
              (In_channel.input_line In_channel.stdin)
              ~default:false
-             ~f:(fun answer -> String.equal (String.strip answer) "yes")))
+             ~f:confirm_default_yes))
       else
         Or_error.error_string
           "refusing to delete without confirmation: run fin delete in a terminal, or \
@@ -327,13 +331,19 @@ let welcome () =
     "fin - your personal finances\n\n\
      Get started:\n\
      \032 fin init                Set up your database\n\
-     \032 fin import --help       Learn how to import bank statements\n\n\
+     \032 fin institution list    List institutions\n\
+     \032 fin institution add     Add an institution for CSV imports\n\
+     \032 fin import --help       Learn how to import statements\n\n\
      Explore your finances:\n\
      \032 fin status              See import coverage and review progress\n\
-     \032 fin account list        See your bank accounts\n\
+     \032 fin account list        See your accounts\n\
      \032 fin transaction list    List imported transactions\n\
-     \032 fin bank review          Review unclassified movements\n\
-     \032 fin transfers candidates  Find possible transfers\n\
+     \032 fin transaction review  Review unclassified movements\n\
+     \032 fin statement list       Inspect statement reconciliation\n\
+     \032 fin settlement review    Review card settlements\n\
+     \032 fin reversal candidates  Find possible reversals\n\
+     \032 fin rule --help          Manage classification rules\n\
+     \032 fin transfer candidates  Find possible transfers\n\
      \032 fin journal export       Produce an hledger journal\n\n\
      More:\n\
      \032 fin paths               Show database and data locations\n\
@@ -355,15 +365,24 @@ let setup database =
     "fin is ready.\n\n\
      Database: %s\n\
      Account settings are stored in the database.\n\n\
-     Import your first statements, for example:\n\
+     Choose an institution and import statements:\n\
+     \032 fin institution list%s\n\
      \032 fin import boursobank ~/Statements/boursobank%s\n\n\
+     For another provider, add an institution for its CSV files:\n\
+     \032 fin institution add%s\n\
+     \032 fin import INSTITUTION ~/Statements/INSTITUTION%s\n\n\
      Accounts appear when you import statements. Then explore:\n\
      \032 fin account list%s\n\
      \032 fin transaction list%s\n\
-     \032 fin bank review%s\n\n\
+     \032 fin transaction review%s\n\
+     \032 fin settlement review%s\n\n\
      See fin import --help for import options.\n\
      You can repeat fin init safely; existing data and account settings are preserved.\n"
     database
+    database_option
+    database_option
+    database_option
+    database_option
     database_option
     database_option
     database_option
@@ -495,7 +514,8 @@ let status database json_output =
       "\n\
        Date ranges show observed records, not complete statement coverage. Financial \
        reports: fin journal export, then query with hledger.";
-    print_endline "Next: fin bank review; fin transfers preview; fin bank history.");
+    print_endline
+      "Next: fin transaction review; fin transfer candidates; fin institution history.");
   Ok ()
 ;;
 
@@ -530,6 +550,7 @@ let import_history_cmd =
 (* Prompts live at the CLI boundary; library callers and redirected stdin never
    need a terminal. EOF has the same meaning as skipping an optional IBAN. *)
 let prompt text =
+  Out_channel.flush stdout;
   Out_channel.output_string stderr text;
   Out_channel.flush stderr;
   In_channel.input_line In_channel.stdin
@@ -643,7 +664,7 @@ let configure_new_accounts db fresh =
   if Unix.isatty Unix.stdin then groups fresh else Ok 0
 ;;
 
-let csv_import_registry database path max_mib ~institution =
+let csv_import_profile ?(setup_only = false) database path max_mib ~institution =
   let%bind contents =
     Or_error.try_with (fun () ->
       let stat = Unix.stat path in
@@ -666,8 +687,18 @@ let csv_import_registry database path max_mib ~institution =
         Some p)
     |> Or_error.combine_errors
   in
+  let%bind configured =
+    with_database database (fun db -> Store.institution_profile db institution)
+  in
+  let%bind configured =
+    match configured with
+    | None -> Ok []
+    | Some encoded ->
+      let%map profile = Json.decode Csv_profile.codec encoded in
+      [ profile ]
+  in
   let matching =
-    List.filter_opt profiles
+    configured @ List.filter_opt profiles
     |> List.filter ~f:(fun (p : Csv_profile.t) ->
       Csv_reader.recognizes ~separator:p.separator ~trim:false ~header:p.header contents)
     |> List.dedup_and_sort ~compare:Poly.compare
@@ -892,11 +923,18 @@ let csv_import_registry database path max_mib ~institution =
     then Ok ()
     else (
       let%bind confirmed =
-        Or_error.try_with (fun () -> yes_no "Import these transactions?")
+        Or_error.try_with (fun () ->
+          yes_no
+            (if setup_only then "Use this CSV layout?" else "Import these transactions?"))
       in
       if confirmed then Ok () else Or_error.error_string "CSV import cancelled")
   in
-  Ok (Builtin.registry_with_csv_profile ~institution profile)
+  Ok profile
+;;
+
+let builtin_institution_name name =
+  List.exists (Registry.institutions Builtin.registry) ~f:(fun institution ->
+    List.mem (Registry.aliases Builtin.registry institution) name ~equal:String.equal)
 ;;
 
 let import_bank database institution paths journal max_mib account_id provider =
@@ -911,6 +949,7 @@ let import_bank database institution paths journal max_mib account_id provider =
         ~default:
           (Stdlib.Filename.concat (Stdlib.Filename.dirname database) "bank.journal")
     in
+    let selected_profile = ref None in
     let%bind institution, registry =
       if String.equal institution "csv"
       then (
@@ -926,10 +965,7 @@ let import_bank database institution paths journal max_mib account_id provider =
                 read_provider ()
               | Some name ->
                 (match Validation.token "CSV provider" (String.strip name) with
-                 | Ok name
-                   when not
-                          (String.equal name "csv"
-                           || Registry.is_registered Builtin.registry name) -> Ok name
+                 | Ok name when not (builtin_institution_name name) -> Ok name
                  | Ok _ ->
                    eprintf "Choose a provider name that is not a built-in institution.\n";
                    read_provider ()
@@ -940,33 +976,19 @@ let import_bank database institution paths journal max_mib account_id provider =
             read_provider ()
           | None -> Or_error.error_string "generic CSV imports require --provider NAME"
         in
-        if String.equal provider "csv" || Registry.is_registered Builtin.registry provider
+        if builtin_institution_name provider
         then Or_error.error_string "CSV provider must not be a built-in institution name"
         else (
-          let%bind legacy =
-            with_database database (fun db -> Store.bank_account_info db)
-          in
-          if
-            List.exists legacy ~f:(fun a ->
-              String.equal a.Store.mapping.institution "csv"
-              && Option.value_map
-                   account_id
-                   ~default:false
-                   ~f:(String.equal a.mapping.account_id))
-          then
+          match paths with
+          | [ path ] ->
+            let%map profile =
+              csv_import_profile database path max_mib ~institution:provider
+            in
+            selected_profile := Some (Json.encode Csv_profile.codec profile);
+            provider, Builtin.registry_with_csv_profile ~institution:provider profile
+          | _ ->
             Or_error.error_string
-              "this account was imported under the old csv provider; migrate it before \
-               importing under a provider name"
-          else (
-            match paths with
-            | [ path ] ->
-              let%map registry =
-                csv_import_registry database path max_mib ~institution:provider
-              in
-              provider, registry
-            | _ ->
-              Or_error.error_string
-                "generic CSV import currently accepts one file at a time")))
+              "generic CSV import currently accepts one file at a time"))
       else if Option.is_some provider
       then Or_error.error_string "--provider applies only to generic CSV imports"
       else Ok (institution, Builtin.registry)
@@ -982,6 +1004,24 @@ let import_bank database institution paths journal max_mib account_id provider =
         ~paths
         ~journal
         ()
+    in
+    let%bind () =
+      if
+        Registry.is_registered Builtin.registry institution
+        || not
+             (List.exists report.inbox.files ~f:(fun row ->
+                Poly.equal row.outcome Imported || Poly.equal row.outcome Unchanged))
+      then Ok ()
+      else
+        with_database database (fun db ->
+          let%bind existing = Store.institutions db in
+          if List.mem existing institution ~equal:String.equal
+          then (
+            match !selected_profile with
+            | None -> Ok ()
+            | Some profile ->
+              Store.set_institution_profile_if_missing db institution profile)
+          else Store.add_institution ?profile:!selected_profile db institution)
     in
     List.iter report.inbox.files ~f:(fun row ->
       printf
@@ -1035,18 +1075,56 @@ let import_bank database institution paths journal max_mib account_id provider =
     else Ok ())
 ;;
 
+let csv_files paths =
+  let rec walk path =
+    Or_error.try_with (fun () -> Unix.lstat path)
+    |> Result.bind ~f:(fun stat ->
+      match stat.Unix.st_kind with
+      | Unix.S_REG ->
+        if String.Caseless.equal (Stdlib.Filename.extension path) ".csv"
+        then Ok [ path ]
+        else Or_error.errorf "not a CSV file: %s" path
+      | Unix.S_DIR ->
+        let%bind children =
+          Bos.OS.Dir.contents (Fpath.v path)
+          |> Result.map_error ~f:(fun (`Msg m) -> Error.of_string m)
+        in
+        let children =
+          List.filter children ~f:(fun child ->
+            not (String.is_prefix (Fpath.basename child) ~prefix:"."))
+          |> List.sort ~compare:Fpath.compare
+        in
+        List.map children ~f:(fun child ->
+          let child = Fpath.to_string child in
+          match Unix.lstat child with
+          | { st_kind = S_DIR; _ } -> walk child
+          | { st_kind = S_REG; _ }
+            when String.Caseless.equal (Stdlib.Filename.extension child) ".csv" ->
+            Ok [ child ]
+          | _ -> Ok [])
+        |> Or_error.combine_errors
+        |> Result.map ~f:List.concat
+      | _ -> Or_error.errorf "not a regular CSV file or directory: %s" path)
+  in
+  let%bind files =
+    List.map paths ~f:walk |> Or_error.combine_errors |> Result.map ~f:List.concat
+  in
+  let files = List.dedup_and_sort files ~compare:String.compare in
+  if List.is_empty files then Or_error.error_string "no CSV files found" else Ok files
+;;
+
 let import_bank_cmd =
   command
     ~man:
       [ `S Manpage.s_synopsis
-      ; `P "$(b,fin import) [$(i,OPTION)]… $(i,BANK) $(i,PATH)…"
+      ; `P "$(b,fin import) [$(i,OPTION)]… $(i,INSTITUTION) $(i,PATH)…"
       ; `P "$(b,fin import) [$(i,OPTION)]… $(i,CSV-FILE)"
       ; `S Manpage.s_description
       ; `P
-          "Import a supported bank's files or directories by naming the bank, for \
-           example $(b,fin import wise ~/statements/wise). Run $(b,fin bank list) to see \
-           the supported banks. To configure a generic card CSV, pass its filename \
-           directly, for example $(b,fin import statement.csv)."
+          "Import an institution's files or directories by naming it, for example \
+           $(b,fin import wise ~/statements/wise). Run $(b,fin institution list) to see \
+           institutions. To configure a generic card CSV, pass its filename directly, \
+           for example $(b,fin import statement.csv)."
       ]
     "import"
     "Import a bank's statement files, apply mappings, and publish a bank journal."
@@ -1060,12 +1138,32 @@ let import_bank_cmd =
                  first
                  ~equal:String.equal)
         in
+        let%bind user_institutions =
+          if
+            List.is_empty institutions
+            && ((not (Stdlib.Sys.file_exists first)) || not (List.is_empty paths))
+          then with_database database Store.institutions
+          else Ok []
+        in
         match institutions with
         | [ institution ] ->
           if List.is_empty paths
           then Or_error.error_string "provide at least one statement path"
           else import_bank database institution paths journal max_mib account_id provider
         | _ :: _ :: _ -> Or_error.errorf "ambiguous institution alias: %s" first
+        | [] when List.mem user_institutions first ~equal:String.equal ->
+          if List.is_empty paths
+          then Or_error.error_string "provide at least one CSV file or directory"
+          else if Option.is_some provider
+          then
+            Or_error.error_string
+              "--provider is unnecessary when the institution is named"
+          else (
+            let%bind files = csv_files paths in
+            List.fold_result files ~init:() ~f:(fun () path ->
+              printf "CSV file: %s\n" path;
+              Out_channel.flush stdout;
+              import_bank database "csv" [ path ] journal max_mib account_id (Some first)))
         | [] when Stdlib.Sys.file_exists first && Stdlib.Sys.is_directory first ->
           Or_error.error_string
             "name the bank before a directory, for example: fin import wise DIRECTORY"
@@ -1080,7 +1178,7 @@ let import_bank_cmd =
               []
               ~docv:"SOURCE"
               ~doc:
-                ("Bank name or generic CSV filename. Built-in banks: "
+                ("Institution name or generic CSV filename. Built-in institutions: "
                  ^ String.concat
                      ~sep:", "
                      (List.filter (Registry.institutions Builtin.registry) ~f:(fun name ->
@@ -1094,14 +1192,13 @@ let import_bank_cmd =
               []
               ~docv:"PATH"
               ~doc:
-                "When SOURCE is a bank, statement files or directories holding them. \
-                 Directories are searched recursively; hidden and partially downloaded \
-                 files inside them are skipped. Files are only read, never modified, and \
-                 importing them again imports only what is new. ZIP files are opened \
-                 automatically in memory; each member follows the same import rules. \
-                 Nested ZIPs and encrypted archives are unsupported. Revolut and Wise \
-                 CSV clocks are assumed UTC; Wise matching retains CAMT source-local \
-                 clocks.")
+                "When SOURCE is an institution, statement files or directories holding \
+                 them. Directories are searched recursively; hidden files are skipped. \
+                 Generic CSV institutions select .csv files and review each separately. \
+                 Built-in importers also accept ZIPs in memory; nested ZIPs and \
+                 encrypted archives are unsupported. Files are only read, never \
+                 modified; repeated imports add only new records. Revolut and Wise CSV \
+                 clocks are assumed UTC; Wise matching retains CAMT source-local clocks.")
       $ Arg.(
           value
           & opt (some string) None
@@ -1153,7 +1250,7 @@ let statements database institution =
 
 let statements_cmd =
   command
-    "statements"
+    "list"
     "Show bank-stated balances against the movements each statement lists, as JSON."
     Term.(const statements $ database $ institution_filter)
 ;;
@@ -1254,6 +1351,10 @@ let categorize_bank_cmd =
                  strings."))
 ;;
 
+type movement_type_filter =
+  | Unknown_type
+  | Known_type of Movement_type.t
+
 let list_transactions
       database
       account_id
@@ -1261,6 +1362,8 @@ let list_transactions
       from_date
       to_date
       search
+      movement_type
+      classification
       limit
       order
       json_output
@@ -1277,6 +1380,14 @@ let list_transactions
   in
   let%bind from_date = parse_date "--from" from_date in
   let%bind to_date = parse_date "--to" to_date in
+  let%bind movement_type =
+    match movement_type with
+    | None -> Ok None
+    | Some "unknown" -> Ok (Some Unknown_type)
+    | Some value when String.is_empty (String.strip value) ->
+      Or_error.error_string "--type must not be empty"
+    | Some value -> Ok (Some (Known_type (Movement_type.of_string value)))
+  in
   let%bind () =
     match from_date, to_date, limit with
     | Some first, Some last, _ when Date.compare first last > 0 ->
@@ -1323,6 +1434,11 @@ let list_transactions
         let r = row.review in
         Option.value_map account_id ~default:true ~f:(String.equal row.account_id)
         && Option.value_map institution ~default:true ~f:(String.equal r.institution)
+        && Option.value_map movement_type ~default:true ~f:(function
+          | Unknown_type -> Option.is_none r.movement_type
+          | Known_type kind ->
+            Option.value_map r.movement_type ~default:false ~f:(Poly.equal kind))
+        && Option.value_map classification ~default:true ~f:(Poly.equal r.classification)
         && Option.value_map from_date ~default:true ~f:(fun date ->
           Date.compare r.transaction.booked_on date >= 0)
         && Option.value_map to_date ~default:true ~f:(fun date ->
@@ -1348,6 +1464,20 @@ let list_transactions
     let rows = Option.value_map limit ~default:rows ~f:(List.take rows) in
     if json_output
     then Report_json.print (Jsont.list Report_json.transaction) rows
+    else if Unix.isatty Unix.stdout && not (List.is_empty rows)
+    then (
+      let pager = Option.value (Sys.getenv "PAGER") ~default:"less -FRX" in
+      if String.is_empty (String.strip pager)
+      then Terminal.transactions rows
+      else (
+        let out = Unix.open_process_out pager in
+        Exn.protect
+          ~f:(fun () ->
+            try Terminal.transactions ~out rows with
+            | Sys_error _ -> ())
+          ~finally:(fun () ->
+            try ignore (Unix.close_process_out out) with
+            | Sys_error _ -> ())))
     else Terminal.transactions rows;
     Ok ())
 ;;
@@ -1355,7 +1485,8 @@ let list_transactions
 let transaction_list_cmd =
   command
     "list"
-    "List imported transactions, newest first."
+    "List imported transactions, newest first. Terminal tables use PAGER (default: less \
+     -FRX); redirected and JSON output is not paged."
     Term.(
       const list_transactions
       $ database
@@ -1393,6 +1524,33 @@ let transaction_list_cmd =
               ~doc:"ASCII case-insensitive display name or description substring.")
       $ Arg.(
           value
+          & opt (some string) None
+          & info
+              [ "type" ]
+              ~docv:"TYPE"
+              ~doc:
+                "Movement type as displayed, or unknown for transactions without a type. \
+                 Provider-specific types are accepted.")
+      $ Arg.(
+          value
+          & opt
+              (some
+                 (enum
+                    [ "unclassified", Store.Unclassified
+                    ; "category", Category
+                    ; "transfer", Transfer
+                    ; "settlement", Settlement
+                    ; "reversal", Reversal
+                    ]))
+              None
+          & info
+              [ "classification" ]
+              ~docv:"CLASSIFICATION"
+              ~doc:
+                "Accounting classification: unclassified, category, transfer, settlement \
+                 or reversal.")
+      $ Arg.(
+          value
           & opt (some int) None
           & info [ "limit" ] ~docv:"COUNT" ~doc:"Maximum number of transactions.")
       $ Arg.(
@@ -1405,22 +1563,958 @@ let transaction_list_cmd =
       $ json_output)
 ;;
 
-let bank_list () =
+let refresh_transaction_types database institution yes =
+  with_database database (fun db ->
+    let%bind changes = Store.preview_movement_types ?institution db in
+    let name = Option.value_map ~default:"unknown" ~f:Movement_type.to_string in
+    if List.is_empty changes
+    then (
+      print_endline "No movement type changes.";
+      Ok ())
+    else (
+      printf "Proposed movement type changes: %d\n" (List.length changes);
+      List.iter changes ~f:(fun (change : Store.movement_type_change) ->
+        printf
+          "  #%Ld  %s  %s -> %s  %s\n"
+          change.event_id
+          (Terminal.text change.institution)
+          (name change.before)
+          (name change.after)
+          (Terminal.text change.description));
+      let%bind confirmed =
+        if yes
+        then Ok true
+        else if Unix.isatty Unix.stdin
+        then
+          Ok
+            (Option.value_map
+               (prompt "Apply these movement type changes? [Y/n]: ")
+               ~default:false
+               ~f:confirm_default_yes)
+        else Or_error.error_string "type refresh requires a terminal or --yes"
+      in
+      if not confirmed
+      then (
+        print_endline "Nothing changed.";
+        Ok ())
+      else (
+        let%map count = Store.refresh_movement_types ?institution db ~expected:changes in
+        printf "movement_types_changed=%d\n" count)))
+;;
+
+let refresh_transaction_types_cmd =
+  command
+    "refresh-types"
+    "Preview and refresh imported movement types from stored source evidence."
+    Term.(
+      const refresh_transaction_types
+      $ database
+      $ institution_filter
+      $ Arg.(value & flag & info [ "yes" ] ~doc:"Apply the preview without prompting."))
+;;
+
+let institution_list database =
   List.iter (Registry.institutions Builtin.registry) ~f:(fun institution ->
     if not (String.equal institution "csv")
     then (
       let aliases = Registry.aliases Builtin.registry institution |> List.tl_exn in
       if List.is_empty aliases
-      then print_endline institution
-      else printf "%s (aliases: %s)\n" institution (String.concat ~sep:", " aliases)));
-  Ok ()
+      then printf "%s (built-in)\n" institution
+      else
+        printf
+          "%s (built-in; aliases: %s)\n"
+          institution
+          (String.concat ~sep:", " aliases)));
+  with_database database (fun db ->
+    let%map names = Store.institutions db in
+    List.iter names ~f:(fun name -> printf "%s (generic CSV)\n" (Terminal.text name)))
 ;;
 
-let bank_list_cmd =
+let institution_list_cmd =
   command
     "list"
-    "List built-in bank importers and their aliases."
-    Term.(const bank_list $ const ())
+    "List built-in and user-added institutions."
+    Term.(const institution_list $ database)
+;;
+
+let institution_add database name sample =
+  let%bind name =
+    match name with
+    | Some name -> Ok name
+    | None when Unix.isatty Unix.stdin ->
+      (match prompt "Institution name (required): " with
+       | Some name -> Ok (String.strip name)
+       | None -> Or_error.error_string "institution name is required")
+    | None -> Or_error.error_string "institution name is required"
+  in
+  let%bind name = Validation.token "institution name" name in
+  let reserved = builtin_institution_name name in
+  if reserved
+  then Or_error.error_string "institution name is reserved for a built-in importer"
+  else (
+    let%bind existing = with_database database Store.institutions in
+    if List.mem existing name ~equal:String.equal
+    then Or_error.errorf "institution already exists: %s" name
+    else (
+      let sample =
+        match sample with
+        | Some _ -> sample
+        | None when Unix.isatty Unix.stdin ->
+          Option.bind
+            (prompt "Sample CSV file (Enter to configure later): ")
+            ~f:(fun value ->
+              Option.some_if
+                (not (String.is_empty (String.strip value)))
+                (String.strip value))
+        | None -> None
+      in
+      let%bind profile =
+        match sample with
+        | None -> Ok None
+        | Some path ->
+          let%map profile =
+            csv_import_profile ~setup_only:true database path 64 ~institution:name
+          in
+          Some (Json.encode Csv_profile.codec profile)
+      in
+      with_database database (fun db ->
+        let%bind () = Store.add_institution ?profile db name in
+        printf
+          "Added %s.%s\n"
+          (Terminal.text name)
+          (if Option.is_some profile
+           then ""
+           else " Import a CSV file to configure its layout.");
+        Ok ())))
+;;
+
+let institution_add_cmd =
+  command
+    "add"
+    "Add an institution using generic CSV statements."
+    Term.(
+      const institution_add
+      $ database
+      $ Arg.(
+          value
+          & pos 0 (some string) None
+          & info
+              []
+              ~docv:"NAME"
+              ~doc:"Institution name; prompted on a terminal if omitted.")
+      $ Arg.(
+          value
+          & pos 1 (some string) None
+          & info
+              []
+              ~docv:"SAMPLE.csv"
+              ~doc:"Sample CSV for layout setup; no transactions are imported."))
+;;
+
+let institution_delete database name yes =
+  with_database database (fun db ->
+    let%bind () = Store.delete_institution ~dry_run:true db name in
+    printf "Delete institution %s and its saved CSV layout?\n" (Terminal.text name);
+    let%bind confirmed =
+      if yes
+      then Ok true
+      else if Unix.isatty Unix.stdin
+      then
+        Ok
+          (Option.value_map
+             (prompt "Delete this institution? [Y/n]: ")
+             ~default:false
+             ~f:confirm_default_yes)
+      else Or_error.error_string "deletion requires confirmation; use --yes in scripts"
+    in
+    if not confirmed
+    then (
+      print_endline "Nothing deleted.";
+      Ok ())
+    else (
+      let%bind () = Store.delete_institution db name in
+      print_endline "Institution deleted.";
+      Ok ()))
+;;
+
+let institution_delete_cmd =
+  command
+    "delete"
+    "Delete an unused user-added institution and its saved CSV layout."
+    Term.(
+      const institution_delete
+      $ database
+      $ Arg.(
+          required
+          & pos 0 (some string) None
+          & info [] ~docv:"NAME" ~doc:"User-added institution name.")
+      $ Arg.(
+          value & flag & info [ "yes" ] ~doc:"Delete without interactive confirmation."))
+;;
+
+type settlement_suggestion =
+  { transaction : Store.bank_review
+  ; card : Store.bank_account_info
+  ; bank : Store.bank_account_info
+  }
+
+let account_reference (mapping : Bank_account_mapping.t) =
+  { Bank_account_config.institution = mapping.institution
+  ; bank_id = mapping.bank_id
+  ; account_id = mapping.account_id
+  ; account_type = mapping.account_type
+  }
+;;
+
+let settlement_suggestions db =
+  let%bind rows = Store.bank_review db in
+  let%bind accounts = Store.bank_account_info db in
+  let suggestions =
+    List.filter_map rows ~f:(fun (row : Store.bank_review) ->
+      let movement = row.transaction in
+      let hint =
+        match Registry.find (Store.registry db) row.institution with
+        | Some (module A : Adapter.S) -> A.settlement_card_hint movement
+        | None -> None
+      in
+      Option.bind hint ~f:(fun hint ->
+        if
+          (not (String.equal row.counter_account "equity:unclassified"))
+          || Option.is_some row.reason
+          || Quantity.(movement.amount >= zero)
+          || not (Quantity.is_zero movement.fee)
+        then None
+        else (
+          let banks =
+            List.filter accounts ~f:(fun a ->
+              String.equal a.Store.mapping.institution row.institution
+              && String.equal a.mapping.bank_id movement.account.bank_id
+              && String.equal a.mapping.account_id movement.account.account_id
+              && String.equal a.mapping.account_type movement.account.account_type)
+          in
+          match banks with
+          | [ bank ] when not (String.equal bank.iban_source "not_applicable") ->
+            let parent = account_reference bank.mapping in
+            let cards =
+              List.filter accounts ~f:(fun card ->
+                String.equal card.Store.mapping.institution row.institution
+                && String.equal card.mapping.bank_id movement.account.bank_id
+                && String.equal card.mapping.account_id hint
+                && String.equal card.mapping.account_type "CREDITCRD"
+                && Iso4217.equal card.currency movement.account.currency
+                && Option.for_all card.settlement_account ~f:(fun linked ->
+                  String.equal linked.institution parent.institution
+                  && String.equal
+                       (Bank_account_config.source_account linked)
+                       (Bank_account_config.source_account parent)))
+            in
+            (match cards with
+             | [ card ] ->
+               let card_has_payment =
+                 List.exists rows ~f:(fun other ->
+                   let tx = other.Store.transaction in
+                   String.equal other.institution card.mapping.institution
+                   && String.equal tx.account.bank_id card.mapping.bank_id
+                   && String.equal tx.account.account_id card.mapping.account_id
+                   && String.equal tx.account.account_type card.mapping.account_type
+                   && Iso4217.equal tx.account.currency movement.account.currency
+                   && Quantity.equal tx.amount (Quantity.neg movement.amount)
+                   && Int.abs (Date.diff tx.booked_on movement.booked_on) <= 7)
+               in
+               Option.some_if (not card_has_payment) { transaction = row; card; bank }
+             | _ -> None)
+          | _ -> None)))
+  in
+  Ok suggestions
+;;
+
+let print_settlement_suggestions suggestions =
+  if List.is_empty suggestions
+  then print_endline "No unambiguous card settlements found."
+  else
+    List.iter suggestions ~f:(fun s ->
+      printf
+        "#%Ld  %s  %s %s  %s / %s\n    %s\n"
+        s.transaction.event_id
+        (Date.to_string s.transaction.transaction.booked_on)
+        (Quantity.to_string s.transaction.transaction.amount)
+        (Iso4217.to_alpha_code s.transaction.transaction.account.currency)
+        (Terminal.text s.card.mapping.institution)
+        (Terminal.text s.card.mapping.account_id)
+        (Terminal.text (String.concat ~sep:" | " s.transaction.transaction.descriptions)))
+;;
+
+let settlement_candidates_cmd =
+  command
+    "candidates"
+    "Find unclassified card settlements with a unique card match."
+    Term.(
+      const (fun database ->
+        with_database database (fun db ->
+          let%map suggestions = settlement_suggestions db in
+          print_settlement_suggestions suggestions))
+      $ database)
+;;
+
+let card_setup_plan ~(card : Store.bank_account_info) ~(bank : Store.bank_account_info) =
+  let proposed =
+    if String.is_prefix card.mapping.ledger_account ~prefix:"liabilities:"
+    then card.mapping.ledger_account
+    else
+      "liabilities:cards:"
+      ^ card.mapping.institution
+      ^ ":"
+      ^ Bank_account_mapping.id card.mapping
+  in
+  let parent = account_reference bank.mapping in
+  let needs_link =
+    not
+      (Option.value_map card.settlement_account ~default:false ~f:(fun linked ->
+         String.equal linked.institution parent.institution
+         && String.equal
+              (Bank_account_config.source_account linked)
+              (Bank_account_config.source_account parent)))
+  in
+  let needs_mapping = not (String.equal proposed card.mapping.ledger_account) in
+  let update =
+    Bank_account_config.
+      { reference = account_reference card.mapping
+      ; ledger_account = (if needs_mapping then Some proposed else None)
+      ; iban = Keep
+      ; settlement_account = (if needs_link then Set parent else Keep)
+      }
+  in
+  proposed, needs_link, needs_mapping, update
+;;
+
+let setup_card
+      db
+      ~(card : Store.bank_account_info)
+      ~(bank : Store.bank_account_info)
+      ~yes
+      ~allow_yes
+  =
+  let proposed, needs_link, needs_mapping, update = card_setup_plan ~card ~bank in
+  if (not needs_link) && not needs_mapping
+  then Ok true
+  else if yes && not allow_yes
+  then Or_error.error_string "card setup requires interactive confirmation"
+  else if (not yes) && not (Unix.isatty Unix.stdin)
+  then Or_error.error_string "card setup requires a terminal"
+  else (
+    printf
+      "Card setup proposal: %s / %s\n"
+      (Terminal.text card.mapping.institution)
+      (Terminal.text card.mapping.account_id);
+    if needs_mapping
+    then
+      printf
+        "  Card account: %s -> %s\n"
+        (Terminal.text card.mapping.ledger_account)
+        (Terminal.text proposed);
+    if needs_link
+    then
+      printf
+        "  Pay from: %s / %s\n"
+        (Terminal.text bank.mapping.institution)
+        (Terminal.text bank.mapping.account_id);
+    let confirmed =
+      yes
+      || Option.value_map
+           (prompt "Apply this card setup? [Y/n]: ")
+           ~default:false
+           ~f:confirm_default_yes
+    in
+    if not confirmed
+    then Ok false
+    else (
+      let%map _ = Store.apply_bank_accounts db [ update ] in
+      true))
+;;
+
+let settlement_tui db suggestions =
+  if not (Unix.isatty Unix.stdin && Unix.isatty Unix.stdout)
+  then Or_error.error_string "the full-screen review requires a terminal"
+  else if List.is_empty suggestions
+  then (
+    print_endline "No unambiguous card settlements found.";
+    Ok ())
+  else (
+    let choices =
+      List.map suggestions ~f:(fun s ->
+        let proposed, needs_link, needs_mapping, _ =
+          card_setup_plan ~card:s.card ~bank:s.bank
+        in
+        let movement = s.transaction.transaction in
+        let currency = Iso4217.to_alpha_code movement.account.currency in
+        let title =
+          Printf.sprintf
+            "#%Ld  %s  %s %s"
+            s.transaction.event_id
+            (Date.to_string movement.booked_on)
+            (Quantity.to_string movement.amount)
+            currency
+        in
+        let details =
+          [ "Description: " ^ String.concat ~sep:" | " movement.descriptions
+          ; "Checking: " ^ s.bank.mapping.institution ^ " / " ^ s.bank.mapping.account_id
+          ; "Card: " ^ s.card.mapping.institution ^ " / " ^ s.card.mapping.account_id
+          ; "Card repayment: "
+            ^ Quantity.to_string (Quantity.neg movement.amount)
+            ^ " "
+            ^ currency
+          ; "Card account: " ^ proposed
+          ]
+          @ (if needs_mapping
+             then [ "Change card account from: " ^ s.card.mapping.ledger_account ]
+             else [])
+          @ (if needs_link
+             then [ "Link card to the checking account shown above." ]
+             else [])
+          @ [ "Only this settlement will be recorded." ]
+        in
+        Settlement_tui.{ title; details })
+    in
+    match Settlement_tui.run choices with
+    | None ->
+      print_endline "Nothing changed.";
+      Ok ()
+    | Some index ->
+      let s = List.nth_exn suggestions index in
+      let _, needs_link, needs_mapping, setup =
+        card_setup_plan ~card:s.card ~bank:s.bank
+      in
+      let%bind () =
+        if needs_link || needs_mapping
+        then
+          Store.confirm_card_settlement_with_setup
+            db
+            ~event_id:s.transaction.event_id
+            ~card_id:(Bank_account_mapping.id s.card.mapping)
+            ~expected_ledger:s.card.mapping.ledger_account
+            ~expected_link:s.card.settlement_account
+            ~setup
+        else
+          Store.confirm_card_settlement
+            db
+            s.transaction.event_id
+            ~card_id:(Bank_account_mapping.id s.card.mapping)
+            ~expected_ledger:s.card.mapping.ledger_account
+      in
+      print_endline
+        "Card settlement recorded. Use fin journal export for an updated journal.";
+      Ok ())
+;;
+
+let settlement_review database requested_event card_id yes tui =
+  with_database database (fun db ->
+    let%bind suggestions = settlement_suggestions db in
+    let suggestions =
+      List.filter suggestions ~f:(fun s ->
+        Option.value_map
+          card_id
+          ~default:true
+          ~f:(String.equal (Bank_account_mapping.id s.card.mapping)))
+    in
+    if tui
+    then
+      if yes
+      then Or_error.error_string "--tui cannot be combined with --yes"
+      else (
+        let suggestions =
+          List.filter suggestions ~f:(fun s ->
+            Option.value_map
+              requested_event
+              ~default:true
+              ~f:(Int64.equal s.transaction.event_id))
+        in
+        settlement_tui db suggestions)
+    else (
+      let%bind event_id =
+        match requested_event with
+        | Some id -> Ok (Some id)
+        | None when yes -> Or_error.error_string "provide EVENT-ID when using --yes"
+        | None when not (Unix.isatty Unix.stdin) ->
+          Or_error.error_string "select a settlement in a terminal or provide EVENT-ID"
+        | None ->
+          print_settlement_suggestions suggestions;
+          if List.is_empty suggestions
+          then Ok None
+          else (
+            let rec choose () =
+              match prompt "Choose an event ID (or q): " with
+              | None -> Ok None
+              | Some answer when String.Caseless.equal (String.strip answer) "q" ->
+                Ok None
+              | Some answer ->
+                (match
+                   Option.try_with (fun () -> Int64.of_string (String.strip answer))
+                   |> Option.bind ~f:(fun id ->
+                     List.find suggestions ~f:(fun s ->
+                       Int64.equal s.transaction.event_id id))
+                 with
+                 | Some selected -> Ok (Some selected.transaction.event_id)
+                 | None ->
+                   eprintf "Choose a listed event ID or q.\n";
+                   choose ())
+            in
+            choose ())
+      in
+      match event_id with
+      | None ->
+        print_endline "Nothing changed.";
+        Ok ()
+      | Some event_id ->
+        let suggestion =
+          List.find suggestions ~f:(fun s ->
+            Int64.equal s.transaction.event_id event_id
+            && Option.value_map
+                 card_id
+                 ~default:true
+                 ~f:(String.equal (Bank_account_mapping.id s.card.mapping)))
+        in
+        let%bind row, card, planned =
+          match suggestion with
+          | None ->
+            let%map row, card = Store.card_settlement_preview ?card_id db event_id in
+            row, card, None
+          | Some s ->
+            let proposed, needs_link, needs_mapping, update =
+              card_setup_plan ~card:s.card ~bank:s.bank
+            in
+            if (not needs_link) && not needs_mapping
+            then (
+              let%map row, card = Store.card_settlement_preview ?card_id db event_id in
+              row, card, None)
+            else if yes
+            then Or_error.error_string "card setup requires interactive confirmation"
+            else
+              Ok
+                ( s.transaction
+                , s.card
+                , Some (s, proposed, needs_link, needs_mapping, update) )
+        in
+        print_endline "Bank transaction:";
+        Terminal.review [ row ];
+        printf
+          "Card: %s / %s (ID %s)\nCard account: %s\n"
+          (Terminal.text card.mapping.institution)
+          (Terminal.text card.mapping.account_id)
+          (Bank_account_mapping.id card.mapping)
+          (Terminal.text
+             (Option.value_map
+                planned
+                ~default:card.mapping.ledger_account
+                ~f:(fun (_, proposed, _, _, _) -> proposed)));
+        Option.iter planned ~f:(fun (s, proposed, needs_link, needs_mapping, _) ->
+          print_endline "Proposed card setup (saved only if you confirm):";
+          if needs_mapping
+          then
+            printf
+              "  Card account: %s -> %s\n"
+              (Terminal.text card.mapping.ledger_account)
+              (Terminal.text proposed);
+          if needs_link
+          then
+            printf
+              "  Pay from: %s / %s\n"
+              (Terminal.text s.bank.mapping.institution)
+              (Terminal.text s.bank.mapping.account_id));
+        printf
+          "Card repayment: %s %s\n"
+          (Quantity.to_string (Quantity.neg row.transaction.amount))
+          (Iso4217.to_alpha_code row.transaction.account.currency);
+        print_endline
+          "If the card statement already includes this payment, review it as a transfer \
+           instead.";
+        let%bind confirmed =
+          if yes
+          then Ok true
+          else if Unix.isatty Unix.stdin
+          then
+            Ok
+              (Option.value_map
+                 (prompt
+                    (if Option.is_some planned
+                     then "Apply this setup and record this one settlement? [Y/n]: "
+                     else "Record this card settlement? [Y/n]: "))
+                 ~default:false
+                 ~f:confirm_default_yes)
+          else
+            Or_error.error_string "settlement requires confirmation; use --yes in scripts"
+        in
+        if not confirmed
+        then (
+          print_endline "Nothing changed.";
+          Ok ())
+        else (
+          let%bind () =
+            match planned with
+            | None ->
+              Store.confirm_card_settlement
+                ~card_id:(Bank_account_mapping.id card.mapping)
+                ~expected_ledger:card.mapping.ledger_account
+                db
+                event_id
+            | Some (s, _, _, _, setup) ->
+              Store.confirm_card_settlement_with_setup
+                db
+                ~event_id
+                ~card_id:(Bank_account_mapping.id s.card.mapping)
+                ~expected_ledger:s.card.mapping.ledger_account
+                ~expected_link:s.card.settlement_account
+                ~setup
+          in
+          print_endline
+            "Card settlement recorded. Use fin journal export for an updated journal.";
+          Ok ())))
+;;
+
+let settlement_review_cmd =
+  command
+    "review"
+    "Review and confirm a bank debit as a linked card settlement."
+    Term.(
+      const settlement_review
+      $ database
+      $ Arg.(
+          value
+          & pos 0 (some int64) None
+          & info
+              []
+              ~docv:"EVENT-ID"
+              ~doc:
+                "Bank transaction ID; omit to choose a suggested settlement in a \
+                 terminal.")
+      $ Arg.(
+          value
+          & opt (some string) None
+          & info
+              [ "card" ]
+              ~docv:"ID"
+              ~doc:"Card account ID, needed if several cards are linked.")
+      $ Arg.(value & flag & info [ "yes" ] ~doc:"Confirm without prompting.")
+      $ Arg.(
+          value & flag & info [ "tui" ] ~doc:"Use the experimental full-screen review."))
+;;
+
+let settlement_undo database event_id yes =
+  with_database database (fun db ->
+    let%bind confirmed =
+      if yes
+      then Ok true
+      else if Unix.isatty Unix.stdin
+      then
+        Ok
+          (Option.value_map
+             (prompt "Undo this card settlement? [Y/n]: ")
+             ~default:false
+             ~f:confirm_default_yes)
+      else Or_error.error_string "undo requires confirmation; use --yes in scripts"
+    in
+    if not confirmed
+    then (
+      print_endline "Nothing changed.";
+      Ok ())
+    else (
+      let%bind () = Store.undo_card_settlement db event_id in
+      print_endline
+        "Card settlement undone. Use fin journal export for an updated journal.";
+      Ok ()))
+;;
+
+let settlement_undo_cmd =
+  command
+    "undo"
+    "Undo a confirmed card settlement."
+    Term.(
+      const settlement_undo
+      $ database
+      $ Arg.(
+          required
+          & pos 0 (some int64) None
+          & info [] ~docv:"EVENT-ID" ~doc:"Confirmed settlement transaction ID.")
+      $ Arg.(value & flag & info [ "yes" ] ~doc:"Undo without prompting."))
+;;
+
+let settlement_history_cmd =
+  command
+    "history"
+    "List card settlement decisions as JSON."
+    Term.(
+      const (fun database ->
+        with_database database (fun db ->
+          let%map rows = Store.card_settlement_history db in
+          Report_json.print (Jsont.list Report_json.card_settlement_change) rows))
+      $ database)
+;;
+
+let find_rule db name =
+  let%bind rules = Store.classification_rules db in
+  List.find rules ~f:(fun r -> String.equal r.Classification_rule.name name)
+  |> Or_error.of_option ~error:(Error.of_string ("unknown rule: " ^ name))
+;;
+
+let rule_add database name pattern target institution case_sensitive settlement =
+  let action =
+    if settlement then Classification_rule.Settlement target else Category target
+  in
+  let%bind rule =
+    Classification_rule.create ~name ~pattern ~institution ~case_sensitive ~action
+  in
+  with_database database (fun db ->
+    let%bind () =
+      match action with
+      | Category _ -> Ok ()
+      | Settlement id ->
+        let%bind accounts = Store.bank_account_info db in
+        (match
+           List.filter accounts ~f:(fun a ->
+             String.equal (Bank_account_mapping.id a.Store.mapping) id)
+         with
+         | [ card ]
+           when List.mem
+                  [ "CREDITCRD"; "credit-card" ]
+                  card.mapping.account_type
+                  ~equal:String.equal -> Ok ()
+         | [ _ ] -> Or_error.error_string "settlement target must be a credit card"
+         | [] -> Or_error.error_string "unknown card ID; see fin account list"
+         | _ -> Or_error.error_string "card ID collision; rule is refused")
+    in
+    let%bind () = Store.add_classification_rule db rule in
+    printf
+      "Saved rule %s. Run fin rule preview %s to review matches.\n"
+      (Terminal.text name)
+      (Terminal.text name);
+    Ok ())
+;;
+
+let rule_add_cmd ~settlement =
+  command
+    (if settlement then "add-settlement" else "add")
+    (if settlement
+     then "Save a regex rule for a linked card's settlements."
+     else "Save a regex rule for an expense or income category.")
+    Term.(
+      const rule_add
+      $ database
+      $ Arg.(
+          required
+          & pos 0 (some string) None
+          & info [] ~docv:"NAME" ~doc:"Unique rule name.")
+      $ Arg.(
+          required
+          & pos 1 (some string) None
+          & info
+              []
+              ~docv:"REGEX"
+              ~doc:
+                "Perl-style regular expression searched in original descriptions and \
+                 display names. To match asterisks literally, escape each one with a \
+                 backslash.")
+      $ Arg.(
+          required
+          & pos 2 (some string) None
+          & info
+              []
+              ~docv:(if settlement then "CARD-ID" else "CATEGORY")
+              ~doc:
+                (if settlement
+                 then "Credit card ID from fin account list."
+                 else "Expense or income account, for example expenses:food."))
+      $ institution_filter
+      $ Arg.(
+          value
+          & flag
+          & info
+              [ "case-sensitive" ]
+              ~doc:"Match case sensitively; default is ASCII case-insensitive.")
+      $ const settlement)
+;;
+
+let rule_list database json_output =
+  with_database database (fun db ->
+    let%map rules = Store.classification_rules db in
+    if json_output
+    then Report_json.print (Jsont.list Report_json.classification_rule) rules
+    else if List.is_empty rules
+    then print_endline "No rules configured."
+    else
+      List.iter rules ~f:(fun r ->
+        printf
+          "%s  %s -> %s  /%s/  %s\n"
+          (Terminal.text r.name)
+          (Classification_rule.action_name r.action)
+          (Terminal.text (Classification_rule.action_target r.action))
+          (Terminal.text r.pattern)
+          (Terminal.text (Option.value r.institution ~default:"all institutions"))))
+;;
+
+let rule_list_cmd =
+  command
+    "list"
+    "List saved regular-expression rules."
+    Term.(const rule_list $ database $ json_output)
+;;
+
+let print_rule_preview (rule : Classification_rule.t) matches =
+  let eligible, skipped = List.partition_tf matches ~f:(fun m -> m.Store.eligible) in
+  printf
+    "Rule %s: %s -> %s; %d eligible, %d already reviewed or ineligible.\n"
+    (Terminal.text rule.name)
+    (Classification_rule.action_name rule.action)
+    (Terminal.text (Classification_rule.action_target rule.action))
+    (List.length eligible)
+    (List.length skipped);
+  if not (List.is_empty eligible)
+  then (
+    print_endline "Eligible matches:";
+    Terminal.review (List.map eligible ~f:(fun m -> m.Store.transaction)));
+  if not (List.is_empty skipped)
+  then (
+    print_endline "Skipped matches:";
+    List.iter skipped ~f:(fun m ->
+      printf
+        "  #%Ld: %s\n"
+        m.Store.transaction.event_id
+        (Terminal.text (Option.value m.explanation ~default:"ineligible"))))
+;;
+
+let rule_preview database name json_output =
+  with_database database (fun db ->
+    let%bind rule = find_rule db name in
+    let%map matches = Store.preview_classification_rule db rule in
+    if json_output
+    then Report_json.print (Jsont.list Report_json.classification_rule_match) matches
+    else print_rule_preview rule matches)
+;;
+
+let rule_preview_cmd =
+  command
+    "preview"
+    "Preview a saved rule without changing transactions."
+    Term.(
+      const rule_preview
+      $ database
+      $ Arg.(
+          required
+          & pos 0 (some string) None
+          & info [] ~docv:"NAME" ~doc:"Rule name from fin rule list.")
+      $ json_output)
+;;
+
+let rule_apply database name yes =
+  with_database database (fun db ->
+    let%bind rule = find_rule db name in
+    let%bind matches = Store.preview_classification_rule db rule in
+    print_rule_preview rule matches;
+    let ids =
+      List.filter_map matches ~f:(fun m ->
+        Option.some_if m.Store.eligible m.transaction.event_id)
+    in
+    if List.is_empty ids
+    then (
+      print_endline "Nothing to apply.";
+      Ok ())
+    else (
+      let%bind confirmed =
+        if yes
+        then Ok true
+        else if Unix.isatty Unix.stdin
+        then
+          Ok
+            (Option.value_map
+               (prompt "Apply to these transactions? [Y/n]: ")
+               ~default:false
+               ~f:confirm_default_yes)
+        else Or_error.error_string "rule application requires a terminal or --yes"
+      in
+      if not confirmed
+      then (
+        print_endline "Nothing changed.";
+        Ok ())
+      else (
+        let%bind changed =
+          Store.apply_classification_rule db ~expected:rule ~event_ids:ids
+        in
+        printf "rule_changes=%d\n" changed;
+        Ok ())))
+;;
+
+let rule_apply_cmd =
+  command
+    "apply"
+    "Preview and explicitly apply a saved rule."
+    Term.(
+      const rule_apply
+      $ database
+      $ Arg.(
+          required
+          & pos 0 (some string) None
+          & info [] ~docv:"NAME" ~doc:"Rule name from fin rule list.")
+      $ Arg.(value & flag & info [ "yes" ] ~doc:"Apply without prompting."))
+;;
+
+let rule_delete database name yes =
+  with_database database (fun db ->
+    let%bind _ = find_rule db name in
+    let%bind confirmed =
+      if yes
+      then Ok true
+      else if Unix.isatty Unix.stdin
+      then
+        Ok
+          (Option.value_map
+             (prompt "Delete this rule? [Y/n]: ")
+             ~default:false
+             ~f:confirm_default_yes)
+      else Or_error.error_string "rule deletion requires a terminal or --yes"
+    in
+    if not confirmed
+    then (
+      print_endline "Nothing deleted.";
+      Ok ())
+    else (
+      let%bind () = Store.delete_classification_rule db name in
+      print_endline "Rule deleted.";
+      Ok ()))
+;;
+
+let rule_delete_cmd =
+  command
+    "delete"
+    "Delete a saved rule; existing decisions are retained."
+    Term.(
+      const rule_delete
+      $ database
+      $ Arg.(
+          required
+          & pos 0 (some string) None
+          & info [] ~docv:"NAME" ~doc:"Rule name from fin rule list.")
+      $ Arg.(value & flag & info [ "yes" ] ~doc:"Delete without prompting."))
+;;
+
+let rule_rename database old_name new_name =
+  with_database database (fun db ->
+    let%map () = Store.rename_classification_rule db ~old_name ~new_name in
+    printf "Renamed rule %s to %s.\n" (Terminal.text old_name) (Terminal.text new_name))
+;;
+
+let rule_rename_cmd =
+  command
+    "rename"
+    "Rename a saved rule; existing decision history is retained."
+    Term.(
+      const rule_rename
+      $ database
+      $ Arg.(
+          required
+          & pos 0 (some string) None
+          & info [] ~docv:"OLD-NAME" ~doc:"Existing rule name.")
+      $ Arg.(
+          required
+          & pos 1 (some string) None
+          & info [] ~docv:"NEW-NAME" ~doc:"New, unused rule name."))
 ;;
 
 let bank_review database all json_output =
@@ -1644,15 +2738,13 @@ let category_review database event_id =
              Terminal.review
                (List.map chosen ~f:(fun r ->
                   { r with Store.counter_account = category; reason = None }));
-             printf
-               "Apply to %d transaction(s)? Type yes to confirm: "
-               (List.length chosen);
+             printf "Apply to %d transaction(s)? [Y/n]: " (List.length chosen);
              Out_channel.flush stdout;
              let confirmed =
                Option.value_map
                  (In_channel.input_line In_channel.stdin)
                  ~default:false
-                 ~f:(fun answer -> String.equal (String.strip answer) "yes")
+                 ~f:confirm_default_yes
              in
              if not confirmed
              then (
@@ -1709,28 +2801,60 @@ let category_history_cmd =
 
 let transfer_candidates database all json_output =
   with_database database (fun db ->
-    let%bind rows = Store.transfer_candidates ~include_reviewed:all db in
+    let%bind rows = Store.transfer_candidates db in
+    let%bind ranked = Transfer_ranking.analyze (Store.registry db) rows in
+    let%bind extra =
+      if all then Store.transfer_candidates ~include_reviewed:true db else Ok []
+    in
     if json_output
-    then Report_json.print (Jsont.list Report_json.candidate) rows
-    else if List.is_empty rows
-    then print_endline "No transfer candidates."
-    else
-      List.iter rows ~f:(fun r ->
-        Terminal.transfer r;
+    then Report_json.print Report_json.preview (ranked, extra)
+    else (
+      print_endline
+        "Transfer candidates: evidence scores are not probabilities; nothing is \
+         confirmed automatically.\n";
+      if List.is_empty ranked
+      then print_endline "No compatible unreviewed transfer candidates.";
+      List.iter ranked ~f:(fun r ->
+        Terminal.transfer r.Transfer_ranking.candidate;
         printf
-          "  State: %s%s\n\n"
-          (Option.value_map r.state ~default:"unreviewed" ~f:Bank_transfer.state_name)
-          (if r.iban_compatible then "" else " (excluded: conflicting IBAN evidence)");
-        Option.iter r.reason ~f:(fun reason ->
-          printf "  Reason: %s\n" (Terminal.text reason)));
+          "  Score: %d; confidence: %s; assignment: %s\n"
+          r.score
+          r.confidence
+          r.assignment.status;
+        List.iter r.evidence ~f:(fun e ->
+          printf "  %s (%+d)\n" (Terminal.text e.Transfer_ranking.detail) e.points);
+        print_endline "");
+      if all
+      then
+        List.iter extra ~f:(fun r ->
+          if
+            not
+              (List.exists ranked ~f:(fun ranked ->
+                 Int64.equal
+                   ranked.Transfer_ranking.candidate.first_event_id
+                   r.first_event_id
+                 && Int64.equal ranked.candidate.second_event_id r.second_event_id))
+          then (
+            Terminal.transfer r;
+            printf
+              "  State: %s%s\n"
+              (Option.value_map
+                 r.state
+                 ~default:"unreviewed; unavailable"
+                 ~f:Bank_transfer.state_name)
+              (if r.iban_compatible then "" else " (excluded: conflicting IBAN evidence)");
+            List.iter r.iban_evidence ~f:(fun evidence ->
+              printf "  %s\n" (Terminal.text evidence));
+            Option.iter r.reason ~f:(fun reason ->
+              printf "  Reason: %s\n" (Terminal.text reason));
+            print_endline "")));
     Ok ())
 ;;
 
 let transfer_candidates_cmd =
   command
     "candidates"
-    "Review possible same-currency transfers; amount/date matches do not establish \
-     ownership."
+    "Show possible transfers with evidence and ranking; nothing is confirmed."
     Term.(
       const transfer_candidates
       $ database
@@ -1744,29 +2868,347 @@ let transfer_candidates_cmd =
 ;;
 
 let review_transfers database path =
-  let%bind contents = read_file path in
-  let%bind decisions = Bank_transfer.of_json contents in
   with_database database (fun db ->
-    let%bind changed = Store.set_bank_transfers db decisions in
-    printf "transfer_changes=%d\n" changed;
-    Ok ())
+    let%bind decisions =
+      match path with
+      | Some path ->
+        let%bind contents = read_file path in
+        Bank_transfer.of_json contents
+      | None ->
+        if not (Unix.isatty Unix.stdin)
+        then
+          Or_error.error_string
+            "interactive review requires a terminal or a decisions file"
+        else (
+          let%bind candidates = Store.transfer_candidates db in
+          let%bind ranked = Transfer_ranking.analyze (Store.registry db) candidates in
+          print_endline
+            "Review one candidate pair at a time. Choices are staged until you confirm \
+             the whole batch.";
+          print_endline
+            "Confirm only pairs representing transfers between your own accounts.";
+          print_endline
+            "For the current pair: c = confirm, r = reject, s = skip.\n\
+             For the batch: a = select supported pairs and finish, d = finish, q = cancel.\n\
+             Other candidates remain for later review. Nothing is saved until the final \
+             confirmation.";
+          let make state (item : Transfer_ranking.ranked) =
+            let c = item.candidate in
+            Bank_transfer.create
+              ~first_event_id:c.first_event_id
+              ~second_event_id:c.second_event_id
+              ~state
+              ~reason:
+                (if Poly.equal state Bank_transfer.Confirmed
+                 then "Confirmed after interactive review"
+                 else "Rejected after interactive review")
+          in
+          let overlaps (a : Bank_transfer.decision) (b : Bank_transfer.decision) =
+            Poly.equal a.state Bank_transfer.Confirmed
+            && Poly.equal b.state Bank_transfer.Confirmed
+            && (Int64.equal a.first_event_id b.first_event_id
+                || Int64.equal a.first_event_id b.second_event_id
+                || Int64.equal a.second_event_id b.first_event_id
+                || Int64.equal a.second_event_id b.second_event_id)
+          in
+          let stage pending decision =
+            if List.exists pending ~f:(overlaps decision)
+            then (
+              print_endline "This conflicts with a pending confirmation; skipped.";
+              pending)
+            else decision :: pending
+          in
+          let rec loop pending = function
+            | [] -> Ok (Some (List.rev pending))
+            | (item : Transfer_ranking.ranked) :: rest ->
+              let c = item.candidate in
+              if
+                List.exists pending ~f:(fun (d : Bank_transfer.decision) ->
+                  Int64.equal
+                    d.first_event_id
+                    (Int64.min c.first_event_id c.second_event_id)
+                  && Int64.equal
+                       d.second_event_id
+                       (Int64.max c.first_event_id c.second_event_id))
+              then loop pending rest
+              else (
+                printf
+                  "\nCurrent pair: #%Ld and #%Ld\n"
+                  c.first_event_id
+                  c.second_event_id;
+                Terminal.transfer c;
+                printf
+                  "  Score: %d; confidence: %s; assignment: %s\n"
+                  item.score
+                  item.confidence
+                  item.assignment.status;
+                List.iter item.evidence ~f:(fun e ->
+                  printf "  %s (%+d)\n" (Terminal.text e.Transfer_ranking.detail) e.points);
+                match
+                  prompt "Current pair or batch choice [c/r/s/a/d/q]: "
+                  |> Option.map ~f:(fun s -> String.lowercase (String.strip s))
+                with
+                | None | Some "q" -> Ok None
+                | Some "d" -> Ok (Some (List.rev pending))
+                | Some "s" -> loop pending rest
+                | (Some "c" | Some "r") as choice ->
+                  let state =
+                    if Poly.equal choice (Some "c")
+                    then Bank_transfer.Confirmed
+                    else Rejected
+                  in
+                  let%bind decision = make state item in
+                  loop (stage pending decision) rest
+                | Some "a" ->
+                  let%bind supported =
+                    List.filter ranked ~f:(fun r ->
+                      String.equal r.Transfer_ranking.assignment.status "supported")
+                    |> List.filter ~f:(fun r ->
+                      let c = r.Transfer_ranking.candidate in
+                      not
+                        (List.exists pending ~f:(fun (d : Bank_transfer.decision) ->
+                           Int64.equal
+                             d.first_event_id
+                             (Int64.min c.first_event_id c.second_event_id)
+                           && Int64.equal
+                                d.second_event_id
+                                (Int64.max c.first_event_id c.second_event_id))))
+                    |> List.map ~f:(make Bank_transfer.Confirmed)
+                    |> Or_error.combine_errors
+                  in
+                  let updated = List.fold supported ~init:pending ~f:stage in
+                  printf
+                    "Staged %d supported pairs.\n"
+                    (List.length updated - List.length pending);
+                  print_endline "Remaining candidates are left for later review.";
+                  Ok (Some (List.rev updated))
+                | Some _ ->
+                  print_endline "Choose c, r, s, a, d or q.";
+                  loop pending (item :: rest))
+          in
+          let%bind pending = loop [] ranked in
+          match pending with
+          | None -> Ok []
+          | Some [] -> Ok []
+          | Some decisions ->
+            printf "Pending decisions: %d\n" (List.length decisions);
+            List.iter decisions ~f:(fun (d : Bank_transfer.decision) ->
+              Option.iter
+                (List.find ranked ~f:(fun r ->
+                   let c = r.Transfer_ranking.candidate in
+                   Int64.equal
+                     d.first_event_id
+                     (Int64.min c.first_event_id c.second_event_id)
+                   && Int64.equal
+                        d.second_event_id
+                        (Int64.max c.first_event_id c.second_event_id)))
+                ~f:(fun r -> Terminal.transfer r.candidate);
+              printf
+                "  #%Ld <-> #%Ld: %s\n"
+                d.first_event_id
+                d.second_event_id
+                (Bank_transfer.state_name d.state));
+            if
+              Option.value_map
+                (prompt "Apply these decisions? [Y/n]: ")
+                ~default:false
+                ~f:confirm_default_yes
+            then Ok decisions
+            else Ok [])
+    in
+    if List.is_empty decisions
+    then (
+      print_endline "Nothing changed.";
+      Ok ())
+    else (
+      let%map changed =
+        Store.set_bank_transfers ~require_unreviewed:(Option.is_none path) db decisions
+      in
+      printf "transfer_changes=%d\n" changed))
 ;;
 
 let review_transfers_cmd =
   command
     "review"
-    "Apply explicit JSON confirm/reject decisions; confirmation asserts both accounts \
-     are yours."
+    "Review a candidate interactively, or apply JSON confirm/reject decisions."
     Term.(
       const review_transfers
       $ database
       $ Arg.(
-          required
+          value
           & pos 0 (some string) None
           & info
               []
               ~docv:"DECISIONS"
-              ~doc:"JSON transfer review decisions. Large IDs use decimal strings."))
+              ~doc:"Optional JSON transfer review decisions; omit for interactive review."))
+;;
+
+let transfer_undo database first second yes =
+  with_database database (fun db ->
+    let%bind decisions = Store.bank_transfer_decisions db in
+    let first, second = Int64.min first second, Int64.max first second in
+    let%bind previous =
+      List.find decisions ~f:(fun (d : Bank_transfer.decision) ->
+        Int64.equal d.first_event_id first
+        && Int64.equal d.second_event_id second
+        && Poly.equal d.state Bank_transfer.Confirmed)
+      |> Or_error.of_option
+           ~error:(Error.of_string "no confirmed transfer for these event IDs")
+    in
+    let%bind rows = Store.bank_review db in
+    let pair =
+      List.filter rows ~f:(fun r ->
+        Int64.equal r.Store.event_id first || Int64.equal r.event_id second)
+    in
+    if List.length pair <> 2
+    then Or_error.error_string "transfer movements are missing"
+    else (
+      print_endline
+        "Undo this confirmed transfer? Both movements will return to unclassified.";
+      Terminal.review pair;
+      let%bind confirmed =
+        if yes
+        then Ok true
+        else if Unix.isatty Unix.stdin
+        then
+          Ok
+            (Option.value_map
+               (prompt "Undo this transfer? [Y/n]: ")
+               ~default:false
+               ~f:confirm_default_yes)
+        else Or_error.error_string "undo requires a terminal or --yes"
+      in
+      if not confirmed
+      then (
+        print_endline "Nothing changed.";
+        Ok ())
+      else (
+        let%bind decision =
+          Bank_transfer.create
+            ~first_event_id:first
+            ~second_event_id:second
+            ~state:Rejected
+            ~reason:"Undone by user"
+        in
+        let%map changed =
+          Store.set_bank_transfers ~expected_previous:previous db [ decision ]
+        in
+        printf "transfer_changes=%d\n" changed)))
+;;
+
+let transfer_undo_cmd =
+  command
+    "undo"
+    "Undo a confirmed transfer and return both movements to review."
+    Term.(
+      const transfer_undo
+      $ database
+      $ Arg.(
+          required
+          & pos 0 (some int64) None
+          & info [] ~docv:"FIRST-EVENT-ID" ~doc:"First transaction event ID.")
+      $ Arg.(
+          required
+          & pos 1 (some int64) None
+          & info [] ~docv:"SECOND-EVENT-ID" ~doc:"Second transaction event ID.")
+      $ Arg.(value & flag & info [ "yes" ] ~doc:"Undo without prompting."))
+;;
+
+let reversal_candidates database =
+  with_database database (fun db ->
+    let%map candidates = Store.reversal_candidates db in
+    if List.is_empty candidates
+    then print_endline "No unreviewed reversal candidates."
+    else
+      List.iter candidates ~f:(fun (c : Store.reversal_candidate) ->
+        printf "Original #%Ld; reversal #%Ld\n" c.original.event_id c.reversal.event_id;
+        Terminal.review [ c.original; c.reversal ]))
+;;
+
+let reversal_candidates_cmd =
+  command
+    "candidates"
+    "Show possible full withdrawal reversals."
+    Term.(const reversal_candidates $ database)
+;;
+
+let reversal_review database original reversal undo yes =
+  with_database database (fun db ->
+    let%bind rows = Store.bank_review db in
+    let find id =
+      List.find rows ~f:(fun r -> Int64.equal r.Store.event_id id)
+      |> Or_error.of_option ~error:(Error.of_string "unknown transaction event ID")
+    in
+    let%bind first = find original in
+    let%bind second = find reversal in
+    if not undo
+    then (
+      print_endline "Confirm this original withdrawal and its reversal?";
+      Terminal.review [ first; second ])
+    else (
+      print_endline "Undo this confirmed reversal?";
+      Terminal.review [ first; second ]);
+    let%bind confirmed =
+      if yes
+      then Ok true
+      else if Unix.isatty Unix.stdin
+      then
+        Ok
+          (Option.value_map
+             (prompt "Apply this decision? [Y/n]: ")
+             ~default:false
+             ~f:confirm_default_yes)
+      else Or_error.error_string "reversal review requires a terminal or --yes"
+    in
+    if not confirmed
+    then (
+      print_endline "Nothing changed.";
+      Ok ())
+    else (
+      let%map () = Store.reversal_change db ~original ~reversal ~undo in
+      print_endline (if undo then "Reversal undone." else "Reversal confirmed.")))
+;;
+
+let reversal_review_cmd ~undo =
+  command
+    (if undo then "undo" else "review")
+    (if undo
+     then "Undo a confirmed reversal pair."
+     else "Confirm a full withdrawal reversal pair.")
+    Term.(
+      const reversal_review
+      $ database
+      $ Arg.(
+          required
+          & pos 0 (some int64) None
+          & info [] ~docv:"ORIGINAL-ID" ~doc:"Original withdrawal event ID.")
+      $ Arg.(
+          required
+          & pos 1 (some int64) None
+          & info [] ~docv:"REVERSAL-ID" ~doc:"Reversal event ID.")
+      $ const undo
+      $ Arg.(value & flag & info [ "yes" ] ~doc:"Confirm without prompting."))
+;;
+
+let reversal_history_cmd =
+  command
+    "history"
+    "Show the append-only reversal decision history."
+    Term.(
+      const (fun database ->
+        with_database database (fun db ->
+          let%map changes = Store.reversal_history db in
+          List.iter changes ~f:(fun (r : Store.reversal_history_entry) ->
+            printf
+              "#%Ld  #%Ld -> #%Ld  %s  %s\n"
+              r.id
+              r.original
+              r.reversal
+              (match r.action with
+               | Reversal_confirmed -> "confirmed"
+               | Reversal_undone -> "undone")
+              (Timestamp.to_rfc3339 r.changed_at))))
+      $ database)
 ;;
 
 let transfer_history database =
@@ -1781,49 +3223,6 @@ let transfer_history_cmd =
     "history"
     "Inspect the append-only transfer review history."
     Term.(const transfer_history $ database)
-;;
-
-let transfer_preview database json_output =
-  with_database database (fun db ->
-    let%bind candidates = Store.transfer_candidates db in
-    let%bind all_candidates = Store.transfer_candidates ~include_reviewed:true db in
-    let%bind ranked = Transfer_ranking.analyze (Store.registry db) candidates in
-    if json_output
-    then Report_json.print Report_json.preview (ranked, all_candidates)
-    else (
-      print_endline
-        "Transfer preview - evidence scores, not probabilities. Nothing is confirmed \
-         automatically.\n";
-      if List.is_empty ranked
-      then print_endline "No compatible unreviewed transfer candidates."
-      else
-        List.iter ranked ~f:(fun r ->
-          Terminal.transfer r.Transfer_ranking.candidate;
-          printf
-            "  Score: %d; confidence: %s; assignment: %s\n"
-            r.score
-            r.confidence
-            r.assignment.status;
-          List.iter r.evidence ~f:(fun e ->
-            printf "  %s (%+d)\n" (Terminal.text e.Transfer_ranking.detail) e.points);
-          print_endline "");
-      let excluded =
-        List.count all_candidates ~f:(fun c -> not c.Store.iban_compatible)
-      in
-      if excluded > 0
-      then
-        printf
-          "%d pairs excluded by IBAN evidence; inspect fin transfers candidates --all.\n"
-          excluded);
-    Ok ())
-;;
-
-let transfer_preview_cmd =
-  command
-    "preview"
-    "Rank compatible transfer candidates and preview globally consistent pairs; scores \
-     are not probabilities."
-    Term.(const transfer_preview $ database $ json_output)
 ;;
 
 let accounts_export database output =
@@ -1975,15 +3374,13 @@ let accounts_delete database account_id dry_run yes =
         then Ok true
         else if Unix.isatty Unix.stdin
         then (
-          Out_channel.output_string
-            stdout
-            "Type yes to delete this account and its records: ";
+          Out_channel.output_string stdout "Delete this account and its records? [Y/n]: ";
           Out_channel.flush stdout;
           Ok
             (Option.value_map
                (In_channel.input_line In_channel.stdin)
                ~default:false
-               ~f:(fun answer -> String.equal (String.strip answer) "yes")))
+               ~f:confirm_default_yes))
         else
           Or_error.error_string
             "refusing to delete without confirmation; use --yes in scripts"
@@ -2010,6 +3407,41 @@ let accounts_delete database account_id dry_run yes =
         Ok ())))
 ;;
 
+let accounts_link_card database card_id bank_id yes =
+  with_database database (fun db ->
+    let%bind accounts = Store.bank_account_info db in
+    let find id =
+      match
+        List.filter accounts ~f:(fun a ->
+          String.equal (Bank_account_mapping.id a.Store.mapping) id)
+      with
+      | [ account ] -> Ok account
+      | [] -> Or_error.errorf "unknown account ID: %s" id
+      | _ -> Or_error.errorf "account ID collision: %s" id
+    in
+    let%bind card = find card_id in
+    let%bind bank = find bank_id in
+    if
+      not
+        (List.mem
+           [ "CREDITCRD"; "credit-card" ]
+           card.mapping.account_type
+           ~equal:String.equal)
+    then Or_error.error_string "the first account must be a credit card"
+    else if String.equal bank.iban_source "not_applicable" || String.equal card_id bank_id
+    then
+      Or_error.error_string "the settlement account must be a separate non-card account"
+    else if not (Iso4217.equal card.currency bank.currency)
+    then
+      Or_error.error_string "the card and settlement account must use the same currency"
+    else (
+      let%bind applied = setup_card db ~card ~bank ~yes ~allow_yes:true in
+      if applied
+      then print_endline "Card setup complete."
+      else print_endline "Nothing changed.";
+      Ok ()))
+;;
+
 let account_cmd =
   Cmd.group
     (Cmd.info
@@ -2019,6 +3451,27 @@ let account_cmd =
         "list"
         "List account details, IBAN provenance, coverage and card settlement links."
         Term.(const list_bank_accounts $ database $ json_output)
+    ; command
+        "link-card"
+        "Link a credit card to the account that pays it."
+        Term.(
+          const accounts_link_card
+          $ database
+          $ Arg.(
+              required
+              & pos 0 (some string) None
+              & info [] ~docv:"CARD-ID" ~doc:"Credit card ID from fin account list.")
+          $ Arg.(
+              required
+              & pos 1 (some string) None
+              & info
+                  []
+                  ~docv:"ACCOUNT-ID"
+                  ~doc:"Settlement account ID from fin account list.")
+          $ Arg.(
+              value
+              & flag
+              & info [ "yes" ] ~doc:"Apply the proposed setup without prompting."))
     ; command
         "export"
         "Export an account settings snapshot as version 1 JSON."
@@ -2102,9 +3555,23 @@ let paths_cmd =
 
 let group name doc commands = Cmd.group (Cmd.info name ~doc) commands
 
+let command_argv () =
+  let argv = Stdlib.Array.copy Stdlib.Sys.argv in
+  if Stdlib.Array.length argv > 1
+  then
+    argv.(1)
+    <- (match argv.(1) with
+        | "tx" | "txn" -> "transaction"
+        | "acc" -> "account"
+        | "inst" -> "institution"
+        | command -> command);
+  argv
+;;
+
 let () =
   Stdlib.exit
     (Cmd.eval
+       ~argv:(command_argv ())
        (Cmd.group
           ~default:Term.(const welcome $ const ())
           (Cmd.info
@@ -2129,11 +3596,14 @@ let () =
                     fin status\n\
                     fin account list\n\
                     fin transaction list\n\
-                    fin bank review\n\
+                    fin transaction review\n\
                     fin journal export > my-finances.journal"
                ; `P
                    "Use $(b,fin paths) to inspect storage locations, or append \
                     $(b,--help) to any subcommand for its options."
+               ; `P
+                   "Command shortcuts: $(b,tx) and $(b,txn) mean $(b,transaction); \
+                    $(b,acc) means $(b,account); $(b,inst) means $(b,institution)."
                ])
           [ setup_cmd
           ; status_cmd
@@ -2144,37 +3614,74 @@ let () =
           ; account_cmd
           ; import_bank_cmd
           ; group
+              "institution"
+              "Manage institutions and their importers."
+              [ institution_list_cmd
+              ; institution_add_cmd
+              ; institution_delete_cmd
+              ; import_history_cmd
+              ]
+          ; group
+              "settlement"
+              "Review credit-card settlements."
+              [ settlement_candidates_cmd
+              ; settlement_review_cmd
+              ; settlement_undo_cmd
+              ; settlement_history_cmd
+              ]
+          ; group
+              "reversal"
+              "Review and undo transaction reversals."
+              [ reversal_candidates_cmd
+              ; reversal_review_cmd ~undo:false
+              ; reversal_review_cmd ~undo:true
+              ; reversal_history_cmd
+              ]
+          ; group
+              "rule"
+              "Manage preview-only regular-expression rules."
+              [ rule_list_cmd
+              ; rule_add_cmd ~settlement:false
+              ; rule_add_cmd ~settlement:true
+              ; rule_preview_cmd
+              ; rule_apply_cmd
+              ; rule_delete_cmd
+              ; rule_rename_cmd
+              ]
+          ; group
               "db"
               "Initialize and inspect local source evidence."
               [ init; events; ingest_cmd ]
           ; group
-              "bank"
-              "Review banking records and reconcile statements."
-              [ bank_list_cmd
-              ; project_bank_cmd
+              "statement"
+              "Inspect and reconcile imported statements and companion files."
+              [ statements_cmd; companions_cmd; match_companions_cmd ]
+          ; group
+              "transfer"
+              "Review transfer candidates and decisions."
+              [ transfer_candidates_cmd
+              ; review_transfers_cmd
+              ; transfer_undo_cmd
+              ; transfer_history_cmd
+              ]
+          ; group
+              "transaction"
+              "Inspect and classify imported transactions."
+              [ transaction_list_cmd
+              ; refresh_transaction_types_cmd
               ; bank_review_cmd
-              ; import_history_cmd
               ; group
-                  "categories"
-                  "Manage reviewed bank categories."
+                  "category"
+                  "Manage reviewed transaction categories."
                   [ categorize_bank_cmd
                   ; category_history_cmd
                   ; category_similar_cmd
                   ; category_review_cmd
                   ]
-              ; companions_cmd
-              ; match_companions_cmd
-              ; statements_cmd
               ]
           ; group
-              "transfers"
-              "Review transfer candidates and decisions."
-              [ transfer_candidates_cmd
-              ; transfer_preview_cmd
-              ; review_transfers_cmd
-              ; transfer_history_cmd
-              ]
-          ; group "transaction" "Inspect imported transactions." [ transaction_list_cmd ]
-          ; group "journal" "Render persisted accounting entries." [ export_hledger_cmd ]
+              "journal"
+              "Project and render accounting entries."
+              [ project_bank_cmd; export_hledger_cmd ]
           ]))
 ;;

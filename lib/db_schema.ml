@@ -3,7 +3,7 @@ open Rel
 
 (** One current experimental baseline; older databases must be reimported. Banks
     have no tables of their own. *)
-let version = 14
+let version = 18
 
 let timestamp = `Expr "(strftime('%Y-%m-%dT%H:%M:%f','now') || '000000000Z')"
 
@@ -1623,6 +1623,291 @@ module Bank_account_settlement_changes = struct
   ;;
 end
 
+module Card_settlement_decisions = struct
+  type t =
+    { event_id : int64
+    ; card_institution : string
+    ; card_source_account : string
+    ; ledger_account : string
+    ; reason : string
+    }
+
+  let event_id = Col.make "event_id" Type.int64 (fun (r : t) -> r.event_id)
+
+  let card_institution =
+    Col.make "card_institution" Type.text (fun (r : t) -> r.card_institution)
+  ;;
+
+  let card_source_account =
+    Col.make "card_source_account" Type.text (fun (r : t) -> r.card_source_account)
+  ;;
+
+  let ledger_account =
+    Col.make "ledger_account" Type.text (fun (r : t) -> r.ledger_account)
+  ;;
+
+  let reason = Col.make "reason" Type.text (fun (r : t) -> r.reason)
+
+  let row =
+    Row.(
+      unit (fun event_id card_institution card_source_account ledger_account reason ->
+        { event_id; card_institution; card_source_account; ledger_account; reason })
+      * event_id
+      * card_institution
+      * card_source_account
+      * ledger_account
+      * reason)
+  ;;
+
+  let table =
+    Table.make
+      ~primary_key:(Table.Primary_key.make [ Col.Def event_id ])
+      ~foreign_keys:
+        [ Table.Foreign_key.make
+            ~cols:[ Col.Def event_id ]
+            ~parent:
+              (Table.Foreign_key.Table (Source_events.table, [ Col.Def Source_events.id ]))
+            ()
+        ]
+      "card_settlement_decisions"
+      row
+  ;;
+
+  let definition = Sqlite_schema.table table
+end
+
+module Card_settlement_changes = struct
+  type t =
+    { id : int64
+    ; event_id : int64
+    ; card_institution : string
+    ; card_source_account : string
+    ; ledger_account : string
+    ; action : string
+    ; changed_at : Ptime.t
+    }
+
+  let id = Col.make "id" Type.int64 (fun (r : t) -> r.id)
+  let event_id = Col.make "event_id" Type.int64 (fun (r : t) -> r.event_id)
+
+  let card_institution =
+    Col.make "card_institution" Type.text (fun (r : t) -> r.card_institution)
+  ;;
+
+  let card_source_account =
+    Col.make "card_source_account" Type.text (fun (r : t) -> r.card_source_account)
+  ;;
+
+  let ledger_account =
+    Col.make "ledger_account" Type.text (fun (r : t) -> r.ledger_account)
+  ;;
+
+  let action = Col.make "action" Type.text (fun (r : t) -> r.action)
+
+  let changed_at =
+    Col.make ~default:timestamp "changed_at" instant (fun (r : t) -> r.changed_at)
+  ;;
+
+  let row =
+    Row.(
+      unit
+        (fun
+            id
+             event_id
+             card_institution
+             card_source_account
+             ledger_account
+             action
+             changed_at
+           ->
+           { id
+           ; event_id
+           ; card_institution
+           ; card_source_account
+           ; ledger_account
+           ; action
+           ; changed_at
+           })
+      * id
+      * event_id
+      * card_institution
+      * card_source_account
+      * ledger_account
+      * action
+      * changed_at)
+  ;;
+
+  let table =
+    Table.make
+      ~primary_key:(Table.Primary_key.make [ Col.Def id ])
+      "card_settlement_changes"
+      row
+  ;;
+
+  let definition =
+    Sqlite_schema.table
+      ~checks:Sqlite_schema.Check.[ one_of action [ "confirmed"; "undone" ] ]
+      ~immutable:"card settlement history is append-only"
+      table
+  ;;
+end
+
+module Classification_rules = struct
+  type t =
+    { name : string
+    ; pattern : string
+    ; institution : string option
+    ; case_mode : string
+    ; action_kind : string
+    ; target : string
+    }
+
+  let name = Col.make "name" Type.text (fun (r : t) -> r.name)
+  let pattern = Col.make "pattern" Type.text (fun (r : t) -> r.pattern)
+
+  let institution =
+    Col.make "institution" Type.(option text) (fun (r : t) -> r.institution)
+  ;;
+
+  let case_mode = Col.make "case_mode" Type.text (fun (r : t) -> r.case_mode)
+  let action_kind = Col.make "action_kind" Type.text (fun (r : t) -> r.action_kind)
+  let target = Col.make "target" Type.text (fun (r : t) -> r.target)
+
+  let row =
+    Row.(
+      unit (fun name pattern institution case_mode action_kind target ->
+        { name; pattern; institution; case_mode; action_kind; target })
+      * name
+      * pattern
+      * institution
+      * case_mode
+      * action_kind
+      * target)
+  ;;
+
+  let table =
+    Table.make
+      ~primary_key:(Table.Primary_key.make [ Col.Def name ])
+      "classification_rules"
+      row
+  ;;
+
+  let definition =
+    Sqlite_schema.table
+      ~checks:
+        Sqlite_schema.Check.
+          [ one_of case_mode [ "sensitive"; "insensitive" ]
+          ; one_of action_kind [ "category"; "settlement" ]
+          ]
+      table
+  ;;
+end
+
+module Institutions = struct
+  type t =
+    { name : string
+    ; profile : string option
+    }
+
+  let name = Col.make "name" Type.text (fun (r : t) -> r.name)
+  let profile = Col.make "profile" Type.(option text) (fun (r : t) -> r.profile)
+  let row = Row.(unit (fun name profile -> { name; profile }) * name * profile)
+
+  let table =
+    Table.make ~primary_key:(Table.Primary_key.make [ Col.Def name ]) "institutions" row
+  ;;
+
+  let definition = Sqlite_schema.table table
+end
+
+module Reversal_pairs = struct
+  type t =
+    { original : int64
+    ; reversal : int64
+    ; reason : string
+    }
+
+  let original = Col.make "original" Type.int64 (fun (r : t) -> r.original)
+  let reversal = Col.make "reversal" Type.int64 (fun (r : t) -> r.reversal)
+  let reason = Col.make "reason" Type.text (fun (r : t) -> r.reason)
+
+  let row =
+    Row.(
+      unit (fun original reversal reason -> { original; reversal; reason })
+      * original
+      * reversal
+      * reason)
+  ;;
+
+  let table =
+    Table.make
+      ~primary_key:(Table.Primary_key.make [ Col.Def original ])
+      ~indices:
+        [ Table.Index.make
+            ~unique:true
+            ~name:"reversal_pairs_reversal"
+            [ Col.Def reversal ]
+        ]
+      ~foreign_keys:
+        [ Table.Foreign_key.make
+            ~cols:[ Col.Def original ]
+            ~parent:
+              (Table.Foreign_key.Table (Source_events.table, [ Col.Def Source_events.id ]))
+            ()
+        ; Table.Foreign_key.make
+            ~cols:[ Col.Def reversal ]
+            ~parent:
+              (Table.Foreign_key.Table (Source_events.table, [ Col.Def Source_events.id ]))
+            ()
+        ]
+      "reversal_pairs"
+      row
+  ;;
+
+  let definition = Sqlite_schema.table table
+end
+
+module Reversal_changes = struct
+  type t =
+    { id : int64
+    ; original : int64
+    ; reversal : int64
+    ; action : string
+    ; changed_at : Ptime.t
+    }
+
+  let id = Col.make "id" Type.int64 (fun (r : t) -> r.id)
+  let original = Col.make "original" Type.int64 (fun (r : t) -> r.original)
+  let reversal = Col.make "reversal" Type.int64 (fun (r : t) -> r.reversal)
+  let action = Col.make "action" Type.text (fun (r : t) -> r.action)
+
+  let changed_at =
+    Col.make ~default:timestamp "changed_at" instant (fun (r : t) -> r.changed_at)
+  ;;
+
+  let row =
+    Row.(
+      unit (fun id original reversal action changed_at ->
+        { id; original; reversal; action; changed_at })
+      * id
+      * original
+      * reversal
+      * action
+      * changed_at)
+  ;;
+
+  let table =
+    Table.make ~primary_key:(Table.Primary_key.make [ Col.Def id ]) "reversal_changes" row
+  ;;
+
+  let definition =
+    Sqlite_schema.table
+      ~checks:Sqlite_schema.Check.[ one_of action [ "confirmed"; "undone" ] ]
+      ~immutable:"reversal history is append-only"
+      table
+  ;;
+end
+
 let definitions =
   [ Source_events.definition
   ; Movements.definition
@@ -1649,6 +1934,12 @@ let definitions =
   ; Bank_account_identity_changes.definition
   ; Bank_account_settlements.definition
   ; Bank_account_settlement_changes.definition
+  ; Institutions.definition
+  ; Card_settlement_decisions.definition
+  ; Card_settlement_changes.definition
+  ; Classification_rules.definition
+  ; Reversal_pairs.definition
+  ; Reversal_changes.definition
   ]
 ;;
 

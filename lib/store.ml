@@ -26,6 +26,83 @@ let transaction db f =
 let statement sql result = Rel_sql.Stmt.v sql ~rev_args:[] ~result
 let integer = Row.(t1 (int "value"))
 
+let institutions db =
+  db_result
+    (Db.fold
+       db.conn
+       (statement "SELECT name FROM institutions ORDER BY name" Row.(t1 (text "name")))
+       (fun name names -> name :: names)
+       [])
+  |> Result.map ~f:List.rev
+;;
+
+let institution_profile db name =
+  let open Rel_sql.Stmt in
+  let query =
+    func
+      "SELECT profile FROM institutions WHERE name=?"
+      (text @-> ret Row.(t1 (option Rel.Type.text "profile")))
+  in
+  db_result (Db.first db.conn (query name)) |> Result.map ~f:Option.join
+;;
+
+let add_institution ?profile db name =
+  let* name = Validation.token "institution name" name in
+  if
+    List.exists (Registry.institutions db.registry) ~f:(fun institution ->
+      List.mem (Registry.aliases db.registry institution) name ~equal:String.equal)
+  then Or_error.error_string "institution name is reserved for a built-in importer"
+  else (
+    let insert = Rel_sql.insert_into_cols Db.dialect Db_schema.Institutions.table in
+    let value = name in
+    db_result
+      (Db.exec
+         db.conn
+         (insert
+            Col.
+              [ Value (Db_schema.Institutions.name, value)
+              ; Value (Db_schema.Institutions.profile, profile)
+              ])))
+;;
+
+let set_institution_profile_if_missing db name profile =
+  let open Rel_sql.Stmt in
+  let update =
+    func
+      "UPDATE institutions SET profile=? WHERE name=? AND profile IS NULL"
+      (text @-> text @-> unit)
+  in
+  db_result (Db.exec db.conn (update profile name))
+;;
+
+let delete_institution ?(dry_run = false) db name =
+  let open Rel_sql.Stmt in
+  transaction db (fun db ->
+    let* name = Validation.token "institution name" name in
+    if
+      List.exists (Registry.institutions db.registry) ~f:(fun institution ->
+        List.mem (Registry.aliases db.registry institution) name ~equal:String.equal)
+    then Or_error.error_string "built-in institutions cannot be deleted"
+    else
+      let* names = institutions db in
+      if not (List.mem names name ~equal:String.equal)
+      then Or_error.errorf "unknown institution: %s" name
+      else (
+        let count =
+          func "SELECT count(*) FROM source_events WHERE venue=?" (text @-> ret integer)
+        in
+        let* count = db_result (Db.first db.conn (count name)) in
+        if Option.value count ~default:0 > 0
+        then
+          Or_error.error_string
+            "institution has imported transactions; delete its accounts first"
+        else if dry_run
+        then Ok ()
+        else (
+          let delete = func "DELETE FROM institutions WHERE name=?" (text @-> unit) in
+          db_result (Db.exec db.conn (delete name)))))
+;;
+
 let initialize db =
   transaction db (fun db ->
     let* version =
@@ -415,6 +492,116 @@ let document_contexts db ~institution =
 ;;
 
 let traverse f xs = Or_error.combine_errors (List.map xs ~f)
+
+let classification_rules db =
+  let open Db_schema.Classification_rules in
+  let row =
+    Row.(
+      unit (fun name pattern institution case_mode action_kind target ->
+        name, pattern, institution, case_mode, action_kind, target)
+      * read_column name
+      * read_column pattern
+      * read_column institution
+      * read_column case_mode
+      * read_column action_kind
+      * read_column target)
+  in
+  let* rows =
+    collect
+      db
+      (statement
+         "SELECT name,pattern,institution,case_mode,action_kind,target FROM \
+          classification_rules ORDER BY name"
+         row)
+  in
+  traverse
+    (fun (name, pattern, institution, case_mode, action_kind, target) ->
+       let* case_sensitive =
+         match case_mode with
+         | "sensitive" -> Ok true
+         | "insensitive" -> Ok false
+         | _ -> Or_error.error_string "unknown rule case mode"
+       in
+       let* action = Classification_rule.action_of_fields action_kind target in
+       Classification_rule.create ~name ~pattern ~institution ~case_sensitive ~action)
+    rows
+;;
+
+let add_classification_rule db (rule : Classification_rule.t) =
+  let* rule =
+    Classification_rule.create
+      ~name:rule.name
+      ~pattern:rule.pattern
+      ~institution:rule.institution
+      ~case_sensitive:rule.case_sensitive
+      ~action:rule.action
+  in
+  let open Db_schema.Classification_rules in
+  let insert = Rel_sql.insert_into_cols Db.dialect table in
+  db_result
+    (Db.exec
+       db.conn
+       (insert
+          Col.
+            [ Value (Db_schema.Classification_rules.name, rule.name)
+            ; Value (pattern, rule.pattern)
+            ; Value (institution, rule.institution)
+            ; Value (case_mode, if rule.case_sensitive then "sensitive" else "insensitive")
+            ; Value (action_kind, Classification_rule.action_name rule.action)
+            ; Value (target, Classification_rule.action_target rule.action)
+            ]))
+;;
+
+let delete_classification_rule db rule_name =
+  transaction db (fun db ->
+    let* rules = classification_rules db in
+    if
+      not
+        (List.exists rules ~f:(fun rule ->
+           String.equal rule.Classification_rule.name rule_name))
+    then Or_error.errorf "unknown rule: %s" rule_name
+    else
+      let open Db_schema.Classification_rules in
+      let query =
+        Rel_sql.delete_from
+          Db.dialect
+          table
+          ~where:Col.[ Value (Db_schema.Classification_rules.name, rule_name) ]
+      in
+      db_result (Db.exec db.conn query))
+;;
+
+let rename_classification_rule db ~old_name ~new_name =
+  transaction db (fun db ->
+    let* rules = classification_rules db in
+    match
+      List.find rules ~f:(fun rule -> String.equal rule.Classification_rule.name old_name)
+    with
+    | None -> Or_error.errorf "unknown rule: %s" old_name
+    | Some rule ->
+      if
+        List.exists rules ~f:(fun rule ->
+          String.equal rule.Classification_rule.name new_name)
+      then Or_error.errorf "rule already exists: %s" new_name
+      else
+        let* renamed =
+          Classification_rule.create
+            ~name:new_name
+            ~pattern:rule.pattern
+            ~institution:rule.institution
+            ~case_sensitive:rule.case_sensitive
+            ~action:rule.action
+        in
+        let* () = add_classification_rule db renamed in
+        let open Db_schema.Classification_rules in
+        let query =
+          Rel_sql.delete_from
+            Db.dialect
+            table
+            ~where:Col.[ Value (Db_schema.Classification_rules.name, old_name) ]
+        in
+        db_result (Db.exec db.conn query))
+;;
 
 let find_document =
   let open Db_schema.Import_documents in
@@ -1088,6 +1275,82 @@ let events db =
     rows
 ;;
 
+type movement_type_change =
+  { event_id : int64
+  ; institution : string
+  ; description : string
+  ; before : Movement_type.t option
+  ; after : Movement_type.t option
+  }
+
+let preview_movement_types ?institution db =
+  let* source = events db in
+  let* table = movement_table db in
+  source
+  |> List.filter ~f:(fun (_, e) ->
+    Registry.is_movement db.registry e
+    && Option.value_map institution ~default:true ~f:(String.equal e.Source_event.venue))
+  |> traverse (fun (event_id, event) ->
+    let* old =
+      Hashtbl.find table event_id
+      |> Or_error.of_option ~error:(Error.of_string "missing stored movement")
+    in
+    let* updated = Registry.movement db.registry event in
+    if Option.equal Poly.equal old.movement_type updated.movement_type
+    then Ok None
+    else
+      Ok
+        (Some
+           { event_id
+           ; institution = event.venue
+           ; description = String.concat ~sep:" | " updated.descriptions
+           ; before = old.movement_type
+           ; after = updated.movement_type
+           }))
+  |> Result.map ~f:List.filter_opt
+;;
+
+let refresh_movement_types ?institution db ~expected =
+  transaction db (fun db ->
+    let* current = preview_movement_types ?institution db in
+    if not (Poly.equal current expected)
+    then Or_error.error_string "movement types changed since preview; review again"
+    else
+      let* trigger =
+        db_result
+          (Db.first
+             db.conn
+             (statement
+                "SELECT sql FROM sqlite_schema WHERE type='trigger' AND \
+                 name='movements_no_update'"
+                Row.(t1 (text "sql"))))
+      in
+      let* trigger =
+        Or_error.of_option
+          trigger
+          ~error:(Error.of_string "missing movement immutability trigger")
+      in
+      let exec sql = db_result (Db.exec_sql db.conn sql) in
+      let* () = exec "DROP TRIGGER movements_no_update" in
+      let update =
+        Rel_sql.Stmt.(
+          func
+            "UPDATE movements SET movement_type=? WHERE event_id=?"
+            (option text @-> int64 @-> unit))
+      in
+      let* () =
+        List.fold_result current ~init:() ~f:(fun () change ->
+          db_result
+            (Db.exec
+               db.conn
+               (update
+                  (Option.map change.after ~f:Movement_type.to_string)
+                  change.event_id)))
+      in
+      let* () = exec trigger in
+      Ok (List.length current))
+;;
+
 let posting_row =
   Row.(
     t3
@@ -1250,11 +1513,52 @@ let category_account db event_id =
   Ok (Option.map category ~f:fst)
 ;;
 
+let find_card_settlement =
+  Rel_sql.Stmt.(
+    func
+      "SELECT ledger_account,reason FROM card_settlement_decisions WHERE event_id=?"
+      (int64
+       @-> ret
+             Row.(
+               t2
+                 (read_column Db_schema.Card_settlement_decisions.ledger_account)
+                 (read_column Db_schema.Card_settlement_decisions.reason))))
+;;
+
+let card_settlement db event_id =
+  db_result (Db.first db.conn (find_card_settlement event_id))
+;;
+
+let reversal_account original reversal =
+  Printf.sprintf "assets:reversals:pair-%Ld-%Ld" original reversal
+;;
+
+let linked_reversal db event_id =
+  let query =
+    Rel_sql.Stmt.(
+      func
+        "SELECT original,reversal,reason FROM reversal_pairs WHERE original=? OR \
+         reversal=?"
+        (int64
+         @-> int64
+         @-> ret Row.(t3 (int64 "original") (int64 "reversal") (text "reason"))))
+  in
+  db_result (Db.first db.conn (query event_id event_id))
+;;
+
 let counter_account db event_id =
-  let* transfer = linked_transfer db event_id in
-  match transfer with
-  | Some (first, second, _) -> Ok (Some (Bank_transfer.account first second))
-  | None -> category_account db event_id
+  let* reversal = linked_reversal db event_id in
+  match reversal with
+  | Some (original, reversal, _) -> Ok (Some (reversal_account original reversal))
+  | None ->
+    let* transfer = linked_transfer db event_id in
+    (match transfer with
+     | Some (first, second, _) -> Ok (Some (Bank_transfer.account first second))
+     | None ->
+       let* settlement = card_settlement db event_id in
+       (match settlement with
+        | Some (account, _) -> Ok (Some account)
+        | None -> category_account db event_id))
 ;;
 
 let mapped_bank_entry db event_id (event : Source_event.t) =
@@ -1422,6 +1726,21 @@ let set_bank_account_mappings_in_transaction db mappings =
         if Option.equal String.equal previous (Some mapping.ledger_account)
         then apply changed rest
         else
+          let open Rel_sql.Stmt in
+          let count =
+            func
+              "SELECT count(*) FROM card_settlement_decisions WHERE card_institution=? \
+               AND card_source_account=?"
+              (text @-> text @-> ret integer)
+          in
+          let* settlement_count =
+            db_result (Db.first db.conn (count mapping.institution source_account))
+          in
+          let* () =
+            if Option.value settlement_count ~default:0 > 0
+            then Or_error.error_string "cannot rename a card with confirmed settlements"
+            else Ok ()
+          in
           let* previous_name =
             match previous with
             | Some name -> Ok name
@@ -1850,7 +2169,7 @@ let statement_reconciliations ?institution db =
     statements
 ;;
 
-let set_bank_categories ?(only_unclassified = false) db decisions =
+let set_bank_categories_in_transaction ?(only_unclassified = false) db decisions =
   let* decisions =
     traverse
       (fun (d : Bank_category.t) ->
@@ -1862,8 +2181,8 @@ let set_bank_categories ?(only_unclassified = false) db decisions =
       (List.map decisions ~f:(fun d -> d.Bank_category.event_id))
       ~compare:Int64.compare
   then Or_error.error_string "duplicate event_id in category batch"
-  else
-    transaction db (fun db ->
+  else (
+    let apply_batch db =
       let* source = events db in
       let rec apply changed = function
         | [] -> Ok changed
@@ -1874,7 +2193,15 @@ let set_bank_categories ?(only_unclassified = false) db decisions =
               ~error:(Error.of_string "unknown category event_id")
           in
           let* transfer = linked_transfer db d.event_id in
-          if Option.is_some transfer
+          let* settlement = card_settlement db d.event_id in
+          let* reversal = linked_reversal db d.event_id in
+          if Option.is_some reversal
+          then
+            Or_error.error_string
+              "undo the confirmed reversal before changing its category"
+          else if Option.is_some settlement
+          then Or_error.error_string "transaction is a confirmed card settlement"
+          else if Option.is_some transfer
           then
             Or_error.error_string
               "reject the confirmed transfer before changing its category"
@@ -1943,7 +2270,14 @@ let set_bank_categories ?(only_unclassified = false) db decisions =
               in
               apply (changed + 1) rest
       in
-      apply 0 decisions)
+      apply 0 decisions
+    in
+    apply_batch db)
+;;
+
+let set_bank_categories ?(only_unclassified = false) db decisions =
+  transaction db (fun db ->
+    set_bank_categories_in_transaction ~only_unclassified db decisions)
 ;;
 
 type category_change =
@@ -1975,6 +2309,13 @@ let bank_category_history db =
        row)
 ;;
 
+type review_classification =
+  | Unclassified
+  | Category
+  | Transfer
+  | Settlement
+  | Reversal
+
 type bank_review =
   { event_id : int64
   ; institution : string
@@ -1983,6 +2324,7 @@ type bank_review =
   ; display_name : string option
   ; movement_type : Movement_type.t option
   ; detail_sources : int64 list
+  ; classification : review_classification
   ; counter_account : string
   ; reason : string option
   }
@@ -2015,6 +2357,28 @@ let review_metadata db =
              (read_column Db_schema.Bank_transfer_memberships.second_event_id)
              (read_column Db_schema.Bank_transfer_decisions.reason)))
   in
+  let* settlements =
+    collect
+      db
+      (statement
+         "SELECT event_id,ledger_account,reason FROM card_settlement_decisions"
+         Row.(
+           t3
+             (read_column Db_schema.Card_settlement_decisions.event_id)
+             (read_column Db_schema.Card_settlement_decisions.ledger_account)
+             (read_column Db_schema.Card_settlement_decisions.reason)))
+  in
+  let* reversals =
+    collect
+      db
+      (statement
+         "SELECT original,reversal,reason FROM reversal_pairs"
+         Db_schema.Reversal_pairs.row)
+  in
+  let reversal_map = Hashtbl.create (module Int64) in
+  List.iter reversals ~f:(fun (r : Db_schema.Reversal_pairs.t) ->
+    Hashtbl.set reversal_map ~key:r.original ~data:(r.original, r.reversal, r.reason);
+    Hashtbl.set reversal_map ~key:r.reversal ~data:(r.original, r.reversal, r.reason));
   Ok
     ( Hashtbl.of_alist_exn
         (module Int64)
@@ -2022,15 +2386,21 @@ let review_metadata db =
     , Hashtbl.of_alist_exn
         (module Int64)
         (List.map transfers ~f:(fun (id, first, second, reason) ->
-           id, (first, second, reason))) )
+           id, (first, second, reason)))
+    , Hashtbl.of_alist_exn
+        (module Int64)
+        (List.map settlements ~f:(fun (id, account, reason) -> id, (account, reason)))
+    , reversal_map )
 ;;
 
-let bank_review_from source table (categories, transfers) details =
+let bank_review_from source table (categories, transfers, settlements, reversals) details =
   traverse
     (fun (event_id, (event : Source_event.t)) ->
        let* transaction = stored table event_id in
        let category = Hashtbl.find categories event_id in
        let transfer = Hashtbl.find transfers event_id in
+       let settlement = Hashtbl.find settlements event_id in
+       let reversal = Hashtbl.find reversals event_id in
        let observations = Option.value (Hashtbl.find details event_id) ~default:[] in
        let consensus ~compare f =
          match
@@ -2056,14 +2426,29 @@ let bank_review_from source table (categories, transfers) details =
                   a.movement_type))
          ; detail_sources =
              List.map observations ~f:fst |> List.sort ~compare:Int64.compare
+         ; classification =
+             (match reversal, transfer, settlement, category with
+              | Some _, _, _, _ -> Reversal
+              | None, Some _, _, _ -> Transfer
+              | None, None, Some _, _ -> Settlement
+              | None, None, None, Some (account, _)
+                when not (String.equal account "equity:unclassified") -> Category
+              | _ -> Unclassified)
          ; counter_account =
-             (match transfer with
-              | Some (first, second, _) -> Bank_transfer.account first second
-              | None -> Option.value_map category ~default:"equity:unclassified" ~f:fst)
+             (match reversal, transfer with
+              | Some (original, reversed, _), _ -> reversal_account original reversed
+              | None, Some (first, second, _) -> Bank_transfer.account first second
+              | None, None ->
+                (match settlement with
+                 | Some (account, _) -> account
+                 | None -> Option.value_map category ~default:"equity:unclassified" ~f:fst))
          ; reason =
-             (match transfer with
-              | Some (_, _, reason) -> Some reason
-              | None -> Option.map category ~f:snd)
+             (match reversal, transfer with
+              | Some (_, _, reason), _ | None, Some (_, _, reason) -> Some reason
+              | None, None ->
+                (match settlement with
+                 | Some (_, reason) -> Some reason
+                 | None -> Option.map category ~f:snd))
          })
     source
 ;;
@@ -2264,7 +2649,168 @@ let verify_bank_entry db event_id event =
       Or_error.error_string "transfer decision conflicts with an existing bank projection"
 ;;
 
-let set_bank_transfers db decisions =
+type reversal_candidate =
+  { original : bank_review
+  ; reversal : bank_review
+  }
+
+let reversal_candidates db =
+  let* rows = bank_review db in
+  let eligible r = Poly.equal r.classification Unclassified && Option.is_none r.reason in
+  let originals =
+    List.filter rows ~f:(fun r ->
+      eligible r && Poly.equal r.movement_type (Some Movement_type.Withdrawal))
+  in
+  let reversals =
+    List.filter rows ~f:(fun r ->
+      eligible r
+      && Poly.equal r.movement_type (Some Movement_type.Withdrawal)
+      && Quantity.(r.transaction.amount > zero)
+      && Option.value_map
+           (Registry.find db.registry r.institution)
+           ~default:false
+           ~f:(fun (module A : Adapter.S) -> A.withdrawal_reversal_hint r.transaction))
+  in
+  Ok
+    (List.concat_map reversals ~f:(fun reversal ->
+       List.filter_map originals ~f:(fun original ->
+         let a = original.transaction
+         and b = reversal.transaction in
+         Option.some_if
+           (String.equal original.institution reversal.institution
+            && Poly.equal a.account b.account
+            && Quantity.(a.amount < zero && b.amount > zero && a.amount + b.amount = zero)
+            && Quantity.is_zero a.fee
+            && Quantity.is_zero b.fee
+            && Date.compare a.booked_on b.booked_on <= 0)
+           { original; reversal })))
+;;
+
+let reversal_change db ~original ~reversal ~undo =
+  let original_id = original
+  and reversal_id = reversal in
+  transaction db (fun db ->
+    let* source = events db in
+    let get id =
+      List.Assoc.find source id ~equal:Int64.equal
+      |> Or_error.of_option ~error:(Error.of_string "unknown event ID")
+    in
+    let* a = get original in
+    let* b = get reversal in
+    let* entries =
+      traverse
+        (fun (id, e) ->
+           let* entry = verify_bank_entry db id e in
+           Ok (id, entry))
+        [ original, a; reversal, b ]
+    in
+    let* () =
+      if undo
+      then
+        let* existing = linked_reversal db original in
+        if
+          not
+            (Option.exists existing ~f:(fun (x, y, _) ->
+               Int64.equal x original && Int64.equal y reversal))
+        then Or_error.error_string "no confirmed reversal for those event IDs"
+        else (
+          let delete =
+            Rel_sql.Stmt.(
+              func
+                "DELETE FROM reversal_pairs WHERE original=? AND reversal=?"
+                (int64 @-> int64 @-> unit))
+          in
+          db_result (Db.exec db.conn (delete original reversal)))
+      else
+        let* candidates = reversal_candidates db in
+        if
+          not
+            (List.exists candidates ~f:(fun c ->
+               Int64.equal c.original.event_id original
+               && Int64.equal c.reversal.event_id reversal))
+        then Or_error.error_string "pair is not an eligible unreviewed reversal candidate"
+        else
+          let open Db_schema.Reversal_pairs in
+          let insert = Rel_sql.insert_into_cols Db.dialect table in
+          db_result
+            (Db.exec
+               db.conn
+               (insert
+                  Col.
+                    [ Value (Db_schema.Reversal_pairs.original, original_id)
+                    ; Value (Db_schema.Reversal_pairs.reversal, reversal_id)
+                    ; Value (reason, "Confirmed withdrawal reversal")
+                    ]))
+    in
+    let* _ =
+      traverse
+        (fun (id, entry) ->
+           match entry with
+           | None -> Ok ()
+           | Some entry_id ->
+             let* account = counter_account db id in
+             db_result
+               (Db.exec
+                  db.conn
+                  (update_posting
+                     (Option.value account ~default:"equity:unclassified")
+                     entry_id
+                     1)))
+        entries
+    in
+    let open Db_schema.Reversal_changes in
+    let insert = Rel_sql.insert_into_cols Db.dialect table in
+    db_result
+      (Db.exec
+         db.conn
+         (insert
+            Col.
+              [ Value (Db_schema.Reversal_changes.original, original_id)
+              ; Value (Db_schema.Reversal_changes.reversal, reversal_id)
+              ; Value (action, if undo then "undone" else "confirmed")
+              ])))
+;;
+
+type reversal_action =
+  | Reversal_confirmed
+  | Reversal_undone
+
+type reversal_history_entry =
+  { id : int64
+  ; original : int64
+  ; reversal : int64
+  ; action : reversal_action
+  ; changed_at : Ptime.t
+  }
+
+let reversal_history db =
+  let* rows =
+    collect
+      db
+      (statement
+         "SELECT id,original,reversal,action,changed_at FROM reversal_changes ORDER BY id"
+         Db_schema.Reversal_changes.row)
+  in
+  traverse
+    (fun (row : Db_schema.Reversal_changes.t) ->
+       let* action =
+         match row.action with
+         | "confirmed" -> Ok Reversal_confirmed
+         | "undone" -> Ok Reversal_undone
+         | _ -> Or_error.error_string "unknown reversal history action"
+       in
+       Ok
+         ({ id = row.id
+          ; original = row.original
+          ; reversal = row.reversal
+          ; action
+          ; changed_at = row.changed_at
+          }
+          : reversal_history_entry))
+    rows
+;;
+
+let set_bank_transfers ?(require_unreviewed = false) ?expected_previous db decisions =
   let* decisions =
     traverse
       (fun (d : Bank_transfer.decision) ->
@@ -2343,6 +2889,28 @@ let set_bank_transfers db decisions =
           let* previous =
             db_result (Db.first db.conn (find_transfer_decision first second))
           in
+          let* () =
+            match expected_previous with
+            | None -> Ok ()
+            | Some (expected : Bank_transfer.decision) ->
+              if
+                Int64.equal first expected.first_event_id
+                && Int64.equal second expected.second_event_id
+                && Option.exists previous ~f:(fun (_, _, state, reason) ->
+                  String.equal state (Bank_transfer.state_name expected.state)
+                  && String.equal reason expected.reason)
+              then Ok ()
+              else
+                Or_error.error_string
+                  "transfer decision changed since preview; review it again"
+          in
+          let* () =
+            if require_unreviewed && Option.is_some previous
+            then
+              Or_error.error_string
+                "transfer decision changed since review; review the batch again"
+            else Ok ()
+          in
           let state = Bank_transfer.state_name d.state in
           if
             Option.exists previous ~f:(fun (_, _, old, reason) ->
@@ -2375,6 +2943,8 @@ let set_bank_transfers db decisions =
                 (fun id ->
                    let* existing = linked_transfer db id in
                    let* category = category_account db id in
+                   let* settlement = card_settlement db id in
+                   let* reversal = linked_reversal db id in
                    if
                      confirming
                      && Option.exists existing ~f:(fun (x, y, _) ->
@@ -2382,6 +2952,14 @@ let set_bank_transfers db decisions =
                    then
                      Or_error.error_string
                        "a movement already belongs to another confirmed transfer"
+                   else if confirming && Option.is_some settlement
+                   then
+                     Or_error.error_string
+                       "a movement is already a confirmed card settlement"
+                   else if confirming && Option.is_some reversal
+                   then
+                     Or_error.error_string
+                       "a movement is already part of a confirmed reversal"
                    else if
                      confirming
                      && Option.exists category ~f:(fun name ->
@@ -2522,8 +3100,12 @@ let transfer_pairs =
      a.currency AND b.principal_magnitude = a.principal_magnitude AND b.principal_sign \
      <> a.principal_sign JOIN ordered oa ON oa.id = a.event_id JOIN ordered ob ON ob.id \
      = b.event_id WHERE oa.position < ob.position AND a.principal_magnitude <> '0' AND \
-     NOT (a.venue = b.venue AND a.account = b.account) AND abs(julianday(a.booked_on) - \
-     julianday(b.booked_on)) <= 7 ORDER BY oa.position DESC, ob.position"
+     NOT EXISTS (SELECT 1 FROM card_settlement_decisions s WHERE s.event_id IN \
+     (a.event_id,b.event_id)) AND NOT (a.venue = b.venue AND a.account = b.account) AND \
+     NOT EXISTS (SELECT 1 FROM reversal_pairs r WHERE r.original IN \
+     (a.event_id,b.event_id) OR r.reversal IN (a.event_id,b.event_id)) AND \
+     abs(julianday(a.booked_on) - julianday(b.booked_on)) <= 7 ORDER BY oa.position \
+     DESC, ob.position"
     Row.(
       t2
         (Col.make "first" Type.int64 Col.no_proj)
@@ -2618,7 +3200,7 @@ let transfer_candidates_from ?pairs ?(include_reviewed = false) db source table 
 let transfer_candidates ?include_reviewed db =
   let* source = movement_source db in
   let* table = movement_table db in
-  let* _, transfers = review_metadata db in
+  let* _, transfers, _, _ = review_metadata db in
   transfer_candidates_from ?include_reviewed db source table transfers
 ;;
 
@@ -2691,13 +3273,15 @@ let status_summaries db source =
       (statement
          "SELECT \
           min(m.event_id),m.venue,m.account,count(*),min(m.booked_on),max(m.booked_on),sum(CASE \
-          WHEN t.event_id IS NULL AND \
+          WHEN t.event_id IS NULL AND s.event_id IS NULL AND r.original IS NULL AND \
           coalesce(c.account,'equity:unclassified')='equity:unclassified' THEN 1 ELSE 0 \
           END) FROM movements m JOIN source_events e ON e.id=m.event_id LEFT JOIN \
           bank_categories c ON c.event_id=m.event_id LEFT JOIN (SELECT t.event_id FROM \
           bank_transfer_memberships t JOIN bank_transfer_decisions d ON \
           d.first_event_id=t.first_event_id AND d.second_event_id=t.second_event_id \
-          WHERE d.state='confirmed') t ON t.event_id=m.event_id GROUP BY \
+          WHERE d.state='confirmed') t ON t.event_id=m.event_id LEFT JOIN \
+          card_settlement_decisions s ON s.event_id=m.event_id LEFT JOIN reversal_pairs \
+          r ON r.original=m.event_id OR r.reversal=m.event_id GROUP BY \
           m.venue,m.account,e.kind"
          Row.(
            unit (fun id venue account count first last unclassified ->
@@ -2763,6 +3347,444 @@ let bank_account_info db =
   bank_account_info_from ~summaries db source table
 ;;
 
+let card_settlement_preview ?card_id db event_id =
+  let* reviews = bank_review db in
+  let* row =
+    List.find reviews ~f:(fun r -> Int64.equal r.event_id event_id)
+    |> Or_error.of_option ~error:(Error.of_string "unknown transaction event ID")
+  in
+  let* () =
+    if
+      (not (String.equal row.counter_account "equity:unclassified"))
+      || Option.is_some row.reason
+    then Or_error.error_string "transaction is already reviewed"
+    else if
+      Quantity.(row.transaction.amount >= zero)
+      || not (Quantity.is_zero row.transaction.fee)
+    then Or_error.error_string "settlement requires a fee-free outgoing bank movement"
+    else Ok ()
+  in
+  let* accounts = bank_account_info db in
+  let account = row.transaction.account in
+  let* reference =
+    Bank_account_config.reference
+      ~institution:row.institution
+      ~bank_id:account.bank_id
+      ~account_id:account.account_id
+      ~account_type:account.account_type
+  in
+  let candidates =
+    List.filter accounts ~f:(fun card ->
+      List.mem
+        [ "CREDITCRD"; "credit-card" ]
+        card.mapping.account_type
+        ~equal:String.equal
+      && Option.value_map card.settlement_account ~default:false ~f:(fun r ->
+        String.equal r.institution reference.institution
+        && String.equal
+             (Bank_account_config.source_account r)
+             (Bank_account_config.source_account reference))
+      && Iso4217.equal card.currency account.currency
+      && Option.value_map card_id ~default:true ~f:(fun id ->
+        String.equal id (Bank_account_mapping.id card.mapping)))
+  in
+  let* card =
+    match candidates with
+    | [ card ] -> Ok card
+    | [] ->
+      Or_error.error_string
+        "no linked card matches this transaction; configure the card settlement account \
+         with fin account edit"
+    | _ -> Or_error.error_string "multiple linked cards; select one with --card ID"
+  in
+  if not (String.is_prefix card.mapping.ledger_account ~prefix:"liabilities:")
+  then
+    Or_error.error_string
+      "map the card to a liabilities account with fin account edit first"
+  else
+    let* source_account =
+      List.find accounts ~f:(fun a ->
+        String.equal a.mapping.institution reference.institution
+        && String.equal
+             (Bank_account_mapping.source_account a.mapping)
+             (Bank_account_config.source_account reference))
+      |> Or_error.of_option ~error:(Error.of_string "missing settlement bank account")
+    in
+    if String.equal source_account.mapping.ledger_account card.mapping.ledger_account
+    then Or_error.error_string "the bank and card must use different ledger accounts"
+    else Ok (row, card)
+;;
+
+let confirm_card_settlement_in_transaction
+      ?card_id
+      ?expected_ledger
+      ?(reason = "Confirmed card settlement")
+      ?validated_card
+      ?source_event
+      db
+      event_id
+  =
+  let* card =
+    match validated_card with
+    | Some card -> Ok card
+    | None ->
+      let* _, card = card_settlement_preview ?card_id db event_id in
+      Ok card
+  in
+  let* () =
+    if
+      Option.value_map
+        expected_ledger
+        ~default:true
+        ~f:(String.equal card.mapping.ledger_account)
+    then Ok ()
+    else Or_error.error_string "card account changed since the preview; review it again"
+  in
+  let* event =
+    match source_event with
+    | Some event -> Ok event
+    | None ->
+      let* source = events db in
+      List.Assoc.find source event_id ~equal:Int64.equal
+      |> Or_error.of_option ~error:(Error.of_string "unknown transaction event ID")
+  in
+  let* existing = verify_bank_entry db event_id event in
+  let* reason_value = Validation.text "settlement reason" reason in
+  let id_value = event_id in
+  let open Db_schema.Card_settlement_decisions in
+  let insert = Rel_sql.insert_into_cols Db.dialect table in
+  let* () =
+    db_result
+      (Db.exec
+         db.conn
+         (insert
+            Col.
+              [ Value (event_id, id_value)
+              ; Value (card_institution, card.mapping.institution)
+              ; Value
+                  (card_source_account, Bank_account_mapping.source_account card.mapping)
+              ; Value (ledger_account, card.mapping.ledger_account)
+              ; Value (reason, reason_value)
+              ]))
+  in
+  let* () =
+    match existing with
+    | None -> Ok ()
+    | Some entry_id ->
+      db_result (Db.exec db.conn (update_posting card.mapping.ledger_account entry_id 1))
+  in
+  let open Db_schema.Card_settlement_changes in
+  let audit = Rel_sql.insert_into_cols Db.dialect table in
+  db_result
+    (Db.exec
+       db.conn
+       (audit
+          Col.
+            [ Value (event_id, id_value)
+            ; Value (card_institution, card.mapping.institution)
+            ; Value (card_source_account, Bank_account_mapping.source_account card.mapping)
+            ; Value (ledger_account, card.mapping.ledger_account)
+            ; Value (action, "confirmed")
+            ]))
+;;
+
+let confirm_card_settlement ?card_id ?expected_ledger db event_id =
+  transaction db (fun db ->
+    confirm_card_settlement_in_transaction ?card_id ?expected_ledger db event_id)
+;;
+
+let undo_card_settlement db event_id =
+  transaction db (fun db ->
+    let open Rel_sql.Stmt in
+    let query =
+      func
+        "SELECT card_institution,card_source_account,ledger_account FROM \
+         card_settlement_decisions WHERE event_id=?"
+        (int64
+         @-> ret
+               Row.(
+                 t3
+                   (text "card_institution")
+                   (text "card_source_account")
+                   (text "ledger_account")))
+    in
+    let* info = db_result (Db.first db.conn (query event_id)) in
+    let* institution, source_account, account =
+      Or_error.of_option
+        info
+        ~error:(Error.of_string "no confirmed settlement for this transaction")
+    in
+    let* source = events db in
+    let* event =
+      List.Assoc.find source event_id ~equal:Int64.equal
+      |> Or_error.of_option ~error:(Error.of_string "unknown transaction")
+    in
+    let* existing = verify_bank_entry db event_id event in
+    let delete =
+      func "DELETE FROM card_settlement_decisions WHERE event_id=?" (int64 @-> unit)
+    in
+    let* () = db_result (Db.exec db.conn (delete event_id)) in
+    let* category = category_account db event_id in
+    let* () =
+      match existing with
+      | None -> Ok ()
+      | Some entry_id ->
+        db_result
+          (Db.exec
+             db.conn
+             (update_posting
+                (Option.value category ~default:"equity:unclassified")
+                entry_id
+                1))
+    in
+    let id_value = event_id in
+    let open Db_schema.Card_settlement_changes in
+    let audit = Rel_sql.insert_into_cols Db.dialect table in
+    db_result
+      (Db.exec
+         db.conn
+         (audit
+            Col.
+              [ Value (event_id, id_value)
+              ; Value (card_institution, institution)
+              ; Value (card_source_account, source_account)
+              ; Value (ledger_account, account)
+              ; Value (action, "undone")
+              ])))
+;;
+
+type card_settlement_action =
+  | Confirmed
+  | Undone
+
+type card_settlement_change =
+  { id : int64
+  ; event_id : int64
+  ; card_institution : string
+  ; card_source_account : string
+  ; ledger_account : string
+  ; action : card_settlement_action
+  ; changed_at : Ptime.t
+  }
+
+let card_settlement_history db =
+  let open Db_schema.Card_settlement_changes in
+  let row =
+    Row.(
+      unit
+        (fun
+            id
+             event_id
+             card_institution
+             card_source_account
+             ledger_account
+             action
+             changed_at
+           ->
+           ( id
+           , event_id
+           , card_institution
+           , card_source_account
+           , ledger_account
+           , action
+           , changed_at ))
+      * read_column id
+      * read_column event_id
+      * read_column card_institution
+      * read_column card_source_account
+      * read_column ledger_account
+      * read_column action
+      * read_column changed_at)
+  in
+  let* rows =
+    collect
+      db
+      (statement
+         "SELECT \
+          id,event_id,card_institution,card_source_account,ledger_account,action,changed_at \
+          FROM card_settlement_changes ORDER BY id"
+         row)
+  in
+  traverse
+    (fun ( id
+         , event_id
+         , card_institution
+         , card_source_account
+         , ledger_account
+         , action
+         , changed_at ) ->
+       let* action =
+         match action with
+         | "confirmed" -> Ok Confirmed
+         | "undone" -> Ok Undone
+         | _ -> Or_error.error_string "unknown card settlement action"
+       in
+       Ok
+         ({ id
+          ; event_id
+          ; card_institution
+          ; card_source_account
+          ; ledger_account
+          ; action
+          ; changed_at
+          }
+          : card_settlement_change))
+    rows
+;;
+
+type classification_rule_match =
+  { transaction : bank_review
+  ; eligible : bool
+  ; explanation : string option
+  }
+
+let preview_classification_rule db (rule : Classification_rule.t) =
+  let* pattern =
+    Transaction_pattern.compile ~case_sensitive:rule.case_sensitive rule.pattern
+  in
+  let* rows = bank_review db in
+  let* settlement_card =
+    match rule.action with
+    | Category _ -> Ok None
+    | Settlement card_id ->
+      let* accounts = bank_account_info db in
+      let* card =
+        match
+          List.filter accounts ~f:(fun info ->
+            String.equal (Bank_account_mapping.id info.mapping) card_id)
+        with
+        | [ card ] -> Ok card
+        | [] -> Or_error.error_string "rule references an unknown card ID"
+        | _ -> Or_error.error_string "rule card ID is ambiguous"
+      in
+      if
+        not
+          (List.mem
+             [ "CREDITCRD"; "credit-card" ]
+             card.mapping.account_type
+             ~equal:String.equal)
+      then Or_error.error_string "rule settlement target is not a credit card"
+      else if not (String.is_prefix card.mapping.ledger_account ~prefix:"liabilities:")
+      then Or_error.error_string "map the rule's card to a liabilities account first"
+      else if Option.is_none card.settlement_account
+      then Or_error.error_string "link the rule's card to its settlement account first"
+      else Ok (Some card)
+  in
+  let matched =
+    List.filter rows ~f:(fun row ->
+      Option.value_map rule.institution ~default:true ~f:(String.equal row.institution)
+      && Transaction_pattern.matches
+           pattern
+           ~display_name:row.display_name
+           ~descriptions:row.transaction.descriptions)
+  in
+  Ok
+    (List.map matched ~f:(fun row ->
+       let explanation =
+         if
+           (not (String.equal row.counter_account "equity:unclassified"))
+           || Option.is_some row.reason
+         then Some "already reviewed"
+         else (
+           match settlement_card with
+           | None -> None
+           | Some card ->
+             let movement = row.transaction in
+             let linked = Option.value_exn card.settlement_account in
+             let account = movement.account in
+             if
+               not
+                 (String.equal row.institution linked.institution
+                  && String.equal account.bank_id linked.bank_id
+                  && String.equal account.account_id linked.account_id
+                  && String.equal account.account_type linked.account_type)
+             then Some "not from the linked settlement account"
+             else if
+               (not (Iso4217.equal card.currency account.currency))
+               || Quantity.(movement.amount >= zero)
+               || not (Quantity.is_zero movement.fee)
+             then Some "not a fee-free debit in the card currency"
+             else if
+               List.exists rows ~f:(fun other ->
+                 let tx = other.transaction in
+                 String.equal other.institution card.mapping.institution
+                 && String.equal tx.account.bank_id card.mapping.bank_id
+                 && String.equal tx.account.account_id card.mapping.account_id
+                 && String.equal tx.account.account_type card.mapping.account_type
+                 && Iso4217.equal tx.account.currency account.currency
+                 && Quantity.equal tx.amount (Quantity.neg movement.amount)
+                 && Int.abs (Date.diff tx.booked_on movement.booked_on) <= 7)
+             then Some "matching card-side payment exists; review as a transfer"
+             else None)
+       in
+       { transaction = row; eligible = Option.is_none explanation; explanation }))
+;;
+
+let apply_classification_rule db ~expected ~event_ids =
+  if List.contains_dup event_ids ~compare:Int64.compare
+  then Or_error.error_string "duplicate rule match"
+  else
+    transaction db (fun db ->
+      let* rules = classification_rules db in
+      let* current =
+        List.find rules ~f:(fun r ->
+          String.equal r.Classification_rule.name expected.Classification_rule.name)
+        |> Or_error.of_option ~error:(Error.of_string "rule no longer exists")
+      in
+      if not (Poly.equal current expected)
+      then Or_error.error_string "rule changed since preview; review it again"
+      else
+        let* matches = preview_classification_rule db current in
+        let* () =
+          traverse
+            (fun id ->
+               match
+                 List.find matches ~f:(fun m -> Int64.equal m.transaction.event_id id)
+               with
+               | Some { eligible = true; _ } -> Ok ()
+               | _ ->
+                 Or_error.error_string
+                   "a rule match changed since preview; review it again")
+            event_ids
+          |> Result.map ~f:ignore
+        in
+        let reason = Printf.sprintf "Rule %s: %s" current.name current.pattern in
+        match current.action with
+        | Category account ->
+          let* decisions =
+            traverse
+              (fun event_id -> Bank_category.create ~event_id ~account ~reason)
+              event_ids
+          in
+          set_bank_categories_in_transaction ~only_unclassified:true db decisions
+        | Settlement card_id ->
+          let* source = events db in
+          let source = Hashtbl.of_alist_exn (module Int64) source in
+          let* card =
+            match event_ids with
+            | [] -> Ok None
+            | first :: _ ->
+              let* _, card = card_settlement_preview ~card_id db first in
+              Ok (Some card)
+          in
+          let* () =
+            List.fold_result event_ids ~init:() ~f:(fun () event_id ->
+              let* event =
+                Hashtbl.find source event_id
+                |> Or_error.of_option
+                     ~error:(Error.of_string "unknown transaction event ID")
+              in
+              confirm_card_settlement_in_transaction
+                ~card_id
+                ~reason
+                ?validated_card:card
+                ~source_event:event
+                db
+                event_id)
+          in
+          Ok (List.length event_ids))
+;;
+
 let bank_overview db =
   let* source = movement_source db in
   let* pairs = collect db transfer_pairs in
@@ -2771,10 +3793,10 @@ let bank_overview db =
     Hash_set.add needed a;
     Hash_set.add needed b);
   let* table = selected_movements db needed in
-  let* metadata = review_metadata db in
+  let* _, transfers, _, _ = review_metadata db in
   let* summaries, movements, unclassified = status_summaries db source in
   let* accounts = bank_account_info_from ~summaries db source table in
-  let* candidates = transfer_candidates_from ~pairs db source table (snd metadata) in
+  let* candidates = transfer_candidates_from ~pairs db source table transfers in
   Ok (accounts, movements, unclassified, List.length candidates)
 ;;
 
@@ -2962,255 +3984,304 @@ let export_bank_accounts db =
        }))
 ;;
 
-let apply_bank_accounts ?(dry_run = false) db config =
+let apply_bank_accounts_in_transaction ?(dry_run = false) db config =
   let* config = Bank_account_config.of_json (Bank_account_config.to_json config) in
-  transaction db (fun db ->
-    let* () =
-      if dry_run
-      then db_result (Db.exec_sql db.conn "SAVEPOINT account_preview")
-      else Ok ()
-    in
-    let* before_history = bank_account_history db in
-    let* info = bank_account_info db in
-    let find r =
-      List.find info ~f:(fun i ->
-        String.equal i.mapping.institution r.Bank_account_config.institution
-        && String.equal
-             (Bank_account_mapping.source_account i.mapping)
-             (Bank_account_config.source_account r))
-    in
-    let describe (r : Bank_account_config.reference) =
-      Printf.sprintf "%s %s %s" r.institution r.account_type r.account_id
-    in
-    let resolve r =
-      Or_error.of_option
-        (find r)
-        ~error:
-          (Error.of_string
-             (Printf.sprintf
-                "%s has no imported statements; import them with fin import %s FOLDER \
-                 before importing the account settings"
-                (describe r)
-                r.institution))
-    in
-    let* () =
-      match
-        List.filter config ~f:(fun row ->
-          Option.is_none (find row.Bank_account_config.reference))
-      with
-      | [] -> Ok ()
-      | missing ->
-        Or_error.errorf
-          "%d configured account%s ha%s no imported statements: %s. Import each one's \
-           statement folder with fin import BANK PATH, then import the account settings \
-           again."
-          (List.length missing)
-          (if List.length missing = 1 then "" else "s")
-          (if List.length missing = 1 then "s" else "ve")
-          (String.concat
-             ~sep:"; "
-             (List.map missing ~f:(fun row -> describe row.Bank_account_config.reference)))
-    in
-    let* mappings =
-      traverse
-        (fun row ->
-           match row.Bank_account_config.ledger_account with
-           | None -> Ok None
-           | Some ledger_account ->
-             let* current = resolve row.reference in
-             if String.equal current.mapping.ledger_account ledger_account
-             then Ok None
-             else (
-               let r = row.reference in
-               let* mapping =
-                 Bank_account_mapping.create
-                   ~institution:r.institution
-                   ~bank_id:r.bank_id
-                   ~account_id:r.account_id
-                   ~account_type:r.account_type
-                   ~ledger_account
-               in
-               Ok (Some mapping)))
-        config
-    in
-    let* mapping_changes =
-      set_bank_account_mappings_in_transaction db (List.filter_opt mappings)
-    in
-    let remove_iban =
-      let open Db_schema.Bank_account_identities in
-      fun v_institution v_source_account ->
-        Rel_sql.delete_from
-          Db.dialect
-          table
-          ~where:
-            Col.
-              [ Value (institution, v_institution)
-              ; Value (source_account, v_source_account)
-              ]
-    in
-    let audit_iban =
-      let open Db_schema.Bank_account_identity_changes in
-      let insert = Rel_sql.insert_into_cols Db.dialect table in
-      fun v_institution v_source_account v_previous_iban ->
-        insert
+  let* () =
+    if dry_run then db_result (Db.exec_sql db.conn "SAVEPOINT account_preview") else Ok ()
+  in
+  let* before_history = bank_account_history db in
+  let* info = bank_account_info db in
+  let find r =
+    List.find info ~f:(fun i ->
+      String.equal i.mapping.institution r.Bank_account_config.institution
+      && String.equal
+           (Bank_account_mapping.source_account i.mapping)
+           (Bank_account_config.source_account r))
+  in
+  let describe (r : Bank_account_config.reference) =
+    Printf.sprintf "%s %s %s" r.institution r.account_type r.account_id
+  in
+  let resolve r =
+    Or_error.of_option
+      (find r)
+      ~error:
+        (Error.of_string
+           (Printf.sprintf
+              "%s has no imported statements; import them with fin import %s FOLDER \
+               before importing the account settings"
+              (describe r)
+              r.institution))
+  in
+  let* () =
+    match
+      List.filter config ~f:(fun row ->
+        Option.is_none (find row.Bank_account_config.reference))
+    with
+    | [] -> Ok ()
+    | missing ->
+      Or_error.errorf
+        "%d configured account%s ha%s no imported statements: %s. Import each one's \
+         statement folder with fin import BANK PATH, then import the account settings \
+         again."
+        (List.length missing)
+        (if List.length missing = 1 then "" else "s")
+        (if List.length missing = 1 then "s" else "ve")
+        (String.concat
+           ~sep:"; "
+           (List.map missing ~f:(fun row -> describe row.Bank_account_config.reference)))
+  in
+  let* mappings =
+    traverse
+      (fun row ->
+         match row.Bank_account_config.ledger_account with
+         | None -> Ok None
+         | Some ledger_account ->
+           let* current = resolve row.reference in
+           if String.equal current.mapping.ledger_account ledger_account
+           then Ok None
+           else (
+             let r = row.reference in
+             let* mapping =
+               Bank_account_mapping.create
+                 ~institution:r.institution
+                 ~bank_id:r.bank_id
+                 ~account_id:r.account_id
+                 ~account_type:r.account_type
+                 ~ledger_account
+             in
+             Ok (Some mapping)))
+      config
+  in
+  let* mapping_changes =
+    set_bank_account_mappings_in_transaction db (List.filter_opt mappings)
+  in
+  let remove_iban =
+    let open Db_schema.Bank_account_identities in
+    fun v_institution v_source_account ->
+      Rel_sql.delete_from
+        Db.dialect
+        table
+        ~where:
           Col.
             [ Value (institution, v_institution)
             ; Value (source_account, v_source_account)
-            ; Value (previous_iban, Some v_previous_iban)
-            ; Value (iban, None)
             ]
-    in
-    let* clears =
-      traverse
-        (fun row ->
-           match row.Bank_account_config.iban with
-           | Keep | Set _ -> Ok 0
-           | Clear ->
+  in
+  let audit_iban =
+    let open Db_schema.Bank_account_identity_changes in
+    let insert = Rel_sql.insert_into_cols Db.dialect table in
+    fun v_institution v_source_account v_previous_iban ->
+      insert
+        Col.
+          [ Value (institution, v_institution)
+          ; Value (source_account, v_source_account)
+          ; Value (previous_iban, Some v_previous_iban)
+          ; Value (iban, None)
+          ]
+  in
+  let* clears =
+    traverse
+      (fun row ->
+         match row.Bank_account_config.iban with
+         | Keep | Set _ -> Ok 0
+         | Clear ->
+           let r = row.reference in
+           let* info = resolve r in
+           let* () =
+             if String.equal info.iban_source "imported"
+             then Or_error.error_string "an imported source IBAN cannot be cleared"
+             else Ok ()
+           in
+           let source = Bank_account_config.source_account r in
+           let* old =
+             db_result (Db.first db.conn (find_account_iban r.institution source))
+           in
+           (match old with
+            | None -> Ok 0
+            | Some iban ->
+              let* () = db_result (Db.exec db.conn (remove_iban r.institution source)) in
+              let* () =
+                db_result (Db.exec db.conn (audit_iban r.institution source iban))
+              in
+              Ok 1))
+      config
+  in
+  let* sets =
+    traverse
+      (fun row ->
+         match row.Bank_account_config.iban with
+         | Keep | Clear -> Ok None
+         | Set iban ->
+           let* current = resolve row.reference in
+           if Option.equal Iban.equal current.iban (Some iban)
+           then Ok None
+           else (
              let r = row.reference in
-             let* info = resolve r in
+             let* identity =
+               Account_identity.create
+                 ~institution:r.institution
+                 ~bank_id:r.bank_id
+                 ~account_id:r.account_id
+                 ~account_type:r.account_type
+                 ~iban
+             in
+             Ok (Some identity)))
+      config
+  in
+  let* identity_sets =
+    set_bank_account_identities_in_transaction db (List.filter_opt sets)
+  in
+  let set =
+    Rel_sql.Stmt.(
+      func
+        "INSERT INTO \
+         bank_account_settlements(institution,source_account,settlement_account) VALUES \
+         (?,?,?) ON CONFLICT(institution,source_account) DO UPDATE SET \
+         settlement_account=excluded.settlement_account"
+        (text @-> text @-> text @-> unit))
+  in
+  let remove =
+    let open Db_schema.Bank_account_settlements in
+    fun v_institution v_source_account ->
+      Rel_sql.delete_from
+        Db.dialect
+        table
+        ~where:
+          Col.
+            [ Value (institution, v_institution)
+            ; Value (source_account, v_source_account)
+            ]
+  in
+  let audit =
+    let open Db_schema.Bank_account_settlement_changes in
+    let insert = Rel_sql.insert_into_cols Db.dialect table in
+    fun v_institution v_source_account v_previous_settlement v_settlement_account ->
+      insert
+        Col.
+          [ Value (institution, v_institution)
+          ; Value (source_account, v_source_account)
+          ; Value (previous_settlement, v_previous_settlement)
+          ; Value (settlement_account, v_settlement_account)
+          ]
+  in
+  let* settlements =
+    traverse
+      (fun row ->
+         match row.Bank_account_config.settlement_account with
+         | Keep -> Ok 0
+         | update ->
+           let r = row.reference in
+           let source = Bank_account_config.source_account r in
+           let* child = resolve r in
+           let* value =
+             match update with
+             | Keep | Clear -> Ok None
+             | Set parent ->
+               let* parent_info = resolve parent in
+               if
+                 (not (String.equal child.iban_source "not_applicable"))
+                 || String.equal parent_info.iban_source "not_applicable"
+                 || not (Iso4217.equal child.currency parent_info.currency)
+               then
+                 Or_error.error_string
+                   "card settlement must link a credit-card account to a non-card \
+                    account in the same currency"
+               else Ok (Some (Json.encode Bank_account_config.reference_jsont parent))
+           in
+           let* previous =
+             db_result (Db.first db.conn (find_settlement r.institution source))
+           in
+           if Option.equal String.equal previous value
+           then Ok 0
+           else
              let* () =
-               if String.equal info.iban_source "imported"
-               then Or_error.error_string "an imported source IBAN cannot be cleared"
-               else Ok ()
+               match value with
+               | None -> db_result (Db.exec db.conn (remove r.institution source))
+               | Some value ->
+                 db_result (Db.exec db.conn (set r.institution source value))
              in
-             let source = Bank_account_config.source_account r in
-             let* old =
-               db_result (Db.first db.conn (find_account_iban r.institution source))
+             let* () =
+               db_result (Db.exec db.conn (audit r.institution source previous value))
              in
-             (match old with
-              | None -> Ok 0
-              | Some iban ->
-                let* () =
-                  db_result (Db.exec db.conn (remove_iban r.institution source))
-                in
-                let* () =
-                  db_result (Db.exec db.conn (audit_iban r.institution source iban))
-                in
-                Ok 1))
-        config
+             Ok 1)
+      config
+  in
+  let* after_history = bank_account_history db in
+  let changes =
+    List.filter after_history ~f:(fun change ->
+      not
+        (List.exists before_history ~f:(fun old ->
+           String.equal old.kind change.kind && Int64.equal old.id change.id)))
+  in
+  let result =
+    { mapping_changes
+    ; identity_changes = identity_sets + List.sum (module Int) clears ~f:Fn.id
+    ; settlement_changes = List.sum (module Int) settlements ~f:Fn.id
+    ; changes
+    }
+  in
+  let* () =
+    if dry_run
+    then
+      db_result
+        (Db.exec_sql db.conn "ROLLBACK TO account_preview; RELEASE account_preview")
+    else Ok ()
+  in
+  Ok result
+;;
+
+let apply_bank_accounts ?(dry_run = false) db config =
+  transaction db (fun db -> apply_bank_accounts_in_transaction ~dry_run db config)
+;;
+
+let confirm_card_settlement_with_setup
+      db
+      ~event_id
+      ~card_id
+      ~expected_ledger
+      ~expected_link
+      ~setup
+  =
+  transaction db (fun db ->
+    let* accounts = bank_account_info db in
+    let* card =
+      match
+        List.filter accounts ~f:(fun info ->
+          String.equal (Bank_account_mapping.id info.mapping) card_id)
+      with
+      | [ card ] -> Ok card
+      | [] -> Or_error.error_string "card no longer exists"
+      | _ -> Or_error.error_string "card ID collision; review is refused"
     in
-    let* sets =
-      traverse
-        (fun row ->
-           match row.Bank_account_config.iban with
-           | Keep | Clear -> Ok None
-           | Set iban ->
-             let* current = resolve row.reference in
-             if Option.equal Iban.equal current.iban (Some iban)
-             then Ok None
-             else (
-               let r = row.reference in
-               let* identity =
-                 Account_identity.create
-                   ~institution:r.institution
-                   ~bank_id:r.bank_id
-                   ~account_id:r.account_id
-                   ~account_type:r.account_type
-                   ~iban
-               in
-               Ok (Some identity)))
-        config
-    in
-    let* identity_sets =
-      set_bank_account_identities_in_transaction db (List.filter_opt sets)
-    in
-    let set =
-      Rel_sql.Stmt.(
-        func
-          "INSERT INTO \
-           bank_account_settlements(institution,source_account,settlement_account) \
-           VALUES (?,?,?) ON CONFLICT(institution,source_account) DO UPDATE SET \
-           settlement_account=excluded.settlement_account"
-          (text @-> text @-> text @-> unit))
-    in
-    let remove =
-      let open Db_schema.Bank_account_settlements in
-      fun v_institution v_source_account ->
-        Rel_sql.delete_from
-          Db.dialect
-          table
-          ~where:
-            Col.
-              [ Value (institution, v_institution)
-              ; Value (source_account, v_source_account)
-              ]
-    in
-    let audit =
-      let open Db_schema.Bank_account_settlement_changes in
-      let insert = Rel_sql.insert_into_cols Db.dialect table in
-      fun v_institution v_source_account v_previous_settlement v_settlement_account ->
-        insert
-          Col.
-            [ Value (institution, v_institution)
-            ; Value (source_account, v_source_account)
-            ; Value (previous_settlement, v_previous_settlement)
-            ; Value (settlement_account, v_settlement_account)
-            ]
-    in
-    let* settlements =
-      traverse
-        (fun row ->
-           match row.Bank_account_config.settlement_account with
-           | Keep -> Ok 0
-           | update ->
-             let r = row.reference in
-             let source = Bank_account_config.source_account r in
-             let* child = resolve r in
-             let* value =
-               match update with
-               | Keep | Clear -> Ok None
-               | Set parent ->
-                 let* parent_info = resolve parent in
-                 if
-                   (not (String.equal child.iban_source "not_applicable"))
-                   || String.equal parent_info.iban_source "not_applicable"
-                   || not (Iso4217.equal child.currency parent_info.currency)
-                 then
-                   Or_error.error_string
-                     "card settlement must link a credit-card account to a non-card \
-                      account in the same currency"
-                 else Ok (Some (Json.encode Bank_account_config.reference_jsont parent))
-             in
-             let* previous =
-               db_result (Db.first db.conn (find_settlement r.institution source))
-             in
-             if Option.equal String.equal previous value
-             then Ok 0
-             else
-               let* () =
-                 match value with
-                 | None -> db_result (Db.exec db.conn (remove r.institution source))
-                 | Some value ->
-                   db_result (Db.exec db.conn (set r.institution source value))
-               in
-               let* () =
-                 db_result (Db.exec db.conn (audit r.institution source previous value))
-               in
-               Ok 1)
-        config
-    in
-    let* after_history = bank_account_history db in
-    let changes =
-      List.filter after_history ~f:(fun change ->
-        not
-          (List.exists before_history ~f:(fun old ->
-             String.equal old.kind change.kind && Int64.equal old.id change.id)))
-    in
-    let result =
-      { mapping_changes
-      ; identity_changes = identity_sets + List.sum (module Int) clears ~f:Fn.id
-      ; settlement_changes = List.sum (module Int) settlements ~f:Fn.id
-      ; changes
-      }
+    let equal_reference
+          (a : Bank_account_config.reference)
+          (b : Bank_account_config.reference)
+      =
+      String.equal a.Bank_account_config.institution b.institution
+      && String.equal
+           (Bank_account_config.source_account a)
+           (Bank_account_config.source_account b)
     in
     let* () =
-      if dry_run
-      then
-        db_result
-          (Db.exec_sql db.conn "ROLLBACK TO account_preview; RELEASE account_preview")
-      else Ok ()
+      if
+        String.equal
+          setup.Bank_account_config.reference.institution
+          card.mapping.institution
+        && String.equal
+             (Bank_account_config.source_account setup.reference)
+             (Bank_account_mapping.source_account card.mapping)
+      then Ok ()
+      else Or_error.error_string "card setup does not match the selected card"
     in
-    Ok result)
+    let* () =
+      if
+        String.equal card.mapping.ledger_account expected_ledger
+        && Option.equal equal_reference card.settlement_account expected_link
+      then Ok ()
+      else Or_error.error_string "card setup changed since the preview; review it again"
+    in
+    let* _ = apply_bank_accounts_in_transaction db [ setup ] in
+    confirm_card_settlement_in_transaction ~card_id db event_id)
 ;;
 
 let registry t = t.registry
@@ -3249,10 +4320,35 @@ let delete_account ?(dry_run = false) db (mapping : Bank_account_mapping.t) =
     let* transactions =
       scalar ("SELECT count(*) FROM source_events WHERE id IN (" ^ events ^ ")")
     in
+    let* settlements =
+      scalar
+        ("SELECT count(*) FROM card_settlement_decisions WHERE event_id IN ("
+         ^ events
+         ^ ") OR (card_institution="
+         ^ institution
+         ^ " AND card_source_account="
+         ^ account
+         ^ ")")
+    in
+    let* reversals =
+      scalar
+        ("SELECT count(*) FROM reversal_pairs WHERE original IN ("
+         ^ events
+         ^ ") OR reversal IN ("
+         ^ events
+         ^ ")")
+    in
     let* documents =
       scalar ("SELECT count(*) FROM import_documents WHERE id IN (" ^ docs ^ ")")
     in
-    if transactions = 0
+    if reversals > 0
+    then
+      Or_error.error_string
+        "account has confirmed reversals; undo them before deleting it"
+    else if settlements > 0
+    then
+      Or_error.error_string "account has confirmed card settlements; deletion is refused"
+    else if transactions = 0
     then Or_error.error_string "account has no imported transactions"
     else
       let* shared =
@@ -3375,6 +4471,7 @@ let delete_account ?(dry_run = false) db (mapping : Bank_account_mapping.t) =
           ; "bank_account_mapping_changes"
           ; "bank_account_identity_changes"
           ; "bank_account_settlement_changes"
+          ; "reversal_changes"
           ]
         in
         let rec remove_triggers acc = function
@@ -3408,6 +4505,11 @@ let delete_account ?(dry_run = false) db (mapping : Bank_account_mapping.t) =
           ; "DELETE FROM journal_entries WHERE event_id IN (" ^ event_ids ^ ")"
           ; "DELETE FROM bank_categories WHERE event_id IN (" ^ event_ids ^ ")"
           ; "DELETE FROM bank_category_changes WHERE event_id IN (" ^ event_ids ^ ")"
+          ; "DELETE FROM reversal_changes WHERE original IN ("
+            ^ event_ids
+            ^ ") OR reversal IN ("
+            ^ event_ids
+            ^ ")"
           ; "DELETE FROM statement_events WHERE event_id IN ("
             ^ event_ids
             ^ ") OR statement_id IN (SELECT id FROM statements WHERE document_id IN ("

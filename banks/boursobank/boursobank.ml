@@ -8,6 +8,22 @@ let aliases = [ "boursorama"; "bourso" ]
 let csv = "csv"
 let formats = [ ofx; csv ]
 
+let settlement_card_hint (movement : Movement.t) =
+  match movement.descriptions with
+  | [ description ] ->
+    Option.bind
+      (List.find_map
+         [ "Relevé différé Carte "; "Relev{ diff{r{ Carte " ]
+         ~f:(fun prefix -> String.chop_prefix (String.strip description) ~prefix))
+      ~f:(fun card -> Option.some_if (not (String.is_empty card)) card)
+  | _ -> None
+;;
+
+let withdrawal_reversal_hint (movement : Movement.t) =
+  Option.value_map (List.hd movement.descriptions) ~default:false ~f:(fun text ->
+    String.is_prefix (String.uppercase (String.strip text)) ~prefix:"ANNUL RETRAIT DAB ")
+;;
+
 let movement_type (movement : Movement.t) =
   let words text =
     String.split_on_chars
@@ -15,14 +31,25 @@ let movement_type (movement : Movement.t) =
       ~on:[ ' '; '\t'; '\n'; '\r' ]
     |> List.filter ~f:(Fn.non String.is_empty)
   in
-  match Option.value_map (List.hd movement.descriptions) ~default:[] ~f:words with
-  | "PAIEMENT" :: "CARTE" :: _ -> Some Movement_type.Card
-  | "CARTE" :: _ when String.equal movement.account.account_type "CREDITCRD" ->
-    Some Movement_type.Card
-  | ("VIR" | "VIREMENT") :: _ -> Some Transfer
-  | ("PRLV" | "PRELEVEMENT") :: _ -> Some Direct_debit
-  | "RETRAIT" :: _ -> Some Withdrawal
-  | _ -> None
+  if Option.is_some (settlement_card_hint movement)
+  then Some Movement_type.Card_settlement
+  else (
+    match Option.value_map (List.hd movement.descriptions) ~default:[] ~f:words with
+    | "PAIEMENT" :: "CARTE" :: _ -> Some Movement_type.Card
+    | "AVOIR" :: _ -> Some Card
+    | "CARTE" :: _ when String.equal movement.account.account_type "CREDITCRD" ->
+      Some Movement_type.Card
+    | ("VIR" | "VIREMENT") :: _ -> Some Transfer
+    | ("PRLV" | "PRELEVEMENT") :: _ -> Some Direct_debit
+    | "RETRAIT" :: _ -> Some Withdrawal
+    | "ANNUL" :: "RETRAIT" :: "DAB" :: _ -> Some Withdrawal
+    | ("*INTERETS" | "INTERETS" | "*INTÉRÊTS" | "INTÉRÊTS") :: _ -> Some Interest
+    | "*INTER.BRUTS" :: _ | "*INT" :: "DEB" :: _ -> Some Interest
+    | "REM" :: "CHQ" :: _ -> Some Deposit
+    | "CHQ." :: _ -> Some Cheque
+    | "*CION" :: "CB" :: _ | "*FRAIS" :: "CB" :: _ | "*RETROC" :: "*FRAIS" :: "CB" :: _ ->
+      Some Fee
+    | _ -> None)
 ;;
 
 let decode event =

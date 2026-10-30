@@ -5,7 +5,7 @@ its status: tick off finished work, add discovered work, and refresh the "Where 
 are" figures when they move. History belongs in `CHANGES.md`; designs stay in the
 other documents, which this one links to rather than repeats.
 
-Last updated: 2026-10-29.
+Last updated: 2026-10-30.
 
 ## Where we are
 
@@ -15,7 +15,7 @@ Last updated: 2026-10-29.
   companion), Bunq (MT940, CSV companion) and Revolut (CSV). Each is an adapter behind
   one registry; the kernel names no bank. Shared OFX parsing takes an explicit
   institution parameter rather than instantiating a functor.
-- Storage is schema 14: generic tables for every bank, plus each movement stored
+- Storage is schema 18: generic tables for every bank, plus each movement stored
   normalized at import, so reads are SQL queries instead of payload decoding. No
   migrations; older databases are refused unchanged.
 - Event occurrences and statement boundaries share `Temporal.t` (`Date` or
@@ -50,11 +50,11 @@ Last updated: 2026-10-29.
   `fin backup` saves one
   consistent SQLite snapshot; `fin restore BACKUP` validates and restores it,
   with overwrite confirmation and automatic removal of stale generated files.
-- 177 tests (146 OCaml cases and 31 CLI cases), plus status performance and
+- 199 tests (149 OCaml cases and 50 CLI cases), plus status performance and
   package man-page checks. Selected import changes have also been compared by
   rebuilding a personal database and diffing reports and source payloads.
 - Issue #1 is implemented locally and awaits publication.
-- The installed Arch package is `finances 0.1.0-23`; the tree uses schema 14.
+- The installed Arch package is `finances 0.1.0-23`; the tree uses schema 18.
 
 ### Personal data
 
@@ -105,11 +105,35 @@ A prior database rebuilt from `personal/*/inbox` contained:
 The import side is done; turning movements into accounting is not.
 
 - [x] Folder ingestion and account mapping.
+- [x] Use the singular `fin transfer` command group.
+- [x] Add short aliases for transaction, account and institution commands.
+- [x] Filter transaction listings by movement type and accounting classification.
+- [x] Undo confirmed transfer pairs by event ID, with an audited confirmation.
+- [x] Combine transfer evidence and candidates, and review pairs interactively;
+  show each pair and explain which choices act on it or the batch. Selecting all
+  supported pairs proceeds directly to the batch preview.
+- [x] Organize review, statement evidence, import history and projection commands
+  under transaction, statement, institution and journal, respectively.
+- [x] Credit-card setup previews its link and accepts a default-yes confirmation.
+- [x] Recognize BoursoBank interest movements at import without classifying income.
+- [x] Recognize BoursoBank cheque and fee descriptions, including fee refunds.
+- [x] Review full ATM withdrawal reversal pairs with audit and undo.
+- [x] Use signed card and withdrawal types for refunds and reversals, with
+  provider-specific source evidence for withdrawal reversal suggestions.
+- [ ] Support partial reversals and fees after designing their accounting.
+- [x] Recognize deferred-card settlement types and refresh stored movement types
+  with a preview and confirmation, without removing accounting decisions.
+- [x] Transaction listings show accounting classification and use a terminal pager;
+  settlement rule batches reuse loaded data across decisions.
 - [x] CSV enrichment, with ambiguous matches visible.
 - [ ] [Classification and review](classification.md): interactive review now
   classifies a movement and selected normalized card-merchant or description matches in one
-  confirmed batch. User tags, richer similarity, reusable rules and a possible
-  vendored Notty review interface remain to be designed and implemented.
+  confirmed batch. Saved regex rules preview and apply category or card settlement
+  decisions explicitly, with renaming and guidance for literal regex metacharacters. User tags,
+  richer similarity and a richer review interface
+  remain to be designed and implemented. An experimental
+  settlement queue now uses a pinned Notty fork submodule; evaluate it and extend
+  it to classification.
 - [ ] Transfer matching: the review workflow exists; the 4 candidates await
   decisions. FX and split transfers are not handled.
 - [ ] Reconciliation and reporting: Wise and Bunq statements reconcile; opening
@@ -179,8 +203,8 @@ The import side is done; turning movements into accounting is not.
   generic card CSV can also be passed directly and configured interactively.
 - [x] `fin account import FILE` requires a snapshot filename and offers a dry run;
   there is no default file to confuse with active settings.
-- [ ] `fin paths` prints only JSON, like `bank statements` and `bank companions`.
-- [ ] `fin bank statements` and `fin bank companions` print only JSON, unlike the
+- [ ] `fin paths` prints only JSON, like `statement list` and `statement companions`.
+- [ ] `fin statement list` and `fin statement companions` print only JSON, unlike the
   other commands, which print text and take `--json`.
 - [ ] The 8 ambiguous BoursoBank CSV rows need a way to be resolved.
 

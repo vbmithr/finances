@@ -216,6 +216,52 @@ let unclassified_batch_is_atomic () =
       (account db second))
 ;;
 
+let rule_batch_is_atomic () =
+  memory (fun db ->
+    project db;
+    let rule =
+      ok
+        (Classification_rule.create
+           ~name:"all"
+           ~pattern:"."
+           ~institution:None
+           ~case_sensitive:false
+           ~action:(Category "expenses:food"))
+    in
+    ok (Store.add_classification_rule db rule);
+    let matches = ok (Store.preview_classification_rule db rule) in
+    let ids =
+      List.filter_map matches ~f:(fun m ->
+        Option.some_if m.Store.eligible m.transaction.event_id)
+    in
+    Alcotest.(check bool) "at least two matches" true (List.length ids >= 2);
+    let first = List.hd_exn ids
+    and last = List.last_exn ids in
+    ignore (classify db [ decision last "expenses:existing" ]);
+    error (Store.apply_classification_rule db ~expected:rule ~event_ids:ids);
+    Alcotest.(check string)
+      "no partial classification"
+      "equity:unclassified"
+      (account db first);
+    check "no partial audit" 1 (List.length (ok (Store.bank_category_history db)));
+    ok (Store.delete_classification_rule db rule.name);
+    let replacement =
+      ok
+        (Classification_rule.create
+           ~name:"all"
+           ~pattern:"C"
+           ~institution:None
+           ~case_sensitive:false
+           ~action:(Category "expenses:food"))
+    in
+    ok (Store.add_classification_rule db replacement);
+    error (Store.apply_classification_rule db ~expected:rule ~event_ids:[ first ]);
+    Alcotest.(check string)
+      "changed rule is refused"
+      "equity:unclassified"
+      (account db first))
+;;
+
 let similarity () =
   let currency = ok (Validation.currency "currency" "EUR") in
   let movement description =
@@ -240,6 +286,7 @@ let similarity () =
     ; display_name = None
     ; movement_type = None
     ; detail_sources = []
+    ; classification = Unclassified
     ; counter_account
     ; reason
     }
@@ -280,7 +327,34 @@ let similarity () =
   Alcotest.(check (list int64))
     "merchant matches without amount and does not mix fallback"
     [ 8L ]
-    (List.map result.candidates ~f:(fun r -> r.event_id))
+    (List.map result.candidates ~f:(fun r -> r.event_id));
+  let pattern =
+    ok (Transaction_pattern.compile ~case_sensitive:false "coffee[ \\t]+shop")
+  in
+  Alcotest.(check bool)
+    "regex matches original description"
+    true
+    (Transaction_pattern.matches
+       pattern
+       ~display_name:candidate.display_name
+       ~descriptions:candidate.transaction.descriptions);
+  Alcotest.(check bool)
+    "regex matches merchant"
+    true
+    (Transaction_pattern.matches
+       pattern
+       ~display_name:card_candidate.display_name
+       ~descriptions:card_candidate.transaction.descriptions);
+  let exact = ok (Transaction_pattern.compile ~case_sensitive:true "^Coffee Shop$") in
+  Alcotest.(check bool)
+    "case-sensitive regex honors case"
+    false
+    (Transaction_pattern.matches
+       exact
+       ~display_name:card_candidate.display_name
+       ~descriptions:card_candidate.transaction.descriptions);
+  error (Transaction_pattern.compile ~case_sensitive:false "[");
+  error (Transaction_pattern.compile ~case_sensitive:false " ")
 ;;
 
 let () =
@@ -289,6 +363,7 @@ let () =
     [ ( "review"
       , List.map
           [ "unclassified batch is atomic", unclassified_batch_is_atomic
+          ; "rule batches reject stale previews atomically", rule_batch_is_atomic
           ; "similarity preview", similarity
           ; "persistent replay and reset", replay
           ; "post-projection, multi-bank and mappings", after_projection

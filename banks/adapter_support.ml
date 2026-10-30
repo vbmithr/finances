@@ -78,6 +78,8 @@ let csv_adapter
     let overlap = overlap
     let companions = companions
     let decode = decode
+    let settlement_card_hint _ = None
+    let withdrawal_reversal_hint _ = false
     let probe ~filename:_ contents = Option.some_if (recognizes contents) format
 
     let parse ~(context : Adapter.context) ~format:_ contents =

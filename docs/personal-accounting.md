@@ -18,7 +18,7 @@ in the other end of transfers too: otherwise a payment to your own savings accou
 can look like unexplained spending.
 
 If fin already contains older records, keep them. Focus reports on your chosen
-month and review the corresponding event IDs. `fin bank review` and `fin status`
+month and review the corresponding event IDs. `fin transaction review` and `fin status`
 cover the whole database; they currently have no month filter. Older unresolved
 movements do not need to be finished before you can review a later month.
 
@@ -74,7 +74,7 @@ fin import boursobank inbox/boursobank
 fin import bunq inbox/bunq
 fin import revolut inbox/revolut --account-id main
 fin import wise inbox/wise
-fin bank history --limit 20
+fin institution history --limit 20
 fin status
 fin account list
 ```
@@ -143,16 +143,18 @@ workspace copy explicitly. Editing that generated copy does not update fin.
 ## Identify transfers before categorizing spending
 
 ```sh
-fin transfers candidates
-fin transfers preview
-fin transfers candidates --json > reports/transfer-candidates.json
+fin transfer candidates
+fin transfer candidates --json > reports/transfer-candidates.json
 ```
 
 Check both account owners, amounts, dates and bank references. Candidates are
 suggestions, and a high score does not establish ownership. A transfer to your
 own savings account is neither an expense nor income.
 
-Create `reviews/transfers-2026-09.json`, using the actual IDs of a verified pair:
+Run `fin transfer review` to inspect pairs and stage decisions. Use `a` to stage
+all supported pairs and finish selection, then check and confirm the proposed
+batch. Other candidates remain for later review.
+For a scripted batch, create `reviews/transfers-2026-09.json` with the actual IDs:
 
 ```json
 [
@@ -166,8 +168,8 @@ Create `reviews/transfers-2026-09.json`, using the actual IDs of a verified pair
 ```
 
 ```sh
-fin transfers review reviews/transfers-2026-09.json
-fin transfers history
+fin transfer review reviews/transfers-2026-09.json
+fin transfer history
 fin journal export > ledger/bank.journal
 ```
 
@@ -203,8 +205,8 @@ unexplained movement unclassified. You can refine the chart as useful patterns
 emerge; there is no need to anticipate every merchant.
 
 ```sh
-fin bank review
-fin bank review --json > reports/bank-review.json
+fin transaction review
+fin transaction review --json > reports/bank-review.json
 ```
 
 Review the amount, description, date and source account. Bank-supplied category
@@ -219,8 +221,8 @@ tags are suggestions, not applied decisions. Create a small batch in
 ```
 
 ```sh
-fin bank categories apply reviews/categories-2026-09.json
-fin bank categories history
+fin transaction category apply reviews/categories-2026-09.json
+fin transaction category history
 fin journal export > ledger/bank.journal
 hledger --no-conf -f ledger/main.journal --strict check
 ```
@@ -325,11 +327,11 @@ database, status or statement reconciliation.
 ## Reconcile, then keep a closing-balance check
 
 ```sh
-fin bank statements
-fin bank companions --review
+fin statement list
+fin statement companions --review
 ```
 
-`fin bank statements` checks the movements linked to each statement against its
+`fin statement list` checks the movements linked to each statement against its
 stated balances. Wise and Bunq supply useful statement checks. Missing balance
 observations mean there is nothing to check, not that a balance was verified.
 Companion review is about matching enrichment rows; it is a different queue from
@@ -371,17 +373,23 @@ explicit same-currency transfer pairs. It is not yet a general manual-entry UI.
 | Refund | Use the original expense category, preserving its sign |
 | Transfer to another owned account | Confirm the matching imported legs |
 | Card purchases and card settlement | Categorize purchases once; do not also categorize the whole card repayment as spending |
-| Card settlement link in account settings | Record the relationship, but check the actual movements; the link creates no settlement postings |
+| Card settlement link in account settings | Link the card to checking, then review the bank debit with `fin settlement review EVENT_ID` |
 | Cash withdrawal | Decide whether you will track cash; fin's category command cannot move the counter-posting to `assets:cash` |
 | Loan principal, investments or money owed by someone else | These need asset/liability accounting; ordinary expense categories are insufficient |
 | FX transfers, split purchases or transfers outside the supported date window | Record them as exceptions to resolve; do not force them into an unrelated category |
 
-Card accounts currently also use names under `assets:bank:`. A conventional
-liability presentation needs further setup; a settlement link alone does not
-provide it. For unsupported cases, leave a note with the event ID and keep them
+Some imported card accounts default to names under `assets:bank:`. Use
+`fin account link-card CARD-ID CHECKING-ID` to link a credit card and propose a
+liability account. For BoursoBank, `fin settlement review` can suggest the
+relationship and the bank debit together. Confirm the bank debit after reviewing it;
+the link alone does not create a posting. If the card statement contains a
+matching payment movement, review the pair as a transfer instead. For unsupported
+cases, leave a note with the event ID and keep them
 visible as unresolved. Scope your first reports accordingly. hledger can model
 these cases, but any manual extension must account for fin's existing postings
-without recording the same bank movement twice.
+without recording the same bank movement twice. The [manual's card settlement
+walkthrough](manual.md#reviewing-transactions-and-transfers) shows the account
+settings and review commands.
 
 ## Make it a monthly routine
 

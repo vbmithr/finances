@@ -2,8 +2,9 @@
 
 Status: first implementation stage, 2026-10-29. Fin stores explicit reviewed
 category decisions, lists transactions and reviews normalized card-merchant or
-description matches. Reusable rules, user-managed tags and the full-screen
-interface described here are not implemented.
+description matches. Saved regular-expression rules can be previewed and applied
+explicitly to categories or card settlements. An experimental full-screen
+settlement review is available; user-managed tags are not implemented.
 
 ## Purpose
 
@@ -66,7 +67,7 @@ that might share its category. Separate these operations:
   application should be a deliberate choice, not a side effect of accepting a
   batch of suggestions.
 
-The first implemented preview is `fin bank categories similar EVENT_ID`. The
+The first implemented preview is `fin transaction category similar EVENT_ID`. The
 example must have a reviewed income or expense category. Within the same
 institution, it compares matched card merchants when available, or the ordered
 description fields otherwise. Merchant and description keys are kept separate.
@@ -92,20 +93,24 @@ never feed unreviewed predictions back as if the user had confirmed them.
 
 ## Review interface
 
-A terminal interface could make the workflow much more comfortable than editing
-JSON for every batch. Evaluate [Notty](https://github.com/pqwy/notty), an OCaml
-terminal UI library, for a full-screen interface; it is an option to investigate,
-not a dependency or implementation decision yet. **If fin uses Notty, vendor it**
-so the project can modify and maintain its own copy. Record its upstream version,
-license and local changes when it is brought in. The existing noninteractive
-commands and JSON workflows must remain available for scripts.
+A full-screen review interface can keep the selected transaction, proposed
+changes and pending state visible while navigating a queue. The experimental
+`fin settlement review --tui` prototypes this for settlements using a pinned
+[Notty fork](https://github.com/vbmithr/notty) as a Git submodule. Cancellation
+discards the pending decision; confirmation commits the card setup and settlement
+together. The
+fork keeps its upstream history and local compatibility fix. Extend
+and evaluate the interface for classification; noninteractive commands and JSON
+workflows must remain available for scripts.
 
-The initial `fin bank categories review EVENT_ID` workflow presents an
+The initial `fin transaction category review EVENT_ID` workflow presents an
 unclassified movement, offers previously used categories or a new category name,
 and lets the user select exact matches and confirm a transactional batch. It
 shows conflicting classifications and leaves cancellation without changes. The
 event ID can be found with `fin transaction list`. This first interface uses
-terminal prompts; it does not yet provide tags, category search or reusable rules.
+terminal prompts; it does not yet provide tags or category search. Separately,
+`fin rule` saves regular expressions for explicit preview and batch application;
+see the [manual](manual.md#regular-expression-rules).
 
 The fuller workflow should present one unclassified movement, let the user search
 or choose a category, add optional tags, inspect source details or skip it. After
@@ -144,9 +149,9 @@ Deliver in steps:
   metadata distinct from accounting categories.
 - Extend the initial exact normalized-description preview with richer matching
   when real cases demonstrate a need, without automatic classification.
-- Extend the transactional batch workflow with explicit, versioned reusable rules.
-- Prototype the review interface and assess whether Notty improves the workflow;
-  vendor Notty if selected.
+- Extend reusable rules with versioning and conflict handling if needed.
+- Evaluate the vendored Notty settlement prototype and extend the review
+  interface to classification if it improves the workflow.
 - Consider local embeddings or other models only after measuring where simple
   matching fails. Keep any external model or service optional and explicit about
   what transaction data leaves the machine.

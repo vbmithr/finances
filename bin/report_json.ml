@@ -224,7 +224,57 @@ let transaction =
   |> field "detail_sources" (Jsont.list Json.int64_codec) (fun r ->
     r.review.detail_sources)
   |> field "counter_account" Jsont.string (fun r -> r.review.counter_account)
+  |> field "classification" Jsont.string (fun r ->
+    match r.review.classification with
+    | Store.Unclassified -> "unclassified"
+    | Category -> "category"
+    | Transfer -> "transfer"
+    | Settlement -> "settlement"
+    | Reversal -> "reversal")
   |> field "reason" (Jsont.option Jsont.string) (fun r -> r.review.reason)
+  |> Jsont.Object.finish
+;;
+
+let card_settlement_change =
+  let field name codec (enc : Store.card_settlement_change -> _) map =
+    Jsont.Object.mem name codec ~enc map
+  in
+  Jsont.Object.enc_only ()
+  |> field "id" Json.int64_codec (fun r -> r.id)
+  |> field "event_id" Json.int64_codec (fun r -> r.event_id)
+  |> field "card_institution" Jsont.string (fun r -> r.card_institution)
+  |> field "card_source_account" Jsont.string (fun r -> r.card_source_account)
+  |> field "ledger_account" Jsont.string (fun r -> r.ledger_account)
+  |> field "action" Jsont.string (fun r ->
+    match r.action with
+    | Confirmed -> "confirmed"
+    | Undone -> "undone")
+  |> field "changed_at" timestamp (fun r -> r.changed_at)
+  |> Jsont.Object.finish
+;;
+
+let classification_rule =
+  let field name codec (enc : Classification_rule.t -> _) map =
+    Jsont.Object.mem name codec ~enc map
+  in
+  Jsont.Object.enc_only ()
+  |> field "name" Jsont.string (fun r -> r.name)
+  |> field "pattern" Jsont.string (fun r -> r.pattern)
+  |> field "institution" (Jsont.option Jsont.string) (fun r -> r.institution)
+  |> field "case_sensitive" Jsont.bool (fun r -> r.case_sensitive)
+  |> field "action" Jsont.string (fun r -> Classification_rule.action_name r.action)
+  |> field "target" Jsont.string (fun r -> Classification_rule.action_target r.action)
+  |> Jsont.Object.finish
+;;
+
+let classification_rule_match =
+  let field name codec (enc : Store.classification_rule_match -> _) map =
+    Jsont.Object.mem name codec ~enc map
+  in
+  Jsont.Object.enc_only ()
+  |> field "transaction" review (fun r -> r.transaction)
+  |> field "eligible" Jsont.bool (fun r -> r.eligible)
+  |> field "explanation" (Jsont.option Jsont.string) (fun r -> r.explanation)
   |> Jsont.Object.finish
 ;;
 
@@ -390,6 +440,7 @@ let preview =
     Transfer_ranking.max_component_vertices)
   |> field "excluded_pairs" (Jsont.list excluded) (fun r ->
     List.filter (snd r) ~f:(fun c -> not c.Store.iban_compatible))
+  |> field "all_pairs" (Jsont.list candidate) snd
   |> field "proposed_pairs" (Jsont.list proposed) (fun r ->
     List.filter (fst r) ~f:(fun r ->
       String.equal r.Transfer_ranking.assignment.status "supported"))

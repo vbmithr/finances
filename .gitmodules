@@ -1,0 +1,4 @@
+[submodule "vendor/notty"]
+	path = vendor/notty
+	url = https://github.com/vbmithr/notty.git
+	branch = master

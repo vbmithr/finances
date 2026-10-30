@@ -192,7 +192,7 @@ record can invalidate a formerly unique automatic link without rewriting evidenc
 Uncontested CSV value dates and bank suggestions are available in journal secondary
 dates and tags. They do not change booking dates, amounts, account classifications,
 or clearing status. The journal includes coverage counts, and inspection is exposed
-through `bank companions --institution boursobank` with an optional `--review` flag. Manual approval of links
+through `statement companions --institution boursobank` with an optional `--review` flag. Manual approval of links
 and conflicting metadata remains a later review-workflow feature.
 
 ## Decisions, transfers, and corrections
@@ -203,8 +203,8 @@ income categories; unresolved records remain unclassified. Distinguish suggestio
 from accepted decisions. Corrections and reclassification need controlled
 projection updates rather than another posting of the original movement.
 
-Explicit manual categorization is implemented with `bank review`,
-`bank categories apply`, and `bank categories history`. A JSON batch carries event IDs, approved
+Explicit manual categorization is implemented with `transaction review`,
+`transaction category apply`, and `transaction category history`. A JSON batch carries event IDs, approved
 expense/income accounts, and reasons. SQLite stores current decisions and an
 append-only audit. Reviewed projections survive regeneration, overlapping imports,
 and bank account renames. Corrections update only verified counter-postings;
@@ -259,7 +259,7 @@ with conservative ambiguity and conflict handling. Reimport and overlap reuse ev
 
 Use separate folders, imported with `fin import wise …` and
 `fin import boursobank …`, sharing the same database and journal output.
-`bank statements --institution wise` reports statement differences and `bank companions --institution wise` the CSV matching decisions.
+`statement list --institution wise` reports statement differences and `statement companions --institution wise` the CSV matching decisions.
 The combined journal includes every institution already stored. Opening balance
 postings, fee postings, and FX accounting are not inferred. Real FX and nonzero-fee
 cases need additional coverage; synthetic tests exercise fee metadata conflicts,
@@ -270,7 +270,7 @@ currency separation, reversals, and multi-bank replay.
 The Bunq adapter accepts the observed MT940 export and its seven-column CSV
 companion from `personal/bunq/inbox/`, imported with `fin import bunq`. MT940 supplies
 movements and reconciled account/currency balances; CSV observations add corroborating
-row provenance, never extra movements. `bank statements` reports persisted reconciliation
+row provenance, never extra movements. `statement list` reports persisted reconciliation
 and CSV matching states.
 
 Because upstream references are `NONREF`, identities include canonical movement
@@ -287,9 +287,9 @@ Revolut completed Current-account CSV import is available with an explicit
 nonzero fees are posted separately. Document/account scope and complete-day
 inventories guard reimports and overlaps without upstream transaction IDs.
 
-`transfers candidates` exposes both sides of potential same-currency principal
-transfers within seven booking days. `transfers review` applies explicit confirm or
-reject decisions with reasons, and `transfers history` preserves their audit.
+`transfer candidates` exposes both sides of potential same-currency principal
+transfers within seven booking days. `transfer review` applies explicit confirm or
+reject decisions with reasons, and `transfer history` preserves their audit.
 Confirmation asserts ownership and uses a shared transfer counter-account, leaving
 fees in expenses and bank quantities unchanged. It does not infer ownership from
 names or matching amounts. Ambiguous candidates need explicit selection; only one
@@ -309,7 +309,7 @@ atomically; explicit null clears curated metadata and omitted properties preserv
 it. Full database backups already include all settings.
 
 IBAN contradictions exclude pairs even when amount and booking date agree.
-`transfers preview` adds documented evidence points and globally consistent
+`transfer candidates` adds documented evidence points and globally consistent
 one-to-one assignment diagnostics, strongly favoring same-day bookings. It reports
 high/medium/ambiguous support rather than invented probability percentages. Missing
 records remain a limitation. Equal best assignments stay ambiguous, and oversized
