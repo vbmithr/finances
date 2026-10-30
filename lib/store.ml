@@ -5,6 +5,7 @@ module Db = Rel_sqlite3
 type t =
   { conn : Db.t
   ; registry : Registry.t
+  ; source_typing_cache : (string, Source_typing.t) Hashtbl.t
   }
 
 type ingest =
@@ -99,6 +100,11 @@ let delete_institution ?(dry_run = false) db name =
         else if dry_run
         then Ok ()
         else (
+          let delete_typing =
+            func "DELETE FROM source_typing_profiles WHERE institution=?" (text @-> unit)
+          in
+          let* () = db_result (Db.exec db.conn (delete_typing name)) in
+          Hashtbl.remove db.source_typing_cache name;
           let delete = func "DELETE FROM institutions WHERE name=?" (text @-> unit) in
           db_result (Db.exec db.conn (delete name)))))
 ;;
@@ -141,7 +147,7 @@ let with_connection ~mode path f =
 
 let with_open ~registry path f =
   with_connection ~mode:Read_write_create path (fun conn ->
-    let db = { conn; registry } in
+    let db = { conn; registry; source_typing_cache = Hashtbl.create (module String) } in
     let* () = initialize db in
     f db)
 ;;
@@ -439,6 +445,87 @@ let occurrence_columns (e : Source_event.t) =
   | Temporal.Date date -> None, Some (Date.to_string date)
 ;;
 
+let source_typing_profile db institution =
+  match Hashtbl.find db.source_typing_cache institution with
+  | Some profile -> Ok profile
+  | None ->
+    let query =
+      Rel_sql.Stmt.(
+        func
+          "SELECT profile FROM source_typing_profiles WHERE institution=?"
+          (text @-> ret Row.(t1 (text "profile"))))
+    in
+    let* stored = db_result (Db.first db.conn (query institution)) in
+    let* profile =
+      match stored with
+      | Some json -> Source_typing.of_json json
+      | None ->
+        (match Registry.default_source_typing db.registry institution with
+         | Some profile -> Ok profile
+         | None -> Source_typing.empty institution)
+    in
+    if not (String.equal (Source_typing.institution profile) institution)
+    then Or_error.error_string "source typing profile institution does not match its key"
+    else (
+      Hashtbl.set db.source_typing_cache ~key:institution ~data:profile;
+      Ok profile)
+;;
+
+let set_source_typing_profile db institution ~expected profile =
+  if not (String.equal institution (Source_typing.institution profile))
+  then Or_error.error_string "profile institution does not match the selected institution"
+  else
+    let* custom = institutions db in
+    if
+      not
+        (Registry.is_registered db.registry institution
+         || List.mem custom institution ~equal:String.equal)
+    then Or_error.error_string "unknown institution; see fin institution list"
+    else
+      transaction db (fun db ->
+        Hashtbl.remove db.source_typing_cache institution;
+        let* current = source_typing_profile db institution in
+        if
+          not
+            (String.equal
+               (Source_typing.to_json current)
+               (Source_typing.to_json expected))
+        then
+          Or_error.error_string
+            "source typing profile changed since preview; review it again"
+        else (
+          let query =
+            Rel_sql.Stmt.(
+              func
+                "INSERT INTO source_typing_profiles(institution,profile) VALUES (?,?) ON \
+                 CONFLICT(institution) DO UPDATE SET profile=excluded.profile"
+                (text @-> text @-> unit))
+          in
+          let* () =
+            db_result
+              (Db.exec db.conn (query institution (Source_typing.to_json profile)))
+          in
+          Hashtbl.remove db.source_typing_cache institution;
+          Ok ()))
+;;
+
+let reset_source_typing_profile db institution ~expected =
+  transaction db (fun db ->
+    Hashtbl.remove db.source_typing_cache institution;
+    let* current = source_typing_profile db institution in
+    if not (String.equal (Source_typing.to_json current) (Source_typing.to_json expected))
+    then
+      Or_error.error_string "source typing profile changed since preview; review it again"
+    else (
+      let query =
+        Rel_sql.Stmt.(
+          func "DELETE FROM source_typing_profiles WHERE institution=?" (text @-> unit))
+      in
+      let* () = db_result (Db.exec db.conn (query institution)) in
+      Hashtbl.remove db.source_typing_cache institution;
+      Ok ()))
+;;
+
 let ingest_in_transaction db (e : Source_event.t) =
   let at, on = occurrence_columns e in
   let* existing =
@@ -466,7 +553,8 @@ let ingest_in_transaction db (e : Source_event.t) =
     let* () =
       if Registry.is_movement db.registry e
       then
-        let* m = Registry.movement db.registry e in
+        let* profile = source_typing_profile db e.venue in
+        let* m = Registry.movement ~source_typing:profile db.registry e in
         db_result (Db.exec db.conn (insert_movement id e m))
       else Ok ()
     in
@@ -1302,7 +1390,8 @@ let preview_movement_types ?institution db =
       Hashtbl.find table event_id
       |> Or_error.of_option ~error:(Error.of_string "missing stored movement")
     in
-    let* updated = Registry.movement db.registry event in
+    let* profile = source_typing_profile db event.Source_event.venue in
+    let* updated = Registry.movement ~source_typing:profile db.registry event in
     if Option.equal Poly.equal old.movement_type updated.movement_type
     then Ok None
     else

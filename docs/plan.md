@@ -15,7 +15,7 @@ Last updated: 2026-10-30.
   companion), Bunq (MT940, CSV companion) and Revolut (CSV). Each is an adapter behind
   one registry; the kernel names no bank. Shared OFX parsing takes an explicit
   institution parameter rather than instantiating a functor.
-- Storage is schema 20: generic tables for every bank, plus each movement stored
+- Storage is schema 21: generic tables for every bank, plus each movement stored
   normalized at import, so reads are SQL queries instead of payload decoding. No
   migrations; older databases are refused unchanged.
 - Event occurrences and statement boundaries share `Temporal.t` (`Date` or
@@ -50,11 +50,11 @@ Last updated: 2026-10-30.
   `fin backup` saves one
   consistent SQLite snapshot; `fin restore BACKUP` validates and restores it,
   with overwrite confirmation and automatic removal of stale generated files.
-- 203 tests (149 OCaml cases and 54 CLI cases), plus status performance and
+- 206 tests (150 OCaml cases and 56 CLI cases), plus status performance and
   package man-page checks. Selected import changes have also been compared by
   rebuilding a personal database and diffing reports and source payloads.
 - Issue #1 is implemented locally and awaits publication.
-- The installed Arch package is `finances 0.1.0-23`; the tree uses schema 20.
+- The installed Arch package is `finances 0.1.0-23`; the tree uses schema 21.
 
 ### Personal data
 
@@ -110,6 +110,10 @@ The import side is done; turning movements into accounting is not.
 - [x] Filter transaction listings by movement type and accounting classification.
 - [x] List common and observed provider types and audit manual type overrides.
 - [x] Match rules on effective type and preview type and category actions together.
+- [x] Move BoursoBank source typing to editable per-institution profiles, with
+  previewed changes and explicit refresh of existing movements.
+- [ ] Move Wise companion type-code mappings into configurable source typing,
+  preserving companion matching and explicit refresh semantics.
 - [x] Undo confirmed transfer pairs by event ID, with an audited confirmation.
 - [x] Combine transfer evidence and candidates, and review pairs interactively;
   show each pair and explain which choices act on it or the batch. Selecting all

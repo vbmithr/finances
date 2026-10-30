@@ -9,6 +9,7 @@ type t
     fallback decodes the specified kind for otherwise unregistered institutions. *)
 val create
   :  ?fallback:string * (Source_event.t -> Movement.t Or_error.t)
+  -> ?source_typing:Source_typing.t list
   -> (module Adapter.S) list
   -> t Or_error.t
 
@@ -27,7 +28,13 @@ val is_movement : t -> Source_event.t -> bool
 
 (** Decodes with the venue adapter, or the explicitly configured fallback for
     an unregistered venue. All other unknown bank kinds are errors. *)
-val movement : t -> Source_event.t -> Movement.t Or_error.t
+val default_source_typing : t -> string -> Source_typing.t option
+
+val movement
+  :  ?source_typing:Source_typing.t
+  -> t
+  -> Source_event.t
+  -> Movement.t Or_error.t
 
 val find : t -> string -> (module Adapter.S) option
 

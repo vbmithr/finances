@@ -420,6 +420,77 @@ class ImportOnboarding(unittest.TestCase):
         matches = json.loads(self.run_fin('tx', 'list', '--type', 'example:reported', '--json').stdout)
         self.assertEqual({r['event_id'] for r in matches}, {source, target})
 
+    def test_configurable_institution_source_types(self):
+        self.run_fin('import', 'boursobank', 'fixtures/bank.ofx')
+        rows = json.loads(self.run_fin('tx', 'list', '--json').stdout)
+        original = next(r for r in rows if r['description'] == 'CAFÉ & CO')
+        event = original['event_id']
+        self.run_fin('tx', 'type', 'set', event, 'fee')
+        decisions = self.root / 'source-rule-category.json'
+        decisions.write_text(json.dumps([{'event_id': event, 'account': 'expenses:shopping', 'reason': 'reviewed'}]))
+        self.run_fin('tx', 'category', 'apply', decisions)
+        before_journal = self.run_fin('journal', 'export').stdout
+        defaults = json.loads(self.run_fin('institution', 'typing', 'show', 'bourso').stdout)
+        self.assertEqual(defaults['institution'], 'boursobank')
+        custom = dict(defaults)
+        custom['rules'] = [{'description': '^CAFÉ & CO$', 'account_type': None,
+                            'case_sensitive': False, 'type': 'bonus'}] + defaults['rules']
+        profile = self.root / 'source-types.json'
+        profile.write_text(json.dumps(custom, ensure_ascii=False))
+        output = self.terminal(['institution', 'typing', 'set', 'boursobank', profile],
+            [('Save this configuration? [Y/n]:', 'n')])
+        self.assertIn('Nothing changed.', output)
+        self.assertEqual(json.loads(self.run_fin('institution', 'typing', 'show', 'boursobank').stdout), defaults)
+        self.run_fin('institution', 'typing', 'set', 'boursobank', profile, '--yes')
+        row = next(r for r in json.loads(self.run_fin('tx', 'list', '--json').stdout) if r['event_id'] == event)
+        self.assertEqual(row['movement_type'], 'fee')
+        self.assertEqual(row['imported_movement_type'], original['movement_type'])
+        self.assertIn('movement_types_changed=1', self.run_fin('tx', 'refresh-types', '--institution', 'boursobank', '--yes').stdout)
+        row = next(r for r in json.loads(self.run_fin('tx', 'list', '--json').stdout) if r['event_id'] == event)
+        self.assertEqual((row['imported_movement_type'], row['movement_type'], row['counter_account']),
+                         ('bonus', 'fee', 'expenses:shopping'))
+        self.assertEqual(self.run_fin('journal', 'export').stdout, before_journal)
+        fresh = self.root / 'another.ofx'
+        fresh.write_text(Path('fixtures/bank.ofx').read_text().replace('<FITID>shared-id</FITID>', '<FITID>new-id</FITID>', 1))
+        self.run_fin('import', 'boursobank', fresh)
+        rows = json.loads(self.run_fin('tx', 'list', '--json', '--search', 'CAFÉ').stdout)
+        self.assertEqual({r['imported_movement_type'] for r in rows}, {'bonus'})
+        bad = self.root / 'bad-source-types.json'
+        bad.write_text(json.dumps({'version': 1, 'institution': 'boursobank', 'rules': [
+            {'description': '[', 'account_type': None, 'case_sensitive': False, 'type': 'fee'}]}))
+        self.assertNotEqual(self.run_fin('institution', 'typing', 'set', 'boursobank', bad, '--yes', check=False).returncode, 0)
+        self.assertEqual(json.loads(self.run_fin('institution', 'typing', 'show', 'boursobank').stdout), custom)
+        self.run_fin('institution', 'typing', 'reset', 'boursobank', '--yes')
+        self.assertEqual(json.loads(self.run_fin('institution', 'typing', 'show', 'boursobank').stdout), defaults)
+        self.assertEqual(next(r for r in json.loads(self.run_fin('tx', 'list', '--json').stdout) if r['event_id'] == event)['imported_movement_type'], 'bonus')
+        self.run_fin('tx', 'refresh-types', '--institution', 'boursobank', '--yes')
+        row = next(r for r in json.loads(self.run_fin('tx', 'list', '--json').stdout) if r['event_id'] == event)
+        self.assertIsNone(row['imported_movement_type'])
+        self.assertEqual(row['movement_type'], 'fee')
+        self.assertNotEqual(self.run_fin('institution', 'typing', 'show', 'no-such-provider', check=False).returncode, 0)
+
+    def test_configurable_typing_for_generic_institution(self):
+        self.run_fin('institution', 'add', 'provider')
+        profile = json.loads(self.run_fin('institution', 'typing', 'show', 'provider').stdout)
+        self.assertEqual(profile, {'version': 1, 'institution': 'provider', 'rules': []})
+        profile['rules'].append({'description': '^Shop$', 'account_type': None,
+                                 'case_sensitive': False, 'type': 'card'})
+        path = self.root / 'generic-types.json'
+        path.write_text(json.dumps(profile))
+        self.run_fin('institution', 'typing', 'set', 'provider', path, '--yes')
+        csv_path = self.root / 'generic.csv'
+        csv_path.write_text('Merchant,Date,USD\nShop,2026-10-01,11.00\n')
+        self.terminal(['import', 'provider', csv_path, '--account-id', 'card'], [
+            ('Use these columns?', '1'), ('Account type:', '1'),
+            ('Are purchases positive amounts in the file?', '1'),
+            ('Skip a summary row with an empty date?', '2'), ('Import these transactions?', '1')])
+        row = json.loads(self.run_fin('tx', 'list', '--json').stdout)[0]
+        self.assertEqual((row['movement_type'], row['classification']), ('card', 'unclassified'))
+        self.run_fin('account', 'delete', row['account_id'], '--yes')
+        self.run_fin('institution', 'delete', 'provider', '--yes')
+        self.run_fin('institution', 'add', 'provider')
+        self.assertEqual(json.loads(self.run_fin('institution', 'typing', 'show', 'provider').stdout)['rules'], [])
+
     def test_institution_list_reports_builtin_and_added(self):
         self.run_fin('institution', 'add', 'provider')
         result = self.run_fin('institution', 'list').stdout

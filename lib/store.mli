@@ -56,6 +56,20 @@ val rename_classification_rule
 val ingest : t -> Source_event.t -> ingest Or_error.t
 
 val events : t -> (int64 * Source_event.t) list Or_error.t
+val source_typing_profile : t -> string -> Source_typing.t Or_error.t
+
+val set_source_typing_profile
+  :  t
+  -> string
+  -> expected:Source_typing.t
+  -> Source_typing.t
+  -> unit Or_error.t
+
+val reset_source_typing_profile
+  :  t
+  -> string
+  -> expected:Source_typing.t
+  -> unit Or_error.t
 
 (** Every bank event with its decoded movement, in event order. *)
 val movements : t -> (int64 * Source_event.t * Movement.t) list Or_error.t

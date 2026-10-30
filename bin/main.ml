@@ -1765,6 +1765,159 @@ let institution_list_cmd =
     Term.(const institution_list $ database)
 ;;
 
+let resolve_typing_institution db name =
+  let registry = Store.registry db in
+  let built_in =
+    Registry.institutions registry
+    |> List.find ~f:(fun institution ->
+      (not (String.equal institution "csv"))
+      && List.mem (Registry.aliases registry institution) name ~equal:String.equal)
+  in
+  match built_in with
+  | Some name -> Ok name
+  | None ->
+    let%bind names = Store.institutions db in
+    if List.mem names name ~equal:String.equal
+    then Ok name
+    else Or_error.error_string "unknown institution; see fin institution list"
+;;
+
+let institution_typing_show database name =
+  with_database database (fun db ->
+    let%bind name = resolve_typing_institution db name in
+    let%map profile = Store.source_typing_profile db name in
+    print_endline (Source_typing.to_json profile))
+;;
+
+let institution_typing_show_cmd =
+  command
+    "show"
+    "Show the effective source typing configuration as JSON."
+    Term.(
+      const institution_typing_show
+      $ database
+      $ Arg.(
+          required
+          & pos 0 (some string) None
+          & info [] ~docv:"INSTITUTION" ~doc:"Institution name."))
+;;
+
+let institution_typing_set database name path yes =
+  let%bind contents = read_file path in
+  let%bind proposed = Source_typing.of_json contents in
+  with_database database (fun db ->
+    let%bind name = resolve_typing_institution db name in
+    let%bind () =
+      if String.equal name (Source_typing.institution proposed)
+      then Ok ()
+      else
+        Or_error.error_string
+          "profile institution does not match the selected institution"
+    in
+    let%bind current = Store.source_typing_profile db name in
+    printf
+      "Proposed source typing configuration for %s:\n%s\n"
+      (Terminal.text name)
+      (Source_typing.to_json proposed);
+    print_endline
+      "This affects future imports; use fin tx refresh-types to preview changes to \
+       existing transactions.";
+    let%bind confirmed =
+      if yes
+      then Ok true
+      else if Unix.isatty Unix.stdin
+      then
+        Ok
+          (Option.value_map
+             (prompt "Save this configuration? [Y/n]: ")
+             ~default:false
+             ~f:confirm_default_yes)
+      else
+        Or_error.error_string
+          "saving source typing configuration requires a terminal or --yes"
+    in
+    if not confirmed
+    then (
+      print_endline "Nothing changed.";
+      Ok ())
+    else (
+      let%map () = Store.set_source_typing_profile db name ~expected:current proposed in
+      print_endline "Source typing configuration saved."))
+;;
+
+let institution_typing_set_cmd =
+  command
+    "set"
+    "Replace an institution's source typing configuration from JSON."
+    Term.(
+      const institution_typing_set
+      $ database
+      $ Arg.(
+          required
+          & pos 0 (some string) None
+          & info [] ~docv:"INSTITUTION" ~doc:"Institution name.")
+      $ Arg.(
+          required
+          & pos 1 (some string) None
+          & info
+              []
+              ~docv:"FILE"
+              ~doc:"JSON configuration from fin institution typing show.")
+      $ Arg.(value & flag & info [ "yes" ] ~doc:"Save without prompting."))
+;;
+
+let institution_typing_reset database name yes =
+  with_database database (fun db ->
+    let%bind name = resolve_typing_institution db name in
+    let%bind current = Store.source_typing_profile db name in
+    let%bind default =
+      match Registry.default_source_typing (Store.registry db) name with
+      | Some profile -> Ok profile
+      | None -> Source_typing.empty name
+    in
+    printf
+      "Restore the default source typing configuration for %s:\n%s\n"
+      (Terminal.text name)
+      (Source_typing.to_json default);
+    print_endline
+      "Existing transaction types change only if you run fin tx refresh-types.";
+    let%bind confirmed =
+      if yes
+      then Ok true
+      else if Unix.isatty Unix.stdin
+      then
+        Ok
+          (Option.value_map
+             (prompt "Restore this configuration? [Y/n]: ")
+             ~default:false
+             ~f:confirm_default_yes)
+      else
+        Or_error.error_string
+          "resetting source typing configuration requires a terminal or --yes"
+    in
+    if not confirmed
+    then (
+      print_endline "Nothing changed.";
+      Ok ())
+    else (
+      let%map () = Store.reset_source_typing_profile db name ~expected:current in
+      print_endline "Source typing configuration reset."))
+;;
+
+let institution_typing_reset_cmd =
+  command
+    "reset"
+    "Restore an institution's default source typing configuration."
+    Term.(
+      const institution_typing_reset
+      $ database
+      $ Arg.(
+          required
+          & pos 0 (some string) None
+          & info [] ~docv:"INSTITUTION" ~doc:"Institution name.")
+      $ Arg.(value & flag & info [ "yes" ] ~doc:"Reset without prompting."))
+;;
+
 let institution_add database name sample =
   let%bind name =
     match name with
@@ -3907,6 +4060,13 @@ let () =
               ; institution_add_cmd
               ; institution_delete_cmd
               ; import_history_cmd
+              ; group
+                  "typing"
+                  "Inspect and configure import-time movement typing."
+                  [ institution_typing_show_cmd
+                  ; institution_typing_set_cmd
+                  ; institution_typing_reset_cmd
+                  ]
               ]
           ; group
               "settlement"

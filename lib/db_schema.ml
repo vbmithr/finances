@@ -3,7 +3,7 @@ open Rel
 
 (** One current experimental baseline; older databases must be reimported. Banks
     have no tables of their own. *)
-let version = 20
+let version = 21
 
 let timestamp = `Expr "(strftime('%Y-%m-%dT%H:%M:%f','now') || '000000000Z')"
 
@@ -2026,6 +2026,30 @@ module Movement_type_changes = struct
   ;;
 end
 
+module Source_typing_profiles = struct
+  type t =
+    { institution : string
+    ; profile : string
+    }
+
+  let institution = Col.make "institution" Type.text (fun (r : t) -> r.institution)
+  let profile = Col.make "profile" Type.text (fun (r : t) -> r.profile)
+
+  let row =
+    Row.(
+      unit (fun institution profile -> { institution; profile }) * institution * profile)
+  ;;
+
+  let table =
+    Table.make
+      ~primary_key:(Table.Primary_key.make [ Col.Def institution ])
+      "source_typing_profiles"
+      row
+  ;;
+
+  let definition = Sqlite_schema.table table
+end
+
 let definitions =
   [ Source_events.definition
   ; Movements.definition
@@ -2060,6 +2084,7 @@ let definitions =
   ; Reversal_changes.definition
   ; Movement_type_overrides.definition
   ; Movement_type_changes.definition
+  ; Source_typing_profiles.definition
   ]
 ;;
 

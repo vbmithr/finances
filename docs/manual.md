@@ -151,7 +151,7 @@ skips the question; without a terminal and without `--yes` it refuses.
 
 ### Rebuilding after a schema change
 
-This experimental release accepts schema version 20; it does not migrate older
+This experimental release accepts schema version 21; it does not migrate older
 databases and refuses them without changing the file. Before upgrading to a new
 schema, use the **old fin executable** to export account settings and save a
 full backup. Save the transaction list and review histories as reference when
@@ -711,6 +711,42 @@ inspection. An interest type is source information, not an income classification
 The settlement type likewise describes the statement; confirming a settlement
 is a separate accounting decision.
 
+### Configuring import-time typing
+
+Each institution has a source typing profile. BoursoBank starts with the
+built-in rules described above; a user-added CSV institution starts with an
+empty profile. Inspect and edit a profile as JSON, then install it:
+
+```sh
+fin institution typing show boursobank > boursobank-types.json
+$EDITOR boursobank-types.json
+fin institution typing set boursobank boursobank-types.json
+fin tx refresh-types --institution boursobank
+```
+
+The version 1 profile names its institution and contains an ordered `rules`
+array. Each rule has a `description` regular expression, `account_type` (an
+exact source account type, or `null` for any account), `case_sensitive` (a
+boolean), and `type`. The expression matches the first trimmed source
+statement description; the first matching rule wins. Use a type from
+`fin tx type list` or a provider-specific type; `unknown` is not a type.
+The file replaces the whole profile, so retain any default rules you need.
+The supplied BoursoBank defaults are in
+[`banks/source_type_defaults.json`](../banks/source_type_defaults.json).
+
+Setting a profile previews it and asks for confirmation (`--yes` accepts it).
+It affects subsequent imports. Existing movements change only when you run and
+confirm `refresh-types` as above. Manual type overrides and accounting decisions
+are preserved. `fin institution typing reset boursobank` previews and restores
+the bundled defaults; for a user-added institution it restores an empty profile.
+Deleting a user-added institution also deletes its profile. Profiles are stored
+in the database and included in database backups.
+
+These source rules are separate from reviewed transaction rules: they assign
+source types at import and do not categorize transactions. Wise's type codes
+from matched companion CSV rows are still handled by its adapter and are not
+changed by this profile or by `refresh-types`.
+
 Refresh existing types from stored source evidence after importer improvements:
 
 ```sh
@@ -826,7 +862,7 @@ belongs to hledger; `fin` tracks import evidence, account identity and review st
 ## Library and dependency changes
 
 This build uses Base, decimal, Ptime and Bos, with no Core or Bigdecimal
-dependency. Version 1 account snapshots remain compatible; databases use schema 20 and
+dependency. Version 1 account snapshots remain compatible; databases use schema 21 and
 are rebuilt from the original statements (see above).
 
 OCaml callers use `Quantity.t` (a `Decimal.t` alias) and `Date.t` (a `Ptime.date`

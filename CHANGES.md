@@ -10,6 +10,15 @@ short line of their own.
 
 ### 2026-10-30
 
+- Make BoursoBank import-time source typing configurable, with bundled defaults
+  and `fin institution typing show`, `set` and `reset`. User-added institutions
+  can define profiles too. Changes apply to new imports; preview and confirm
+  `fin tx refresh-types` to update existing source types. Manual overrides and
+  accounting decisions remain intact. Wise companion type mappings remain in
+  its adapter. **Action required:** schema 21 requires rebuilding the database.
+  Before upgrading, use the old executable to back up and export account settings;
+  after reimport, inspect and recreate review decisions and rules.
+
 - Extend previewed rules with optional effective-type conditions and movement
   type actions, independently or alongside category decisions. Preserve reviewed
   overrides and classifications, and record type decisions in audited history.

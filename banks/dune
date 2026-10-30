@@ -1,5 +1,13 @@
 (include_subdirs unqualified)
 
+(rule
+ (targets source_type_defaults.ml)
+ (deps source_type_defaults.json)
+ (action
+  (write-file
+   %{targets}
+   "let json = {fin|%{read:source_type_defaults.json}|fin}")))
+
 ; Adapters are pure: no Rel or SQLite dependency, enforced here.
 
 (library

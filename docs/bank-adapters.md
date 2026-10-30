@@ -339,3 +339,13 @@ Changing any of these requires a schema version bump and a rebuild:
   chain (closing = next opening) as a kernel check.
 - Wise fees: the observed CAMT has no `Chrgs`. Whether the CSV fee column should
   ever become a posted fee, or stay a journal tag.
+
+## Source typing profiles
+
+The registry applies an institution's ordered source typing profile to decoded
+primary movements at import. Bundled BoursoBank defaults live in
+`banks/source_type_defaults.json`; database overrides also work for user-added
+institutions. Profile changes do not modify existing movements until the user
+previews and confirms a type refresh. Wise companion type-code mappings remain
+in its adapter and are not affected by primary source typing profiles. Source
+typing is independent of reviewed accounting rules and manual overrides.

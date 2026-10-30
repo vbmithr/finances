@@ -290,7 +290,7 @@ or `Date of Date.t`.
 The `events` command prints an RFC 3339 `occurred_at` for instants, or
 `occurred_at: null` and a populated `occurred_on` for date-only OFX records.
 Wise records retain an instant and project using the local booking date.
-This experimental build supports only the current schema baseline (20). Fresh
+This experimental build supports only the current schema baseline (21). Fresh
 files initialize it atomically; other schema versions are rejected without changes.
 There are no historical migrations or schema fixtures. Reimport original statements
 and import exported account settings when resetting an experiment. Category and
@@ -527,6 +527,9 @@ classification. Terminal output uses `$PAGER` (default `less -FRX`); redirected
 and JSON output is not paged.
 Filter by movement type or accounting decision with, for example,
 `fin tx list --type interest` or `fin tx list --classification settlement`.
+Inspect and customize import-time source typing with `fin institution typing show`,
+`set` and `reset`; see the [manual](docs/manual.md#configuring-import-time-typing).
+
 Use `fin tx type list` to see available movement types, then run
 `fin tx type set EVENT-ID TYPE` to record a manual override. The imported type
 remains available, and `fin tx type reset EVENT-ID` removes the override.

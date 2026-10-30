@@ -4,9 +4,10 @@ type t =
   { adapters : (module Adapter.S) Map.M(String).t
   ; kinds : Set.M(String).t
   ; fallback : (string * (Source_event.t -> Movement.t Or_error.t)) option
+  ; source_typing : Source_typing.t Map.M(String).t
   }
 
-let create ?fallback adapters =
+let create ?fallback ?(source_typing = []) adapters =
   let open Or_error.Let_syntax in
   let%bind entries =
     List.map adapters ~f:(fun (module A : Adapter.S) ->
@@ -36,7 +37,13 @@ let create ?fallback adapters =
       |> List.concat_map ~f:(fun (module A : Adapter.S) -> A.kinds)
       |> Set.of_list (module String)
     in
-    Ok { adapters; kinds; fallback }
+    (match
+       Map.of_alist
+         (module String)
+         (List.map source_typing ~f:(fun p -> Source_typing.institution p, p))
+     with
+     | `Duplicate_key name -> Or_error.errorf "duplicate source typing profile: %s" name
+     | `Ok source_typing -> Ok { adapters; kinds; fallback; source_typing })
 ;;
 
 let institutions t = Map.keys t.adapters
@@ -49,16 +56,24 @@ let aliases t institution =
 ;;
 
 let is_movement t (event : Source_event.t) = Set.mem t.kinds event.kind
+let default_source_typing t institution = Map.find t.source_typing institution
 
-let movement t (event : Source_event.t) =
-  match Map.find t.adapters event.venue with
-  | Some (module A) when List.mem A.kinds event.kind ~equal:String.equal -> A.decode event
-  | Some _ ->
-    Or_error.errorf "institution %s does not produce %s events" event.venue event.kind
-  | None ->
-    (match t.fallback with
-     | Some (kind, decode) when String.equal kind event.kind -> decode event
-     | _ -> Or_error.errorf "no adapter is registered for institution %s" event.venue)
+let movement ?source_typing t (event : Source_event.t) =
+  let result =
+    match Map.find t.adapters event.venue with
+    | Some (module A) when List.mem A.kinds event.kind ~equal:String.equal ->
+      A.decode event
+    | Some _ ->
+      Or_error.errorf "institution %s does not produce %s events" event.venue event.kind
+    | None ->
+      (match t.fallback with
+       | Some (kind, decode) when String.equal kind event.kind -> decode event
+       | _ -> Or_error.errorf "no adapter is registered for institution %s" event.venue)
+  in
+  let profile = Option.first_some source_typing (default_source_typing t event.venue) in
+  Or_error.map result ~f:(fun movement ->
+    Option.value_map profile ~default:movement ~f:(fun p ->
+      Source_typing.apply p movement))
 ;;
 
 let find t institution = Map.find t.adapters institution
