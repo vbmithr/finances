@@ -1,8 +1,7 @@
 # Bank adapters and format libraries
 
-Status: the registry and generic schema are implemented. BoursoBank is a
-data-driven preset using the shared OFX and CSV companion importers; Bunq,
-Revolut and Wise still have adapters. Further format-library extraction and
+Status: the registry and generic schema are implemented. BoursoBank and Wise are
+data-driven presets using shared importers; Bunq and Revolut still have adapters. Further format-library extraction and
 external adapter conformance work remain.
 
 ## Rules
@@ -98,22 +97,25 @@ length must match too.
 
 ### `camt`: ISO 20022 cash management
 
-A reader for `camt.053` (statement), later `camt.052` (intraday report) and
-`camt.054` (notification), across their namespace versions (`.001.02` to
-current). Wise's parser accepts only `camt.053.001.10` today.
+The `finances.camt` library reads `camt.053` XML independently of an
+institution, retains the XML tree, namespaces and attributes, and exposes
+statement, account, balance and entry views. Its current views cover the fields
+needed by the existing importer; other XML remains available in the tree. It
+accepts CAMT.053 namespace versions, while Wise's configured source profile
+requires `.001.10`. Original document bytes are stored separately.
 
-Typed model of the subset banks use: `Stmt` (Id, ElctrncSeqNb, FrToDt, Acct
-with IBAN/Othr, Ccy, Svcr), `Bal` (type codes OPBD/CLBD/ITBD/CLAV…, amount,
-CdtDbtInd, date or datetime), `Ntry` (Amt, CdtDbtInd, RvslInd, Sts, BookgDt,
-ValDt, AcctSvcrRef, BkTxCd domain and proprietary, AddtlNtryInf, Chrgs) and
-`NtryDtls/TxDtls` (Refs including EndToEndId, RltdPties debtor/creditor names
-and accounts, RmtInf structured and unstructured). Reconciliation checks
-(opening + entries = closing, entry counts) are offered as functions, not
-forced during parsing.
-
-Wise keeps in its adapter: the servicer check, which field is its reference
-(`BkTxCd/Prtry/Cd`), cashback reference normalization and identity rules.
-Counterparty IBANs and charges become available to the movement model.
+`Camt_source` interprets those views using a typed profile for the servicer,
+reference field, reference normalization, account and source identity. It also
+checks booked entries and statement reconciliation. The shipped profile covers
+Wise; this is not yet a general-purpose CLI importer for arbitrary CAMT exports.
+The CAMT/CSV adapter and its clock-based CSV companion decoder are shared; the
+Wise column names and conflict fields come from a validated bundled profile. The
+current CSV decoder assumes comma-separated, day-first millisecond timestamps,
+and signed dot-decimal amounts. Wise's reported type codes use bundled automatic
+rules stored in the same rule table as other source rules. Each CSV observation
+retains its resolved type at import; explicit refresh previews changes. Further
+work includes user-configurable profiles, broader ISO 20022 fields and
+reconciliation policies, and CAMT.052/054.
 
 ### `mt940`: SWIFT MT940/MT942
 
@@ -299,8 +301,8 @@ rebuilt with the previous build against one rebuilt with the new build.
    rebuild from the personal inboxes gives the same events, entries, match
    states and reconciliations; journal provenance is one `companion-row-ids`
    tag.
-6. **Format libraries for the remaining banks:** `mt940` under Bunq and `camt`
-   under Wise, like `ofx` under BoursoBank.
+6. **Format libraries for the remaining banks:** the `camt.053` reader is shared;
+   extract `mt940` under Bunq and complete generic CAMT import.
 7. **External adapter example and conformance suite,** written against the
    finished interface.
 
@@ -344,5 +346,6 @@ Changing any of these requires a schema version bump and a rebuild:
 Fresh databases install bundled BoursoBank defaults into the same ordered rule
 table as user rules. Store applies automatic type and category actions to new
 movements; changing a rule does not rewrite existing movements. Type refresh and
-rule application preview historical changes. Wise companion type-code mappings
-remain in its adapter and are not affected by the automatic source rules.
+rule application preview historical changes. Wise companion type-code defaults
+are in the same rule table, and their import-time snapshots have a separate
+previewed refresh.

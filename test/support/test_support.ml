@@ -12,7 +12,9 @@ module Other_bank = struct
 end
 
 let registry =
-  Registry.create (Builtin.adapters @ [ (module Other_bank : Adapter.S) ])
+  Registry.create
+    ~reported_types:Builtin.reported_types
+    (Builtin.adapters @ [ (module Other_bank : Adapter.S) ])
   |> Or_error.ok_exn
 ;;
 

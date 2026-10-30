@@ -14,7 +14,18 @@ let adapters : (module Adapter.S) list =
         ~layout:p.layout
         ())
   in
-  presets @ [ (module Bunq); (module Revolut); (module Wise); (module Csv_adapter) ]
+  let camt_presets =
+    List.map Camt_institution_preset.all ~f:(fun (p : Camt_institution_preset.t) ->
+      Camt_csv_adapter.make
+        ~profile:p.camt_profile
+        ~csv_profile:p.csv_profile
+        ~aliases:p.aliases
+        ~csv:p.companion_format
+        ~policy:p.matching_policy
+        ~metadata_prefix:p.metadata_prefix
+        ())
+  in
+  presets @ camt_presets @ [ (module Bunq); (module Revolut); (module Csv_adapter) ]
 ;;
 
 let companion_layout name =
@@ -34,8 +45,19 @@ let source_evidence =
   |> Or_error.ok_exn
 ;;
 
+let reported_types =
+  Json.decode (Jsont.list Reported_type_defaults.codec) Reported_type_defaults_data.json
+  |> Or_error.ok_exn
+;;
+
 let registry =
-  Registry.create ~fallback ~fallbacks ~source_typing ~source_evidence adapters
+  Registry.create
+    ~fallback
+    ~fallbacks
+    ~source_typing
+    ~source_evidence
+    ~reported_types
+    adapters
   |> Or_error.ok_exn
 ;;
 
@@ -49,6 +71,7 @@ let registry_with_companions profiles =
     ~fallbacks
     ~source_typing
     ~source_evidence
+    ~reported_types
     ~fallback_institutions:(List.map profiles ~f:fst)
     (dynamic @ adapters)
   |> Or_error.ok_exn
@@ -70,6 +93,7 @@ let registry_with_csv_profile ?(companions = []) ?(institution = "csv") profile 
     ~fallbacks
     ~source_typing
     ~source_evidence
+    ~reported_types
     ~fallback_institutions:(institution :: List.map companions ~f:fst)
     ((Csv_adapter.make ~institution ~profile () :: dynamic) @ adapters)
   |> Or_error.ok_exn
@@ -94,6 +118,7 @@ let registry_with_ofx ?(companions = []) ~institution () =
     ~fallbacks
     ~source_typing
     ~source_evidence
+    ~reported_types
     ~fallback_institutions:(institution :: List.map companions ~f:fst)
     (extra @ dynamic @ adapters)
   |> Or_error.ok_exn

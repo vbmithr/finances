@@ -95,6 +95,7 @@ let companion : Companion.t =
       { Companion.value_on = None
       ; display_name = None
       ; movement_type = None
+      ; reported_type = None
       ; tags =
           (if String.is_empty row.counterparty
            then []

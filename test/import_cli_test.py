@@ -1313,6 +1313,22 @@ class ImportOnboarding(unittest.TestCase):
         self.assertEqual([r['action'] for r in history], ['confirmed', 'undone'])
         self.assertTrue(all(r['event_id'] == event for r in history))
 
+    def test_reported_type_rules_apply_on_import_and_preview_refresh(self):
+        self.run_fin('import', 'wise', 'fixtures/wise.csv', 'fixtures/wise.xml')
+        rules = json.loads(self.run_fin('rule', 'list', '--json').stdout)
+        self.assertTrue(any(r['name'] == 'wise-reported-card' for r in rules))
+        self.run_fin('rule', 'add-reported-type', 'my-card', 'wise', '^CARD$', 'bonus')
+        before = json.loads(self.run_fin('tx', 'list', '--institution', 'wise', '--json').stdout)
+        self.assertTrue(all(r['movement_type'] == 'card' for r in before))
+        preview = self.terminal(['tx', 'refresh-reported-types', '--institution', 'wise'],
+                                [('Apply these reported type changes?', 'n')])
+        self.assertIn('Proposed reported type changes: 3', preview)
+        self.assertIn('Nothing changed.', preview)
+        self.assertIn('reported_types_changed=3', self.run_fin('tx', 'refresh-reported-types', '--institution', 'wise', '--yes').stdout)
+        after = json.loads(self.run_fin('tx', 'list', '--institution', 'wise', '--json').stdout)
+        self.assertTrue(all(r['movement_type'] == 'bonus' for r in after))
+        self.assertIn('No reported type changes.', self.run_fin('tx', 'refresh-reported-types').stdout)
+
     def test_wise_enrichment_shows_merchant_and_matches_different_descriptions(self):
         self.run_fin('import', 'wise', 'fixtures/wise.xml', 'fixtures/wise.csv')
         rows = json.loads(self.run_fin('transaction', 'list', '--json').stdout)

@@ -1,0 +1,9 @@
+[
+  {
+    "institution": "wise",
+    "aliases": [],
+    "companion_format": "wise_csv",
+    "matching_policy": "wise-csv-v1",
+    "metadata_prefix": "wise"
+  }
+]

@@ -423,3 +423,9 @@
    %{dep:manpage_cli_test.py}
    %{exe:../bin/main.exe}
    %{dep:../packaging/arch/build.py})))
+
+(test
+ (name camt_test)
+ (modules camt_test)
+ (deps fixtures/wise.xml)
+ (libraries finances.camt base stdio alcotest))

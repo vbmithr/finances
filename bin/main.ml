@@ -1744,6 +1744,60 @@ let refresh_transaction_types database institution yes =
         printf "movement_types_changed=%d\n" count)))
 ;;
 
+let refresh_reported_types database institution yes =
+  with_database database (fun db ->
+    let%bind changes = Store.preview_reported_types ?institution db in
+    let name = Option.value_map ~default:"unknown" ~f:Movement_type.to_string in
+    if List.is_empty changes
+    then (
+      print_endline "No reported type changes.";
+      Ok ())
+    else (
+      printf "Proposed reported type changes: %d\n" (List.length changes);
+      List.iter changes ~f:(fun (c : Store.reported_type_change) ->
+        printf
+          "  CSV row #%Ld%s  %s  %s  %s -> %s\n"
+          c.row_id
+          (Option.value_map
+             c.event_id
+             ~default:""
+             ~f:(Printf.sprintf " (transaction #%Ld)"))
+          (Terminal.text c.institution)
+          (Terminal.text c.code)
+          (name c.before)
+          (name c.after));
+      let%bind confirmed =
+        if yes
+        then Ok true
+        else if Unix.isatty Unix.stdin
+        then
+          Ok
+            (Option.value_map
+               (prompt "Apply these reported type changes? [Y/n]: ")
+               ~default:false
+               ~f:confirm_default_yes)
+        else Or_error.error_string "reported type refresh requires a terminal or --yes"
+      in
+      if not confirmed
+      then (
+        print_endline "Nothing changed.";
+        Ok ())
+      else (
+        let%map count = Store.refresh_reported_types ?institution db ~expected:changes in
+        printf "reported_types_changed=%d\n" count)))
+;;
+
+let refresh_reported_types_cmd =
+  command
+    "refresh-reported-types"
+    "Preview and refresh types from imported provider codes."
+    Term.(
+      const refresh_reported_types
+      $ database
+      $ institution_filter
+      $ Arg.(value & flag & info [ "yes" ] ~doc:"Apply the preview without prompting."))
+;;
+
 let refresh_transaction_evidence database institution yes =
   with_database database (fun db ->
     let%bind changes = Store.preview_source_evidence ?institution db in
@@ -2768,7 +2822,9 @@ let rule_add
     match automatic, action with
     | true, (Classification_rule.Type _ | Category _ | Type_and_category _) -> Ok ()
     | true, Settlement _ -> Or_error.error_string "settlement rules require review"
-    | true, (Card_reference | Withdrawal_reversal_hint) -> Ok ()
+    | ( true
+      , (Card_reference | Withdrawal_reversal_hint | Reported_type _ | Reported_other _) )
+      -> Ok ()
     | false, _ -> Ok ()
   in
   let%bind rule =
@@ -3046,6 +3102,90 @@ let rule_add_evidence_cmd =
       $ Arg.(value & flag & info [ "replace" ] ~doc:"Replace an existing rule."))
 ;;
 
+let rule_add_reported_type
+      database
+      name
+      institution
+      pattern
+      target
+      case_sensitive
+      priority
+      replace
+  =
+  let action =
+    if String.is_prefix target ~prefix:"other:"
+    then Classification_rule.Reported_other (String.drop_prefix target 6)
+    else
+      Reported_type
+        (if String.equal target "unknown"
+         then None
+         else Some (Movement_type.of_string target))
+  in
+  let%bind rule =
+    Classification_rule.create
+      ~mode:Automatic
+      ~account_type:None
+      ~priority
+      ~name
+      ~pattern:(Some pattern)
+      ~institution:(Some institution)
+      ~match_type:None
+      ~case_sensitive
+      ~action
+  in
+  with_database database (fun db ->
+    let%bind () =
+      if replace
+      then Store.replace_classification_rule db rule
+      else Store.add_classification_rule db rule
+    in
+    printf
+      "Saved reported-type rule %s. It applies to future imports; run fin tx \
+       refresh-reported-types to preview existing changes.\n"
+      (Terminal.text name);
+    Ok ())
+;;
+
+let rule_add_reported_type_cmd =
+  command
+    "add-reported-type"
+    "Map an institution's reported type code to a movement type."
+    Term.(
+      const rule_add_reported_type
+      $ database
+      $ Arg.(
+          required
+          & pos 0 (some string) None
+          & info [] ~docv:"NAME" ~doc:"Unique rule name.")
+      $ Arg.(
+          required
+          & pos 1 (some string) None
+          & info [] ~docv:"INSTITUTION" ~doc:"Institution whose source codes are matched.")
+      $ Arg.(
+          required
+          & pos 2 (some string) None
+          & info
+              []
+              ~docv:"REGEX"
+              ~doc:"Expression matched against the reported type code.")
+      $ Arg.(
+          required
+          & pos 3 (some string) None
+          & info
+              []
+              ~docv:"TYPE"
+              ~doc:"Movement type, unknown, or other:PREFIX to retain unrecognized codes.")
+      $ Arg.(value & flag & info [ "case-sensitive" ] ~doc:"Match case sensitively.")
+      $ Arg.(
+          value
+          & opt int (-1000)
+          & info
+              [ "priority" ]
+              ~docv:"NUMBER"
+              ~doc:"Lower numbers run first (default: -1000).")
+      $ Arg.(value & flag & info [ "replace" ] ~doc:"Replace an existing rule."))
+;;
+
 let rule_list database json_output =
   with_database database (fun db ->
     let%map rules = Store.classification_rules db in
@@ -3167,6 +3307,9 @@ let rule_preview database name json_output =
       | Card_reference | Withdrawal_reversal_hint ->
         Or_error.error_string
           "use fin tx refresh-evidence to preview automatic evidence changes"
+      | Reported_type _ | Reported_other _ ->
+        Or_error.error_string
+          "use fin tx refresh-reported-types to preview automatic reported type changes"
       | _ -> Ok ()
     in
     let%map matches = Store.preview_classification_rule db rule in
@@ -3197,6 +3340,9 @@ let rule_apply database name yes =
       | Card_reference | Withdrawal_reversal_hint ->
         Or_error.error_string
           "use fin tx refresh-evidence to preview and apply evidence changes"
+      | Reported_type _ | Reported_other _ ->
+        Or_error.error_string
+          "use fin tx refresh-reported-types to preview and apply reported type changes"
       | _ -> Ok ()
     in
     let%bind matches = Store.preview_classification_rule db rule in
@@ -4440,6 +4586,7 @@ let () =
               ; rule_add_cmd ~settlement:false
               ; rule_add_cmd ~settlement:true
               ; rule_add_evidence_cmd
+              ; rule_add_reported_type_cmd
               ; rule_preview_cmd
               ; rule_apply_cmd
               ; rule_delete_cmd
@@ -4466,6 +4613,7 @@ let () =
               "Inspect and classify imported transactions."
               [ transaction_list_cmd
               ; refresh_transaction_types_cmd
+              ; refresh_reported_types_cmd
               ; refresh_transaction_evidence_cmd
               ; group
                   "type"

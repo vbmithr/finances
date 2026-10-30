@@ -5,6 +5,24 @@ open Finances
 let ok = Or_error.ok_exn
 let check = Alcotest.(check int)
 let replace s a b = String.substr_replace_all s ~pattern:a ~with_:b
+
+module Wise_csv = struct
+  include Csv_clock_companion
+
+  let profile = Option.value_exn (Csv_clock_profile.find "wise")
+  let camt = Option.value_exn (Camt_profile.find "wise")
+  let parse = parse profile camt
+  let match_rows = match_rows profile
+end
+
+module Wise_camt = struct
+  let profile = Option.value_exn (Camt_profile.find "wise")
+  let source = Camt_source.create profile
+  let parse = Camt_source.parse source
+  let source_transaction = Camt_source.source_transaction source
+  let matching_time = Camt_source.matching_time
+end
+
 let xml () = In_channel.read_all "fixtures/wise.xml"
 let csv () = In_channel.read_all "fixtures/wise.csv"
 
@@ -64,6 +82,110 @@ let parser () =
   error (Wise_csv.parse (replace (csv ()) "DEBIT" "CREDIT"));
   error
     (Wise_csv.parse (replace (csv ()) "02-01-2025 00:00:00.123" "02-01-2025 00:00:00"))
+;;
+
+let reusable_clock_csv () =
+  let wise = Option.value_exn (Csv_clock_profile.find "wise") in
+  let camt = Option.value_exn (Camt_profile.find "wise") in
+  let header =
+    List.map wise.header ~f:(fun s ->
+      if String.equal s "TransferWise ID" then "Reference" else s)
+  in
+  let profile =
+    { wise with
+      institution = "example"
+    ; name = "Example"
+    ; header
+    ; columns = { wise.columns with reference = "Reference" }
+    }
+  in
+  let profile =
+    Json.decode Csv_clock_profile.codec (Json.encode Csv_clock_profile.codec profile)
+    |> ok
+  in
+  let contents = replace (csv ()) "TransferWise ID" "Reference" in
+  let rows = ok (Csv_clock_companion.parse profile camt contents) in
+  check "other profile parses all rows" 3 (List.length rows);
+  Alcotest.(check bool)
+    "recognizes configured header"
+    true
+    (Csv_clock_companion.recognizes profile camt contents);
+  let bad = { profile with columns = { profile.columns with reference = "missing" } } in
+  error (Json.decode Csv_clock_profile.codec (Json.encode Csv_clock_profile.codec bad));
+  let module A =
+    (val Camt_csv_adapter.make
+           ~profile:camt
+           ~csv_profile:profile
+           ~csv:"example_csv"
+           ~policy:"example-v1"
+           ~metadata_prefix:"example"
+           ()
+      : Adapter.S)
+  in
+  Alcotest.(check (option string))
+    "configured importer recognizes CSV"
+    (Some "example_csv")
+    (A.probe ~filename:"statement.csv" contents);
+  let document =
+    ok (A.parse ~context:{ account_label = None } ~format:"example_csv" contents)
+  in
+  check "configured importer retains rows" 3 (List.length document.companion_rows)
+;;
+
+let reusable_camt_source () =
+  let wise = Option.value_exn (Camt_profile.find "wise") in
+  let profile =
+    { wise with
+      institution = "example"
+    ; servicer_contains = Some "other bank"
+    ; account_type_prefix = "account-"
+    ; event_kind = "example-camt"
+    ; payload_tag = "example-camt-v1"
+    ; reference_field = Camt_profile.Account_servicer_reference
+    ; reference_normalization = Camt_profile.Preserve
+    }
+  in
+  let profile =
+    Json.decode Camt_profile.codec (Json.encode Camt_profile.codec profile) |> ok
+  in
+  let contents =
+    xml ()
+    |> fun s ->
+    replace s ">Wise<" ">Other Bank<"
+    |> fun s -> replace s "<BkTxCd>" "<AcctSvcrRef>EXAMPLE-REF</AcctSvcrRef><BkTxCd>"
+  in
+  let engine = Camt_source.create profile in
+  let document = ok (Camt_source.parse engine contents) in
+  let transaction = List.hd_exn (List.hd_exn document.statements).transactions in
+  Alcotest.(check string) "configured bank" "example" transaction.account.bank_id;
+  Alcotest.(check string)
+    "configured account type"
+    "account-EUR"
+    transaction.account.account_type;
+  Alcotest.(check string) "configured reference field" "EXAMPLE-REF" transaction.reference;
+  let event =
+    ok
+      (Source_event.create
+         ~venue:"example"
+         ~account:(Camt_source.account_identity transaction.account)
+         ~kind:profile.event_kind
+         ~source_id:transaction.source_id
+         ~occurred_at:transaction.booked_at
+         ~payload:transaction.payload)
+  in
+  let decoded = ok (Camt_source.source_transaction engine event) in
+  Alcotest.(check string) "payload replay" transaction.payload decoded.payload;
+  let wrong =
+    ok
+      (Source_event.create
+         ~venue:"another"
+         ~account:event.account
+         ~kind:event.kind
+         ~source_id:event.source_id
+         ~occurred_at:transaction.booked_at
+         ~payload:event.payload)
+  in
+  error (Camt_source.source_transaction engine wrong)
 ;;
 
 let multi_bank () =
@@ -276,12 +398,110 @@ let review_enrichment () =
           (Option.map row.movement_type ~f:Movement_type.to_string)))
 ;;
 
+let reported_type_rules () =
+  memory (fun db ->
+    accepted (import db "first.csv" (csv ()));
+    accepted (import db "later.xml" (xml ()));
+    ignore (ok (Store.match_companions ~institution:"wise" db) : Store.companion_report);
+    let rows = ok (Store.bank_review db) in
+    check "all transactions imported" 3 (List.length rows);
+    List.iter rows ~f:(fun row ->
+      Alcotest.(check (option string))
+        "default from imported code"
+        (Some "card")
+        (Option.map row.movement_type ~f:Movement_type.to_string));
+    let event_id = (List.hd_exn rows).event_id in
+    ignore
+      (ok
+         (Store.set_movement_type_override
+            db
+            ~event_id
+            ~movement_type:(Some Movement_type.Fee))
+       : bool);
+    let rule =
+      ok
+        (Classification_rule.create
+           ~mode:Automatic
+           ~account_type:None
+           ~priority:(-1000)
+           ~name:"card-as-bonus"
+           ~pattern:(Some "^CARD$")
+           ~institution:(Some "wise")
+           ~match_type:None
+           ~case_sensitive:true
+           ~action:(Reported_type (Some Bonus)))
+    in
+    ok (Store.add_classification_rule db rule);
+    check
+      "all observations previewed"
+      3
+      (List.length (ok (Store.preview_reported_types ~institution:"wise" db)));
+    accepted (import db "first.csv" (csv ()));
+    let before = ok (Store.bank_review db) in
+    Alcotest.(check (option string))
+      "reimport does not change snapshot"
+      (Some "card")
+      (Option.map (List.hd_exn before).imported_movement_type ~f:Movement_type.to_string);
+    let preview = ok (Store.preview_reported_types ~institution:"wise" db) in
+    ok (Store.set_classification_rule_mode db "card-as-bonus" Disabled);
+    error (Store.refresh_reported_types ~institution:"wise" db ~expected:preview);
+    ok (Store.set_classification_rule_mode db "card-as-bonus" Automatic);
+    check
+      "refreshed rows"
+      3
+      (ok (Store.refresh_reported_types ~institution:"wise" db ~expected:preview));
+    let updated = ok (Store.bank_review db) in
+    List.iter updated ~f:(fun row ->
+      Alcotest.(check (option string))
+        "refreshed imported type"
+        (Some "bonus")
+        (Option.map row.imported_movement_type ~f:Movement_type.to_string));
+    let overridden =
+      List.find_exn updated ~f:(fun r -> Int64.equal r.event_id event_id)
+    in
+    Alcotest.(check (option string))
+      "manual override preserved"
+      (Some "fee")
+      (Option.map overridden.movement_type ~f:Movement_type.to_string))
+;;
+
+let reported_type_fallbacks () =
+  memory (fun db ->
+    let csv_unknown = replace (csv ()) ",CARD\n" ",UNKNOWN\n" in
+    accepted (import db "unknown.csv" csv_unknown);
+    accepted (import db "statement.xml" (xml ()));
+    ignore (ok (Store.match_companions ~institution:"wise" db) : Store.companion_report);
+    List.iter
+      (ok (Store.bank_review db))
+      ~f:(fun row ->
+        Alcotest.(check (option string))
+          "unknown code stays untyped"
+          None
+          (Option.map row.movement_type ~f:Movement_type.to_string)));
+  memory (fun db ->
+    let csv_other = replace (csv ()) ",CARD\n" ",NEW_CODE\n" in
+    accepted (import db "other.csv" csv_other);
+    accepted (import db "statement.xml" (xml ()));
+    ignore (ok (Store.match_companions ~institution:"wise" db) : Store.companion_report);
+    List.iter
+      (ok (Store.bank_review db))
+      ~f:(fun row ->
+        Alcotest.(check (option string))
+          "unrecognized code retained"
+          (Some "wise:NEW_CODE")
+          (Option.map row.movement_type ~f:Movement_type.to_string)))
+;;
+
 let () =
   Alcotest.run
     "Wise and multiple banks"
     [ ( "adapter"
       , List.map
           [ "parser and balances", parser
+          ; "reusable CAMT source profile", reusable_camt_source
+          ; "reusable clock CSV profile and importer", reusable_clock_csv
+          ; "reported type rules, replay and refresh", reported_type_rules
+          ; "unknown and provider-specific codes", reported_type_fallbacks
           ; "Ptime instants, raw text and stable identity", timestamp_precision
           ; "CSV UTC assumption and source-local matching", csv_times
           ; "two banks, replay, conflict", multi_bank

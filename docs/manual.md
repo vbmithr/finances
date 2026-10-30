@@ -812,7 +812,10 @@ NAME` to review and apply decisions to existing transactions. Reimporting the
 same source does not rerun automatic rules. The database and backups contain
 rules; the bundled defaults are installed for a fresh database from
 [`banks/source_type_defaults.json`](../banks/source_type_defaults.json).
-Wise companion CSV type codes still come from its adapter.
+Wise companion CSV type codes use the same rule list. The bundled
+[`banks/reported_type_defaults.json`](../banks/reported_type_defaults.json)
+maps known codes and preserves other codes as provider-specific types. These
+rules match the reported code, not the transaction description.
 
 Refresh existing types from stored source evidence after importer improvements:
 
@@ -825,8 +828,25 @@ applies the preview without prompting. Omit `--institution` for all institutions
 It does not change event IDs, transactions, accounting classifications or review
 history. It rechecks the preview and applies the type changes atomically. Types
 from matched companion files are separate and are not changed by this command.
-Use `fin transaction review` for unclassified items and hledger
-for accounting reports and running balances.
+For reported codes from companion CSVs, add an automatic rule and preview the
+changes to previously imported CSV rows:
+
+```sh
+fin rule add-reported-type wise-card wise '^CARD$' card --case-sensitive
+fin tx refresh-reported-types --institution wise
+```
+
+The positional arguments are rule name, institution, code expression and type.
+The special type `unknown` leaves a matching code untyped; `other:PREFIX`
+retains the code as a provider-specific type prefixed by `PREFIX`. Lower
+priorities run first; new rules default to -1000, ahead of bundled defaults.
+The refresh shows affected CSV rows and matched transaction IDs, asks for
+confirmation and rechecks the preview atomically; `--yes` accepts it. An
+unmatched CSV row is refreshed too, so a later CAMT import uses its stored type.
+Rule edits and reimports do not change previously stored results until refresh.
+Manual type overrides and accounting decisions are preserved. Use
+`fin transaction review` for unclassified items and hledger for accounting
+reports and running balances.
 
 ### Settlement and reversal evidence rules
 
@@ -963,7 +983,7 @@ belongs to hledger; `fin` tracks import evidence, account identity and review st
 ## Library and dependency changes
 
 This build uses Base, decimal, Ptime and Bos, with no Core or Bigdecimal
-dependency. Version 1 account snapshots remain compatible; databases use schema 24 and
+dependency. Version 1 account snapshots remain compatible; databases use schema 25 and
 are rebuilt from the original statements (see above).
 
 OCaml callers use `Quantity.t` (a `Decimal.t` alias) and `Date.t` (a `Ptime.date`

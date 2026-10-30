@@ -7,6 +7,7 @@ type t =
   ; fallback_institutions : Set.M(String).t
   ; source_typing : Source_typing.t Map.M(String).t
   ; source_evidence : Source_evidence.default list
+  ; reported_types : Reported_type_defaults.t list
   }
 
 let create
@@ -15,6 +16,7 @@ let create
       ?(fallback_institutions = [])
       ?(source_typing = [])
       ?(source_evidence = [])
+      ?(reported_types = [])
       adapters
   =
   let fallback_institutions = Set.of_list (module String) fallback_institutions in
@@ -62,6 +64,7 @@ let create
          ; fallback_institutions
          ; source_typing
          ; source_evidence
+         ; reported_types
          })
 ;;
 
@@ -77,6 +80,7 @@ let aliases t institution =
 let is_movement t (event : Source_event.t) = Set.mem t.kinds event.kind
 let default_source_typing t institution = Map.find t.source_typing institution
 let default_source_evidence t = t.source_evidence
+let default_reported_types t = t.reported_types
 
 let movement ?source_typing t (event : Source_event.t) =
   let result =

@@ -1,0 +1,4 @@
+(library
+ (name camt)
+ (public_name finances.camt)
+ (libraries base re xmlm))

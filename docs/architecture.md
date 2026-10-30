@@ -330,9 +330,10 @@ Paradex position reconstruction, funding, and exchange reconciliation are deferr
 until the bank workflow is complete. No API credentials or live exchange
 operations are needed by the current kernel.
 
-## Wise bank adapter
+## Wise CAMT and CSV preset
 
-Wise_camt reads the observed CAMT.053.001.10 shape, validates booked status,
+The shared CAMT.053 reader exposes the XML structure and statement views. The
+profile-driven `Camt_source` interprets Wise CAMT.053.001.10 and validates booked status,
 currency, interval, entry count when present, distinct event identities, and exact
 opening/movements/closing reconciliation before import. A statement and all source
 movements commit atomically. Rejected documents retain bytes and an import attempt.
@@ -350,19 +351,23 @@ boundaries use Ptime instants; the kernel represents them as `Temporal.Instant`,
 while Bunq supplies `Temporal.Date` without fabricating midnight or a timezone.
 Import and account/review audit timestamps also use Ptime through Rel codecs.
 
-Wise_csv exposes `booked_at` as a Ptime instant under a UTC assumption, retaining
+The shared clock-based CSV decoder reads a validated profile of column names and
+conflict fields, and exposes `booked_at` as a Ptime instant under a UTC assumption, retaining
 all 23 original source fields. Matching projects the CAMT booking instant back to
 its source-local wall clock using the supplied offset, treats that comparison
 clock as UTC too, and truncates it to milliseconds with Ptime. It deliberately
 compares local-clock evidence rather than requiring equality of the actual CAMT
 instant and the CSV's assumed instant.
 
-Wise_csv preserves all 23 fields and matches only Wise CAMT events using normalized
+The Wise profile preserves all 23 fields and matches only Wise CAMT events using normalized
 reference, local millisecond clock, amount and currency. Multiple balance accounts
 with indistinguishable candidates remain ambiguous. Separate observation and match
 tables keep BoursoBank's account/date/description matching policy independent.
 Both adapters share matching-state persistence and append-only decision history.
-The folder workflow recomputes both match sets before generic journal projection.
+The folder workflow recomputes both match sets before generic journal projection. Provider-reported
+CSV type codes are evaluated against the shared ordered rules at import, with
+one stored result per observation. A confirmed refresh rechecks its preview in a
+transaction. Matching and manual overrides remain separate from that snapshot.
 
 `statement list` recomputes statement reconciliation from stored event memberships
 using exact decimal quantities and exposes every Wise CSV row's match state. The journal adds
@@ -376,7 +381,7 @@ Three libraries separate the kernel from the banks:
 - `finances.core` (`core/`): quantities, dates, source events, `Movement`, the
   `Adapter.S` signature and `Registry`. No database access.
 - `finances.banks` (`banks/`): shared format importers, data-driven institution
-  presets and the remaining Bunq, Revolut and Wise adapters. `Builtin` assembles
+  presets and the remaining Bunq and Revolut adapters. `Builtin` assembles
   the registry. The library cannot depend on Rel or SQLite.
 - `finances` (`lib/`): Store, projection, transfer review and account
   configuration.
@@ -402,8 +407,8 @@ tables (`docs/bank-adapters.md`). The kernel library does not depend on
 `finances.banks`.
 
 The adapters share `Bank_match` for matching states and results. Exact CSV
-companion matching is implemented in `Csv_exact_match`; Wise uses its own
-reference and clock matching. Source events, database persistence, account mappings,
+companion matching is implemented in `Csv_exact_match`; Wise uses the shared
+`Csv_reference_match` reference and clock matching strategy. Source events, database persistence, account mappings,
 the common bank transaction view, and accounting projection stay in `lib/`.
 Folder scanning and import orchestration remain in `bank/`, and journal rendering
 remains in `journal/`. This is source organization within one library; adding a

@@ -14,6 +14,7 @@ type annotation =
   { value_on : Date.t option
   ; display_name : string option
   ; movement_type : Movement_type.t option
+  ; reported_type : string option
   ; tags : (string * string) list
   }
 

@@ -7,6 +7,8 @@ type action =
   | Type_and_category of Movement_type.t * string
   | Card_reference
   | Withdrawal_reversal_hint
+  | Reported_type of Movement_type.t option
+  | Reported_other of string
 
 type type_condition =
   | Unknown
@@ -46,6 +48,8 @@ let action_name = function
   | Type_and_category _ -> "type-category"
   | Card_reference -> "card-reference"
   | Withdrawal_reversal_hint -> "withdrawal-reversal"
+  | Reported_type _ -> "reported-type"
+  | Reported_other _ -> "reported-other"
 ;;
 
 let action_target = function
@@ -53,11 +57,19 @@ let action_target = function
   | Type value -> Movement_type.to_string value
   | Card_reference -> "capture-group-1"
   | Withdrawal_reversal_hint -> "withdrawal-reversal"
+  | Reported_type value ->
+    Option.value_map value ~default:"unknown" ~f:Movement_type.to_string
+  | Reported_other prefix -> prefix
 ;;
 
 let action_type = function
   | Type value | Type_and_category (value, _) -> Some value
-  | Category _ | Settlement _ | Card_reference | Withdrawal_reversal_hint -> None
+  | Category _
+  | Settlement _
+  | Card_reference
+  | Withdrawal_reversal_hint
+  | Reported_type _
+  | Reported_other _ -> None
 ;;
 
 let action_of_fields kind value type_value =
@@ -67,6 +79,13 @@ let action_of_fields kind value type_value =
   | "type", None -> Ok (Type (Movement_type.of_string value))
   | "card-reference", None -> Ok Card_reference
   | "withdrawal-reversal", None -> Ok Withdrawal_reversal_hint
+  | "reported-type", None ->
+    Ok
+      (Reported_type
+         (if String.equal value "unknown"
+          then None
+          else Some (Movement_type.of_string value)))
+  | "reported-other", None -> Ok (Reported_other value)
   | "type-category", Some name ->
     Ok (Type_and_category (Movement_type.of_string name, value))
   | _ -> Or_error.error_string "invalid rule action"
@@ -88,8 +107,9 @@ let create
   let%bind () =
     match mode, action with
     | Automatic, Settlement _ -> Or_error.error_string "settlement rules require review"
-    | Review, (Card_reference | Withdrawal_reversal_hint) ->
-      Or_error.error_string "evidence rules must be automatic or disabled"
+    | ( Review
+      , (Card_reference | Withdrawal_reversal_hint | Reported_type _ | Reported_other _) )
+      -> Or_error.error_string "evidence rules must be automatic or disabled"
     | _ -> Ok ()
   in
   let%bind () =
@@ -129,6 +149,10 @@ let create
   let%bind () = Option.value_map (action_type action) ~default:(Ok ()) ~f:validate_type in
   let%bind () =
     match action with
+    | (Reported_type _ | Reported_other _)
+      when Option.is_some account_type || Option.is_some match_type ->
+      Or_error.error_string
+        "reported-type rules do not accept account or movement-type conditions"
     | Category account | Type_and_category (_, account) ->
       let%bind _ = Bank_category.create ~event_id:1L ~account ~reason:"rule" in
       if String.equal account "equity:unclassified"
@@ -154,6 +178,21 @@ let create
              ~account_type
              ~match_type:None
          in
+         ())
+    | Reported_type kind ->
+      (match pattern, institution, kind with
+       | None, _, _ | _, None, _ ->
+         Or_error.error_string
+           "reported-type rules require an institution and code expression"
+       | Some _, Some _, Some kind -> validate_type kind
+       | Some _, Some _, None -> Ok ())
+    | Reported_other prefix ->
+      (match pattern, institution with
+       | None, _ | _, None ->
+         Or_error.error_string
+           "reported-type rules require an institution and code expression"
+       | Some _, Some _ ->
+         let%map _ = Validation.text "provider type prefix" prefix in
          ())
     | Type _ -> Ok ()
   in

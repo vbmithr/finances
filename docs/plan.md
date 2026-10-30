@@ -13,9 +13,9 @@ Last updated: 2026-10-30.
 
 - All four banks import: BoursoBank (OFX, CSV companion), Wise (CAMT.053, CSV
   companion), Bunq (MT940, CSV companion) and Revolut (CSV). BoursoBank is a
-  data-driven preset; the others use adapters behind the registry. User-added
+  data-driven presets along with Wise; Bunq and Revolut use adapters. User-added
   institutions can import OFX or configure a generic single-account CSV layout.
-- Storage is schema 24: generic tables for every bank, plus each movement stored
+- Storage is schema 25: generic tables for every bank, plus each movement stored
   normalized at import, so reads are SQL queries instead of payload decoding. No
   migrations; older databases are refused unchanged.
 - Event occurrences and statement boundaries share `Temporal.t` (`Date` or
@@ -50,11 +50,11 @@ Last updated: 2026-10-30.
   `fin backup` saves one
   consistent SQLite snapshot; `fin restore BACKUP` validates and restores it,
   with overwrite confirmation and automatic removal of stale generated files.
-- 216 tests (151 OCaml cases and 65 CLI cases), plus status performance and
+- 225 tests (159 OCaml cases and 66 CLI cases), plus status performance and
   package man-page checks. Selected import changes have also been compared by
   rebuilding a personal database and diffing reports and source payloads.
 - Issue #1 is implemented locally and awaits publication.
-- The installed Arch package is `finances 0.1.0-23`; the tree uses schema 24.
+- The installed Arch package is `finances 0.1.0-23`; the tree uses schema 25.
 
 ### Personal data
 
@@ -107,16 +107,23 @@ A prior database rebuilt from `personal/*/inbox` contained:
   import-time rules, with previewed refresh and existing review checks.
 - [x] Compose the BoursoBank preset from generic OFX, companion configuration
   and default rules; remove its dedicated adapter after equivalence tests.
-- [ ] Generalize the remaining Wise companion type mapping and other reusable
-  format policies. Keep explicit source identity, overlap and correction policies.
+- [x] Extract a shared CAMT.053 XML reader, profile-driven source interpreter,
+  configurable clock-based CSV layout and reference/clock matcher; compose
+  Wise from these shared components while preserving its identities and results.
+- [x] Compose the Wise preset from shared CAMT and CSV components and move its
+  reported type mappings into unified import-time rules with previewed refresh.
+- [ ] Expose generic CAMT setup to users and extend its format policies. Keep
+  explicit source identity, overlap and correction policies.
 
 ### 1. Bank adapters (`docs/bank-adapters.md`)
 
 - [x] Baseline, `iban` library, kernel types and registry, schema 11, import behind
   the adapters (steps 1 to 5).
 - [x] Currencies as `Iso4217.t`.
-- [ ] Step 6: `mt940` format library under Bunq and `camt` under Wise, like `ofx`
-  under BoursoBank. `camt` will need a `Bic.t` (ISO 9362).
+- [x] Extract the shared `camt.053` document reader and its current statement,
+  balance and entry views; use a profile-driven source interpreter for Wise.
+- [ ] Finish generic CAMT import and extract an `mt940` format library under Bunq.
+  Broader CAMT support may need a `Bic.t` (ISO 9362).
 - [ ] Step 7: an external adapter example and a conformance suite every adapter
   runs.
 - [ ] Open questions: partial export days blocking later exports under
@@ -139,7 +146,7 @@ The import side is done; turning movements into accounting is not.
   ordered rule set, automatic defaults and previewed historical changes.
 - [ ] Extend automatic rules to settlements after designing safe import-time
   card matching and reversal handling.
-- [ ] Move Wise companion type-code mappings into configurable source typing,
+- [x] Move Wise companion type-code mappings into unified automatic rules,
   preserving companion matching and explicit refresh semantics.
 - [x] Undo confirmed transfer pairs by event ID, with an audited confirmation.
 - [x] Combine transfer evidence and candidates, and review pairs interactively;

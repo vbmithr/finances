@@ -24,6 +24,36 @@
    %{targets}
    "let json = {fin|%{read:source_evidence_defaults.json}|fin}")))
 
+(rule
+ (targets camt_profiles_data.ml)
+ (deps camt_profiles.json)
+ (action
+  (write-file %{targets} "let json = {fin|%{read:camt_profiles.json}|fin}")))
+
+(rule
+ (targets csv_clock_profiles_data.ml)
+ (deps csv_clock_profiles.json)
+ (action
+  (write-file
+   %{targets}
+   "let json = {fin|%{read:csv_clock_profiles.json}|fin}")))
+
+(rule
+ (targets reported_type_defaults_data.ml)
+ (deps reported_type_defaults.json)
+ (action
+  (write-file
+   %{targets}
+   "let json = {fin|%{read:reported_type_defaults.json}|fin}")))
+
+(rule
+ (targets camt_institution_presets_data.ml)
+ (deps camt_institution_presets.json)
+ (action
+  (write-file
+   %{targets}
+   "let json = {fin|%{read:camt_institution_presets.json}|fin}")))
+
 ; Adapters are pure: no Rel or SQLite dependency, enforced here.
 
 (library
@@ -31,6 +61,17 @@
  (public_name finances.banks)
  (flags
   (:standard -open Finances_core))
- (libraries finances.core iban iso4217 ofx base jsont xmlm re digestif csv)
+ (libraries
+  finances.core
+  iban
+  iso4217
+  ofx
+  camt
+  base
+  jsont
+  xmlm
+  re
+  digestif
+  csv)
  (preprocess
   (pps ppx_sexp_conv ppx_compare ppx_let)))

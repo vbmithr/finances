@@ -277,6 +277,26 @@ type reversal_history_entry =
 
 val reversal_history : t -> reversal_history_entry list Or_error.t
 
+type reported_type_change =
+  { row_id : int64
+  ; event_id : int64 option
+  ; institution : string
+  ; code : string
+  ; before : Movement_type.t option
+  ; after : Movement_type.t option
+  }
+
+val preview_reported_types
+  :  ?institution:string
+  -> t
+  -> reported_type_change list Or_error.t
+
+val refresh_reported_types
+  :  ?institution:string
+  -> t
+  -> expected:reported_type_change list
+  -> int Or_error.t
+
 type source_evidence_change =
   { event_id : int64
   ; institution : string

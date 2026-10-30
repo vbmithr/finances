@@ -10,6 +10,19 @@ short line of their own.
 
 ### 2026-10-30
 
+- Compose Wise from bundled CAMT and CSV profiles and shared importers, and move
+  reported type-code mappings into the unified rules. Add `fin rule
+  add-reported-type` and previewed `fin tx refresh-reported-types`; existing
+  overrides and accounting decisions survive a refresh. **Action required:**
+  schema 25 requires rebuilding the database. Use the previous executable to
+  back up and export account settings, then reimport statements and recreate
+  rules and review decisions.
+
+- Extract a shared CAMT.053 XML reader, profile-driven source interpreter,
+  configurable clock-based CSV decoder and reference/clock matcher. Wise import
+  behavior and identities are preserved;
+  importing other institutions’ CAMT files is not yet exposed in the CLI.
+
 - Compose BoursoBank from a data-driven preset, the generic OFX importer and
   CSV companion engine. Preserve aliases, source identities, matching policy
   and existing evidence behavior while removing the dedicated adapter.

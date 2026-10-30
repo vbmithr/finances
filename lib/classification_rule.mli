@@ -7,6 +7,8 @@ type action =
   | Type_and_category of Movement_type.t * string
   | Card_reference
   | Withdrawal_reversal_hint
+  | Reported_type of Movement_type.t option
+  | Reported_other of string
 
 type type_condition =
   | Unknown
