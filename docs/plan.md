@@ -5,17 +5,17 @@ its status: tick off finished work, add discovered work, and refresh the "Where 
 are" figures when they move. History belongs in `CHANGES.md`; designs stay in the
 other documents, which this one links to rather than repeats.
 
-Last updated: 2026-10-30.
+Last updated: 2026-10-31.
 
 ## Where we are
 
 ### Code
 
 - All four banks import: BoursoBank (OFX, CSV companion), Wise (CAMT.053, CSV
-  companion), Bunq (MT940, CSV companion) and Revolut (CSV). BoursoBank is a
-  data-driven presets along with Wise; Bunq and Revolut use adapters. User-added
-  institutions can import OFX or configure a generic single-account CSV layout.
-- Storage is schema 25: generic tables for every bank, plus each movement stored
+  companion), Bunq (MT940, CSV companion) and Revolut (CSV). All use bundled
+  profiles and shared import components; none has a dedicated bank module.
+  User-added institutions can import OFX or configure a generic CSV layout.
+- Storage is schema 26: generic tables for every bank, plus each movement stored
   normalized at import, so reads are SQL queries instead of payload decoding. No
   migrations; older databases are refused unchanged.
 - Event occurrences and statement boundaries share `Temporal.t` (`Date` or
@@ -50,11 +50,11 @@ Last updated: 2026-10-30.
   `fin backup` saves one
   consistent SQLite snapshot; `fin restore BACKUP` validates and restores it,
   with overwrite confirmation and automatic removal of stale generated files.
-- 225 tests (159 OCaml cases and 66 CLI cases), plus status performance and
+- 231 tests (161 OCaml cases and 70 CLI cases), plus status performance and
   package man-page checks. Selected import changes have also been compared by
   rebuilding a personal database and diffing reports and source payloads.
 - Issue #1 is implemented locally and awaits publication.
-- The installed Arch package is `finances 0.1.0-23`; the tree uses schema 25.
+- The installed Arch package is `finances 0.1.0-23`; the tree uses schema 26.
 
 ### Personal data
 
@@ -89,6 +89,55 @@ A prior database rebuilt from `personal/*/inbox` contained:
 
 ### Generic institutions and reusable import formats
 
+The chosen model is **generic format support plus institution configuration**.
+Readers handle the structure of CSV, OFX, CAMT or MT940; institution settings
+supply the interpretation the format does not establish, such as columns, signs,
+account and transaction identities, matching policies and import-time rules.
+Fin previews the result, preserves source evidence and leaves uncertain meanings
+for review. The configuration is saved and reused for subsequent imports.
+
+An institution represents the real-world provider; a definition describes how
+fin imports and interprets its statements. The user creates the institution,
+then attaches or configures its import definition from a sample or a file. Fin
+validates and previews the definition before saving it. Built-in institutions
+start with bundled definitions that users can inspect and adjust. Definitions
+are saved configuration for the existing workflow, not institutions themselves
+or a competing setup path.
+
+Improve the generic readers and configuration using real institution exports.
+Keep fin's existing internal representation; do not introduce a public interchange
+format or external converter framework until a concrete case demonstrates the
+need. A format or policy that cannot yet be expressed may still require custom
+implementation.
+
+The goal is to add an institution through a user-supplied definition, without
+writing OCaml or rebuilding fin. Versioned definitions now cover primary CSV,
+OFX with a CSV companion, Wise-shaped CAMT with a CSV companion, a running-balance
+CSV, and an MT940/CSV profile. Fin stores attached definitions in the database and
+uses the same representation for the bundled institutions. Not every bank's format or policy is
+configurable yet.
+
+- [x] Load validated definitions at runtime, retain them in the database, and
+  expose bundled definitions as starting points. Preserve importer identity and
+  overlap policies across reimports and process restarts.
+- [x] Validate definitions and preview sample statements without importing. The
+  preview shows a few movements or companion rows and reports parse errors.
+- [x] Test a primary CSV definition against the two card exports: 57
+  movements imported, and replay was unchanged.
+- [x] Attach a validated definition to an existing institution, preview its
+  default source rules and add them to the unified rule set without overwriting
+  existing rules. Permit rule-only updates and refuse source interpretation
+  changes while imported evidence depends on the previous definition.
+- [ ] Integrate sample-based setup and saved definitions into one configuration
+  model without losing per-file account prompts for generic CSV directories.
+  Support changing source interpretation while preserving prior document profiles.
+- [ ] Extend sample diagnostics to identify all rejected rows where possible,
+  and test a previously unsupported institution. Generalize multi-account and
+  multi-currency CSV, identifiers, signs and companion matching as needed.
+- [ ] Reassess scripting when a concrete provider needs behavior that cannot
+  reasonably be expressed in a definition. A small native adapter remains an
+  option for genuinely unusual formats.
+
 - [x] Allow a user-added institution to import supported OFX 2.x without an
   institution-specific adapter; preserve account identity and FITID deduplication.
 - [x] Extend single-account generic CSV profiles to current and savings accounts,
@@ -112,7 +161,7 @@ A prior database rebuilt from `personal/*/inbox` contained:
   Wise from these shared components while preserving its identities and results.
 - [x] Compose the Wise preset from shared CAMT and CSV components and move its
   reported type mappings into unified import-time rules with previewed refresh.
-- [ ] Expose generic CAMT setup to users and extend its format policies. Keep
+- [ ] Extend configurable CAMT format policies beyond the Wise-shaped profile. Keep
   explicit source identity, overlap and correction policies.
 
 ### 1. Bank adapters (`docs/bank-adapters.md`)
@@ -122,8 +171,10 @@ A prior database rebuilt from `personal/*/inbox` contained:
 - [x] Currencies as `Iso4217.t`.
 - [x] Extract the shared `camt.053` document reader and its current statement,
   balance and entry views; use a profile-driven source interpreter for Wise.
-- [ ] Finish generic CAMT import and extract an `mt940` format library under Bunq.
-  Broader CAMT support may need a `Bic.t` (ISO 9362).
+- [x] Move Bunq and Revolut onto shared MT940/CSV and running-balance CSV
+  components and bundled profiles, preserving identities and observed behavior.
+- [ ] Broaden generic CAMT and MT940 parsing beyond the supported profile shapes;
+  broader CAMT support may need a `Bic.t` (ISO 9362).
 - [ ] Step 7: an external adapter example and a conformance suite every adapter
   runs.
 - [ ] Open questions: partial export days blocking later exports under

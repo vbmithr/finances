@@ -28,6 +28,19 @@ let transaction db f =
 let statement sql result = Rel_sql.Stmt.v sql ~rev_args:[] ~result
 let integer = Row.(t1 (int "value"))
 
+let institution_definitions db =
+  db_result
+    (Db.fold
+       db.conn
+       (statement
+          "SELECT name,definition_json FROM institution_definitions ORDER BY name"
+          Db_schema.Institution_definitions.row)
+       (fun (row : Db_schema.Institution_definitions.t) acc ->
+          (row.name, row.definition) :: acc)
+       [])
+  |> Result.map ~f:List.rev
+;;
+
 let institutions db =
   db_result
     (Db.fold
@@ -173,7 +186,35 @@ let delete_institution ?(dry_run = false) db name =
   transaction db (fun db ->
     let* name = Validation.token "institution name" name in
     let* names = institutions db in
-    if not (List.mem names name ~equal:String.equal)
+    let* definitions = institution_definitions db in
+    if
+      List.Assoc.mem definitions name ~equal:String.equal
+      && not (List.mem names name ~equal:String.equal)
+    then Or_error.error_string "built-in institutions cannot be deleted"
+    else if List.Assoc.mem definitions name ~equal:String.equal
+    then (
+      let count =
+        func
+          "SELECT (SELECT count(*) FROM source_events WHERE venue=?) + (SELECT count(*) \
+           FROM companion_rows WHERE institution=?)"
+          (text @-> text @-> ret integer)
+      in
+      let* count = db_result (Db.first db.conn (count name name)) in
+      if Option.value count ~default:0 > 0
+      then
+        Or_error.error_string
+          "institution has imported evidence; remove its accounts and companion rows \
+           first"
+      else if dry_run
+      then Ok ()
+      else (
+        let query =
+          func "DELETE FROM institution_definitions WHERE name=?" (text @-> unit)
+        in
+        let* () = db_result (Db.exec db.conn (query name)) in
+        let delete = func "DELETE FROM institutions WHERE name=?" (text @-> unit) in
+        db_result (Db.exec db.conn (delete name))))
+    else if not (List.mem names name ~equal:String.equal)
     then
       if
         List.exists (Registry.institutions db.registry) ~f:(fun institution ->
@@ -1012,6 +1053,79 @@ let add_classification_rule db (rule : Classification_rule.t) =
                   | Type_and_category (t, _) -> Some (Movement_type.to_string t)
                   | _ -> None )
             ]))
+;;
+
+let set_institution_definition
+      ?(dry_run = false)
+      db
+      ~name
+      ~definition
+      ~expected
+      ~expected_rules
+      ~rules
+      ~source_unchanged
+  =
+  transaction db (fun db ->
+    let* definitions = institution_definitions db in
+    let current = List.Assoc.find definitions name ~equal:String.equal in
+    if not (Option.equal String.equal current expected)
+    then
+      Or_error.error_string "institution definition changed since preview; review again"
+    else
+      let* existing_rules = classification_rules db in
+      if not (Poly.equal existing_rules expected_rules)
+      then Or_error.error_string "rules changed since preview; review again"
+      else
+        let* names = institutions db in
+        if
+          not
+            (List.mem names name ~equal:String.equal
+             || Registry.is_registered db.registry name)
+        then Or_error.errorf "unknown institution: %s" name
+        else (
+          let count =
+            Rel_sql.Stmt.(
+              func
+                "SELECT (SELECT count(*) FROM source_events WHERE venue=?) + (SELECT \
+                 count(*) FROM companion_rows WHERE institution=?)"
+                (text @-> text @-> ret integer))
+          in
+          let* count = db_result (Db.first db.conn (count name name)) in
+          if
+            Option.value count ~default:0 > 0
+            && (not source_unchanged)
+            && not (Option.equal String.equal current (Some definition))
+          then
+            Or_error.error_string
+              "institution has imported evidence; remove it before changing the \
+               definition"
+          else if dry_run
+          then
+            Ok
+              (List.count rules ~f:(fun (r : Classification_rule.t) ->
+                 not
+                   (List.exists existing_rules ~f:(fun old ->
+                      String.equal old.name r.name))))
+          else (
+            let sql =
+              Rel_sql.Stmt.(
+                func
+                  "INSERT INTO institution_definitions(name,definition_json) VALUES \
+                   (?,?) ON CONFLICT(name) DO UPDATE SET \
+                   definition_json=excluded.definition_json"
+                  (text @-> text @-> unit))
+            in
+            let* () = db_result (Db.exec db.conn (sql name definition)) in
+            let missing =
+              List.filter rules ~f:(fun (r : Classification_rule.t) ->
+                not
+                  (List.exists existing_rules ~f:(fun old -> String.equal old.name r.name)))
+            in
+            let* () =
+              Or_error.combine_errors_unit
+                (List.map missing ~f:(add_classification_rule db))
+            in
+            Ok (List.length missing))))
 ;;
 
 let delete_classification_rule db rule_name =

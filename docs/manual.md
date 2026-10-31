@@ -235,6 +235,89 @@ companion profile, a directory can contain both OFX and companion CSV files.
 Earlier files remain imported if a later file fails. For a generic CSV, you can also use `fin import FILE.csv`;
 fin prompts for its provider and account details when needed.
 
+### Attach an institution definition
+
+An institution definition is a versioned JSON file for a primary CSV, an OFX
+source with a CSV companion, a CAMT.053 source with a clock-based CSV companion,
+a running-balance CSV, or the supported MT940/CSV profile. Validate a definition and preview a sample before installing it:
+
+```sh
+fin institution definition show wise > institution.json
+$EDITOR institution.json
+fin institution definition check institution.json sample.xml
+fin institution add mybank
+fin institution definition set mybank institution.json
+fin institution list
+fin import mybank ~/Statements/mybank
+```
+
+Change the institution and any provider-specific settings in the template
+before attaching it. The institution name in the file must match the selected
+institution. When adapting a bundled template for another institution, give
+its rules distinct names as well. `set` previews the rules to add and asks for
+confirmation; `--yes` accepts the preview in scripts. Existing rules with the
+same names are retained, including rules belonging to other institutions. For a primary CSV, `fin import` requires `--account-id`
+(or prompts for the label on a terminal). `check` accepts `--account-id` for its
+preview and defaults to `preview`; it prints up to five movements or companion
+rows and does not open or change the database. Invalid samples report the first
+parse error. `show` accepts all four built-in institutions and installed
+definitions.
+
+For example, a primary CSV definition can be written as:
+
+```json
+{
+  "version": 1,
+  "kind": "csv",
+  "csv": {
+    "institution": "mycard",
+    "aliases": [],
+    "profile": {
+      "separator": ",",
+      "header": ["Date", "Merchant", "Amount"],
+      "date": "Date",
+      "date_format": "iso",
+      "amount_format": "dot",
+      "description": "Merchant",
+      "amount": "Amount",
+      "currency": "EUR",
+      "account_type": "prepaid-card",
+      "invert_amount": true,
+      "skip_column": null,
+      "skip_value": null
+    }
+  }
+}
+```
+
+This profile tracks one fixed currency; positive amounts in this example are
+purchases and are inverted to negative movements. Definitions can include default source-interpretation rules; these become normal
+editable rules in `fin rule list`. For example, add this top-level field to a
+definition:
+
+```json
+"rules": [
+  {"name": "mycard-purchase", "pattern": "^CARD ", "action": "type", "target": "card"}
+]
+```
+
+Supported actions are `type`, `card-reference`, `withdrawal-reversal`,
+`reported-type`, and `reported-other`. Rules may specify `priority`,
+`case_sensitive`, `account_type` and `match_type` where applicable. Use
+`fin rule add` for personal accounting rules. The CAMT interpreter supports the
+policies exposed by the Wise-shaped profile rather than every bank's CAMT format;
+likewise, the MT940 profile currently covers the observed Bunq-style structure,
+not every bank's MT940 variant.
+
+Fin saves the validated definition in its database, so later edits or removal of
+the JSON file do not change existing imports. To update it, run `definition set`
+again. Rule-only changes can be saved after import without changing existing
+transactions; existing rules with the same names are not overwritten. Changes to
+the source interpretation require removing the institution's imported evidence
+first, so previously stored records cannot be silently reinterpreted. Source identities, overlap and reconciliation follow the chosen importer:
+primary CSV uses day inventories, OFX uses its source IDs, and CAMT uses the
+configured reference and clock policy. Backups include installed definitions.
+
 ### Configure a CSV companion
 
 If an institution supplies both OFX and a CSV with additional transaction
@@ -983,7 +1066,7 @@ belongs to hledger; `fin` tracks import evidence, account identity and review st
 ## Library and dependency changes
 
 This build uses Base, decimal, Ptime and Bos, with no Core or Bigdecimal
-dependency. Version 1 account snapshots remain compatible; databases use schema 25 and
+dependency. Version 1 account snapshots remain compatible; databases use schema 26 and
 are rebuilt from the original statements (see above).
 
 OCaml callers use `Quantity.t` (a `Decimal.t` alias) and `Date.t` (a `Ptime.date`

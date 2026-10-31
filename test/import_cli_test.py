@@ -1313,6 +1313,104 @@ class ImportOnboarding(unittest.TestCase):
         self.assertEqual([r['action'] for r in history], ['confirmed', 'undone'])
         self.assertTrue(all(r['event_id'] == event for r in history))
 
+    def test_builtin_bunq_and_revolut_definitions(self):
+        for institution, kind, sample in [('bunq', 'mt940-csv', 'fixtures/bunq.mt940'),
+                                          ('revolut', 'running-csv', 'fixtures/revolut.csv')]:
+            with self.subTest(institution=institution):
+                profile = json.loads(self.run_fin('institution', 'definition', 'show', institution).stdout)
+                self.assertEqual(profile['kind'], kind)
+                path = self.root / (institution + '.json')
+                path.write_text(json.dumps(profile))
+                preview = self.run_fin('institution', 'definition', 'check', path, sample).stdout
+                self.assertIn('transactions', preview)
+                self.assertIn('no data was imported', preview)
+
+    def test_primary_csv_institution_definition(self):
+        definition = self.root / 'csv-definition.json'
+        definition.write_text(json.dumps({'version': 1, 'kind': 'csv', 'csv': {
+            'institution': 'examplecard', 'aliases': ['example'], 'profile': {
+                'separator': ',', 'header': ['Date', 'Merchant', 'Amount'],
+                'date': 'Date', 'description': 'Merchant', 'amount': 'Amount',
+                'currency': 'EUR', 'account_type': 'prepaid-card',
+                'invert_amount': True, 'skip_column': None, 'skip_value': None}}}))
+        sample = self.root / 'example.csv'
+        sample.write_text('Date,Merchant,Amount\n2025-01-01,Shop,12.50\n')
+        self.assertIn('1 transactions', self.run_fin('institution', 'definition', 'check', definition, sample).stdout)
+        self.run_fin('institution', 'add', 'examplecard')
+        self.run_fin('institution', 'definition', 'set', 'examplecard', definition, '--yes')
+        self.run_fin('import', 'example', sample, '--account-id', 'main')
+        self.run_fin('import', 'examplecard', sample, '--account-id', 'main')
+        rows = json.loads(self.run_fin('tx', 'list', '--institution', 'examplecard', '--json').stdout)
+        self.assertEqual(len(rows), 1)
+        self.assertEqual(rows[0]['amount'], '-12.5')
+
+    def test_definition_rules_are_previewed_and_preserve_edits(self):
+        self.run_fin('institution', 'add', 'examplecard')
+        self.run_fin('rule', 'add', 'existing-rule', '--institution', 'examplecard', '--description', '^Shop$', '--set-type', 'fee', '--automatic')
+        definition = self.root / 'rules-definition.json'
+        data = {'version': 1, 'kind': 'csv', 'csv': {
+            'institution': 'examplecard', 'aliases': [], 'profile': {
+                'separator': ',', 'header': ['Date', 'Merchant', 'Amount'],
+                'date': 'Date', 'description': 'Merchant', 'amount': 'Amount',
+                'currency': 'EUR', 'account_type': 'prepaid-card',
+                'invert_amount': True, 'skip_column': None, 'skip_value': None}},
+            'rules': [
+                {'name': 'existing-rule', 'pattern': '^Shop$', 'action': 'type', 'target': 'card'},
+                {'name': 'bonus-default', 'pattern': '^Gift$', 'action': 'type', 'target': 'bonus'}]}
+        definition.write_text(json.dumps(data))
+        transcript = self.terminal(['institution', 'definition', 'set', 'examplecard', str(definition)], [('Attach this definition?', 'n')])
+        self.assertIn('1 new rules, 1 existing rules retained', transcript)
+        self.assertIn('Nothing changed.', transcript)
+        before = json.loads(self.run_fin('rule', 'list', '--json').stdout)
+        self.assertFalse(any(r['name'] == 'bonus-default' for r in before))
+        self.run_fin('institution', 'definition', 'set', 'examplecard', definition, '--yes')
+        after = json.loads(self.run_fin('rule', 'list', '--json').stdout)
+        self.assertEqual(next(r['target'] for r in after if r['name'] == 'existing-rule'), 'fee')
+        self.assertEqual(next(r['target'] for r in after if r['name'] == 'bonus-default'), 'bonus')
+        sample = self.root / 'example.csv'
+        sample.write_text('Date,Merchant,Amount\n2025-01-01,Shop,12.50\n2025-01-02,Gift,5.00\n')
+        self.run_fin('import', 'examplecard', sample, '--account-id', 'main')
+        transactions = json.loads(self.run_fin('tx', 'list', '--institution', 'examplecard', '--json').stdout)
+        self.assertEqual({r['movement_type'] for r in transactions}, {'fee', 'bonus'})
+        data['rules'].append({'name': 'extra-default', 'pattern': '^Other$', 'action': 'type', 'target': 'card'})
+        definition.write_text(json.dumps(data))
+        self.run_fin('institution', 'definition', 'set', 'examplecard', definition, '--yes')
+        rules = json.loads(self.run_fin('rule', 'list', '--json').stdout)
+        self.assertTrue(any(r['name'] == 'extra-default' for r in rules))
+        self.assertEqual({r['movement_type'] for r in json.loads(self.run_fin('tx', 'list', '--institution', 'examplecard', '--json').stdout)}, {'fee', 'bonus'})
+        data['csv']['profile']['invert_amount'] = False
+        definition.write_text(json.dumps(data))
+        self.assertNotEqual(self.run_fin('institution', 'definition', 'set', 'examplecard', definition, '--yes', check=False).returncode, 0)
+
+    def test_runtime_institution_definition_and_sample_preview(self):
+        profile = json.loads(self.run_fin('institution', 'definition', 'show', 'wise').stdout)
+        profile['camt']['institution'] = 'samplebank'
+        profile['camt']['camt_profile']['institution'] = 'samplebank'
+        profile['camt']['camt_profile']['event_kind'] = 'samplebank-transaction'
+        profile['camt']['camt_profile']['payload_tag'] = 'samplebank-camt-v1'
+        profile['camt']['csv_profile']['institution'] = 'samplebank'
+        profile['camt']['metadata_prefix'] = 'samplebank'
+        profile['camt']['aliases'] = ['sample']
+        definition = self.root / 'samplebank.json'
+        definition.write_text(json.dumps(profile))
+        preview = self.run_fin('institution', 'definition', 'check', definition, 'fixtures/wise.xml').stdout
+        self.assertIn('3 transactions', preview)
+        self.assertIn('no data was imported', preview)
+        self.assertEqual(json.loads(self.run_fin('tx', 'list', '--json').stdout), [])
+        self.run_fin('institution', 'add', 'samplebank')
+        self.run_fin('institution', 'definition', 'set', 'samplebank', definition, '--yes')
+        self.assertIn('samplebank (definition)', self.run_fin('institution', 'list').stdout)
+        self.run_fin('import', 'sample', 'fixtures/wise.csv', 'fixtures/wise.xml')
+        rows = json.loads(self.run_fin('tx', 'list', '--institution', 'samplebank', '--json').stdout)
+        self.assertEqual(len(rows), 3)
+        definition.unlink()
+        self.assertEqual(len(json.loads(self.run_fin('tx', 'list', '--institution', 'samplebank', '--json').stdout)), 3)
+        self.assertNotEqual(self.run_fin('institution', 'delete', 'samplebank', '--yes', check=False).returncode, 0)
+        invalid = profile.copy()
+        invalid['version'] = 99
+        definition.write_text(json.dumps(invalid))
+        self.assertNotEqual(self.run_fin('institution', 'definition', 'check', definition, check=False).returncode, 0)
+
     def test_reported_type_rules_apply_on_import_and_preview_refresh(self):
         self.run_fin('import', 'wise', 'fixtures/wise.csv', 'fixtures/wise.xml')
         rules = json.loads(self.run_fin('rule', 'list', '--json').stdout)

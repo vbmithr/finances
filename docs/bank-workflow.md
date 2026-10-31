@@ -267,7 +267,7 @@ currency separation, reversals, and multi-bank replay.
 
 ## Bunq import
 
-The Bunq adapter accepts the observed MT940 export and its seven-column CSV
+The Bunq preset accepts the observed MT940 export and its seven-column CSV
 companion from `personal/bunq/inbox/`, imported with `fin import bunq`. MT940 supplies
 movements and reconciled account/currency balances; CSV observations add corroborating
 row provenance, never extra movements. `statement list` reports persisted reconciliation

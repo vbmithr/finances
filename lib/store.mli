@@ -32,6 +32,19 @@ val registry : t -> Registry.t
 (** User-added institutions using generic CSV layouts. *)
 val institutions : t -> string list Or_error.t
 
+val institution_definitions : t -> (string * string) list Or_error.t
+
+val set_institution_definition
+  :  ?dry_run:bool
+  -> t
+  -> name:string
+  -> definition:string
+  -> expected:string option
+  -> expected_rules:Classification_rule.t list
+  -> rules:Classification_rule.t list
+  -> source_unchanged:bool
+  -> int Or_error.t
+
 val institution_companion_profiles : t -> (string * string) list Or_error.t
 val institution_companion_profile : t -> string -> string option Or_error.t
 

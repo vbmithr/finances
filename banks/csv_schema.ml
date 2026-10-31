@@ -156,13 +156,13 @@ module Cell = struct
       ()
   ;;
 
-  let bunq_amount =
+  let fixed_comma_amount =
     quantity
       ~sign:`Negative_only
       ~grouping:`Spaces
       ~decimal_mark:`Comma
       ~decimals:(`Exact 2)
-      ~message:"invalid Bunq CSV amount"
+      ~message:"invalid fixed-decimal CSV amount"
       ()
   ;;
 

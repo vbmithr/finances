@@ -1,0 +1,39 @@
+[
+  {
+    "version": 1,
+    "institution": "revolut",
+    "name": "Revolut",
+    "aliases": [],
+    "format": "revolut_csv",
+    "kind": "revolut-transaction",
+    "payload_tag": "revolut-v1",
+    "account_prefix": "current-",
+    "header": [
+      "Type",
+      "Product",
+      "Started Date",
+      "Completed Date",
+      "Description",
+      "Amount",
+      "Fee",
+      "Currency",
+      "State",
+      "Balance"
+    ],
+    "columns": {
+      "type": "Type",
+      "product": "Product",
+      "started": "Started Date",
+      "completed": "Completed Date",
+      "description": "Description",
+      "amount": "Amount",
+      "fee": "Fee",
+      "currency": "Currency",
+      "state": "State",
+      "balance": "Balance"
+    },
+    "product_value": "Current",
+    "completed_value": "COMPLETED",
+    "reverted_value": "REVERTED"
+  }
+]

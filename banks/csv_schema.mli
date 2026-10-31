@@ -35,7 +35,7 @@ module Cell : sig
     -> Quantity.t t
 
   val french_amount : Quantity.t t
-  val bunq_amount : Quantity.t t
+  val fixed_comma_amount : Quantity.t t
   val decimal_balance : Quantity.t t
 end
 

@@ -1,8 +1,8 @@
 # Bank adapters and format libraries
 
-Status: the registry and generic schema are implemented. BoursoBank and Wise are
-data-driven presets using shared importers; Bunq and Revolut still have adapters. Further format-library extraction and
-external adapter conformance work remain.
+Status: the registry and generic schema are implemented. BoursoBank, Wise, Bunq
+and Revolut use data-driven presets and shared import components. Broader format
+coverage and external adapter conformance work remain.
 
 ## Rules
 
@@ -114,21 +114,18 @@ current CSV decoder assumes comma-separated, day-first millisecond timestamps,
 and signed dot-decimal amounts. Wise's reported type codes use bundled automatic
 rules stored in the same rule table as other source rules. Each CSV observation
 retains its resolved type at import; explicit refresh previews changes. Further
-work includes user-configurable profiles, broader ISO 20022 fields and
-reconciliation policies, and CAMT.052/054.
+work includes broader user-configurable ISO 20022 fields and reconciliation
+policies, and CAMT.052/054. A runtime definition can configure this existing
+CAMT/CSV profile shape without rebuilding fin.
 
 ### `mt940`: SWIFT MT940/MT942
 
-The field grammar: `:20:`, `:21:`, `:25:`, `:28C:`, `:60F:/:60M:`, `:61:`,
-`:86:`, `:62F:/:62M:`, `:64:`, `:65:`; and the `:61:` subfields (value date,
-optional entry date, D/C/RC/RD, funds code, amount, type code, customer
-reference, `//` bank reference, supplementary details). Entry-date year
-inference is a library function with the rule documented.
-
-`:86:` is free text whose structure varies by bank. The library returns it raw,
-plus optional parsers for common structured layouts (`/TAG/value` sequences,
-`?nn` subfields). Bunq's `/IBAN/…/NAME/…/REMI/…` decoding, the `NONREF`
-handling and the `BUNQ` header check stay in the Bunq adapter.
+The shared MT940 source currently supports the observed Bunq-style statement
+shape and a profile for institution identity, framing, entry expression, memo
+markers and its CSV companion. It preserves dated occurrence identities and
+checks opening plus movements equals closing. Other MT940 variants, including
+other field forms and memo structures, still need format support; this is not a
+complete MT940/MT942 library.
 
 ### `ofx`: OFX 2.x (implemented)
 

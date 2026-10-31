@@ -2,6 +2,10 @@ open Base
 open Stdio
 open Finances
 
+module Revolut_csv = Csv_running_source.Make (struct
+    let profile = Option.value_exn (Csv_running_profile.find "revolut")
+  end)
+
 let ok = Or_error.ok_exn
 let rejected name result = Alcotest.(check bool) name true (Result.is_error result)
 

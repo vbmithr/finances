@@ -381,8 +381,7 @@ Three libraries separate the kernel from the banks:
 - `finances.core` (`core/`): quantities, dates, source events, `Movement`, the
   `Adapter.S` signature and `Registry`. No database access.
 - `finances.banks` (`banks/`): shared format importers, data-driven institution
-  presets and the remaining Bunq and Revolut adapters. `Builtin` assembles
-  the registry. The library cannot depend on Rel or SQLite.
+  presets. `Builtin` assembles the registry from shared import components. The library cannot depend on Rel or SQLite.
 - `finances` (`lib/`): Store, projection, transfer review and account
   configuration.
 
@@ -411,8 +410,10 @@ companion matching is implemented in `Csv_exact_match`; Wise uses the shared
 `Csv_reference_match` reference and clock matching strategy. Source events, database persistence, account mappings,
 the common bank transaction view, and accounting projection stay in `lib/`.
 Folder scanning and import orchestration remain in `bank/`, and journal rendering
-remains in `journal/`. This is source organization within one library; adding a
-bank still requires wiring its importer and persistence into the workflow.
+remains in `journal/`. Versioned institution definitions can assemble the
+supported shared importers at runtime; fin stores installed definitions in the
+database so historical observations do not depend on a mutable external file.
+Unsupported format policies still require additional implementation.
 
 `dune fmt` applies the repository's ocamlformat configuration (Jane Street profile)
 to all adapter and shared OCaml files, including nested directories.
@@ -447,10 +448,10 @@ No bank suggestion automatically becomes a decision, and no extra journal entry
 is created for a category change. Review and history CLI commands expose these
 states; rendering must run again after applying decisions.
 
-## Bunq adapter
+## Bunq MT940 and CSV preset
 
-`Bunq_mt940` parses the observed Bunq MT940 form and verifies exact opening balance
-plus movements equals closing balance. `Bunq_transaction` builds canonical payloads
+The profile-driven `Mt940_source` parses the observed MT940 form and verifies exact
+opening balance plus movements equals closing balance. `Mt940_transaction` builds canonical payloads
 and identities including occurrence numbers, so identical repeated payments remain
 separate. Its generic source events use kind `bunq-transaction` and dated booking
 occurrences.
@@ -463,7 +464,7 @@ is archived. This conservatively rejects partial-day overlaps or corrections; no
 stable upstream IDs exist to resolve those safely. Statement membership uses the
 existing document/event links. The reconciliation API sums those persisted events.
 
-`Bunq_csv` treats the currency-free CSV as companion observations only. Normalized
+`Mt940_csv_companion` treats the currency-free CSV as companion observations only. Normalized
 account, dates, amount, counterparty, name and description form a matching key.
 Both sources must supply equal occurrence counts per key within each document;
 mismatches or currency ambiguity remain review items. CSV arrival order does not
@@ -476,7 +477,8 @@ The baseline includes Revolut document/account context,
 immutable daily movement inventories, current transfer decisions, unique per-event
 confirmed memberships, and append-only transfer changes.
 
-`Revolut_csv` supports the observed Current-account CSV: completed rows are
+`Csv_running_source` supports the observed Current-account CSV through a profile:
+completed rows are
 movements, reverted rows (no completion date, no balance) are skipped. Its caller must
 provide an account label because the file cannot identify the account. Canonical
 payloads retain original start/completion clock text, signed principal and

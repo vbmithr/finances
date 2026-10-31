@@ -1,0 +1,250 @@
+open Base
+
+type csv =
+  { institution : string
+  ; aliases : string list
+  ; profile : Csv_profile.t
+  }
+
+type source =
+  | Ofx_csv of Institution_preset.t
+  | Camt_csv of Camt_institution_preset.t
+  | Mt940_csv of Mt940_profile.t
+  | Running_csv of Csv_running_profile.t
+  | Csv of csv
+
+type action =
+  | Type
+  | Card_reference
+  | Withdrawal_reversal
+  | Reported_type
+  | Reported_other
+
+type rule =
+  { name : string
+  ; pattern : string
+  ; case_sensitive : bool
+  ; priority : int
+  ; account_type : string option
+  ; match_type : string option
+  ; action : action
+  ; target : string
+  }
+
+type t =
+  { source : source
+  ; rules : rule list
+  }
+
+let action_codec =
+  Jsont.enum
+    [ "type", Type
+    ; "card-reference", Card_reference
+    ; "withdrawal-reversal", Withdrawal_reversal
+    ; "reported-type", Reported_type
+    ; "reported-other", Reported_other
+    ]
+;;
+
+let rule_codec =
+  Jsont.Object.map
+    (fun name pattern case_sensitive priority account_type match_type action target ->
+       let name = Validation.token "rule name" name |> Json.or_error in
+       let _ = Transaction_pattern.compile ~case_sensitive pattern |> Json.or_error in
+       { name
+       ; pattern
+       ; case_sensitive
+       ; priority
+       ; account_type
+       ; match_type
+       ; action
+       ; target
+       })
+  |> Jsont.Object.mem "name" Jsont.string ~enc:(fun r -> r.name)
+  |> Jsont.Object.mem "pattern" Jsont.string ~enc:(fun r -> r.pattern)
+  |> Jsont.Object.mem "case_sensitive" Jsont.bool ~dec_absent:false ~enc:(fun r ->
+    r.case_sensitive)
+  |> Jsont.Object.mem "priority" Json.integer ~dec_absent:1000 ~enc:(fun r -> r.priority)
+  |> Jsont.Object.opt_mem "account_type" Jsont.string ~enc:(fun r -> r.account_type)
+  |> Jsont.Object.opt_mem "match_type" Jsont.string ~enc:(fun r -> r.match_type)
+  |> Jsont.Object.mem "action" action_codec ~enc:(fun r -> r.action)
+  |> Jsont.Object.mem "target" Jsont.string ~enc:(fun r -> r.target)
+  |> Jsont.Object.error_unknown
+  |> Jsont.Object.finish
+;;
+
+let camt_codec =
+  Jsont.Object.map
+    (fun
+        institution
+         aliases
+         companion_format
+         matching_policy
+         metadata_prefix
+         camt_profile
+         csv_profile
+       ->
+       let institution = Validation.token "institution" institution |> Json.or_error in
+       let aliases =
+         List.map aliases ~f:(fun x ->
+           Validation.token "institution alias" x |> Json.or_error)
+       in
+       let companion_format =
+         Validation.token "companion format" companion_format |> Json.or_error
+       in
+       let matching_policy =
+         Validation.token "matching policy" matching_policy |> Json.or_error
+       in
+       let metadata_prefix =
+         Validation.token "metadata prefix" metadata_prefix |> Json.or_error
+       in
+       if
+         not
+           (String.equal institution camt_profile.Camt_profile.institution
+            && String.equal institution csv_profile.Csv_clock_profile.institution)
+       then failwith "institution must agree with both CAMT and CSV profiles";
+       { Camt_institution_preset.institution
+       ; aliases
+       ; companion_format
+       ; matching_policy
+       ; metadata_prefix
+       ; camt_profile
+       ; csv_profile
+       })
+  |> Jsont.Object.mem
+       "institution"
+       Jsont.string
+       ~enc:(fun (p : Camt_institution_preset.t) -> p.institution)
+  |> Jsont.Object.mem
+       "aliases"
+       (Jsont.list Jsont.string)
+       ~enc:(fun (p : Camt_institution_preset.t) -> p.aliases)
+  |> Jsont.Object.mem
+       "companion_format"
+       Jsont.string
+       ~enc:(fun (p : Camt_institution_preset.t) -> p.companion_format)
+  |> Jsont.Object.mem
+       "matching_policy"
+       Jsont.string
+       ~enc:(fun (p : Camt_institution_preset.t) -> p.matching_policy)
+  |> Jsont.Object.mem
+       "metadata_prefix"
+       Jsont.string
+       ~enc:(fun (p : Camt_institution_preset.t) -> p.metadata_prefix)
+  |> Jsont.Object.mem
+       "camt_profile"
+       Camt_profile.codec
+       ~enc:(fun (p : Camt_institution_preset.t) -> p.camt_profile)
+  |> Jsont.Object.mem
+       "csv_profile"
+       Csv_clock_profile.codec
+       ~enc:(fun (p : Camt_institution_preset.t) -> p.csv_profile)
+  |> Jsont.Object.error_unknown
+  |> Jsont.Object.finish
+;;
+
+let csv_codec =
+  Jsont.Object.map (fun institution aliases profile ->
+    let institution = Validation.token "institution" institution |> Json.or_error in
+    let aliases =
+      List.map aliases ~f:(fun x ->
+        Validation.token "institution alias" x |> Json.or_error)
+    in
+    if List.is_empty profile.Csv_profile.header
+    then failwith "CSV header must not be empty";
+    List.iter
+      ([ profile.date_column; profile.description_column; profile.amount_column ]
+       @ Option.to_list (Option.map profile.skip_when ~f:fst))
+      ~f:(fun name -> ignore (Csv_profile.column profile.header name : int));
+    { institution; aliases; profile })
+  |> Jsont.Object.mem "institution" Jsont.string ~enc:(fun p -> p.institution)
+  |> Jsont.Object.mem "aliases" (Jsont.list Jsont.string) ~enc:(fun p -> p.aliases)
+  |> Jsont.Object.mem "profile" Csv_profile.codec ~enc:(fun p -> p.profile)
+  |> Jsont.Object.error_unknown
+  |> Jsont.Object.finish
+;;
+
+let codec =
+  Jsont.Object.map (fun () kind ofx camt csv running mt940 rules ->
+    match kind, ofx, camt, csv, running, mt940 with
+    | "ofx-csv", Some p, None, None, None, None -> { source = Ofx_csv p; rules }
+    | "camt-csv", None, Some p, None, None, None -> { source = Camt_csv p; rules }
+    | "csv", None, None, Some p, None, None -> { source = Csv p; rules }
+    | "running-csv", None, None, None, Some p, None -> { source = Running_csv p; rules }
+    | "mt940-csv", None, None, None, None, Some p -> { source = Mt940_csv p; rules }
+    | _ -> failwith "definition kind and source profile do not agree")
+  |> Jsont.Object.mem "version" (Json.version 1) ~enc:(fun _ -> ())
+  |> Jsont.Object.mem "kind" Jsont.string ~enc:(fun p ->
+    match p.source with
+    | Ofx_csv _ -> "ofx-csv"
+    | Camt_csv _ -> "camt-csv"
+    | Csv _ -> "csv"
+    | Running_csv _ -> "running-csv"
+    | Mt940_csv _ -> "mt940-csv")
+  |> Jsont.Object.opt_mem "ofx" Institution_preset.codec ~enc:(fun p ->
+    match p.source with
+    | Ofx_csv p -> Some p
+    | _ -> None)
+  |> Jsont.Object.opt_mem "camt" camt_codec ~enc:(fun p ->
+    match p.source with
+    | Camt_csv p -> Some p
+    | _ -> None)
+  |> Jsont.Object.opt_mem "csv" csv_codec ~enc:(fun p ->
+    match p.source with
+    | Csv p -> Some p
+    | _ -> None)
+  |> Jsont.Object.opt_mem "running" Csv_running_profile.codec ~enc:(fun p ->
+    match p.source with
+    | Running_csv p -> Some p
+    | _ -> None)
+  |> Jsont.Object.opt_mem "mt940" Mt940_profile.codec ~enc:(fun p ->
+    match p.source with
+    | Mt940_csv p -> Some p
+    | _ -> None)
+  |> Jsont.Object.mem "rules" (Jsont.list rule_codec) ~dec_absent:[] ~enc:(fun p ->
+    p.rules)
+  |> Jsont.Object.error_unknown
+  |> Jsont.Object.finish
+;;
+
+let institution t =
+  match t.source with
+  | Ofx_csv p -> p.institution
+  | Camt_csv p -> p.institution
+  | Csv p -> p.institution
+  | Running_csv p -> p.institution
+  | Mt940_csv p -> p.institution
+;;
+
+let adapter t =
+  match t.source with
+  | Running_csv p -> Csv_running_adapter.make p
+  | Mt940_csv p -> Mt940_csv_adapter.make p
+  | Ofx_csv p ->
+    Csv_ofx_adapter.make
+      ~institution:p.institution
+      ~aliases:p.aliases
+      ~csv_format:p.companion_format
+      ~policy:p.matching_policy
+      ~snapshot:p.snapshot
+      ~layout:p.layout
+      ()
+  | Csv p ->
+    let module A =
+      (val Csv_adapter.make ~institution:p.institution ~profile:p.profile () : Adapter.S)
+    in
+    (module struct
+      include A
+
+      let aliases = p.aliases
+    end : Adapter.S)
+  | Camt_csv p ->
+    Camt_csv_adapter.make
+      ~profile:p.camt_profile
+      ~csv_profile:p.csv_profile
+      ~aliases:p.aliases
+      ~csv:p.companion_format
+      ~policy:p.matching_policy
+      ~metadata_prefix:p.metadata_prefix
+      ()
+;;

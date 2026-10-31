@@ -8,6 +8,20 @@ short line of their own.
 
 ## Unreleased
 
+### 2026-10-31
+
+- Replace dedicated Bunq and Revolut modules with bundled profiles and shared
+  MT940/CSV and running-balance CSV import components. Preserve transaction
+  identities, source evidence, reconciliation and companion matching.
+
+- Add versioned runtime institution definitions for primary CSV, OFX with CSV
+  companions, and supported CAMT/CSV profiles. `fin institution definition
+  show`, `check` and `set` expose templates, preview samples and attach profiles
+  to existing institutions. Default source rules are previewed and added to the
+  unified rule list without overwriting existing rules. **Action required:**
+  schema 26 requires rebuilding the database. Back up and export account settings with the old executable, then
+  reimport statements and recreate rules and review decisions.
+
 ### 2026-10-30
 
 - Compose Wise from bundled CAMT and CSV profiles and shared importers, and move

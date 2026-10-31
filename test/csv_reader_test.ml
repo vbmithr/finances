@@ -139,7 +139,7 @@ let schema_validation_and_diagnostics () =
     let open Csv_schema in
     make (fun d q -> d, q)
     |> col_name "Date" (Cell.dmy_date ())
-    |> col_name "Amount" Cell.bunq_amount
+    |> col_name "Amount" Cell.fixed_comma_amount
     |> create
          ~name:"Diag"
          ~separator:','

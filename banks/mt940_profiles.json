@@ -1,0 +1,38 @@
+[
+  {
+    "version": 1,
+    "institution": "bunq",
+    "name": "Bunq",
+    "aliases": [],
+    "format": "bunq_mt940",
+    "companion_format": "bunq_csv",
+    "kind": "bunq-transaction",
+    "payload_tag": "bunq-v1",
+    "account_prefix": "current-",
+    "recognizer_prefix": "BUNQ",
+    "matching_policy": "bunq-csv-v1",
+    "remittance_marker": "/REMI/",
+    "name_marker": "/NAME/",
+    "counterparty_marker": "/IBAN/",
+    "entry_pattern": "^([0-9]{6})([0-9]{4})([CD])([0-9]+,[0-9]*)(N[A-Z]{3})NONREF$",
+    "header": [
+      "Date",
+      "Interest Date",
+      "Amount",
+      "Account",
+      "Counterparty",
+      "Name",
+      "Description"
+    ],
+    "columns": {
+      "booked_on": "Date",
+      "value_on": "Interest Date",
+      "amount": "Amount",
+      "account_id": "Account",
+      "counterparty": "Counterparty",
+      "name": "Name",
+      "description": "Description"
+    },
+    "metadata_prefix": "bunq"
+  }
+]

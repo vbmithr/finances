@@ -59,10 +59,29 @@ let companion_profiles path =
   |> Or_error.combine_errors
 ;;
 
+let institution_definitions path =
+  let%bind rows =
+    Store.with_open ~registry:Builtin.registry path Store.institution_definitions
+  in
+  rows
+  |> List.map ~f:(fun (name, json) ->
+    let%bind definition = Json.decode Institution_definition.codec json in
+    if String.equal name (Institution_definition.institution definition)
+    then Ok definition
+    else Or_error.error_string "stored institution definition name does not match")
+  |> Or_error.combine_errors
+;;
+
+let registry_for path =
+  let%bind profiles = companion_profiles path in
+  let%map definitions = institution_definitions path in
+  Builtin.registry_with_companions ~definitions profiles
+;;
+
 let with_database path f =
   let%bind () = require_database path in
-  let%bind profiles = companion_profiles path in
-  Store.with_open ~registry:(Builtin.registry_with_companions profiles) path f
+  let%bind registry = registry_for path in
+  Store.with_open ~registry path f
 ;;
 
 let write_file path contents =
@@ -568,9 +587,9 @@ let prompt text =
   In_channel.input_line In_channel.stdin
 ;;
 
-let import_account_label institution account_id =
+let import_account_label registry institution account_id =
   let validate = Validation.token "account label" in
-  match Registry.find Builtin.registry institution with
+  match Registry.find registry institution with
   | Some (module A : Adapter.S) when A.takes_account_label ->
     let message =
       Printf.sprintf
@@ -1001,9 +1020,9 @@ let csv_import_profile ?(setup_only = false) database path max_mib ~institution 
   Ok profile
 ;;
 
-let builtin_institution_name name =
-  List.exists (Registry.institutions Builtin.registry) ~f:(fun institution ->
-    List.mem (Registry.aliases Builtin.registry institution) name ~equal:String.equal)
+let builtin_institution_name registry name =
+  List.exists (Registry.institutions registry) ~f:(fun institution ->
+    List.mem (Registry.aliases registry institution) name ~equal:String.equal)
 ;;
 
 let ensure_generic_source database institution expected_kind =
@@ -1035,7 +1054,9 @@ let import_bank database institution paths journal max_mib account_id provider =
   then Or_error.error_string "max-file-mib must be between 1 and 1024"
   else (
     let%bind () = require_database database in
-    let%bind account_id = import_account_label institution account_id in
+    let%bind runtime_registry = registry_for database in
+    let%bind definitions = institution_definitions database in
+    let%bind account_id = import_account_label runtime_registry institution account_id in
     let journal =
       Option.value
         journal
@@ -1059,7 +1080,8 @@ let import_bank database institution paths journal max_mib account_id provider =
                 read_provider ()
               | Some name ->
                 (match Validation.token "CSV provider" (String.strip name) with
-                 | Ok name when not (builtin_institution_name name) -> Ok name
+                 | Ok name when not (builtin_institution_name runtime_registry name) ->
+                   Ok name
                  | Ok _ ->
                    eprintf "Choose a provider name that is not a built-in institution.\n";
                    read_provider ()
@@ -1070,7 +1092,7 @@ let import_bank database institution paths journal max_mib account_id provider =
             read_provider ()
           | None -> Or_error.error_string "generic CSV imports require --provider NAME"
         in
-        if builtin_institution_name provider
+        if builtin_institution_name runtime_registry provider
         then Or_error.error_string "CSV provider must not be a built-in institution name"
         else (
           let%bind () = ensure_generic_source database provider "csv-movement" in
@@ -1082,6 +1104,7 @@ let import_bank database institution paths journal max_mib account_id provider =
             selected_profile := Some (Json.encode Csv_profile.codec profile);
             ( provider
             , Builtin.registry_with_csv_profile
+                ~definitions
                 ~companions:companion_profiles
                 ~institution:provider
                 profile )
@@ -1090,12 +1113,16 @@ let import_bank database institution paths journal max_mib account_id provider =
               "generic CSV import currently accepts one file at a time"))
       else if Option.is_some provider
       then Or_error.error_string "--provider applies only to generic CSV imports"
-      else if Registry.is_registered Builtin.registry institution
-      then Ok (institution, Builtin.registry_with_companions companion_profiles)
+      else if Registry.is_registered runtime_registry institution
+      then Ok (institution, runtime_registry)
       else
         Ok
           ( institution
-          , Builtin.registry_with_ofx ~companions:companion_profiles ~institution () )
+          , Builtin.registry_with_ofx
+              ~definitions
+              ~companions:companion_profiles
+              ~institution
+              () )
     in
     let%bind report =
       Finances_bank.Sync.run
@@ -1111,7 +1138,7 @@ let import_bank database institution paths journal max_mib account_id provider =
     in
     let%bind () =
       if
-        Registry.is_registered Builtin.registry institution
+        Registry.is_registered runtime_registry institution
         || not
              (List.exists report.inbox.files ~f:(fun row ->
                 Poly.equal row.outcome Imported || Poly.equal row.outcome Unchanged))
@@ -1243,11 +1270,13 @@ let import_bank_cmd =
     "Import a bank's statement files, apply mappings, and publish a bank journal."
     Term.(
       const (fun database first paths journal max_mib account_id provider ->
+        let%bind () = require_database database in
+        let%bind runtime_registry = registry_for database in
         let institutions =
-          List.filter (Registry.institutions Builtin.registry) ~f:(fun institution ->
+          List.filter (Registry.institutions runtime_registry) ~f:(fun institution ->
             (not (String.equal institution "csv"))
             && List.mem
-                 (Registry.aliases Builtin.registry institution)
+                 (Registry.aliases runtime_registry institution)
                  first
                  ~equal:String.equal)
         in
@@ -1993,6 +2022,8 @@ let transaction_type_history_cmd =
 ;;
 
 let institution_list database =
+  let%bind () = require_database database in
+  let%bind definitions = institution_definitions database in
   List.iter (Registry.institutions Builtin.registry) ~f:(fun institution ->
     if not (String.equal institution "csv")
     then (
@@ -2004,9 +2035,18 @@ let institution_list database =
           "%s (built-in; aliases: %s)\n"
           institution
           (String.concat ~sep:", " aliases)));
+  List.iter definitions ~f:(fun definition ->
+    let name = Institution_definition.institution definition in
+    if not (Registry.is_registered Builtin.registry name)
+    then printf "%s (definition)\n" (Terminal.text name));
   with_database database (fun db ->
     let%map names = Store.institutions db in
-    List.iter names ~f:(fun name -> printf "%s (generic)\n" (Terminal.text name)))
+    List.iter names ~f:(fun name ->
+      if
+        not
+          (List.exists definitions ~f:(fun definition ->
+             String.equal name (Institution_definition.institution definition)))
+      then printf "%s (generic)\n" (Terminal.text name)))
 ;;
 
 let institution_list_cmd =
@@ -2027,7 +2067,9 @@ let institution_add database name sample =
     | None -> Or_error.error_string "institution name is required"
   in
   let%bind name = Validation.token "institution name" name in
-  let reserved = builtin_institution_name name in
+  let%bind () = require_database database in
+  let%bind runtime_registry = registry_for database in
+  let reserved = builtin_institution_name runtime_registry name in
   if reserved
   then Or_error.error_string "institution name is reserved for a built-in importer"
   else (
@@ -2088,6 +2130,408 @@ let institution_add_cmd =
               []
               ~docv:"SAMPLE.csv"
               ~doc:"Sample CSV for layout setup; no transactions are imported."))
+;;
+
+let definition_rules (definition : Institution_definition.t) =
+  let name = Institution_definition.institution definition in
+  let%bind () =
+    if
+      List.contains_dup
+        (List.map definition.rules ~f:(fun r -> r.name))
+        ~compare:String.compare
+    then Or_error.error_string "definition has duplicate rule names"
+    else Ok ()
+  in
+  List.map definition.rules ~f:(fun (r : Institution_definition.rule) ->
+    let kind =
+      match r.action with
+      | Type -> "type"
+      | Card_reference -> "card-reference"
+      | Withdrawal_reversal -> "withdrawal-reversal"
+      | Reported_type -> "reported-type"
+      | Reported_other -> "reported-other"
+    in
+    let%bind action = Classification_rule.action_of_fields kind r.target None in
+    Classification_rule.create
+      ~mode:Automatic
+      ~account_type:r.account_type
+      ~priority:r.priority
+      ~name:r.name
+      ~pattern:(Some r.pattern)
+      ~institution:(Some name)
+      ~match_type:(Option.map r.match_type ~f:Classification_rule.condition_of_string)
+      ~case_sensitive:r.case_sensitive
+      ~action)
+  |> Or_error.combine_errors
+;;
+
+let read_institution_definition path =
+  let%bind text = read_file path in
+  let%bind definition = Json.decode Institution_definition.codec text in
+  let%map _ = definition_rules definition in
+  definition
+;;
+
+let check_institution_definition path sample account_id =
+  let%bind definition = read_institution_definition path in
+  let module A = (val Institution_definition.adapter definition : Adapter.S) in
+  printf
+    "Definition: %s\nFormats: %s\n"
+    (Terminal.text A.institution)
+    (String.concat ~sep:", " A.formats);
+  match sample with
+  | None ->
+    print_endline "Definition is valid.";
+    Ok ()
+  | Some sample ->
+    let%bind contents = read_file sample in
+    let%bind format =
+      A.probe ~filename:sample contents
+      |> Or_error.of_option
+           ~error:(Error.of_string "sample is not recognized by this definition")
+    in
+    let%bind document =
+      A.parse
+        ~context:{ account_label = Some (Option.value account_id ~default:"preview") }
+        ~format
+        contents
+    in
+    let events =
+      document.events
+      @ List.concat_map document.statements ~f:(fun s -> s.Document.events)
+    in
+    let%bind movements = List.map events ~f:A.decode |> Or_error.combine_errors in
+    let%bind rules = definition_rules definition in
+    let rules =
+      List.sort rules ~compare:(fun a b ->
+        match Int.compare a.Classification_rule.priority b.priority with
+        | 0 -> String.compare a.name b.name
+        | n -> n)
+    in
+    let%bind typing =
+      rules
+      |> List.filter_map ~f:(fun (rule : Classification_rule.t) ->
+        match rule.action with
+        | Type kind ->
+          Some
+            (let%map r =
+               Source_typing.make_rule
+                 (Option.value_exn rule.pattern)
+                 rule.account_type
+                 rule.case_sensitive
+                 (Movement_type.to_string kind)
+             in
+             Source_typing.with_match_type
+               r
+               (Option.map rule.match_type ~f:Classification_rule.condition_name))
+        | _ -> None)
+      |> Or_error.combine_errors
+    in
+    let typing = Source_typing.create ~institution:A.institution typing in
+    let movements = List.map movements ~f:(Source_typing.apply typing) in
+    printf
+      "Sample: %s; %d statements, %d transactions, %d companion rows.\n"
+      (Terminal.text format)
+      (List.length document.statements)
+      (List.length movements)
+      (List.length document.companion_rows);
+    List.take movements 5
+    |> List.iter ~f:(fun m ->
+      printf
+        "  %s  %s %s  %s  %s\n"
+        (Date.to_string m.Movement.booked_on)
+        (Quantity.to_string m.amount)
+        (Iso4217.to_alpha_code m.account.currency)
+        (Option.value_map m.movement_type ~default:"unknown" ~f:Movement_type.to_string)
+        (Terminal.text (String.concat ~sep:" | " m.descriptions)));
+    (match
+       List.find A.companions ~f:(fun (c : Companion.t) -> String.equal c.format format)
+     with
+     | None -> ()
+     | Some companion ->
+       List.take document.companion_rows 5
+       |> List.iter ~f:(fun (number, fields) ->
+         let row : Companion.row =
+           { row_id = Int64.of_int number
+           ; document_id = 0L
+           ; institution = A.institution
+           ; format
+           ; row_number = number
+           ; fields
+           ; context = document.context
+           }
+         in
+         match companion.describe row with
+         | Error e -> eprintf "  Row %d: %s\n" number (Error.to_string_hum e)
+         | Ok details ->
+           printf
+             "  Row %d: %s\n"
+             number
+             (String.concat
+                ~sep:"; "
+                (List.filter_map details ~f:(fun (key, value) ->
+                   Option.map value ~f:(fun v ->
+                     Terminal.text key ^ "=" ^ Terminal.text v))))));
+    print_endline "Preview only; no data was imported.";
+    Ok ()
+;;
+
+let institution_definition_check_cmd =
+  command
+    "check"
+    "Validate an institution definition and preview a sample statement."
+    Term.(
+      const check_institution_definition
+      $ Arg.(required & pos 0 (some string) None & info [] ~docv:"DEFINITION.json")
+      $ Arg.(value & pos 1 (some string) None & info [] ~docv:"SAMPLE")
+      $ Arg.(
+          value
+          & opt (some string) None
+          & info
+              [ "account-id" ]
+              ~docv:"LABEL"
+              ~doc:"Account label for a primary CSV sample (default: preview)."))
+;;
+
+let bundled_definition_rules institution =
+  let source =
+    List.find Builtin.source_typing ~f:(fun p ->
+      String.equal (Source_typing.institution p) institution)
+    |> Option.to_list
+    |> List.concat_map ~f:(fun p ->
+      Source_typing.rules p
+      |> List.mapi ~f:(fun i (r : Source_typing.rule) ->
+        { Institution_definition.name =
+            Printf.sprintf "%s-default-%02d" institution (i + 1)
+        ; pattern = r.description
+        ; case_sensitive = r.case_sensitive
+        ; priority = i
+        ; account_type = r.account_type
+        ; match_type = r.match_type
+        ; action = Type
+        ; target = Movement_type.to_string r.kind
+        }))
+  in
+  let evidence =
+    Builtin.source_evidence
+    |> List.filter ~f:(fun (r : Source_evidence.default) ->
+      String.equal r.institution institution)
+    |> List.map ~f:(fun (r : Source_evidence.default) ->
+      { Institution_definition.name = r.name
+      ; pattern = r.pattern
+      ; case_sensitive = r.case_sensitive
+      ; priority = 100
+      ; account_type = None
+      ; match_type = None
+      ; action =
+          (match r.action with
+           | Card_reference -> Card_reference
+           | Withdrawal_reversal -> Withdrawal_reversal)
+      ; target = Source_evidence.action_name r.action
+      })
+  in
+  let reported =
+    Builtin.reported_types
+    |> List.filter ~f:(fun (r : Reported_type_defaults.t) ->
+      String.equal r.institution institution)
+    |> List.map ~f:(fun (r : Reported_type_defaults.t) ->
+      let action, target =
+        match r.action with
+        | Type kind ->
+          ( Institution_definition.Reported_type
+          , Option.value_map kind ~default:"unknown" ~f:Movement_type.to_string )
+        | Other prefix -> Reported_other, prefix
+      in
+      { Institution_definition.name = r.name
+      ; pattern = r.pattern
+      ; case_sensitive = r.case_sensitive
+      ; priority = r.priority
+      ; account_type = None
+      ; match_type = None
+      ; action
+      ; target
+      })
+  in
+  source @ evidence @ reported
+;;
+
+let show_institution_definition database name =
+  let builtin =
+    match Institution_preset.find name with
+    | Some p ->
+      Some
+        { Institution_definition.source = Ofx_csv p
+        ; rules = bundled_definition_rules p.institution
+        }
+    | None ->
+      List.find Camt_institution_preset.all ~f:(fun p ->
+        List.mem (p.institution :: p.aliases) name ~equal:String.equal)
+      |> Option.map ~f:(fun p ->
+        { Institution_definition.source = Camt_csv p
+        ; rules = bundled_definition_rules p.institution
+        })
+      |> fun result ->
+      Option.first_some
+        result
+        (List.find Csv_running_profile.all ~f:(fun p ->
+           List.mem (p.institution :: p.aliases) name ~equal:String.equal)
+         |> Option.map ~f:(fun p ->
+           { Institution_definition.source = Running_csv p
+           ; rules = bundled_definition_rules p.institution
+           }))
+      |> fun result ->
+      Option.first_some
+        result
+        (List.find Mt940_profile.all ~f:(fun p ->
+           List.mem (p.institution :: p.aliases) name ~equal:String.equal)
+         |> Option.map ~f:(fun p ->
+           { Institution_definition.source = Mt940_csv p
+           ; rules = bundled_definition_rules p.institution
+           }))
+  in
+  let%bind () = require_database database in
+  let%bind definitions = institution_definitions database in
+  let%bind definition =
+    match
+      List.find definitions ~f:(fun d ->
+        String.equal (Institution_definition.institution d) name)
+    with
+    | Some d -> Ok d
+    | None ->
+      Or_error.of_option builtin ~error:(Error.of_string "unknown institution definition")
+  in
+  print_endline (Json.encode ~format:Jsont.Indent Institution_definition.codec definition);
+  Ok ()
+;;
+
+let institution_definition_show_cmd =
+  command
+    "show"
+    "Show a bundled or installed institution definition as JSON."
+    Term.(
+      const show_institution_definition
+      $ database
+      $ Arg.(required & pos 0 (some string) None & info [] ~docv:"INSTITUTION"))
+;;
+
+let set_institution_definition database name path yes =
+  let%bind () = require_database database in
+  let%bind definition = read_institution_definition path in
+  let module A = (val Institution_definition.adapter definition : Adapter.S) in
+  if not (String.equal A.institution name)
+  then
+    Or_error.error_string "definition institution does not match the selected institution"
+  else (
+    let%bind registry = registry_for database in
+    let%bind generic = with_database database Store.institutions in
+    if
+      not
+        (Registry.is_registered registry name || List.mem generic name ~equal:String.equal)
+    then
+      Or_error.errorf "unknown institution: %s; create it with fin institution add" name
+    else (
+      let registered =
+        Registry.institutions registry
+        |> List.filter ~f:(fun owner -> not (String.equal owner name))
+        |> List.concat_map ~f:(Registry.aliases registry)
+      in
+      if
+        List.contains_dup (name :: A.aliases) ~compare:String.compare
+        || List.exists A.aliases ~f:(fun alias ->
+          List.mem (registered @ generic) alias ~equal:String.equal)
+      then Or_error.error_string "institution alias is already in use"
+      else (
+        let%bind _ = Registry.create [ (module A : Adapter.S) ] in
+        let%bind rules = definition_rules definition in
+        let json = Json.encode Institution_definition.codec definition in
+        let%bind expected, expected_rules =
+          with_database database (fun db ->
+            let%bind definitions = Store.institution_definitions db in
+            let%map rules = Store.classification_rules db in
+            List.Assoc.find definitions name ~equal:String.equal, rules)
+        in
+        let%bind source_unchanged =
+          match expected with
+          | None -> Ok false
+          | Some text ->
+            let%map old = Json.decode Institution_definition.codec text in
+            Poly.equal old.source definition.source
+        in
+        let%bind _ =
+          with_database database (fun db ->
+            Store.set_institution_definition
+              ~dry_run:true
+              db
+              ~name
+              ~definition:json
+              ~expected
+              ~expected_rules
+              ~rules
+              ~source_unchanged)
+        in
+        let added, retained =
+          List.partition_tf rules ~f:(fun r ->
+            not (List.exists expected_rules ~f:(fun old -> String.equal old.name r.name)))
+        in
+        printf
+          "Definition for %s: %s; %d new rules, %d existing rules retained.\n"
+          (Terminal.text name)
+          (String.concat ~sep:", " A.formats)
+          (List.length added)
+          (List.length retained);
+        List.iter added ~f:(fun r ->
+          printf
+            "  add %s: %s -> %s\n"
+            (Terminal.text r.name)
+            (Classification_rule.action_name r.action)
+            (Terminal.text (Classification_rule.action_target r.action)));
+        List.iter retained ~f:(fun r ->
+          printf "  retain existing %s\n" (Terminal.text r.name));
+        let%bind confirmed =
+          if yes
+          then Ok true
+          else if Unix.isatty Unix.stdin
+          then
+            Ok
+              (Option.value_map
+                 (prompt "Attach this definition? [Y/n]: ")
+                 ~default:false
+                 ~f:confirm_default_yes)
+          else Or_error.error_string "attaching a definition requires a terminal or --yes"
+        in
+        if not confirmed
+        then (
+          print_endline "Nothing changed.";
+          Ok ())
+        else
+          with_database database (fun db ->
+            let%map count =
+              Store.set_institution_definition
+                db
+                ~name
+                ~definition:json
+                ~expected
+                ~expected_rules
+                ~rules
+                ~source_unchanged
+            in
+            printf
+              "Attached definition for %s; added %d rules. Existing transactions and \
+               rules are unchanged.\n"
+              (Terminal.text name)
+              count))))
+;;
+
+let institution_definition_set_cmd =
+  command
+    "set"
+    "Attach an import definition to an existing institution."
+    Term.(
+      const set_institution_definition
+      $ database
+      $ Arg.(required & pos 0 (some string) None & info [] ~docv:"INSTITUTION")
+      $ Arg.(required & pos 1 (some string) None & info [] ~docv:"DEFINITION.json")
+      $ Arg.(value & flag & info [ "yes" ] ~doc:"Accept the preview without prompting."))
 ;;
 
 let institution_companion_show database name =
@@ -4553,6 +4997,13 @@ let () =
               [ institution_list_cmd
               ; institution_add_cmd
               ; institution_delete_cmd
+              ; group
+                  "definition"
+                  "Validate and install institution definitions."
+                  [ institution_definition_show_cmd
+                  ; institution_definition_check_cmd
+                  ; institution_definition_set_cmd
+                  ]
               ; import_history_cmd
               ; group
                   "companion"

@@ -3,7 +3,7 @@ open Rel
 
 (** One current experimental baseline; older databases must be reimported. Banks
     have no tables of their own. *)
-let version = 25
+let version = 26
 
 let timestamp = `Expr "(strftime('%Y-%m-%dT%H:%M:%f','now') || '000000000Z')"
 
@@ -1948,6 +1948,29 @@ module Classification_rules = struct
   ;;
 end
 
+module Institution_definitions = struct
+  type t =
+    { name : string
+    ; definition : string
+    }
+
+  let name = Col.make "name" Type.text (fun (r : t) -> r.name)
+  let definition_json = Col.make "definition_json" Type.text (fun (r : t) -> r.definition)
+
+  let row =
+    Row.(unit (fun name definition -> { name; definition }) * name * definition_json)
+  ;;
+
+  let table =
+    Table.make
+      ~primary_key:(Table.Primary_key.make [ Col.Def name ])
+      "institution_definitions"
+      row
+  ;;
+
+  let definition = Sqlite_schema.table table
+end
+
 module Institutions = struct
   type t =
     { name : string
@@ -2185,6 +2208,7 @@ let definitions =
   ; Bank_account_settlements.definition
   ; Bank_account_settlement_changes.definition
   ; Institutions.definition
+  ; Institution_definitions.definition
   ; Card_settlement_decisions.definition
   ; Card_settlement_changes.definition
   ; Classification_rules.definition

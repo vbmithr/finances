@@ -255,6 +255,8 @@ Import statements with `fin import BANK PATH...`, replacing the old
 `fin bank sync` command. A generic CSV can also be passed directly as
 `fin import FILE.csv`. `BANK` names a built-in institution (`boursobank`,
 `bunq`, `revolut` or `wise`) or one added with `fin institution add NAME`.
+Runtime institution definitions can also describe supported CSV, OFX/CSV and
+CAMT/CSV profiles; see `fin institution definition --help` and the manual.
 User-added institutions support generic OFX 2.x, configurable account or card
 CSVs, and CSV companions for OFX; see the [manual](docs/manual.md#configure-a-csv-companion).
 The institution's adapter recognizes each file's format; a file another bank recognizes is rejected

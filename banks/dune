@@ -54,6 +54,20 @@
    %{targets}
    "let json = {fin|%{read:camt_institution_presets.json}|fin}")))
 
+(rule
+ (targets csv_running_profiles_data.ml)
+ (deps csv_running_profiles.json)
+ (action
+  (write-file
+   %{targets}
+   "let json = {fin|%{read:csv_running_profiles.json}|fin}")))
+
+(rule
+ (targets mt940_profiles_data.ml)
+ (deps mt940_profiles.json)
+ (action
+  (write-file %{targets} "let json = {fin|%{read:mt940_profiles.json}|fin}")))
+
 ; Adapters are pure: no Rel or SQLite dependency, enforced here.
 
 (library
