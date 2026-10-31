@@ -196,6 +196,16 @@ configurable yet.
 - [x] `fin rule test` for a draft type rule: matches, newly typed and changed
   movements, rules that shadow it and manual overrides; read-only (2026-10-31).
   Conflicts with reviewed decisions and near misses are not reported yet.
+- [ ] Simpler rule model ([proposal](classification.md#a-simpler-rule-model-proposal)):
+  one rule form (field, expression, type or category), named fields, derived
+  types. Decide the open questions there, then stage it: expose named fields,
+  `--field` on type rules and bundled `code` rules, derived types without the
+  refresh commands, remove the old action kinds.
+- [ ] Wise description rules, available today: on the real archives
+  `^Wise Charges for` to `fee` would newly type 187 fee lines now typed by their
+  card, conversion or transfer code, `^Cashback` to `bonus` 29 rows, and the
+  `MONEY_ADDED` code `deposit` 2 rows. Decide whether to ship them in `wise.json`
+  now or with the simpler model.
 - [x] `fin rule explain EVENT-ID` (2026-10-31): type trace by stage, stale-type
   warning. Category rules are not traced yet; `--json` is not implemented.
 - [x] `fin institution show INSTITUTION` (2026-10-31): fields read and unread, what

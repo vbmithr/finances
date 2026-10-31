@@ -230,6 +230,90 @@ Revolut's definition maps Card Payment and Card Refund to `card`, Deposit to
 keeps other codes as `revolut:CODE`. Revolut's REVERTED rows are handled
 separately.
 
+### A simpler rule model (proposal)
+
+Status: design for discussion, 2026-10-31; not implemented. `fin rule explain`
+shows the problem: to say why a movement has its type, fin walks four stages (a
+manual override, the bank's code, the first description, the companion file's code)
+with a caveat on the last. The model has these moving parts:
+
+- eight rule actions: type, category, type and category, settlement, card
+  reference, withdrawal reversal, reported type, reported other;
+- a different matching input per kind and mode: the first description for
+  automatic type rules, any description or the companion's display name for review
+  rules, the bank's code for reported-type rules;
+- types saved as a snapshot at import and changed by an explicit refresh, with
+  companion codes arriving later, when files are matched.
+
+The proposal is one sentence: **when FIELD matches REGEX, set a type or a
+category.**
+
+- **Named fields, the same for every rule.** `description` (a rule matches when
+  any description does), `merchant` (the companion's display name), `code` (the
+  bank's own code, from a primary source or a matched companion), and later
+  `direction`, `payee` and `reference`. They come from what the sources already
+  carry: `Companion.describe` already names a companion's fields, and a primary
+  source's payload and `Movement.reported_code` the rest. The existing conditions
+  stay: institution, account type, and the type so far.
+- **Two actions for users.** `type` (interpretation; bundled and shareable) and
+  `category` (personal; never shipped). Reported-type and reported-other become
+  type rules on the `code` field. Settlement and the two evidence rules stay as
+  advanced workflows with their own commands.
+- **Modes say when a rule runs, not what it sees.** `automatic` rules run on every
+  import and rule change; `review` rules run on demand with a preview. Both match
+  the same fields.
+- **A type is derived, not snapshotted.** The effective type is the manual
+  override, else the first matching type rule in priority order, else none. A
+  companion is no longer a separate stage: its fields are fields, available once
+  its rows match. Editing a rule changes types, so `refresh-types` and
+  `refresh-reported-types` go away; the type history records what each recompute
+  changed.
+
+What it fixes: the Wise fee lines (`Wise Charges for…`, 187 rows typed `card`,
+`conversion` or `transfer` by their code) become an ordinary rule on `description`
+that outranks the `code` mapping by priority. `rule explain` becomes one table of
+rules against fields. Bundled definitions describe every rule the same way, which
+is what sharing rules between users needs.
+
+What it costs:
+
+- **Derived types need a recompute strategy.** Recomputing on every read would slow
+  `status` and listings (today about 75 ms on 4,400 movements). Recompute after an
+  import or a rule edit and store the result, which keeps reads fast but makes
+  every import and edit pay for it.
+- **Audit.** The stored type snapshot and its history table exist so a change is
+  visible. Recomputing must log which rule change caused which type change.
+- **Companion timing and disagreement.** Fields from a companion exist only after
+  its rows match, so rules on them must re-run after matching, and several matched
+  rows may disagree on a field (today's consensus rule: they must agree).
+- **Priority replaces stages.** Today the primary's own type beats the companion's
+  by stage. With one list, a `description` rule that should beat a `code` rule must
+  have a lower priority number, and bundled and user priorities need a convention.
+- **Breaking change.** Fin is in beta, so no compatibility is kept: a schema bump,
+  rewritten bundled definitions and a rebuild. Existing databases still need the
+  bundled rules added, which is the provenance and update work.
+
+Open questions:
+
+- A rule over `description`: does it match any description, or does it need
+  `description[1]` for the first (today's automatic behaviour)?
+- How `reported-other` keeps the code as a provider-specific type (`wise:CODE`)
+  without a separate action: a `{code}` template in the target?
+- Whether `direction` (credit or debit) and `amount` conditions come with the first
+  step or later.
+- Whether `type and category` stays one action or becomes two rules.
+- Where recomputed types are stored and how their history is kept.
+
+Staging, each step usable alone:
+
+1. Expose named fields. Add a single description of a movement's fields, used by
+   `rule explain`, `rule test` and `rule gaps`; no behaviour change.
+2. `--field` on type rules, with `code` and `merchant`; convert the bundled
+   reported-type rules to type rules on `code` and bump the definition format.
+3. Derive types: recompute after import and rule edit, log the changes, remove the
+   refresh commands.
+4. Remove the old action kinds and the staged `rule explain` output.
+
 ### Distribution and trust
 
 Bundled definitions live in the repository, reviewed by pull request and
