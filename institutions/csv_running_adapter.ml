@@ -27,7 +27,9 @@ let make (profile : Csv_running_profile.t) =
             ~kind:profile.kind
             ~source_id:tx.source_id
             ~occurred_on:tx.booked_on
-            ~payload:tx.payload)
+            ~fields:tx.fields
+            ~payload:tx.payload
+            ())
         |> Or_error.combine_errors
       in
       { Document.empty with events; context = [ "account_id", account_id ] })
@@ -46,7 +48,6 @@ let make (profile : Csv_running_profile.t) =
         ~amount:tx.amount
         ~fee:tx.fee
         ~reported_code:tx.transaction_type
-        ~fields:[ "type", tx.transaction_type ]
         [ tx.description ])
     ()
 ;;

@@ -687,6 +687,51 @@ let primary_fields () =
          (count ~field:"text" "^Synthetic shop$" > 0
           && count ~field:"text" "^Purchase$" > 0);
        check_int "a field the source lacks matches nothing" 0 (count ~field:"memo" ".");
+       (* The stored movement keeps which text is the main one, so the gap finder
+          groups Bunq by the payment text, as the rules do. *)
+       let keys =
+         List.map (ok (Store.description_gaps ~institution:"bunq" db)) ~f:(fun g -> g.key)
+       in
+       Alcotest.(check bool)
+         "the payment text is a group"
+         true
+         (List.mem keys "purchase" ~equal:String.equal);
+       Alcotest.(check bool)
+         "the counterparty name is not"
+         false
+         (List.mem keys "synthetic shop" ~equal:String.equal);
+       Ok ()));
+  (* The columns a payload drops are stored with the event and reloaded with it. *)
+  ok
+    (Store.with_open ~registry:Test_support.registry ":memory:" (fun db ->
+       import_revolut db;
+       let events = ok (Store.events db) in
+       check_int "four events" 4 (List.length events);
+       List.iter events ~f:(fun (_, (e : Source_event.t)) ->
+         Alcotest.(check (option string))
+           "Product"
+           (Some "Current")
+           (List.Assoc.find e.fields "Product" ~equal:String.equal);
+         Alcotest.(check bool)
+           "every header column"
+           true
+           (List.length e.fields = 10
+            && List.Assoc.mem e.fields "Balance" ~equal:String.equal));
+       let any = (List.hd_exn events |> snd).fields in
+       check_int
+         "in file order"
+         0
+         (Option.value_exn
+            (List.findi any ~f:(fun _ (n, _) -> String.equal n "Type")
+             |> Option.map ~f:fst));
+       (* A rule on a dropped column matches through the stored fields. *)
+       let t =
+         ok
+           (Store.test_type_rule
+              db
+              (draft ~field:"Product" ~institution:"revolut" "^Current$"))
+       in
+       check_int "all four match on Product" 4 (List.length t.matches);
        Ok ()));
   (* OFX: name and memo are fields; the main description is the first present. *)
   ok

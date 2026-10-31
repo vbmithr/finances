@@ -44,6 +44,8 @@ type t =
   ; occurred : string
   ; retrieved_at : string
   ; payload : string (** The source event's payload, indented when it is JSON. *)
+  ; fields : (string * string) list
+    (** Every column or tag the source carried, by name, as stored beside it. *)
   ; documents : document list
   ; statements : statement list
   ; companions : companion list

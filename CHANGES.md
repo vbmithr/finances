@@ -10,6 +10,20 @@ short line of their own.
 
 ### 2026-10-31
 
+- Keep every column of a CSV primary beside its transaction, so type rules can match
+  any of them with `--field COLUMN`, named by the file's header: Revolut's `Type`,
+  `Product`, `State` and `Balance`, and any column of a bank you added yourself.
+  `fin tx show` lists them under "Source columns", `fin institution show` says
+  rules can match them, and the stored transaction now remembers which of its texts
+  is the main one, so `fin rule gaps` groups Bunq by the payment text as the rules
+  do. The columns live in a new `source_event_fields` table; payloads and source
+  identities are unchanged. The named field `type` that Revolut exposed briefly is
+  now the column `Type`. **Action required:** schema 28 adds that table and a
+  `main_description` column, so rebuild the database from your statements, then
+  recreate your rules and review decisions. OCaml consumers: `Source_event.create`
+  and `create_dated` take `?fields` and a trailing `()`; `Source_event.t` and
+  `Movement.t` carry `fields`.
+
 - Let automatic type rules match a named field of the primary source:
   `fin rule add` and `fin rule test` take `--field FIELD`. `description` is now the
   main text the adapter declares instead of the first text, `text` matches any

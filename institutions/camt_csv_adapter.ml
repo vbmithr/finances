@@ -74,7 +74,8 @@ let make ~profile ~csv_profile ?(aliases = []) ~csv ~policy ~metadata_prefix ()
                   ~kind:profile.event_kind
                   ~source_id:trn.source_id
                   ~occurred_at:trn.booked_at
-                  ~payload:trn.payload)
+                  ~payload:trn.payload
+                  ())
               |> Or_error.combine_errors
             in
             { Document.source_account = Camt_source.account_identity statement.account

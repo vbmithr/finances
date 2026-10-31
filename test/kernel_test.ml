@@ -50,7 +50,8 @@ let event
        ~kind
        ~source_id:id
        ~occurred_at:(Timestamp.of_unix_ms_exn at)
-       ~payload)
+       ~payload
+       ())
 ;;
 
 let inserted = function
@@ -279,7 +280,8 @@ let precise_timestamps () =
            ~kind:"observation"
            ~source_id:id
            ~occurred_at:(Timestamp.of_rfc3339_exn text)
-           ~payload:"raw")
+           ~payload:"raw"
+           ())
     in
     with_store path (fun db ->
       List.iter samples ~f:(fun (id, text) ->

@@ -227,7 +227,8 @@ let profile_adapter () =
             ~payload:
               (Json.encode
                  payload_jsont
-                 (r.account_id, r.booked_on, r.amount, r.currency, r.description)))
+                 (r.account_id, r.booked_on, r.amount, r.currency, r.description))
+            ())
         |> Or_error.combine_errors)
       ~decode:(fun event ->
         Or_error.bind

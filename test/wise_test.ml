@@ -175,7 +175,8 @@ let reusable_camt_source () =
          ~kind:profile.event_kind
          ~source_id:transaction.source_id
          ~occurred_at:transaction.booked_at
-         ~payload:transaction.payload)
+         ~payload:transaction.payload
+         ())
   in
   let decoded = ok (Camt_source.source_transaction engine event) in
   Alcotest.(check string) "payload replay" transaction.payload decoded.payload;
@@ -187,7 +188,8 @@ let reusable_camt_source () =
          ~kind:event.kind
          ~source_id:event.source_id
          ~occurred_at:transaction.booked_at
-         ~payload:event.payload)
+         ~payload:event.payload
+         ())
   in
   error (Camt_source.source_transaction engine wrong)
 ;;

@@ -83,7 +83,8 @@ let calendar_and_clock () =
           ~kind:"test"
           ~source_id:"1"
           ~occurred_on:(2023, 2, 29)
-          ~payload:"test"));
+          ~payload:"test"
+          ()));
   let ns source =
     Timestamp.of_rfc3339_exn source |> Timestamp.nanoseconds_since_epoch_exn
   in

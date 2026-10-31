@@ -21,6 +21,9 @@ struct
     ; occurrence : int
     ; source_id : string
     ; payload : string
+    ; fields : (string * string) list
+      (** Every column of the row by its header; empty when the transaction
+              was rebuilt from a stored payload. *)
     }
 
   type t =
@@ -29,6 +32,12 @@ struct
     }
 
   let header = profile.header
+
+  (* Cells beyond the header have no name and are left out. *)
+  let named_cells cells =
+    let n = Int.min (List.length header) (List.length cells) in
+    List.zip_exn (List.take header n) (List.take cells n)
+  ;;
 
   let decimal =
     Csv_schema.Cell.quantity
@@ -59,6 +68,7 @@ struct
         ; fee : Quantity.t
         ; currency : Iso4217.t
         ; balance : Quantity.t
+        ; cells : string list
         }
 
   let schema =
@@ -75,6 +85,7 @@ struct
            currency
            state
            balance
+           cells
          ->
          (* A reverted transaction never completed and never changed the balance:
          the source lists it with no completion date and no balance. The document
@@ -92,6 +103,7 @@ struct
              ; fee
              ; currency
              ; balance
+             ; cells
              }
          | _ -> failwith row_error)
     |> col_name profile.columns.transaction_type Cell.string
@@ -112,6 +124,7 @@ struct
             ~message:row_error
             [ profile.completed_value; profile.reverted_value ])
     |> col_name profile.columns.balance (Cell.opt decimal)
+    |> raw_fields
     |> create
          ~name:profile.name
          ~separator:','
@@ -208,6 +221,7 @@ struct
       ; occurrence
       ; source_id = ""
       ; payload = ""
+      ; fields = []
       }
     in
     let base = Json.encode identity_jsont tx in
@@ -289,6 +303,7 @@ struct
                 ~balance:(Some r.balance)
                 ~occurrence:(Hashtbl.find_exn counts initial.source_id)
             in
+            let tx = { tx with fields = named_cells r.cells } in
             Option.iter
               (Hashtbl.find balances r.currency)
               ~f:(fun (previous_at, previous_balance) ->

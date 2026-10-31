@@ -100,6 +100,13 @@ let movement ?source_typing t (event : Source_event.t) =
   in
   let profile = Option.first_some source_typing (default_source_typing t event.venue) in
   Or_error.map result ~f:(fun movement ->
+    (* The columns stored beside the event are fields too; the adapter's own
+       named fields come first. *)
+    let movement =
+      if List.is_empty event.fields
+      then movement
+      else Movement.with_fields movement (movement.fields @ event.fields)
+    in
     Option.value_map profile ~default:movement ~f:(fun p ->
       Source_typing.apply p movement))
 ;;

@@ -41,7 +41,8 @@ let parse (profile : Mt940_profile.t) engine ~context:_ ~format contents =
           ~kind:profile.kind
           ~source_id:tx.source_id
           ~occurred_on:tx.booked_on
-          ~payload:tx.payload)
+          ~payload:tx.payload
+          ())
       |> Or_error.combine_errors
     in
     { Document.empty with

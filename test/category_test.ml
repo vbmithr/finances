@@ -144,7 +144,8 @@ let invalid_batch () =
            ~kind:"opaque"
            ~source_id:"one"
            ~occurred_at:(Timestamp.of_unix_ms_exn 1L)
-           ~payload:"{}")
+           ~payload:"{}"
+           ())
     in
     let other =
       match ok (Store.ingest db event) with

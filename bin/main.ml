@@ -112,7 +112,7 @@ let ingest database venue account kind source_id at path =
     Or_error.try_with (fun () -> Timestamp.of_unix_ms_exn (Int64.of_string at))
   in
   let%bind event =
-    Source_event.create ~venue ~account ~kind ~source_id ~occurred_at ~payload
+    Source_event.create ~venue ~account ~kind ~source_id ~occurred_at ~payload ()
   in
   with_database database (fun db ->
     let%bind result = Store.ingest db event in
@@ -4337,9 +4337,13 @@ let print_transaction_detail (t : Transaction_detail.t) =
       s.period
       s.opening
       s.closing);
-  print_endline "\nSource fields";
+  print_endline "\nSource fields (payload)";
   String.split_lines t.payload
   |> List.iter ~f:(fun line -> printf "  %s\n" (Terminal.text line));
+  if not (List.is_empty t.fields)
+  then (
+    print_endline "\nSource columns (stored, matchable by rules)";
+    print_fields "  " t.fields);
   (match t.companions with
    | [] -> print_endline "\nCompanion files: no matched rows"
    | companions ->

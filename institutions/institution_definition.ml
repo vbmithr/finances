@@ -471,6 +471,7 @@ let describe t =
       p.header
       (List.map fields ~f:snd)
       [ Printf.sprintf "the description column %S (type rules)" c.description
+      ; "any column of the file, named by its header, with --field (type rules)"
       ; Printf.sprintf
           "the column %S as the bank's code (reported-type rules)"
           c.transaction_type
@@ -508,5 +509,6 @@ let describe t =
       profile.header
       (List.map fields ~f:snd)
       [ Printf.sprintf "the description column %S (type rules)" profile.description_column
+      ; "any column of the file, named by its header, with --field (type rules)"
       ]
 ;;

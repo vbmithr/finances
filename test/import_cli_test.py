@@ -1495,6 +1495,39 @@ class ImportOnboarding(unittest.TestCase):
         self.assertTrue(all(r['movement_type'] == 'bonus' for r in after))
         self.assertIn('No reported type changes.', self.run_fin('tx', 'refresh-reported-types').stdout)
 
+    def test_every_column_of_a_primary_csv_is_a_field(self):
+        # Revolut: the columns the payload drops are kept beside the event.
+        self.run_fin('import', 'revolut', self.csv, '--account-id', 'main')
+        rows = json.loads(self.run_fin('tx', 'list', '--json').stdout)
+        deposit = next(r['event_id'] for r in rows if r['description'] == 'Initial deposit')
+        shown = self.run_fin('tx', 'show', deposit).stdout
+        self.assertIn('Source columns (stored, matchable by rules)', shown)
+        self.assertRegex(shown, r'Product\s+Current')
+        self.assertRegex(shown, r'Balance\s+150')
+        test = self.run_fin('rule', 'test', 'by-balance', '--institution', 'revolut', '--field', 'Balance',
+                            '--description', '^150', '--set-type', 'bonus').stdout
+        self.assertIn('1 match.', test)
+        # A user-defined institution: a column the profile never named is a field too.
+        csv_path = self.root / 'extra.csv'
+        csv_path.write_text('Date,Description,EUR,Merchant ID\n2026-10-01,Rent,-120.00,M-100\n'
+                            '2026-10-02,Salary,950.00,M-200\n')
+        self.terminal(['import', str(csv_path), '--account-id', 'main', '--provider', 'mybank'], [
+            ('Use these columns?', '1'),
+            ('Account type:', '3'),
+            ('Are outgoing amounts positive in the file?', '2'),
+            ('Skip a summary row with an empty date?', '2'),
+            ('Import these transactions?', '1'),
+            ('IBAN (Enter to skip):', ''),
+        ])
+        test = self.run_fin('rule', 'test', 'by-merchant', '--institution', 'mybank', '--field', 'Merchant ID',
+                            '--description', '^M-2', '--set-type', 'deposit').stdout
+        self.assertIn('1 match.', test)
+        self.assertIn('Salary', test)
+        self.assertIn('newly typed: 1', test)
+        own = next(r['event_id'] for r in json.loads(self.run_fin('tx', 'list', '--institution', 'mybank', '--json').stdout)
+                   if r['description'] == 'Rent')
+        self.assertRegex(self.run_fin('tx', 'show', own).stdout, r'Merchant ID\s+M-100')
+
     def test_type_rules_can_match_a_named_field_of_the_primary(self):
         # A CAMT statement alone: the bank's transaction code is the field reference.
         self.run_fin('import', 'wise', 'fixtures/wise.xml')

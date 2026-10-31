@@ -61,6 +61,9 @@ val principal : t -> Quantity.t
 (** Attach a type derived from the primary source at import. *)
 val with_movement_type : t -> Movement_type.t option -> t
 
+(** The movement with its fields replaced. *)
+val with_fields : t -> (string * string) list -> t
+
 (** The values a rule can test under a field name. [description] is the main text
     the adapter declares, [text] is every description, and any other name is one
     of {!t.fields}. Descriptions are stripped of surrounding whitespace, and the

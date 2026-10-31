@@ -471,7 +471,8 @@ let eligibility () =
            ~kind:"opaque"
            ~source_id:"x"
            ~occurred_on:(Date.of_string "2026-01-01")
-           ~payload:"{}")
+           ~payload:"{}"
+           ())
     in
     let id =
       match ok (Store.ingest db event) with

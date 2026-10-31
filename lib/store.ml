@@ -629,7 +629,21 @@ let insert_movement =
         ; Value
             ( Db_schema.Movements.movement_type
             , Option.map m.movement_type ~f:Movement_type.to_string )
+        ; Value (Db_schema.Movements.main_description, m.main_description)
         ]
+;;
+
+(* Every column or tag the source carried, in order, beside the event. *)
+let store_event_fields db event_id fields =
+  let insert =
+    Rel_sql.Stmt.(
+      func
+        "INSERT INTO source_event_fields(event_id,ordinal,name,value) VALUES (?,?,?,?)"
+        (int64 @-> int @-> text @-> text @-> unit))
+  in
+  List.mapi fields ~f:(fun ordinal (name, value) -> ordinal, name, value)
+  |> List.fold_result ~init:() ~f:(fun () (ordinal, name, value) ->
+    db_result (Db.exec db.conn (insert event_id ordinal name value)))
 ;;
 
 (* The movement stored at import, rebuilt and validated again. *)
@@ -674,11 +688,12 @@ let movement_of_row (r : Db_schema.Movements.t) =
        ~fee
        ?counterparty_iban
        ?movement_type:(Option.map r.movement_type ~f:Movement_type.of_string)
+       ~main_description:r.main_description
        descriptions)
 ;;
 
 let movement_columns =
-  "event_id,venue,account,bank_id,account_id,account_type,currency,own_iban_status,own_iban,booked_on,value_on,amount,fee,principal_magnitude,principal_sign,counterparty_iban,descriptions,movement_type"
+  "event_id,venue,account,bank_id,account_id,account_type,currency,own_iban_status,own_iban,booked_on,value_on,amount,fee,principal_magnitude,principal_sign,counterparty_iban,descriptions,movement_type,main_description"
 ;;
 
 let occurrence_columns (e : Source_event.t) =
@@ -942,6 +957,7 @@ let ingest_in_transaction db (e : Source_event.t) =
            (insert_source e.venue e.account e.kind e.source_id at on e.payload))
     in
     let id = Db.last_insert_rowid db.conn in
+    let* () = store_event_fields db id e.fields in
     (* Movements are decoded once, here, and stored for queries. *)
     let* () =
       if Registry.is_movement db.registry e
@@ -1993,10 +2009,10 @@ let event_of_row
   let* e =
     match at, on with
     | Some occurred_at, None ->
-      Source_event.create ~venue ~account ~kind ~source_id ~occurred_at ~payload
+      Source_event.create ~venue ~account ~kind ~source_id ~occurred_at ~payload ()
     | None, Some date ->
       let* occurred_on = Or_error.try_with (fun () -> Date.of_string date) in
-      Source_event.create_dated ~venue ~account ~kind ~source_id ~occurred_on ~payload
+      Source_event.create_dated ~venue ~account ~kind ~source_id ~occurred_on ~payload ()
     | _ -> Or_error.error_string "invalid source event occurrence"
   in
   Ok (id, e)
@@ -2013,7 +2029,23 @@ let events db =
           10)),occurred_at,id"
          source_row)
   in
-  traverse event_of_row rows
+  let* decoded = traverse event_of_row rows in
+  let* stored =
+    collect
+      db
+      (statement
+         "SELECT event_id,ordinal,name,value FROM source_event_fields ORDER BY \
+          event_id,ordinal"
+         Db_schema.Source_event_fields.row)
+  in
+  let by_event = Hashtbl.create (module Int64) in
+  List.iter stored ~f:(fun (f : Db_schema.Source_event_fields.t) ->
+    Hashtbl.add_multi by_event ~key:f.event_id ~data:(f.name, f.value));
+  Ok
+    (List.map decoded ~f:(fun (id, event) ->
+       match Hashtbl.find by_event id with
+       | None -> id, event
+       | Some reversed -> id, Source_event.with_fields event (List.rev reversed)))
 ;;
 
 (* One source event, without decoding the others. *)
@@ -2032,7 +2064,21 @@ let event_by_id db event_id =
   match rows with
   | [ row ] ->
     let* _, event = event_of_row row in
-    Ok event
+    let* stored =
+      collect
+        db
+        (statement
+           (Printf.sprintf
+              "SELECT event_id,ordinal,name,value FROM source_event_fields WHERE \
+               event_id = %Ld ORDER BY ordinal"
+              event_id)
+           Db_schema.Source_event_fields.row)
+    in
+    Ok
+      (Source_event.with_fields
+         event
+         (List.map stored ~f:(fun (f : Db_schema.Source_event_fields.t) ->
+            f.name, f.value)))
   | _ -> Or_error.error_string "unknown transaction event ID"
 ;;
 
@@ -5772,6 +5818,7 @@ let delete_account ?(dry_run = false) db (mapping : Bank_account_mapping.t) =
           ; "DELETE FROM import_documents WHERE id IN (" ^ doc_ids ^ ")"
           ; "DELETE FROM movement_evidence WHERE event_id IN (" ^ event_ids ^ ")"
           ; "DELETE FROM movements WHERE event_id IN (" ^ event_ids ^ ")"
+          ; "DELETE FROM source_event_fields WHERE event_id IN (" ^ event_ids ^ ")"
           ; "DELETE FROM source_events WHERE id IN (" ^ event_ids ^ ")"
           ; "DELETE FROM bank_account_mappings WHERE " ^ local
           ; "DELETE FROM bank_account_mapping_changes WHERE " ^ local
@@ -5971,7 +6018,9 @@ let description_gaps ?institution db =
       && Option.value_map institution ~default:true ~f:(String.equal r.institution)
     then (
       let description =
-        Option.value_map (List.hd r.transaction.descriptions) ~default:"" ~f:String.strip
+        Option.value
+          (List.hd (Movement.field_values r.transaction "description"))
+          ~default:""
       in
       let key = Description_key.key description in
       Hashtbl.add_multi
@@ -6520,6 +6569,19 @@ let show_movement db event_id =
       companion_rows
   in
   let* transfer = linked_transfer db event_id in
+  let* stored_fields =
+    let* rows =
+      collect
+        db
+        (statement
+           (Printf.sprintf
+              "SELECT event_id,ordinal,name,value FROM source_event_fields WHERE \
+               event_id = %Ld ORDER BY ordinal"
+              event_id)
+           Db_schema.Source_event_fields.row)
+    in
+    Ok (List.map rows ~f:(fun (f : Db_schema.Source_event_fields.t) -> f.name, f.value))
+  in
   let payload =
     match Json.decode Jsont.json event.payload with
     | Ok value -> Json.encode ~format:Jsont.Indent Jsont.json value
@@ -6538,6 +6600,7 @@ let show_movement db event_id =
          | None, None -> "")
     ; retrieved_at = Timestamp.to_rfc3339 event.retrieved_at
     ; payload
+    ; fields = stored_fields
     ; documents
     ; statements
     ; companions

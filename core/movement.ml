@@ -66,6 +66,7 @@ let create
 
 let principal t = Quantity.(t.amount + t.fee)
 let with_movement_type t movement_type = { t with movement_type }
+let with_fields t fields = { t with fields }
 
 (* [description] is the text the adapter declares as the main one, [text] is any of
    them, and every other name is a field the source carries. *)

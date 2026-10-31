@@ -68,6 +68,7 @@ let event ~institution t =
       ~source_id:(source_id t)
       ~occurred_on:t.date
       ~payload:(Json.encode codec t)
+      ()
 ;;
 
 let decode (source : Source_event.t) =
@@ -101,7 +102,7 @@ let decode (source : Source_event.t) =
       [ t.description ])
 ;;
 
-let events ?(institution = "csv") ~account_id rows =
+let events ?(institution = "csv") ?header ~account_id rows =
   let counts = Hashtbl.create (module String) in
   List.map rows ~f:(fun (row : Csv_profile.row) ->
     let t =
@@ -117,6 +118,14 @@ let events ?(institution = "csv") ~account_id rows =
     in
     let key = Json.encode base_codec t in
     Hashtbl.incr counts key;
-    event ~institution { t with occurrence = Hashtbl.find_exn counts key })
+    let named =
+      match header with
+      | None -> []
+      | Some header ->
+        let n = Int.min (List.length header) (List.length row.fields) in
+        List.zip_exn (List.take header n) (List.take row.fields n)
+    in
+    event ~institution { t with occurrence = Hashtbl.find_exn counts key }
+    |> Or_error.map ~f:(fun e -> Source_event.with_fields e named))
   |> Or_error.combine_errors
 ;;

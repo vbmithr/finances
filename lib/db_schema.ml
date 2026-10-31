@@ -3,7 +3,7 @@ open Rel
 
 (** One current experimental baseline; older databases must be reimported. Banks
     have no tables of their own. *)
-let version = 27
+let version = 28
 
 let timestamp = `Expr "(strftime('%Y-%m-%dT%H:%M:%f','now') || '000000000Z')"
 
@@ -150,6 +150,7 @@ module Movements = struct
     ; counterparty_iban : string option
     ; descriptions : string
     ; movement_type : string option
+    ; main_description : int
     }
 
   let event_id = Col.make "event_id" Type.int64 (fun (r : t) -> r.event_id)
@@ -189,6 +190,11 @@ module Movements = struct
     Col.make "movement_type" Type.(option text) (fun (r : t) -> r.movement_type)
   ;;
 
+  (* Which of the descriptions the adapter declares as the main text. *)
+  let main_description =
+    Col.make "main_description" Type.int (fun (r : t) -> r.main_description)
+  ;;
+
   let row =
     Row.(
       unit
@@ -211,6 +217,7 @@ module Movements = struct
              counterparty_iban
              descriptions
              movement_type
+             main_description
            ->
            { event_id
            ; venue
@@ -230,6 +237,7 @@ module Movements = struct
            ; counterparty_iban
            ; descriptions
            ; movement_type
+           ; main_description
            })
       * event_id
       * venue
@@ -248,7 +256,8 @@ module Movements = struct
       * principal_sign
       * counterparty_iban
       * descriptions
-      * movement_type)
+      * movement_type
+      * main_description)
   ;;
 
   let table =
@@ -277,9 +286,53 @@ module Movements = struct
           [ one_of principal_sign [ "+"; "-" ]
           ; one_of own_iban_status [ "known"; "unknown"; "not_applicable" ]
           ; equivalent (text_equal own_iban_status "known") (present own_iban)
+          ; nonnegative main_description
           ]
       ~immutable:"movements are derived from immutable source events"
       table
+  ;;
+end
+
+(* Every column or tag a source carried, by name, kept beside the immutable event so
+   rules can match fields the payload does not hold. Not part of the event's identity. *)
+module Source_event_fields = struct
+  type t =
+    { event_id : int64
+    ; ordinal : int
+    ; name : string
+    ; value : string
+    }
+
+  let event_id = Col.make "event_id" Type.int64 (fun (r : t) -> r.event_id)
+  let ordinal = Col.make "ordinal" Type.int (fun (r : t) -> r.ordinal)
+  let name = Col.make "name" Type.text (fun (r : t) -> r.name)
+  let value = Col.make "value" Type.text (fun (r : t) -> r.value)
+
+  let row =
+    Row.(
+      unit (fun event_id ordinal name value -> { event_id; ordinal; name; value })
+      * event_id
+      * ordinal
+      * name
+      * value)
+  ;;
+
+  let table =
+    Table.make
+      ~primary_key:(Table.Primary_key.make [ Col.Def event_id; Col.Def ordinal ])
+      ~foreign_keys:
+        [ Table.Foreign_key.make
+            ~cols:[ Col.Def event_id ]
+            ~parent:
+              (Table.Foreign_key.Table (Source_events.table, [ Col.Def Source_events.id ]))
+            ()
+        ]
+      "source_event_fields"
+      row
+  ;;
+
+  let definition =
+    Sqlite_schema.table ~checks:Sqlite_schema.Check.[ nonnegative ordinal ] table
   ;;
 end
 
@@ -2189,6 +2242,7 @@ end
 let definitions =
   [ Source_events.definition
   ; Movements.definition
+  ; Source_event_fields.definition
   ; Movement_evidence.definition
   ; Journal_entries.definition
   ; Postings.definition

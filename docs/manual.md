@@ -941,9 +941,13 @@ which comes first in the list), and the single description for Wise and Revolut.
 `--field` chooses another:
 
 - `text`: any of the transaction's descriptions;
-- a named text or column the source carries: `name` and `memo` (OFX), `name` and
+- a named text the source carries: `name` and `memo` (OFX), `name` and
   `counterparty` (Bunq), `reference` (the Wise CAMT bank transaction code, such as
-  `FEE-CARD-…`), `type` (Revolut's own type column).
+  `FEE-CARD-…`);
+- any column of a CSV primary, by its header exactly as it appears in the file:
+  Revolut's `Type`, `Product`, `State` or `Balance`, or a column of a bank you added
+  yourself, such as `Merchant ID`. Fin stores every column of each row beside the
+  transaction, and `fin tx show` lists them under "Source columns".
 
 A rule matches when any value under the field matches. A field that a transaction
 does not have matches nothing, and `fin rule explain` says so. A rule that names a
@@ -959,9 +963,9 @@ fin rule add wise-ref-fee --institution wise --field reference \
 fin transaction refresh-types --institution wise
 ```
 
-On a Wise CAMT statement alone, with no CSV, that types every fee line. Only the
-fields listed above are available for now; columns that the stored payload drops
-(Revolut's `Product`, `State` and `Balance`) are not.
+On a Wise CAMT statement alone, with no CSV, that types every fee line. Fields of
+the tag-based formats are limited to the named ones above, because only those are
+exposed so far. `fin rule gaps` groups by the main description, like the rules.
 
 #### Explain a movement's type
 
@@ -1192,7 +1196,7 @@ belongs to hledger; `fin` tracks import evidence, account identity and review st
 ## Library and dependency changes
 
 This build uses Base, decimal, Ptime and Bos, with no Core or Bigdecimal
-dependency. Version 1 account snapshots remain compatible; databases use schema 27 and
+dependency. Version 1 account snapshots remain compatible; databases use schema 28 and
 are rebuilt from the original statements (see above).
 
 OCaml callers use `Quantity.t` (a `Decimal.t` alias) and `Date.t` (a `Ptime.date`

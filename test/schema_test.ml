@@ -44,10 +44,10 @@ let initialize () =
          check "fresh database empty" 0 (List.length (ok (Store.events db)));
          Ok ()));
     raw path (fun db ->
-      check "latest baseline" 27 (scalar db "PRAGMA user_version");
+      check "latest baseline" 28 (scalar db "PRAGMA user_version");
       check
         "all tables are strict"
-        36
+        37
         (scalar
            db
            "SELECT count(*) FROM pragma_table_list WHERE schema='main' AND name NOT LIKE \
@@ -175,7 +175,8 @@ let generated_queries () =
            ~kind
            ~source_id
            ~occurred_at:Ptime.max
-           ~payload:"bytes\000payload")
+           ~payload:"bytes\000payload"
+           ())
     in
     let first = event "checking" "deposit" "quoted ' ? identifier" in
     let others =

@@ -58,7 +58,8 @@ let parse ~institution contents =
           ~kind:"bank-transaction"
           ~source_id:trn.fitid
           ~occurred_on:trn.booked_on
-          ~payload:trn.source_payload))
+          ~payload:trn.source_payload
+          ()))
     |> Or_error.combine_errors
   in
   { Document.empty with events }

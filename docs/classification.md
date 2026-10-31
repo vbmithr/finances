@@ -341,11 +341,14 @@ Staging, each step usable alone:
      Revolut `type`), the `description` and `text` split, and `--field` on
      automatic type rules, with `rule test` and `rule explain` showing the field
      and value. No schema change.
-   - 2b: the side table, populated at import, for the columns the payload drops
-     (Revolut `Product`, `State`, `Balance`; every column of a generic CSV), then
-     the tag-based formats (CAMT, OFX, MT940) through a generic flattening. The
-     stored movement should also keep which text is the main one, so `rule gaps`
-     groups by it; today it groups by the first text.
+   - 2b, CSV part implemented 2026-10-31: the `source_event_fields` side table,
+     populated at import with every column of a CSV primary by its header (Revolut
+     `Product`, `State`, `Balance`, and every column of a user-defined bank), loaded
+     with the event and merged into the movement's fields. The stored movement also
+     keeps which text is the main one, so `rule gaps` groups by it. Schema 28.
+   - 2b, remaining: the tag-based formats (CAMT, OFX, MT940) through a generic
+     flattening. Deferred until a rule needs a tag that is not exposed; today only
+     the named fields above are.
    - Canonical fields `direction`, `amount` and `date` come with 2b or later.
 3. One rule form: `--field` on type rules, the bundled reported-type rules
    converted to type rules on a field, the definition format bumped, and the role

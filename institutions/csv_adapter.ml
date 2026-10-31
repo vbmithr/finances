@@ -22,7 +22,9 @@ let make ?(institution = "csv") ?profile () =
           ~error:(Error.of_string "CSV account label is required")
       in
       let%bind rows = Csv_profile.parse profile contents in
-      let%map events = Csv_movement.events ~institution ~account_id rows in
+      let%map events =
+        Csv_movement.events ~institution ~header:profile.header ~account_id rows
+      in
       { Document.empty with
         events
       ; context =

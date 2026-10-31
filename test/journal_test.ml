@@ -131,7 +131,8 @@ let malformed_source_rollback () =
              ~kind:last.kind
              ~source_id:"does-not-match-payload"
              ~occurred_on:(Date.of_string "2026-01-06")
-             ~payload:last.payload)
+             ~payload:last.payload
+             ())
       in
       let before = List.length (ok (Store.events db)) in
       (* Movements are decoded when they are stored, so an event whose payload

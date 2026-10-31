@@ -44,7 +44,8 @@ let event ?(venue = "example") ?(kind = "example-transaction") payload =
        ~kind
        ~source_id:"1"
        ~occurred_on:(Date.of_string "2026-10-27")
-       ~payload)
+       ~payload
+       ())
 ;;
 
 let construction () =
