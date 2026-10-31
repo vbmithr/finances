@@ -10,6 +10,13 @@ short line of their own.
 
 ### 2026-10-31
 
+- Ship Wise rules on the `TransferWise ID` column and for the `MONEY_ADDED` code:
+  `FEE-` to `fee`, `BALANCE_CASHBACK-` to `bonus`, and `MONEY_ADDED` to `deposit`. On
+  the real archives they type 187 fee lines, which the bank code had typed as
+  `card`, `conversion` or `transfer`, 29 cashback rows that were untyped, and 2
+  top-ups. They are installed into a new database, which the schema 27 rebuild
+  provides. `fin institution show` now names the column a rule matches.
+
 - Add `fin tx show EVENT-ID`: everything stored about a transaction. Its type,
   category and confirmed transfer, the source event and payload fields, the stored
   document and every file it was imported from, the statement, and each matched

@@ -41,9 +41,13 @@ let rejected result =
   Alcotest.(check bool) "rejected" true (Poly.equal result.Bank_import.outcome Rejected)
 ;;
 
+(* These tests are about the bank's type code, so drop the bundled rules that
+   type by TransferWise ID; the typing_rules suite covers those. *)
 let memory f =
   ok
     (Store.with_open ~registry:Test_support.registry ":memory:" (fun db ->
+       List.iter [ "wise-id-fee"; "wise-id-cashback" ] ~f:(fun name ->
+         ok (Store.delete_classification_rule db name));
        f db;
        Ok ()))
 ;;

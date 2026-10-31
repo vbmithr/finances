@@ -487,6 +487,9 @@ let field_rule () =
          ())
   in
   let import db =
+    (* Start from the bank code alone; the shipped ID rules are tested below. *)
+    List.iter [ "wise-id-fee"; "wise-id-cashback" ] ~f:(fun name ->
+      ok (Store.delete_classification_rule db name));
     List.iter [ "wise.xml"; "wise.csv" ] ~f:(fun path ->
       ignore
         (ok
@@ -589,6 +592,43 @@ let field_rule () =
        Ok ()))
 ;;
 
+(* The shipped Wise rules type by TransferWise ID, ahead of the bank code. *)
+let shipped_wise_rules () =
+  ok
+    (Store.with_open ~registry:Test_support.registry ":memory:" (fun db ->
+       List.iter [ "wise.xml"; "wise.csv" ] ~f:(fun path ->
+         ignore
+           (ok
+              (Test_support.import
+                 db
+                 ~institution:"wise"
+                 ~path
+                 (In_channel.read_all ("fixtures/" ^ path)))));
+       ignore (ok (Store.match_companions ~institution:"wise" db));
+       let by_type =
+         (ok (Store.institution_summary db "wise")).by_type
+         |> List.map ~f:(fun (kind, n) ->
+           Option.value_map kind ~default:"" ~f:Movement_type.to_string, n)
+         |> List.sort ~compare:Poly.compare
+       in
+       Alcotest.(check (list (pair string int)))
+         "the cashback ID outranks the CARD code"
+         [ "bonus", 1; "card", 2 ]
+         by_type;
+       let rules =
+         List.map (ok (Store.classification_rules db)) ~f:(fun r -> r.name, r.field)
+       in
+       Alcotest.(check (option (option string)))
+         "fee rule matches the ID column"
+         (Some (Some "TransferWise ID"))
+         (List.Assoc.find rules "wise-id-fee" ~equal:String.equal);
+       Alcotest.(check (option (option string)))
+         "code rules name no column"
+         (Some None)
+         (List.Assoc.find rules "wise-reported-card" ~equal:String.equal);
+       Ok ()))
+;;
+
 let show () =
   ok
     (Store.with_open ~registry:Test_support.registry ":memory:" (fun db ->
@@ -649,6 +689,7 @@ let () =
         ; Alcotest.test_case "explain" `Quick explain
         ; Alcotest.test_case "explain companion code" `Quick explain_companion
         ; Alcotest.test_case "companion column rules" `Quick field_rule
+        ; Alcotest.test_case "shipped Wise rules" `Quick shipped_wise_rules
         ; Alcotest.test_case "transaction detail" `Quick show
         ] )
     ]

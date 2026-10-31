@@ -1477,6 +1477,9 @@ class ImportOnboarding(unittest.TestCase):
         self.assertNotEqual(self.run_fin('institution', 'definition', 'check', definition, check=False).returncode, 0)
 
     def test_reported_type_rules_apply_on_import_and_preview_refresh(self):
+        # This is about the bank's code, so drop the bundled rules on TransferWise ID.
+        for name in ('wise-id-fee', 'wise-id-cashback'):
+            self.run_fin('rule', 'delete', name, '--yes')
         self.run_fin('import', 'wise', 'fixtures/wise.csv', 'fixtures/wise.xml')
         rules = json.loads(self.run_fin('rule', 'list', '--json').stdout)
         self.assertTrue(any(r['name'] == 'wise-reported-card' for r in rules))
@@ -1514,6 +1517,8 @@ class ImportOnboarding(unittest.TestCase):
         self.assertNotEqual(self.run_fin('tx', 'show', '999999', check=False).returncode, 0)
 
     def test_reported_type_rules_can_match_any_companion_column(self):
+        for name in ('wise-id-fee', 'wise-id-cashback'):
+            self.run_fin('rule', 'delete', name, '--yes')
         self.run_fin('import', 'wise', 'fixtures/wise.csv', 'fixtures/wise.xml')
         # The cashback row's bank code is CARD; its TransferWise ID says otherwise.
         self.run_fin('rule', 'add-reported-type', 'id-cashback', 'wise', '^BALANCE_CASHBACK-', 'bonus',
@@ -1541,19 +1546,24 @@ class ImportOnboarding(unittest.TestCase):
         self.run_fin('import', 'wise', 'fixtures/wise.xml', 'fixtures/wise.csv')
         rows = json.loads(self.run_fin('transaction', 'list', '--json').stdout)
         self.assertEqual(len(rows), 3)
-        self.assertTrue(all(r['display_name'] == 'Synthetic shop' and
-                            r['movement_type'] == 'card' and r['detail_sources'] for r in rows))
+        self.assertTrue(all(r['display_name'] == 'Synthetic shop' and r['detail_sources'] for r in rows))
+        # The shipped rules on TransferWise ID type the fixture's cashback row, whose
+        # bank code is CARD, as a bonus.
+        self.assertEqual(sorted(r['movement_type'] for r in rows), ['bonus', 'card', 'card'])
         self.assertGreater(len({r['description'] for r in rows}), 1)
         output = self.run_fin('transaction', 'list').stdout
         self.assertIn('Synthetic shop', output)
         self.assertIn('card', output)
+        # Only card purchases are grouped by merchant, so seed from a card row: the
+        # other card row is its candidate and the bonus row is not.
+        seed = next(r for r in rows if r['movement_type'] == 'card')
         decisions = self.root / 'wise-category.json'
-        decisions.write_text(json.dumps([{'event_id': rows[0]['event_id'],
+        decisions.write_text(json.dumps([{'event_id': seed['event_id'],
                                           'account': 'expenses:shopping', 'reason': 'Reviewed'}]))
         self.run_fin('transaction', 'category', 'apply', decisions)
-        result = json.loads(self.run_fin('transaction', 'category', 'similar', rows[0]['event_id'],
+        result = json.loads(self.run_fin('transaction', 'category', 'similar', seed['event_id'],
                                          '--json').stdout)
-        self.assertEqual(len(result['candidates']), 2)
+        self.assertEqual(len(result['candidates']), 1)
 
     def test_transaction_list_order_uses_timestamp_before_limit(self):
         csv = self.root / 'times.csv'

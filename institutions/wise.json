@@ -76,6 +76,24 @@
   },
   "rules": [
     {
+      "name": "wise-id-fee",
+      "pattern": "^FEE-",
+      "case_sensitive": true,
+      "priority": -100,
+      "action": "reported-type",
+      "target": "fee",
+      "field": "TransferWise ID"
+    },
+    {
+      "name": "wise-id-cashback",
+      "pattern": "^BALANCE_CASHBACK-",
+      "case_sensitive": true,
+      "priority": -99,
+      "action": "reported-type",
+      "target": "bonus",
+      "field": "TransferWise ID"
+    },
+    {
       "name": "wise-reported-card",
       "pattern": "^CARD$",
       "case_sensitive": true,
@@ -122,6 +140,14 @@
       "priority": 5,
       "action": "reported-type",
       "target": "unknown"
+    },
+    {
+      "name": "wise-reported-money-added",
+      "pattern": "^MONEY_ADDED$",
+      "case_sensitive": true,
+      "priority": 6,
+      "action": "reported-type",
+      "target": "deposit"
     },
     {
       "name": "wise-reported-other",

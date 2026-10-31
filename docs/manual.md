@@ -904,8 +904,11 @@ reads from each source column by role, the columns it does not read, what rules
 can match (a type rule sees the first description; a reported-type rule sees the
 bank's own code column), its default rules and, when a database exists, how many
 movements are imported by type. It also works for installed definitions.
-Reported-type rules use the same rule list. They match a bank's own code, not the
-transaction description. Wise's definition maps the codes of its companion CSV.
+Reported-type rules use the same rule list. They match a bank's own code, or a
+named companion column, not the transaction description. Wise's definition maps
+the codes of its companion CSV (including `MONEY_ADDED` to `deposit`) and, ahead of
+them, the prefix of the `TransferWise ID` column: `FEE-` to `fee` and
+`BALANCE_CASHBACK-` to `bonus`.
 Revolut's maps the `Type` column of its primary CSV: Card Payment and Card Refund
 to `card`, Deposit to `deposit`, Transfer to `transfer`, ATM to `withdrawal` and
 Charge to `fee`. Both preserve any other code as a provider-specific type
@@ -994,12 +997,11 @@ A reported-type rule can match any column of the companion file instead of the
 bank's type code. Name the column as it appears in the file's header with
 `--field`; the rule matches when any cell under that header matches. For Wise the
 `TransferWise ID` prefix separates fee lines and cashback from the bank code
-`CARD`:
+`CARD`. Wise ships those two as `wise-id-fee` and `wise-id-cashback`; add your own
+the same way, for example to type card orders:
 
 ```sh
-fin rule add-reported-type wise-id-fee wise '^FEE-' fee \
-  --field 'TransferWise ID' --case-sensitive --priority=-2000
-fin rule add-reported-type wise-id-cashback wise '^BALANCE_CASHBACK-' bonus \
+fin rule add-reported-type wise-id-card-order wise '^CARD_ORDER_CHECKOUT-' fee \
   --field 'TransferWise ID' --case-sensitive --priority=-2000
 fin tx refresh-reported-types --institution wise
 ```

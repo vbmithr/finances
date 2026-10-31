@@ -2092,11 +2092,13 @@ let print_institution_rules (definition : Institution_definition.t) =
       | Reported_other -> "reported-other"
     in
     printf
-      "    %3d  %-18s %-40s /%s/ -> %s\n"
+      "    %3d  %-18s %-40s /%s/%s -> %s\n"
       r.priority
       action
       (Terminal.text r.name)
       (Terminal.text r.pattern)
+      (Option.value_map r.field ~default:"" ~f:(fun column ->
+         Printf.sprintf " on column %s" (Terminal.text column)))
       (Terminal.text r.target))
 ;;
 

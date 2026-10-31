@@ -202,11 +202,10 @@ configurable yet.
   Decide the open questions there, then stage it: companion fields (step 1, done:
   `add-reported-type --field`), primary fields, one rule form, derived types without the refresh
   commands, remove the old action kinds.
-- [ ] Wise description rules, available today: on the real archives
-  `^Wise Charges for` to `fee` would newly type 187 fee lines now typed by their
-  card, conversion or transfer code, `^Cashback` to `bonus` 29 rows, and the
-  `MONEY_ADDED` code `deposit` 2 rows. Decide whether to ship them in `wise.json`
-  now or with the simpler model.
+- [x] Wise rules shipped in `wise.json` (2026-10-31), on the `TransferWise ID`
+  column rather than the description: `FEE-` to `fee` (187 rows), `BALANCE_CASHBACK-`
+  to `bonus` (29) and the `MONEY_ADDED` code to `deposit` (2). They are ordinary
+  column rules, so they move to the single rule form with the others.
 - [x] `fin tx show EVENT-ID` (2026-10-31): source, files, payload fields, statement,
   companion rows by column, decisions.
 - [x] `fin rule explain EVENT-ID` (2026-10-31): type trace by stage, stale-type
