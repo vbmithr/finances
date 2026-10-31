@@ -150,10 +150,9 @@ repeated mechanics, not eliminating every function associated with a bank.
 
 ## Fit with the existing architecture
 
-Start shared modules inside `finances.banks`, alongside `Adapter_support`.
-They can use the core's validated types and remain pure, with no SQLite, hledger
-or filesystem dependency. Separate a standalone format library later only if
-the boundary proves useful.
+Shared statement sources live in `formats/statement/` and compile into
+`finances.institutions`, alongside `Adapter_support`. They use the core's validated
+types and remain pure, without SQLite, hledger or filesystem dependencies.
 
 Keep `Adapter.S`, `Document.t` and `Companion.t` as the integration boundaries:
 
@@ -161,7 +160,7 @@ Keep `Adapter.S`, `Document.t` and `Companion.t` as the integration boundaries:
 - A companion profile produces numbered raw-field observations and supplies the
   existing annotation, description and matching operations.
 - SQLite archiving, transactions, import history, overlap enforcement and
-  projection remain in the kernel. File and ZIP traversal remain in `bank/`.
+  projection remain in the kernel. File and ZIP traversal remain in `import/`.
 
 Today `Adapter.S` selects overlap policy and account-label requirements for the
 institution, not separately for each format. Initial profiles must respect those

@@ -45,11 +45,11 @@ let archive members =
 ;;
 
 let scan ?max_file_bytes ?(institution = "boursobank") db paths =
-  ok (Finances_bank.Inbox.scan ?max_file_bytes db ~institution ~paths)
+  ok (Finances_import.Inbox.scan ?max_file_bytes db ~institution ~paths)
 ;;
 
 let count report outcome =
-  List.count report.Finances_bank.Inbox.files ~f:(fun file ->
+  List.count report.Finances_import.Inbox.files ~f:(fun file ->
     Poly.equal file.outcome outcome)
 ;;
 

@@ -498,7 +498,7 @@ let list_bank_accounts database json_output =
 ;;
 
 let status database json_output =
-  let module Status = Finances_bank.Bank_status in
+  let module Status = Finances_import.Bank_status in
   let%bind report = with_database database Status.read in
   let banks =
     List.map report.accounts ~f:(fun a -> a.Store.mapping.institution)
@@ -1125,7 +1125,7 @@ let import_bank database institution paths journal max_mib account_id provider =
               () )
     in
     let%bind report =
-      Finances_bank.Sync.run
+      Finances_import.Sync.run
         ~registry
         ~configure_new_accounts
         ?account_id

@@ -38,7 +38,7 @@ let with_store root f =
 ;;
 
 let sync root =
-  Finances_bank.Sync.run
+  Finances_import.Sync.run
     ~registry:Builtin.registry
     ~database:(database root)
     ~institution:"boursobank"
@@ -50,7 +50,7 @@ let sync root =
 let write path contents = Out_channel.write_all path ~data:contents
 
 let count outcome report =
-  List.count report.Finances_bank.Inbox.files ~f:(fun file ->
+  List.count report.Finances_import.Inbox.files ~f:(fun file ->
     Poly.equal file.outcome outcome)
 ;;
 
@@ -199,7 +199,7 @@ let read_limit () =
     with_store root (fun db ->
       let report =
         ok
-          (Finances_bank.Inbox.scan
+          (Finances_import.Inbox.scan
              ~max_file_bytes:32L
              db
              ~institution:"boursobank"
@@ -390,7 +390,7 @@ let path_protection () =
   workspace (fun root ->
     write (join (inbox root) "bank.ofx") (fixture ());
     let run database directory journal =
-      Finances_bank.Sync.run
+      Finances_import.Sync.run
         ~registry:Builtin.registry
         ~database
         ~institution:"boursobank"
@@ -450,7 +450,7 @@ let explicit_paths () =
     let file = join (inbox root) "bank.ofx" in
     write file (fixture ());
     let run paths =
-      Finances_bank.Sync.run
+      Finances_import.Sync.run
         ~registry:Builtin.registry
         ~database:(database root)
         ~institution:"boursobank"

@@ -1,5 +1,5 @@
 open Base
-open Finances_banks
+open Finances_institutions
 
 let profile : Csv_profile.t =
   { separator = ','

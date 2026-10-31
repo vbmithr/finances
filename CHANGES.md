@@ -10,6 +10,12 @@ short line of their own.
 
 ### 2026-10-31
 
+- Rename the import workflow and institution directories and OCaml libraries to
+  `import` and `institutions`; move shared statement sources under `formats/`.
+  **Action required:** OCaml consumers must update references to
+  `finances.import` and `finances.institutions`. CLI behavior and the database
+  schema are unchanged.
+
 - Replace dedicated Bunq and Revolut modules with bundled profiles and shared
   MT940/CSV and running-balance CSV import components. Preserve transaction
   identities, source evidence, reconciliation and companion matching.

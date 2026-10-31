@@ -894,9 +894,9 @@ and refresh imported types. Use `fin rule preview NAME` and `fin rule apply
 NAME` to review and apply decisions to existing transactions. Reimporting the
 same source does not rerun automatic rules. The database and backups contain
 rules; the bundled defaults are installed for a fresh database from
-[`banks/source_type_defaults.json`](../banks/source_type_defaults.json).
+[`institutions/source_type_defaults.json`](../institutions/source_type_defaults.json).
 Wise companion CSV type codes use the same rule list. The bundled
-[`banks/reported_type_defaults.json`](../banks/reported_type_defaults.json)
+[`institutions/reported_type_defaults.json`](../institutions/reported_type_defaults.json)
 maps known codes and preserves other codes as provider-specific types. These
 rules match the reported code, not the transaction description.
 

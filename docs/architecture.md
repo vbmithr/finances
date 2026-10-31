@@ -108,7 +108,7 @@ not yet calculate average entry price from fills or model inverse contracts.
 
 ## Persistence and replay
 
-`Finances_bank.Bank_status` summarizes imported accounts and observed date ranges,
+`Finances_import.Bank_status` summarizes imported accounts and observed date ranges,
 unclassified movement counts, unreviewed compatible transfer candidate pairs and
 the most recent inbox import attempt through Store APIs. The CLI renders this
 progress without interpreting observed ranges as complete statement coverage or
@@ -264,7 +264,7 @@ companion wiring and CSV-only adapter construction; see
 [shared CSV engine and typed profiles](csv-imports.md).
 
 The bank workflow design in [bank-workflow.md](bank-workflow.md) specifies the
-implemented folder milestone and later phases. The separate finances.bank library
+implemented folder milestone and later phases. The separate finances.import library
 owns filesystem scanning and import orchestration. Format detection, mapping types,
 and durable import/history operations remain in the core library.
 
@@ -376,18 +376,22 @@ FX postings. Real samples currently validate EUR movements with zero fees.
 
 ## Bank adapter layout
 
-Three libraries separate the kernel from the banks:
+The main libraries separate the kernel, institution handling and import workflow:
 
 - `finances.core` (`core/`): quantities, dates, source events, `Movement`, the
   `Adapter.S` signature and `Registry`. No database access.
-- `finances.banks` (`banks/`): shared format importers, data-driven institution
-  presets. `Builtin` assembles the registry from shared import components. The library cannot depend on Rel or SQLite.
+- `finances.institutions` (`institutions/` and `formats/statement/`): shared
+  statement parsers and data-driven institution presets. Dune compiles the
+  statement sources into this library; it cannot depend on Rel or SQLite.
+- `finances.import` (`import/`): inbox scanning, archive handling, import
+  orchestration and status reporting.
 - `finances` (`lib/`): Store, projection, transfer review and account
   configuration.
 
-Standard file formats are independent libraries under `formats/` that know
-nothing about banks or accounting: `finances.iban` (ISO 13616) and
-`finances.ofx` (OFX 2.x). Adapters build on them and add their bank's rules.
+Independent libraries under `formats/` include `finances.iban` (ISO 13616),
+`finances.ofx` (OFX 2.x) and `finances.camt` (CAMT.053). Shared statement
+sources in `formats/statement/` compile into `finances.institutions`, alongside
+the institution adapters and presets.
 
 `Store.with_open ~registry` receives the banks it may decode; the CLI passes
 `Builtin.registry`. When a bank event is stored, `Registry.movement` dispatches by
@@ -403,13 +407,13 @@ Imports go through the same registry: adapters recognize and parse files into a
 bank-neutral `Document.t`, and companion formats are matched, annotated and
 described by their adapter, while the kernel stores everything in its generic
 tables (`docs/bank-adapters.md`). The kernel library does not depend on
-`finances.banks`.
+`finances.institutions`.
 
 The adapters share `Bank_match` for matching states and results. Exact CSV
 companion matching is implemented in `Csv_exact_match`; Wise uses the shared
 `Csv_reference_match` reference and clock matching strategy. Source events, database persistence, account mappings,
 the common bank transaction view, and accounting projection stay in `lib/`.
-Folder scanning and import orchestration remain in `bank/`, and journal rendering
+Folder scanning and import orchestration remain in `import/`, and journal rendering
 remains in `journal/`. Versioned institution definitions can assemble the
 supported shared importers at runtime; fin stores installed definitions in the
 database so historical observations do not depend on a mutable external file.

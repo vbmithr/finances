@@ -1,7 +1,7 @@
 (include_subdirs unqualified)
 
 ; The kernel names no bank: it reaches them only through the registry it is
-; given, so it does not depend on finances.banks.
+; given, so it does not depend on finances.institutions.
 
 (library
  (name finances)

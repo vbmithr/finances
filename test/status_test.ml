@@ -1,7 +1,7 @@
 open Base
 open Stdio
 open Finances
-module Status = Finances_bank.Bank_status
+module Status = Finances_import.Bank_status
 
 let ok = Or_error.ok_exn
 let check = Alcotest.(check int)

@@ -1,5 +1,11 @@
 (include_subdirs unqualified)
 
+; Shared source parsers live under formats and compile into this library.
+
+(copy_files ../formats/statement/*.ml)
+
+(copy_files ../formats/statement/*.mli)
+
 (rule
  (targets source_type_defaults.ml)
  (deps source_type_defaults.json)
@@ -71,8 +77,8 @@
 ; Adapters are pure: no Rel or SQLite dependency, enforced here.
 
 (library
- (name finances_banks)
- (public_name finances.banks)
+ (name finances_institutions)
+ (public_name finances.institutions)
  (flags
   (:standard -open Finances_core))
  (libraries

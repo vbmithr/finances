@@ -2,13 +2,13 @@
  (name main)
  (public_name fin)
  (flags
-  (:standard -open Finances_core -open Finances_banks))
+  (:standard -open Finances_core -open Finances_institutions))
  (libraries
   finances
-  finances.banks
+  finances.institutions
   finances.core
   finances.hledger
-  finances.bank
+  finances.import
   finances.iban
   notty.unix
   iso4217

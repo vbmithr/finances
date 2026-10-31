@@ -201,7 +201,7 @@ Review workflows consume those stored clues and still require confirmation.
 `Ofx_bank` shares OFX decoding, probing and adapter defaults. Parsing takes the
 institution explicitly: `Ofx_bank.parse ~institution contents`. User-added
 institutions can use a generic OFX adapter. BoursoBank composes that importer,
-its CSV companion and aliases from `banks/institution_presets.json`; source
+its CSV companion and aliases from `institutions/institution_presets.json`; source
 evidence and typing come from ordinary default rules. A user-added OFX
 institution can configure an exact-match CSV companion; its layout is stored
 with each document. Generic
@@ -292,7 +292,7 @@ rebuilt with the previous build against one rebuilt with the new build.
    journal tags are renumbered.
 5. **Import behind the adapters.** Done: probing, parsing, overlap policy and
    companions are adapter members; Store, the journal exporter and the CLI name
-   no bank, and the kernel library does not depend on `finances.banks`. The
+   no bank, and the kernel library does not depend on `finances.institutions`. The
    per-bank commands became `fin statement list`, `fin statement companions` and
    `fin statement match`; `Bank_import.format` is the adapter's format text. A
    rebuild from the personal inboxes gives the same events, entries, match

@@ -1,5 +1,5 @@
 open Base
-open Finances_banks
+open Finances_institutions
 
 let reader () =
   let header = [ "Solde"; "Solde"; "Description" ] in

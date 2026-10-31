@@ -82,7 +82,7 @@ let latest_import =
 ;;
 
 let status =
-  let field name codec (enc : string * int * Finances_bank.Bank_status.t -> _) map =
+  let field name codec (enc : string * int * Finances_import.Bank_status.t -> _) map =
     Jsont.Object.mem name codec ~enc map
   in
   Jsont.Object.enc_only ()
