@@ -57,7 +57,7 @@
         "datetime": "Date Time",
         "amount": "Amount",
         "currency": "Currency",
-        "description": "Description",
+        "description": "Merchant",
         "payment_reference": "Payment Reference",
         "running_balance": "Running Balance",
         "merchant": "Merchant",

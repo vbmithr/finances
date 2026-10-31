@@ -23,8 +23,16 @@ commands such as `fin import --help`. The installed package also provides
 `man fin` and subcommand man pages.
 
 `tx` and `txn` are shortcuts for `transaction`; `acc` is a shortcut for
-`account`; `inst` is a shortcut for `institution`. For example, `fin tx list` and `fin acc list` use the same commands
-as their full names. Help displays the canonical command name.
+`account`; `inst` for `institution`; and `cat` for the top-level `category`
+catalog. Under `transaction`, `cat` also abbreviates `category` for transaction
+review commands. For example, `fin cat list` lists the catalog, and
+`fin tx cat review EVENT-ID` reviews a transaction. Help displays canonical names.
+
+From a development checkout, `make run ARGS='tx list'` runs the current code
+through Dune without installing. It uses the normal Fin database unless you pass
+`--database PATH`. On Arch, `make install-fast` builds an incremental development
+package and installs it with pacman; it skips tests. See the [README](../README.md)
+for the clean, tested package workflow.
 
 Start with:
 
@@ -311,6 +319,12 @@ rule may also name a `field` to test (see "What a type rule matches"), and its
 policies exposed by the Wise-shaped profile rather than every bank's CAMT format;
 likewise, the MT940 profile currently covers the observed Bunq-style structure,
 not every bank's MT940 variant.
+
+The bundled Wise CSV companion maps its description role to `Merchant`, rather
+than the constructed `Description` column. When `Merchant` is empty, the companion
+description is empty. Fin chooses one effective description: the matched, nonempty
+`Merchant` value when companion rows agree, otherwise the primary CAMT description.
+Original source descriptions and CSV fields remain available as evidence.
 
 Fin saves the validated definition in its database, so later edits or removal of
 the JSON file do not change existing imports. To update it, run `definition set`
@@ -702,20 +716,62 @@ fin transfer candidates
 ```
 
 Unclassified movements initially use `equity:unclassified`. Imported bank
-categories are suggestions. To classify a movement interactively, find its event
+categories are suggestions. To classify or re-review a movement interactively, find its event
 ID in `fin transaction list`, then replace `123` below with that ID:
 
 ```sh
 fin transaction category review 123
 ```
 
-Choose a previously used category by number or enter an `expenses:...` or
-`income:...` account. The command shows matching unclassified movements and lets
-you select all, none, or individual numbered matches. It also shows conflicting
-reviewed classifications. Check the proposed batch and type `yes` to apply it;
-enter `q` at a selection prompt or decline confirmation to cancel. This command
-requires a terminal. It checks that all selected movements are still unclassified
-before saving the batch, so a concurrent decision cannot be overwritten.
+To assign or change one category without the interactive batch review, use:
+
+```sh
+fin tx cat set 123 expenses:food:restaurants
+```
+
+Use `equity:unclassified` as the account to return the movement to review. The
+command needs no reason or confirmation. Confirmed transfers, settlements and
+reversals must be undone first. Regenerate the journal after changing a decision.
+
+Fin maintains a personal catalog of income and expense account names. Start with
+`fin cat init` to review suggested categories, select all or numbered entries,
+and confirm. Repeating the command skips existing names. Add your own with
+`fin cat add expenses:food:groceries`; `fin cat list` lists the catalog,
+including unused entries, and `--json` outputs an array. Category decisions also
+add their account to the catalog. The initializer requires a terminal.
+
+Choose a catalog category by number or enter an `expenses:...` or `income:...`
+account. Fin shows exact matches followed by all ranked fuzzy suggestions above the similarity cutoff
+across institutions. Results are numbered and marked `exact` or `fuzzy` (with a
+similarity score). Enter comma-separated numbers and ascending ranges such as
+`1-5,7,8-19` to select or deselect each row; selected rows are marked `x`.
+Overlapping ranges are rejected. You can explicitly select previously categorized
+matches to change them too; their existing categories are displayed. Confirmed
+transfers, settlements and reversals cannot be selected.
+
+Enter `search` to search effective descriptions by a case-insensitive substring.
+Search can be repeated and selections carry over; `fuzzy` returns to the original
+exact and fuzzy results. `all` selects all selectable rows in the current list,
+including fuzzy and previously categorized matches, and proceeds. It retains prior selections. `none`
+clears the selection and proceeds; `done` proceeds with the current selection.
+Fuzzy scores are not probabilities. Matching uses character-trigram overlap,
+folds ASCII case and treats punctuation as spaces; it is not accent-insensitive,
+and short names under four bytes have no fuzzy suggestions.
+
+The seed is always included. Check the proposed batch and confirm to apply it;
+`q`, EOF, or declining confirmation cancels. This command requires a terminal.
+It checks that every selected category is unchanged since review before saving,
+so a concurrent decision cannot be overwritten. The separate `search` command uses substring matching; it does not search every
+raw source column.
+
+
+Confirmed same-currency transfers export as one journal transaction with direct
+postings to both bank accounts, retaining both source event IDs and any fee postings.
+Fin uses the earlier booking date as the transaction date and attaches the later
+booking date to its bank and fee postings. Between those dates, date-filtered reports
+reflect the two bank balances without a separate in-transit asset; the books may
+therefore appear temporarily unbalanced by date. Fin keeps both source movements
+and review history in SQLite. Regenerate the journal after confirming or undoing.
 
 `fin transfer candidates` shows possible pairs, their evidence and ranking;
 scores are not calibrated probabilities. Run `fin transfer review` to inspect
@@ -779,12 +835,13 @@ fin transaction category similar 123
 fin transaction category similar 123 --json
 ```
 
-The preview matches within the same institution, using the merchant for card
-movements when available, or otherwise the ordered descriptions. The two kinds
-of match do not mix. It ignores ASCII case and whitespace. It shows other
-unclassified movements and separately flags
-matches categorized differently. It never applies a category; use interactive
-review or an explicit decisions file to apply changes. Confirmed transfers are excluded.
+The preview searches across institutions, comparing their effective descriptions.
+Matching
+ignores ASCII case and whitespace; it is not fuzzy matching. The preview shows
+unclassified matches and flags matches categorized differently. It never applies
+a category; use interactive review or an explicit decisions file to apply changes.
+Confirmed transfers are excluded. Check each match: the same name does not always
+mean the same purchase purpose.
 
 The filenames above are files you create, not files generated by the commands.
 Confirm a transfer only when both movements belong to your accounts. Registered
@@ -798,8 +855,10 @@ newest first, with the institution and account ID for each movement. The
 displayed event IDs can be used in review decisions; account IDs come from
 `fin account list`.
 
-The table shows the source movement type separately from its accounting
-classification, including confirmed settlements. On a terminal, the table opens
+The table shows the movement type and the counter-account used in the exported
+journal. `-` means the movement remains unclassified (`equity:unclassified`).
+Confirmed transfers show the other bank account; reversals show their clearing
+account. On a terminal, the table opens
 in `$PAGER` (default `less -FRX`); an empty `PAGER` disables paging. Redirected
 output and `--json` go directly to stdout.
 
@@ -808,27 +867,27 @@ fin transaction list
 fin transaction list --from 2026-01-01 --to 2026-01-31
 fin transaction list --search coffee --limit 20
 fin tx list --type interest
-fin tx list --type card-settlement --classification settlement
-fin tx list --type unknown --classification unclassified
+fin tx list --type card-settlement --decision settlement
+fin tx list --type unknown --decision unclassified
 fin transaction list --order asc
 fin transaction list --json
 ```
 
 Dates are inclusive booking dates. Use `--account ID` for one account or
-`--institution NAME` for a provider; `--search` matches the display name or
-original description using ASCII case-insensitive comparison. `--order asc`
+`--institution NAME` for a provider; `--search` matches the effective description
+using ASCII case-insensitive comparison. `--order asc`
 lists oldest first; `--order desc` is the default.
 `--type` matches the displayed movement type, including provider-specific values;
-`--type unknown` selects movements without a type. `--classification` accepts
-`unclassified`, `category`, `transfer`, `settlement` or `reversal`. Filters combine, and
+`--type unknown` selects movements without a type. `--decision` filters by the
+kind of accounting decision: `unclassified`, `category`, `transfer`, `settlement`
+or `reversal`. It does not filter by counter-account. Filters combine, and
 are applied before sorting and `--limit`.
 Sorting uses the source event's date or timestamp in UTC; date-only events sort
 before timed events on the same date, with event IDs breaking ties. Sorting
-precedes `--limit`, which must be positive. When a uniquely matched Wise CSV
-provides a merchant or movement type, the list shows those fields; otherwise it
-falls back to the source description. Conflicting values are omitted. JSON
-includes the original `description`, optional `display_name` and `movement_type`,
-and `detail_sources` companion row IDs, which can be inspected with
+precedes `--limit`, which must be positive. A matched Wise CSV can provide the
+effective description; missing or conflicting values fall back to the primary
+description. JSON contains one effective `description`, `movement_type`, and
+`detail_sources` companion row IDs, which can be inspected with
 `fin statement companions`. Provider-specific types are prefixed with the provider
 name. A reported transfer type does not confirm a transfer between your accounts.
 
@@ -1116,7 +1175,8 @@ Use `--match-type unknown` to select movements without an effective type;
 `unknown` cannot be used as a `--set-type` value.
 
 The expression uses Perl-style regular-expression syntax and is searched in
-the display name and each original description field. Matching ignores ASCII
+the effective description for review-mode rules. Automatic rules at import use the
+primary description available at import time. Matching ignores ASCII
 letter case by default; pass `--case-sensitive` when creating the rule to
 change that. `--institution` restricts it to the exact institution name; omit
 it to search all institutions. Quote expressions to protect them from the shell.
@@ -1172,7 +1232,7 @@ belongs to hledger; `fin` tracks import evidence, account identity and review st
 ## Library and dependency changes
 
 This build uses Base, decimal, Ptime and Bos, with no Core or Bigdecimal
-dependency. Version 1 account snapshots remain compatible; databases use schema 30 and
+dependency. Version 1 account snapshots remain compatible; databases use schema 31 and
 are rebuilt from the original statements (see above).
 
 OCaml callers use `Quantity.t` (a `Decimal.t` alias) and `Date.t` (a `Ptime.date`

@@ -373,6 +373,7 @@ let welcome () =
      Explore your finances:\n\
      \032 fin status              See import coverage and review progress\n\
      \032 fin account list        See your accounts\n\
+     \032 fin category list       See your category catalog\n\
      \032 fin transaction list    List imported transactions\n\
      \032 fin transaction review  Review unclassified movements\n\
      \032 fin statement list       Inspect statement reconciliation\n\
@@ -1509,6 +1510,36 @@ let categorize_bank database path =
     Ok ())
 ;;
 
+let category_set database event_id account =
+  let%bind decision =
+    Bank_category.create ~event_id ~account ~reason:"Set with fin tx cat set"
+  in
+  with_database database (fun db ->
+    let%bind changed = Store.set_bank_categories db [ decision ] in
+    printf "category_changes=%d\n" changed;
+    Ok ())
+;;
+
+let category_set_cmd =
+  command
+    "set"
+    "Assign or change a transaction's category."
+    Term.(
+      const category_set
+      $ database
+      $ Arg.(
+          required
+          & pos 0 (some int64) None
+          & info [] ~docv:"EVENT-ID" ~doc:"Transaction event ID.")
+      $ Arg.(
+          required
+          & pos 1 (some string) None
+          & info
+              []
+              ~docv:"ACCOUNT"
+              ~doc:"Income or expense account, or equity:unclassified to reset."))
+;;
+
 let categorize_bank_cmd =
   command
     "apply"
@@ -1620,10 +1651,7 @@ let list_transactions
         && Option.value_map to_date ~default:true ~f:(fun date ->
           Date.compare r.transaction.booked_on date <= 0)
         && Option.value_map search ~default:true ~f:(fun text ->
-          Option.value_map r.display_name ~default:false ~f:(fun name ->
-            String.Caseless.is_substring name ~substring:text)
-          || List.exists r.transaction.descriptions ~f:(fun d ->
-            String.Caseless.is_substring d ~substring:text)))
+          String.Caseless.is_substring r.description ~substring:text))
       |> List.sort
            ~compare:(fun (a : Report_json.transaction) (b : Report_json.transaction) ->
              let compare (a : Report_json.transaction) (b : Report_json.transaction) =
@@ -1697,7 +1725,7 @@ let transaction_list_cmd =
           & info
               [ "search" ]
               ~docv:"TEXT"
-              ~doc:"ASCII case-insensitive display name or description substring.")
+              ~doc:"ASCII case-insensitive effective description substring.")
       $ Arg.(
           value
           & opt (some string) None
@@ -1720,10 +1748,10 @@ let transaction_list_cmd =
                     ]))
               None
           & info
-              [ "classification" ]
-              ~docv:"CLASSIFICATION"
+              [ "decision" ]
+              ~docv:"DECISION"
               ~doc:
-                "Accounting classification: unclassified, category, transfer, settlement \
+                "Accounting decision kind: unclassified, category, transfer, settlement \
                  or reversal.")
       $ Arg.(
           value
@@ -4234,8 +4262,8 @@ let category_similar database seed json_output =
         (Terminal.text preview.seed.counter_account);
       Terminal.review [ preview.seed ];
       print_endline
-        "Matching unclassified transactions (same institution and card merchant or \
-         description, ignoring ASCII case and whitespace):";
+        "Matching unclassified transactions (across institutions, matching normalized \
+         effective descriptions):";
       Terminal.review preview.candidates;
       if not (List.is_empty preview.conflicts)
       then (
@@ -4261,6 +4289,132 @@ let category_similar_cmd =
       $ json_output)
 ;;
 
+let category_list database json_output =
+  with_database database (fun db ->
+    let%bind categories = Store.categories db in
+    if json_output
+    then Report_json.print (Jsont.list Jsont.string) categories
+    else List.iter categories ~f:(fun category -> printf "%s\n" (Terminal.text category));
+    Ok ())
+;;
+
+let category_list_cmd =
+  command
+    "list"
+    "List the personal income and expense category catalog."
+    Term.(const category_list $ database $ json_output)
+;;
+
+let category_add database name =
+  with_database database (fun db ->
+    let%bind () = Store.add_categories db [ name ] in
+    printf "Category available: %s\n" (Terminal.text name);
+    Ok ())
+;;
+
+let category_add_cmd =
+  command
+    "add"
+    "Add an income or expense category to the catalog."
+    Term.(
+      const category_add
+      $ database
+      $ Arg.(required & pos 0 (some string) None & info [] ~docv:"ACCOUNT"))
+;;
+
+let starter_categories =
+  [ "expenses:home"
+  ; "expenses:utilities"
+  ; "expenses:food:groceries"
+  ; "expenses:food:restaurants"
+  ; "expenses:transport"
+  ; "expenses:health"
+  ; "expenses:shopping"
+  ; "expenses:entertainment"
+  ; "expenses:travel"
+  ; "expenses:taxes"
+  ; "expenses:other"
+  ; "income:salary"
+  ; "income:interest"
+  ; "income:other"
+  ]
+;;
+
+let category_init database =
+  if not (Unix.isatty Unix.stdin)
+  then Or_error.error_string "category initialization requires a terminal"
+  else
+    with_database database (fun db ->
+      let%bind existing = Store.categories db in
+      let available =
+        List.filter starter_categories ~f:(fun name ->
+          not (List.mem existing name ~equal:String.equal))
+      in
+      if List.is_empty available
+      then (
+        print_endline "All starter categories already exist.";
+        Ok ())
+      else (
+        print_endline "Suggested starter categories:";
+        List.iteri available ~f:(fun i name -> printf "  %d. %s\n" (i + 1) name);
+        let rec select () =
+          match
+            prompt "Select all, none, or numbers separated by spaces (q to cancel): "
+          with
+          | None -> Ok None
+          | Some input ->
+            let input = String.strip input in
+            if String.Caseless.equal input "q" || String.Caseless.equal input "none"
+            then Ok None
+            else if String.Caseless.equal input "all"
+            then Ok (Some available)
+            else (
+              let nums =
+                String.split_on_chars input ~on:[ ' '; ','; '\t' ]
+                |> List.filter ~f:(Fn.non String.is_empty)
+              in
+              let indexes =
+                List.map nums ~f:(fun n -> Option.try_with (fun () -> Int.of_string n))
+              in
+              if
+                List.is_empty indexes
+                || List.exists indexes ~f:(function
+                  | None -> true
+                  | Some n -> n < 1 || n > List.length available)
+              then (
+                eprintf "Enter all, none, or valid numbers.\n";
+                select ())
+              else
+                Ok
+                  (Some
+                     (List.filteri available ~f:(fun i _ ->
+                        List.mem indexes (Some (i + 1)) ~equal:(Option.equal Int.equal)))))
+        in
+        let%bind selected = select () in
+        match selected with
+        | None ->
+          print_endline "No categories added.";
+          Ok ()
+        | Some selected ->
+          print_endline "Categories to add:";
+          List.iter selected ~f:(fun name -> printf "  %s\n" name);
+          (match prompt "Add these categories? [Y/n]: " with
+           | Some answer when confirm_default_yes answer ->
+             let%bind () = Store.add_categories db selected in
+             printf "categories_added=%d\n" (List.length selected);
+             Ok ()
+           | _ ->
+             print_endline "No categories added.";
+             Ok ())))
+;;
+
+let category_init_cmd =
+  command
+    "init"
+    "Choose suggested starter categories for your personal catalog."
+    Term.(const category_init $ database)
+;;
+
 let category_review database event_id =
   if not (Unix.isatty Unix.stdin)
   then Or_error.error_string "interactive category review requires a terminal"
@@ -4271,24 +4425,20 @@ let category_review database event_id =
         List.find rows ~f:(fun (r : Store.bank_review) -> Int64.equal r.event_id event_id)
         |> Or_error.of_option ~error:(Error.of_string "unknown transaction event ID")
       in
-      if not (String.equal seed.counter_account "equity:unclassified")
+      if
+        not
+          (Poly.equal seed.classification Store.Unclassified
+           || Poly.equal seed.classification Store.Category)
       then
         Or_error.error_string
-          "transaction is already classified or belongs to a confirmed transfer"
+          "transaction belongs to a confirmed transfer, settlement or reversal"
       else (
         print_endline "Transaction to classify:";
         Terminal.review [ seed ];
-        let categories =
-          List.filter_map rows ~f:(fun (r : Store.bank_review) ->
-            Option.some_if
-              (String.is_prefix r.counter_account ~prefix:"expenses:"
-               || String.is_prefix r.counter_account ~prefix:"income:")
-              r.counter_account)
-          |> List.dedup_and_sort ~compare:String.compare
-        in
+        let%bind categories = Store.categories db in
         if not (List.is_empty categories)
         then (
-          print_endline "Previously used categories:";
+          print_endline "Available categories:";
           List.iteri categories ~f:(fun i category ->
             printf "  %d. %s\n" (i + 1) (Terminal.text category)));
         let rec pick_category () =
@@ -4331,12 +4481,7 @@ let category_review database event_id =
             }
           in
           let%bind matches =
-            if
-              ((not (Poly.equal seed.movement_type (Some Movement_type.Card)))
-               || Option.value_map seed.display_name ~default:true ~f:(fun name ->
-                 String.is_empty (String.strip name)))
-              && List.for_all seed.transaction.descriptions ~f:(fun s ->
-                String.is_empty (String.strip s))
+            if String.is_empty (String.strip seed.description)
             then
               Ok Category_similarity.{ seed = example; candidates = []; conflicts = [] }
             else
@@ -4346,68 +4491,149 @@ let category_review database event_id =
                  :: List.filter rows ~f:(fun r ->
                    not (Int64.equal r.Store.event_id event_id)))
           in
-          if not (List.is_empty matches.conflicts)
-          then (
-            print_endline "Similar transactions with different reviewed categories:";
-            Terminal.review matches.conflicts);
-          let candidates = matches.candidates in
-          if not (List.is_empty candidates)
-          then (
-            print_endline
-              "Similar unclassified transactions (same institution and normalized card \
-               merchant or description):";
+          let fuzzy = Category_similarity.fuzzy ~seed rows in
+          let initial = matches.candidates @ matches.conflicts @ List.map fuzzy ~f:fst in
+          let eligible (r : Store.bank_review) =
+            Poly.equal r.classification Store.Unclassified
+            || Poly.equal r.classification Store.Category
+          in
+          let show_rows
+                (selected : Store.bank_review list)
+                (candidates : Store.bank_review list)
+                show_fuzzy
+            =
+            print_endline "Matches (selected rows marked x):";
+            if List.is_empty candidates then print_endline "  No matches.";
             List.iteri candidates ~f:(fun i (r : Store.bank_review) ->
+              let chosen =
+                List.exists selected ~f:(fun x -> Int64.equal x.Store.event_id r.event_id)
+              in
+              let label =
+                if show_fuzzy
+                then
+                  Option.value_map
+                    (List.find fuzzy ~f:(fun (row, _) ->
+                       Int64.equal row.Store.event_id r.event_id))
+                    ~default:"exact"
+                    ~f:(fun (_, score) -> Printf.sprintf "fuzzy %.2f" score)
+                else "search"
+              in
               printf
-                "  %d. #%Ld  %s  %s %s  %s\n"
+                "  %d. [%s] %s  #%Ld  %s  %s  %s %s  %s  (%s)\n"
                 (i + 1)
+                (if chosen then "x" else " ")
+                label
                 r.event_id
+                (Terminal.text r.institution)
                 (Date.to_string r.transaction.booked_on)
                 (Quantity.to_string r.transaction.amount)
                 (Iso4217.to_alpha_code r.transaction.account.currency)
-                (Terminal.text
-                   (Option.value
-                      r.display_name
-                      ~default:(String.concat ~sep:" | " r.transaction.descriptions)))));
-          let rec select () =
-            if List.is_empty candidates
-            then Ok (Some [])
-            else (
-              match
-                prompt "Select matches (all, none, comma-separated numbers, or q): "
-              with
-              | None -> Ok None
-              | Some input ->
-                let input = String.strip input in
-                if String.Caseless.equal input "q"
-                then Ok None
-                else if String.Caseless.equal input "all"
-                then Ok (Some candidates)
-                else if String.Caseless.equal input "none"
-                then Ok (Some [])
-                else (
-                  let selected =
-                    String.split input ~on:','
-                    |> List.map ~f:(fun s ->
-                      Option.try_with (fun () -> Int.of_string (String.strip s))
-                      |> Option.bind ~f:(fun n ->
-                        if n <= 0 then None else List.nth candidates (n - 1)))
-                  in
-                  if List.is_empty selected || List.exists selected ~f:Option.is_none
-                  then (
-                    eprintf "Enter valid, comma-separated match numbers.\n";
-                    select ())
-                  else (
-                    let selected = List.filter_opt selected in
-                    if
-                      List.contains_dup
-                        (List.map selected ~f:(fun r -> r.Store.event_id))
-                        ~compare:Int64.compare
-                    then (
-                      eprintf "Select each match only once.\n";
-                      select ())
-                    else Ok (Some selected))))
+                (Terminal.text r.description)
+                (Terminal.text r.counter_account))
           in
-          let%bind selected = select () in
+          let rec select
+                    (candidates : Store.bank_review list)
+                    (selected : Store.bank_review list)
+                    show_fuzzy
+            =
+            show_rows selected candidates show_fuzzy;
+            printf
+              "Selected: %d. all selects all selectable displayed matches and proceeds.\n"
+              (List.length selected);
+            print_endline
+              "Enter numbers or ranges to select or deselect, e.g. 1-5,7,8-19.";
+            print_endline "Commands: all, none, search, fuzzy, done, q";
+            match prompt "Select matches: " with
+            | None -> Ok None
+            | Some input ->
+              let input = String.strip input in
+              if String.Caseless.equal input "q"
+              then Ok None
+              else if String.Caseless.equal input "done"
+              then Ok (Some selected)
+              else if String.Caseless.equal input "none"
+              then Ok (Some [])
+              else if String.Caseless.equal input "all"
+              then
+                Ok
+                  (Some
+                     (List.dedup_and_sort
+                        ~compare:(fun (a : Store.bank_review) (b : Store.bank_review) ->
+                          Int64.compare a.event_id b.event_id)
+                        (selected @ List.filter candidates ~f:eligible)))
+              else if
+                String.Caseless.equal input "fuzzy" || String.Caseless.equal input "f"
+              then select initial selected true
+              else if
+                String.Caseless.equal input "search" || String.Caseless.equal input "s"
+              then (
+                match prompt "Search description (empty to return): " with
+                | None -> Ok None
+                | Some query ->
+                  let query = String.strip query in
+                  if String.is_empty query
+                  then select candidates selected show_fuzzy
+                  else (
+                    let results =
+                      List.filter rows ~f:(fun (r : Store.bank_review) ->
+                        (not (Int64.equal r.event_id event_id))
+                        && String.Caseless.is_substring r.description ~substring:query)
+                    in
+                    select results selected false))
+              else (
+                let number text =
+                  Option.try_with (fun () -> Int.of_string (String.strip text))
+                in
+                let parse piece =
+                  let range = String.split (String.strip piece) ~on:'-' in
+                  let bounds =
+                    match range with
+                    | [ one ] -> Option.map (number one) ~f:(fun n -> n, n)
+                    | [ first; last ] -> Option.both (number first) (number last)
+                    | _ -> None
+                  in
+                  Option.bind bounds ~f:(fun (first, last) ->
+                    if first < 1 || last < first || last > List.length candidates
+                    then None
+                    else
+                      Some
+                        (List.init
+                           (last - first + 1)
+                           ~f:(fun i -> List.nth_exn candidates (first + i - 1))))
+                in
+                let parsed = List.map (String.split input ~on:',') ~f:parse in
+                if List.exists parsed ~f:Option.is_none
+                then (
+                  eprintf "Enter valid comma-separated numbers or ascending ranges.\n";
+                  select candidates selected show_fuzzy)
+                else (
+                  let choices = List.concat (List.filter_opt parsed) in
+                  if List.exists choices ~f:(Fn.non eligible)
+                  then (
+                    eprintf
+                      "Only unclassified or categorized transactions can be selected.\n";
+                    select candidates selected show_fuzzy)
+                  else if
+                    List.contains_dup
+                      (List.map choices ~f:(fun r -> r.Store.event_id))
+                      ~compare:Int64.compare
+                  then (
+                    eprintf "Select each match only once.\n";
+                    select candidates selected show_fuzzy)
+                  else (
+                    let selected =
+                      List.fold choices ~init:selected ~f:(fun selected r ->
+                        if
+                          List.exists selected ~f:(fun x ->
+                            Int64.equal x.Store.event_id r.Store.event_id)
+                        then
+                          List.filter selected ~f:(fun x ->
+                            not (Int64.equal x.Store.event_id r.Store.event_id))
+                        else selected @ [ r ])
+                    in
+                    select candidates selected show_fuzzy)))
+          in
+          let%bind selected = select initial [] true in
           (match selected with
            | None ->
              print_endline "Nothing classified.";
@@ -4439,12 +4665,18 @@ let category_review database event_id =
                      ~reason:
                        (if Int64.equal r.event_id event_id
                         then "Reviewed interactively"
-                        else Printf.sprintf "Reviewed as similar to event %Ld" event_id))
+                        else
+                          Printf.sprintf
+                            "Selected during category review of event %Ld"
+                            event_id))
                  |> Or_error.combine_errors
                in
-               let%bind changed =
-                 Store.set_bank_categories ~only_unclassified:true db decisions
+               let expected =
+                 List.map chosen ~f:(fun (r : Store.bank_review) ->
+                   ( r.event_id
+                   , Option.map r.reason ~f:(fun reason -> r.counter_account, reason) ))
                in
+               let%bind changed = Store.review_bank_categories db ~expected decisions in
                printf "category_changes=%d\n" changed;
                Ok ()))))
 ;;
@@ -4452,7 +4684,7 @@ let category_review database event_id =
 let category_review_cmd =
   command
     "review"
-    "Interactively classify a transaction and selected similar movements."
+    "Review or change a category and selected similar movements."
     Term.(
       const category_review
       $ database
@@ -4462,7 +4694,9 @@ let category_review_cmd =
           & info
               []
               ~docv:"EVENT-ID"
-              ~doc:"Unclassified transaction ID from fin transaction list."))
+              ~doc:
+                "Transaction ID from fin transaction list; existing categories may be \
+                 changed."))
 ;;
 
 let category_history database =
@@ -5244,7 +5478,13 @@ let command_argv () =
         | "tx" | "txn" -> "transaction"
         | "acc" -> "account"
         | "inst" -> "institution"
+        | "cat" -> "category"
         | command -> command);
+  if
+    Stdlib.Array.length argv > 2
+    && String.equal argv.(1) "transaction"
+    && String.equal argv.(2) "cat"
+  then argv.(2) <- "category";
   argv
 ;;
 
@@ -5283,7 +5523,8 @@ let () =
                     $(b,--help) to any subcommand for its options."
                ; `P
                    "Command shortcuts: $(b,tx) and $(b,txn) mean $(b,transaction); \
-                    $(b,acc) means $(b,account); $(b,inst) means $(b,institution)."
+                    $(b,acc) means $(b,account); $(b,inst) means $(b,institution); \
+                    $(b,cat) means $(b,category)."
                ])
           [ setup_cmd
           ; status_cmd
@@ -5293,6 +5534,10 @@ let () =
           ; delete_cmd
           ; account_cmd
           ; import_bank_cmd
+          ; group
+              "category"
+              "Manage the personal income and expense category catalog."
+              [ category_list_cmd; category_add_cmd; category_init_cmd ]
           ; group
               "institution"
               "Manage institutions and their importers."
@@ -5384,6 +5629,7 @@ let () =
                   "category"
                   "Manage reviewed transaction categories."
                   [ categorize_bank_cmd
+                  ; category_set_cmd
                   ; category_history_cmd
                   ; category_similar_cmd
                   ; category_review_cmd

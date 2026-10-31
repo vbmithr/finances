@@ -15,7 +15,7 @@ import tempfile
 
 
 MANPAGE_COMMANDS = (None, 'init', 'status', 'backup', 'restore', 'delete',
-                    'import', 'account', 'institution', 'statement', 'transfer', 'transaction', 'settlement', 'reversal', 'rule', 'journal', 'db', 'paths')
+                    'import', 'account', 'category', 'institution', 'statement', 'transfer', 'transaction', 'settlement', 'reversal', 'rule', 'journal', 'db', 'paths')
 
 
 def main():
@@ -23,10 +23,12 @@ def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--switch', help='Prepared opam switch to use')
     parser.add_argument('--output', type=Path, default=root / 'dist' / 'arch')
+    parser.add_argument('--fast', action='store_true',
+                        help='Reuse a release build cache and skip tests for development packages')
     parser.add_argument('--prepare-only', action='store_true',
                         help='Generate the native payload and PKGBUILD without building a package')
     parser.add_argument('--scratch-root', type=Path,
-                        default=Path.home() / '.cache' / 'finances' / 'build')
+                        default=Path.home() / '.cache' / 'codex' / 'scratch' / 'finances-arch')
     args = parser.parse_args()
     output = args.output.resolve()
     scratch_root = args.scratch_root.resolve()
@@ -53,11 +55,23 @@ def main():
         def run(command, *, cwd=root, **kwargs):
             return subprocess.run(command, cwd=cwd, env=env, check=True, **kwargs)
 
-        build = work / 'dune'
+        # Fast builds retain only Dune's build cache; package staging stays temporary.
+        # Separate caches keep switches with incompatible compilers from sharing artifacts.
+        if args.fast:
+            compiler_path = run(opam + ['--', 'ocamlc', '-where'],
+                                capture_output=True, text=True).stdout.strip()
+            switch_key = hashlib.sha256(compiler_path.encode()).hexdigest()[:12]
+            build = root / '_build' / 'arch-fast' / switch_key
+            build.parent.mkdir(parents=True, exist_ok=True)
+        else:
+            build = work / 'dune'
         dune = opam + ['--', 'dune']
         run(dune + ['build', '--profile', 'release', '--build-dir', str(build),
                     'bin/main.exe'])
-        run(dune + ['runtest', '--profile', 'release', '--build-dir', str(build)])
+        if args.fast:
+            print('Fast development package: reusing build cache; tests are skipped.', flush=True)
+        else:
+            run(dune + ['runtest', '--profile', 'release', '--build-dir', str(build)])
         executable = build / 'default' / 'bin' / 'main.exe'
         reported = run([str(executable), '--version'], capture_output=True,
                        text=True).stdout.strip()

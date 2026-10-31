@@ -68,17 +68,15 @@ that might share its category. Separate these operations:
   Rules exist (below); creating one from a reviewed batch does not yet.
 
 The first implemented preview is `fin transaction category similar EVENT_ID`. The
-example must have a reviewed income or expense category. Within the same
-institution, it compares matched card merchants when available, or the ordered
-description fields otherwise. Merchant and description keys are kept separate.
-It ignores ASCII case and runs of
-spaces, tabs and newlines. It reports unclassified matches and separately reports
-matching transactions with a different reviewed category. Confirmed transfers are
-excluded. This is evidence for review, not a probability or
-an automatic decision; `--json` provides the same preview for scripts.
+example must have a reviewed income or expense category. It searches across
+institutions, comparing one effective description per transaction. Comparisons
+ignore ASCII case and whitespace. It reports unclassified matches and separately
+reports transactions with a different reviewed category. Confirmed transfers are
+excluded. This is evidence for review, not a probability or an automatic decision;
+`--json` provides the same preview for scripts.
 
-Start with exact and carefully normalized descriptions, then evaluate fuzzy
-matching on real variations. Possible evidence includes provider, account,
+Interactive review also offers ranked trigram-based fuzzy suggestions; evaluate
+them against real variations and select relevant rows. Possible evidence includes provider, account,
 direction, merchant text and, when useful, amount or recurrence. Do not make a
 single merchant default authoritative for mixed-purpose merchants. Conflicting
 reviewed examples should produce alternatives or an unresolved result, not a
@@ -434,11 +432,12 @@ and evaluate the interface for classification; noninteractive commands and JSON
 workflows must remain available for scripts.
 
 The initial `fin transaction category review EVENT_ID` workflow presents an
-unclassified movement, offers previously used categories or a new category name,
+unclassified or categorized movement, offers catalog categories or a new category name,
 and lets the user select exact matches and confirm a transactional batch. It
 shows conflicting classifications and leaves cancellation without changes. The
 event ID can be found with `fin transaction list`. This first interface uses
-terminal prompts; it does not yet provide tags or category search. Separately,
+terminal prompts, including repeated substring searches and selectable results; it
+does not yet provide tags or category search. Separately,
 `fin rule` saves conditions and actions for automatic import or explicit preview
 and batch application; see the [manual](manual.md#transaction-rules).
 

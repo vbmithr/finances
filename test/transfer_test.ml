@@ -266,6 +266,69 @@ let confirm_and_reject () =
     check "no duplicate projection" 0 (ok (Store.project_bank db)).inserted;
     let journal = ok (Finances_hledger.export db) in
     Alcotest.(check bool)
+      "no per-pair clearing account in export"
+      false
+      (String.is_substring journal ~substring:account);
+    Alcotest.(check bool)
+      "both source ids retained"
+      true
+      (String.is_substring
+         journal
+         ~substring:
+           (Printf.sprintf "source-event-ids: %Ld %Ld" c.first_event_id c.second_event_id));
+    let journal_transactions =
+      Hledger.Parse.journal_exn journal |> Hledger.Journal.transactions
+    in
+    let direct =
+      List.find_exn journal_transactions ~f:(fun tx ->
+        Option.equal
+          String.equal
+          tx.Hledger.Journal.code
+          (Some (Printf.sprintf "event-%Ld" c.first_event_id)))
+    in
+    let first_entry = entries db c.first_event_id in
+    let second_entry = entries db c.second_event_id in
+    let accounts = List.map direct.postings ~f:(fun p -> p.Hledger.Journal.account) in
+    Alcotest.(check bool)
+      "both real bank accounts are direct postings"
+      true
+      (List.mem accounts (List.hd_exn first_entry.postings).account ~equal:String.equal
+       && List.mem
+            accounts
+            (List.hd_exn second_entry.postings).account
+            ~equal:String.equal);
+    let reviews = ok (Store.bank_review db) in
+    let find_review id =
+      List.find_exn reviews ~f:(fun r -> Int64.equal r.Store.event_id id)
+    in
+    Alcotest.(check string)
+      "first movement shows the other account"
+      (List.hd_exn second_entry.postings).account
+      (find_review c.first_event_id).counter_account;
+    Alcotest.(check string)
+      "second movement shows the other account"
+      (List.hd_exn first_entry.postings).account
+      (find_review c.second_event_id).counter_account;
+    Alcotest.(check int)
+      "bank legs and fees appear exactly once"
+      (List.length first_entry.postings + List.length second_entry.postings - 2)
+      (List.length direct.postings);
+    let later =
+      if Date.compare first_entry.date second_entry.date > 0
+      then first_entry.date
+      else second_entry.date
+    in
+    if not (Date.equal first_entry.date second_entry.date)
+    then
+      Alcotest.(check bool)
+        "later leg keeps posting date"
+        true
+        (List.exists direct.postings ~f:(fun p ->
+           Option.equal
+             String.equal
+             p.Hledger.Journal.comment.same_line
+             (Some ("[" ^ Date.to_string later ^ "]"))));
+    Alcotest.(check bool)
       "review provenance"
       true
       (String.is_substring journal ~substring:"transfer-pair:");
@@ -308,7 +371,9 @@ let confirm_and_reject () =
     check
       "review shows two transfer legs"
       2
-      (List.count review ~f:(fun r -> String.equal r.Store.counter_account account)))
+      (List.count review ~f:(fun r ->
+         Poly.equal r.Store.classification Store.Transfer
+         && not (String.is_prefix r.counter_account ~prefix:"assets:transfers:pair-"))))
 ;;
 
 let before_projection () =

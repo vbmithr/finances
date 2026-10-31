@@ -383,7 +383,7 @@ let review_enrichment () =
     ignore (ok (Store.match_companions ~institution:"wise" db) : Store.companion_report);
     let rows = ok (Store.bank_review db) in
     List.iter rows ~f:(fun row ->
-      Alcotest.(check (option string)) "merchant" (Some "Synthetic shop") row.display_name;
+      Alcotest.(check string) "effective description" "Synthetic shop" row.description;
       Alcotest.(check (option string))
         "type"
         (Some "card")
@@ -394,10 +394,10 @@ let review_enrichment () =
     List.iter
       (ok (Store.bank_review db))
       ~f:(fun row ->
-        Alcotest.(check (option string))
-          "disagreeing merchant suppressed"
-          None
-          row.display_name;
+        Alcotest.(check string)
+          "disagreeing companion descriptions fall back to primary"
+          (List.nth_exn row.transaction.descriptions row.transaction.main_description)
+          row.description;
         Alcotest.(check (option string))
           "agreeing type retained"
           (Some "card")

@@ -16,11 +16,13 @@ Last updated: 2026-10-31.
   and reusable statement sources in `formats/statement/`. MT940 has its own
   `formats/mt940/` directory and `finances.mt940` library. The workflow and
   institution libraries are `finances.import` and `finances.institutions`.
+- Wise uses a matched, nonempty and consistent CSV `Merchant` as the effective
+  transaction description, falling back to CAMT; source evidence remains intact.
 - All four banks import: BoursoBank (OFX, CSV companion), Wise (CAMT.053, CSV
   companion), Bunq (MT940, CSV companion) and Revolut (CSV). All use bundled
   profiles and shared import components; none has a dedicated bank module.
   User-added institutions can import OFX or configure a generic CSV layout.
-- Storage is schema 26: generic tables for every bank, plus each movement stored
+- Storage is schema 31: generic tables for every bank, plus each movement stored
   normalized at import, so reads are SQL queries instead of payload decoding. No
   migrations; older databases are refused unchanged.
 - Event occurrences and statement boundaries share `Temporal.t` (`Date` or
@@ -48,6 +50,9 @@ Last updated: 2026-10-31.
   Encoding uses small per-call buffers; status and account listings compute
   each source account identifier once per account rather than per movement.
 - IBANs and currencies are validated types (`Iban.t`, `Iso4217.t`).
+- Confirmed same-currency transfers export as direct bank-to-bank journal entries,
+  with separate posting dates and both source IDs; SQLite retains per-movement
+  projections for review and undo.
 - Movements project to balanced entries against `equity:unclassified`, unless a
   reviewed category or confirmed transfer says otherwise. `fin journal export`
   writes a reproducible hledger journal.
@@ -55,11 +60,11 @@ Last updated: 2026-10-31.
   `fin backup` saves one
   consistent SQLite snapshot; `fin restore BACKUP` validates and restores it,
   with overwrite confirmation and automatic removal of stale generated files.
-- 231 tests (161 OCaml cases and 70 CLI cases), plus status performance and
-  package man-page checks. Selected import changes have also been compared by
+- OCaml test suites and 87 CLI cases, plus status performance and package
+  man-page checks. Selected import changes have also been compared by
   rebuilding a personal database and diffing reports and source payloads.
 - Issue #1 is implemented locally and awaits publication.
-- The installed Arch package is `finances 0.1.0-23`; the tree uses schema 26.
+- The installed Arch package is `finances 0.1.0-23`; the tree uses schema 31.
 
 ### Personal data
 
@@ -271,7 +276,7 @@ The import side is done; turning movements into accounting is not.
 - [x] Folder ingestion and account mapping.
 - [x] Use the singular `fin transfer` command group.
 - [x] Add short aliases for transaction, account and institution commands.
-- [x] Filter transaction listings by movement type and accounting classification.
+- [x] Show transaction counter-accounts and filter listings by type and accounting decision.
 - [x] List common and observed provider types and audit manual type overrides.
 - [x] Match rules on effective type and preview type and category actions together.
 - [x] Move BoursoBank source typing to editable per-institution profiles, with
@@ -300,6 +305,11 @@ The import side is done; turning movements into accounting is not.
 - [x] Transaction listings show accounting classification and use a terminal pager;
   settlement rule batches reuse loaded data across decisions.
 - [x] CSV enrichment, with ambiguous matches visible.
+- [x] Find similar transactions across institutions during category review.
+- [x] Search descriptions and select transactions across searches during category review.
+- [x] Set or correct an individual category directly; re-review categorized batches.
+- [x] Offer uncapped ranked fuzzy suggestions during category review; evaluate on real variations.
+- [x] Maintain a personal category catalog with `fin cat add`, `list` and interactive `init`.
 - [ ] [Classification and review](classification.md): rules (regular expressions
   with automatic, review and disabled modes, priorities, type and category
   actions), previews and interactive review exist. User tags, richer similarity,
@@ -313,6 +323,8 @@ The import side is done; turning movements into accounting is not.
 
 ### 3. Smaller gaps
 
+- [x] Provide incremental checkout execution and a cached Arch development package
+  path, keeping the clean tested package workflow.
 - [x] Generate Arch package man pages for every top-level command and check the
   package list against the CLI in the test suite.
 

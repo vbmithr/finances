@@ -18,21 +18,37 @@ let transaction
       metadata
       extra_metadata
       secondary_dates
+      descriptions
+      posting_dates
       (event_id, key, (entry : Accounting.entry))
   =
   let postings =
-    List.map entry.postings ~f:(fun posting ->
+    List.mapi entry.postings ~f:(fun index posting ->
+      let comment =
+        match
+          Hashtbl.find posting_dates event_id
+          |> Option.bind ~f:(fun dates -> List.nth dates index)
+        with
+        | Some date when not (Date.equal date entry.date) ->
+          Hledger.Journal.
+            { same_line = Some ("[" ^ Date.to_string date ^ "]"); lines = [] }
+        | _ -> Hledger.Journal.no_comment
+      in
       Hledger.Journal.posting
         posting.account
+        ~comment
         ~amount:(Hledger.Amount.create ~commodity:posting.commodity posting.quantity))
   in
   (* Matched companion rows, in row order: the first value date wins, and each
      tag comes from the first row that provides it. *)
   let observations = Option.value (Hashtbl.find metadata event_id) ~default:[] in
   let date2 =
-    Option.first_some
-      (List.find_map observations ~f:(fun (_, (a : Companion.annotation)) -> a.value_on))
-      (Hashtbl.find secondary_dates event_id)
+    if Hashtbl.mem posting_dates event_id
+    then None
+    else
+      Option.first_some
+        (List.find_map observations ~f:(fun (_, (a : Companion.annotation)) -> a.value_on))
+        (Hashtbl.find secondary_dates event_id)
   in
   let tags =
     List.fold observations ~init:[] ~f:(fun tags (_, (a : Companion.annotation)) ->
@@ -61,7 +77,18 @@ let transaction
     entry.date
     ?date2
     ~code:(Printf.sprintf "event-%Ld" event_id)
-    ~description:(header_text entry.description)
+    ~description:
+      (header_text
+         (if String.equal key Bank_projection.key
+          then
+            Option.value_map
+              (Hashtbl.find descriptions event_id)
+              ~default:entry.description
+              ~f:(fun text ->
+                if String.is_empty (String.strip text)
+                then entry.description
+                else String.substr_replace_all text ~pattern:"|" ~with_:"｜")
+          else entry.description))
     ~comment
     postings
 ;;
@@ -72,7 +99,65 @@ let export db =
   let%bind observations = Store.companion_observations db in
   let%bind category_history = Store.bank_category_history db in
   let%bind movements = Store.movements db in
+  let%bind review_rows = Store.bank_review db in
+  let descriptions = Hashtbl.create (module Int64) in
+  List.iter review_rows ~f:(fun (row : Store.bank_review) ->
+    Hashtbl.set descriptions ~key:row.event_id ~data:row.description);
   let%bind transfer_decisions = Store.bank_transfer_decisions db in
+  let posting_dates = Hashtbl.create (module Int64) in
+  let pairs = Hashtbl.create (module Int64) in
+  let by_event = Hashtbl.create (module Int64) in
+  List.iter entries ~f:(fun (id, key, entry) ->
+    if String.equal key Bank_projection.key then Hashtbl.set by_event ~key:id ~data:entry);
+  let%bind () =
+    List.filter transfer_decisions ~f:(fun d ->
+      Poly.equal d.Bank_transfer.state Confirmed)
+    |> List.map ~f:(fun (d : Bank_transfer.decision) ->
+      match
+        Hashtbl.find by_event d.first_event_id, Hashtbl.find by_event d.second_event_id
+      with
+      | None, None -> Ok ()
+      | Some first, Some second ->
+        let leg (entry : Accounting.entry) =
+          match entry.postings with
+          | bank :: _clearing :: fees -> Ok (bank :: fees)
+          | _ -> Or_error.error_string "transfer projection has missing postings"
+        in
+        let%bind first_postings = leg first in
+        let%bind second_postings = leg second in
+        let date =
+          if Date.compare first.date second.date <= 0 then first.date else second.date
+        in
+        let%bind combined =
+          Accounting.entry
+            ~date
+            ~description:first.description
+            (first_postings @ second_postings)
+        in
+        Hashtbl.set
+          posting_dates
+          ~key:d.first_event_id
+          ~data:
+            (List.map first_postings ~f:(fun _ -> first.date)
+             @ List.map second_postings ~f:(fun _ -> second.date));
+        Hashtbl.set pairs ~key:d.first_event_id ~data:(Some combined);
+        Hashtbl.set pairs ~key:d.second_event_id ~data:None;
+        Ok ()
+      | _ ->
+        Or_error.error_string
+          "confirmed transfer has only one projected movement; run fin journal project")
+    |> Or_error.combine_errors_unit
+  in
+  let entries =
+    List.filter_map entries ~f:(fun (id, key, entry) ->
+      if not (String.equal key Bank_projection.key)
+      then Some (id, key, entry)
+      else (
+        match Hashtbl.find pairs id with
+        | None -> Some (id, key, entry)
+        | Some None -> None
+        | Some (Some combined) -> Some (id, key, combined)))
+  in
   let companions =
     List.map
       (Registry.companions (Store.registry db))
@@ -107,6 +192,10 @@ let export db =
       List.iter [ decision.first_event_id; decision.second_event_id ] ~f:(fun event_id ->
         let tags =
           [ Printf.sprintf
+              "source-event-ids: %Ld %Ld"
+              decision.first_event_id
+              decision.second_event_id
+          ; Printf.sprintf
               "transfer-pair: %Ld %Ld"
               decision.first_event_id
               decision.second_event_id
@@ -129,6 +218,15 @@ let export db =
   let metadata = Hashtbl.create (module Int64) in
   List.iter annotated ~f:(fun (event_id, annotation) ->
     Hashtbl.add_multi metadata ~key:event_id ~data:annotation);
+  List.iter transfer_decisions ~f:(fun (d : Bank_transfer.decision) ->
+    if Poly.equal d.state Confirmed && Hashtbl.mem pairs d.first_event_id
+    then (
+      let combined =
+        Option.value (Hashtbl.find metadata d.first_event_id) ~default:[]
+        @ Option.value (Hashtbl.find metadata d.second_event_id) ~default:[]
+      in
+      if not (List.is_empty combined)
+      then Hashtbl.set metadata ~key:d.first_event_id ~data:combined));
   Hashtbl.map_inplace metadata ~f:(fun rows ->
     List.sort rows ~compare:(fun (a, _) (b, _) -> Int64.compare a b));
   let review_rows =
@@ -186,7 +284,13 @@ let export db =
     @ [ Hledger.Journal.Blank ]
     @ List.concat_map entries ~f:(fun entry ->
       [ Hledger.Journal.Transaction
-          (transaction metadata extra_metadata secondary_dates entry)
+          (transaction
+             metadata
+             extra_metadata
+             secondary_dates
+             descriptions
+             posting_dates
+             entry)
       ; Blank
       ])
   in

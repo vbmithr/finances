@@ -176,9 +176,7 @@ let review =
   |> field "amount" Json.quantity (fun r -> r.transaction.amount)
   |> field "fee" Json.quantity (fun r -> r.transaction.fee)
   |> field "currency" Json.currency (fun r -> r.transaction.account.currency)
-  |> field "description" Jsont.string (fun r ->
-    String.concat ~sep:" | " r.transaction.descriptions)
-  |> field "display_name" (Jsont.option Jsont.string) (fun r -> r.display_name)
+  |> field "description" Jsont.string (fun r -> r.description)
   |> field "movement_type" (Jsont.option Jsont.string) (fun r ->
     Option.map r.movement_type ~f:Movement_type.to_string)
   |> field "imported_movement_type" (Jsont.option Jsont.string) (fun r ->
@@ -187,7 +185,7 @@ let review =
     Option.map r.movement_type_override ~f:Movement_type.to_string)
   |> field "detail_sources" (Jsont.list Json.int64_codec) (fun r -> r.detail_sources)
   |> field "account" Jsont.string (fun r -> r.counter_account)
-  |> field "classification" Jsont.string (fun r ->
+  |> field "decision" Jsont.string (fun r ->
     match r.classification with
     | Store.Unclassified -> "unclassified"
     | Category -> "category"
@@ -204,8 +202,7 @@ let category_similar =
   in
   Jsont.Object.enc_only ()
   |> field "match" Jsont.string (fun _ ->
-    "same institution and card merchant, or description; ignoring ASCII case and \
-     whitespace")
+    "across institutions: effective description, ignoring ASCII case and whitespace")
   |> field "example" review (fun r -> r.seed)
   |> field "candidates" (Jsont.list review) (fun r -> r.candidates)
   |> field "conflicts" (Jsont.list review) (fun r -> r.conflicts)
@@ -235,9 +232,7 @@ let transaction =
   |> field "amount" Json.quantity (fun r -> r.review.transaction.amount)
   |> field "fee" Json.quantity (fun r -> r.review.transaction.fee)
   |> field "currency" Json.currency (fun r -> r.review.transaction.account.currency)
-  |> field "description" Jsont.string (fun r ->
-    String.concat ~sep:" | " r.review.transaction.descriptions)
-  |> field "display_name" (Jsont.option Jsont.string) (fun r -> r.review.display_name)
+  |> field "description" Jsont.string (fun r -> r.review.description)
   |> field "movement_type" (Jsont.option Jsont.string) (fun r ->
     Option.map r.review.movement_type ~f:Movement_type.to_string)
   |> field "imported_movement_type" (Jsont.option Jsont.string) (fun r ->
@@ -247,7 +242,7 @@ let transaction =
   |> field "detail_sources" (Jsont.list Json.int64_codec) (fun r ->
     r.review.detail_sources)
   |> field "counter_account" Jsont.string (fun r -> r.review.counter_account)
-  |> field "classification" Jsont.string (fun r ->
+  |> field "decision" Jsont.string (fun r ->
     match r.review.classification with
     | Store.Unclassified -> "unclassified"
     | Category -> "category"

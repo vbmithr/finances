@@ -114,6 +114,32 @@ contents. See the [manual](docs/manual.md) for limits and supported compression.
 
 ## Install an Arch Linux test package
 
+For the quickest development loop, run the checkout directly without installing:
+
+```sh
+make run ARGS='tx list' OPAM_SWITCH=5.5.0
+```
+
+This uses Dune's incremental development build and your usual Fin database and
+configuration. Pass any Fin arguments through `ARGS`; commands that write data
+still affect that database. For a separate disposable database, initialize one and
+pass `--database PATH` to the relevant commands.
+
+For a pacman-managed development installation, use:
+
+```sh
+make install-fast OPAM_SWITCH=5.5.0
+```
+
+`install-fast` builds an Arch package using a persistent release build cache,
+skips the regression suite, and runs `sudo pacman -U`. Its first build is cold;
+later builds reuse unchanged work. Use `make package-fast` to build without
+installing. These development packages have the same package version and name as
+regular local builds, so pacman treats them as reinstalls. Run `make test` before
+relying on a change; use `make install` for the clean, tested package workflow.
+The release cache is under `_build/arch-fast/` and can be removed with the rest of
+Dune's build artifacts.
+
 Build the current checkout using a prepared opam switch, and install it:
 
 ```sh
@@ -138,10 +164,11 @@ Run make from the project root. Omit `OPAM_SWITCH` to use the active switch.
 `make help` lists targets, including `build`, `test` and `fmt`. Override
 `ARCH_OUTPUT` or `SCRATCH_ROOT` to change output or disk-backed scratch locations.
 The underlying commands remain `python packaging/arch/build.py --switch 5.5.0`
-and that command with `--prepare-only`, respectively. The generated PKGBUILD uses
+and that command with `--prepare-only`, respectively. Add `--fast` for the
+incremental development build (also accepted with `--prepare-only`). The generated PKGBUILD uses
 the generated binary archive, so copying the template alone is insufficient.
 
-The helper compiles and tests a native release executable, stages only the binary,
+The normal helper compiles and tests a native release executable, stages only the binary,
 public docs, license and generated man pages, then invokes makepkg. Its working
 files use disk-backed cache storage and are removed afterward. `dist/arch/` holds
 the package, a checksummed binary payload and a concrete PKGBUILD for repackaging.
@@ -150,8 +177,8 @@ It requires makepkg/fakeroot, Python, zstd and the prepared opam build dependenc
 The installed executable requires only glibc, GMP (used through Zarith/decimal),
 and SQLite; opam and OCaml are not needed at runtime. The hledger CLI is optional
 for querying rendered journals. No personal records or configuration enter the package.
-`packaging/arch/build.py` never runs sudo or installs anything; only `make install`
-does, after building.
+`packaging/arch/build.py` never runs sudo or installs anything; the two install
+targets do, after building.
 
 The CLI provides `init`, `import`, `status`, `paths`, `backup` and `restore`,
 with grouped commands under `db`, `account`, `bank`, `transfers`, and `journal`:
@@ -530,7 +557,7 @@ Use `fin transaction list` to see imported movements, including their accounting
 classification. Terminal output uses `$PAGER` (default `less -FRX`); redirected
 and JSON output is not paged.
 Filter by movement type or accounting decision with, for example,
-`fin tx list --type interest` or `fin tx list --classification settlement`.
+`fin tx list --type interest` or `fin tx list --decision settlement`.
 Inspect automatic and reviewed rules with `fin rule list`; evidence rules can
 also record card references and withdrawal reversals at import. See the
 [manual](docs/manual.md#automatic-rules-at-import).
@@ -555,11 +582,21 @@ fin transaction review --json > personal/reports/bank-review.json
 fin transaction review --all
 ```
 
+Use `fin cat init` to choose suggested starter categories, `fin cat add
+expenses:food` to add your own, and `fin cat list` (or `--json`) to see your
+personal catalog, including unused categories.
+
+Use `fin tx cat set EVENT_ID expenses:food` to assign or change one category;
+use `equity:unclassified` to return it to review.
+
 Use `fin transaction list` to find an event ID, then run
-`fin transaction category review EVENT_ID` to choose a category, select matching
-unclassified movements and confirm the proposed batch in a terminal.
+`fin transaction category review EVENT_ID` to choose or change its category, select matching
+movements (including previously categorized ones) or search descriptions across institutions, then confirm the
+proposed batch in a terminal. Ranked approximate matches appear alongside exact matches. Toggle rows with
+numbers and ranges, including across searches.
 After reviewing a transaction, `fin transaction category similar EVENT_ID` previews
-unclassified movements with matching normalized card merchants or descriptions and flags conflicting
+unclassified movements across institutions with matching normalized effective
+descriptions, and flags conflicting
 reviewed categories. It does not apply decisions. See the
 [classification design](docs/classification.md) for its current limits.
 
@@ -663,6 +700,10 @@ the CSV supplies no offset. Its original fields remain unchanged. Matching still
 uses the CAMT source-local clock, not equality with the CAMT UTC instant: the
 matching key retains local-clock semantics and truncates only to milliseconds.
 Companion inspection displays the assumed-UTC clock as canonical RFC 3339.
+
+A matched Wise CSV `Merchant` supplies the effective transaction description when
+nonempty and consistent; otherwise Fin uses the primary CAMT description. Original
+source fields, including CSV `Description`, remain available as evidence.
 
 Wise CSV matching requires reference, local millisecond booking clock, exact signed
 amount, and currency to agree uniquely in both directions within a document. CSV
@@ -785,14 +826,16 @@ fin journal project
 fin journal export > personal/bank.journal
 fin transfer history
 hledger -f personal/bank.journal --strict check
-hledger -f personal/bank.journal register assets:transfers
+hledger -f personal/bank.journal register assets:bank
 ```
 
-Confirmation assigns both principal counter-postings to a shared
-`assets:transfers:pair-ID-ID` account. They cancel once both dates are included,
-while an outstanding leg remains visible between booking dates. Bank amounts,
-explicit Revolut fees and original evidence remain intact. No new movement or
-extra accounting entry is created. Journal tags record the pair and review reason.
+A confirmed pair exports as one transaction with direct postings to both bank
+accounts and separate fee postings. The journal records both source event IDs and
+the review reason. When booking dates differ, the transaction uses the earlier
+date and the later leg has an hledger posting date. Date-filtered reports reflect
+the two bank dates without a separate in-transit asset, so the books can appear
+temporarily unbalanced between them. Fin retains both source movements and its
+internal per-movement projections for review and undo.
 
 Each movement can belong to only one confirmed pair. A substantive expense/income
 category must first be reset to `equity:unclassified`; confirmation never overwrites

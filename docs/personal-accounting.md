@@ -173,10 +173,12 @@ fin transfer history
 fin journal export > ledger/bank.journal
 ```
 
-fin routes the two principal counter-postings through an
-`assets:transfers:pair-ID-ID` account. They cancel when both booking dates are
-included. A balance between those dates represents money in transit; investigate
-it rather than inventing an expense to make it disappear.
+Fin exports a confirmed pair as one journal transaction directly between the two
+bank accounts. Both source event IDs remain in its metadata, and fees keep their
+own postings. When booking dates differ, the later bank posting carries its own
+hledger posting date. A date-filtered report between the two dates therefore
+reflects the different bank balances without an in-transit asset; the books may
+appear temporarily unbalanced by date.
 
 Supported pairs have opposite equal principals, the same currency and booking
 dates at most seven days apart. If a leg is missing, obtain its statement first.

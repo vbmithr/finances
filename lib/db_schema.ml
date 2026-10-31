@@ -3,7 +3,7 @@ open Rel
 
 (** One current experimental baseline; older databases must be reimported. Banks
     have no tables of their own. *)
-let version = 30
+let version = 31
 
 let timestamp = `Expr "(strftime('%Y-%m-%dT%H:%M:%f','now') || '000000000Z')"
 
@@ -1046,6 +1046,22 @@ module Companion_match_changes = struct
   let definition =
     Sqlite_schema.table ~immutable:"companion matching history is append-only" table
   ;;
+end
+
+module Category_catalog = struct
+  type t = { account : string }
+
+  let account = Col.make "account" Type.text (fun (r : t) -> r.account)
+  let row = Row.(unit (fun account -> { account }) * account)
+
+  let table =
+    Table.make
+      ~primary_key:(Table.Primary_key.make [ Col.Def account ])
+      "category_catalog"
+      row
+  ;;
+
+  let definition = Sqlite_schema.table table
 end
 
 module Bank_categories = struct
@@ -2213,6 +2229,7 @@ let definitions =
   ; Companion_rows.definition
   ; Companion_matches.definition
   ; Companion_match_changes.definition
+  ; Category_catalog.definition
   ; Bank_categories.definition
   ; Bank_category_changes.definition
   ; Day_inventories.definition

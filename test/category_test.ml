@@ -39,6 +39,40 @@ let account db event_id =
 let classify db decisions = ok (Store.set_bank_categories db decisions)
 let project db = ignore (ok (Store.project_bank db))
 
+let rereview_atomic () =
+  memory (fun db ->
+    let first, second =
+      match ok (Store.events db) with
+      | (a, _) :: (b, _) :: _ -> a, b
+      | _ -> failwith "expected two events"
+    in
+    ignore
+      (classify db [ decision first "expenses:food"; decision second "expenses:food" ]);
+    let expected =
+      [ first, Some ("expenses:food", "Reviewed receipt")
+      ; second, Some ("expenses:food", "Reviewed receipt")
+      ]
+    in
+    ignore (classify db [ decision ~reason:"Changed elsewhere" second "expenses:other" ]);
+    error
+      (Store.review_bank_categories
+         db
+         ~expected
+         [ decision first "expenses:coffee"; decision second "expenses:coffee" ]);
+    let rows = ok (Store.bank_review db) in
+    let category id =
+      (List.find_exn rows ~f:(fun r -> Int64.equal r.Store.event_id id)).counter_account
+    in
+    Alcotest.(check string)
+      "first unchanged after stale batch"
+      "expenses:food"
+      (category first);
+    Alcotest.(check string)
+      "concurrent change retained"
+      "expenses:other"
+      (category second))
+;;
+
 let replay () =
   memory (fun db ->
     let event_id = id db in
@@ -305,7 +339,7 @@ let similarity () =
     ; institution
     ; occurred = Temporal.Date (Date.of_string "2026-10-01")
     ; transaction = movement description
-    ; display_name = None
+    ; description
     ; movement_type = None
     ; imported_movement_type = None
     ; movement_type_override = None
@@ -324,35 +358,62 @@ let similarity () =
     row 5L "provider" "coffee shop" "assets:transfers:pair" (Some "reviewed")
   in
   let no_match = row 6L "provider" "coffee shop two" "equity:unclassified" None in
-  let rows = [ seed; candidate; conflict; other_provider; transfer; no_match ] in
+  let other_conflict =
+    row 10L "other" "coffee shop" "expenses:travel" (Some "reviewed")
+  in
+  let rows =
+    [ seed; candidate; conflict; other_provider; transfer; no_match; other_conflict ]
+  in
   let result = ok (Category_similarity.find ~seed:1L rows) in
   Alcotest.(check (list int64))
     "unclassified matches"
-    [ 2L ]
+    [ 2L; 4L ]
     (List.map result.candidates ~f:(fun r -> r.event_id));
   Alcotest.(check (list int64))
     "conflicting decisions"
-    [ 3L ]
+    [ 3L; 10L ]
     (List.map result.conflicts ~f:(fun r -> r.event_id));
   error (Category_similarity.find ~seed:2L rows);
   error (Category_similarity.find ~seed:99L rows);
   let empty = row 7L "provider" "   " "expenses:food" (Some "reviewed") in
   error (Category_similarity.find ~seed:7L [ empty ]);
   let card r name =
-    { r with Store.display_name = Some name; movement_type = Some Movement_type.Card }
+    { r with Store.description = name; movement_type = Some Movement_type.Card }
   in
   let card_seed = card seed "Coffee Shop" in
   let card_candidate =
     card (row 8L "provider" "Different amount" "equity:unclassified" None) "coffee  shop"
   in
-  let no_merchant = row 9L "provider" "Coffee  SHOP" "equity:unclassified" None in
+  let no_merchant = row 9L "other" "Coffee  SHOP" "equity:unclassified" None in
   let result =
     ok (Category_similarity.find ~seed:1L [ card_seed; card_candidate; no_merchant ])
   in
   Alcotest.(check (list int64))
-    "merchant matches without amount and does not mix fallback"
-    [ 8L ]
+    "card display name matches another display name or a single description"
+    [ 8L; 9L ]
     (List.map result.candidates ~f:(fun r -> r.event_id));
+  let close = row 11L "other" "Coffee-Shop Paris" "equity:unclassified" None in
+  let unrelated = row 12L "other" "Bakery Toulouse" "equity:unclassified" None in
+  let fuzzy =
+    Category_similarity.fuzzy ~seed [ seed; candidate; close; unrelated; transfer ]
+  in
+  Alcotest.(check (list int64))
+    "fuzzy ranking includes a near match, excluding exact matches and transfers"
+    [ 11L ]
+    (List.map fuzzy ~f:(fun (r, _) -> r.Store.event_id));
+  let many =
+    List.init 35 ~f:(fun i ->
+      row (Int64.of_int (100 + i)) "other" "Coffee-Shop Paris" "equity:unclassified" None)
+  in
+  Alcotest.(check int)
+    "fuzzy suggestions are not capped"
+    35
+    (List.length (Category_similarity.fuzzy ~seed many));
+  let short = row 13L "other" "AB" "expenses:food" (Some "reviewed") in
+  Alcotest.(check int)
+    "short text has no fuzzy suggestions"
+    0
+    (List.length (Category_similarity.fuzzy ~seed:short [ close ]));
   let pattern =
     ok (Transaction_pattern.compile ~case_sensitive:false "coffee[ \\t]+shop")
   in
@@ -361,14 +422,14 @@ let similarity () =
     true
     (Transaction_pattern.matches
        pattern
-       ~display_name:candidate.display_name
+       ~display_name:None
        ~descriptions:candidate.transaction.descriptions);
   Alcotest.(check bool)
     "regex matches merchant"
     true
     (Transaction_pattern.matches
        pattern
-       ~display_name:card_candidate.display_name
+       ~display_name:(Some card_candidate.description)
        ~descriptions:card_candidate.transaction.descriptions);
   let exact = ok (Transaction_pattern.compile ~case_sensitive:true "^Coffee Shop$") in
   Alcotest.(check bool)
@@ -376,7 +437,7 @@ let similarity () =
     false
     (Transaction_pattern.matches
        exact
-       ~display_name:card_candidate.display_name
+       ~display_name:(Some card_candidate.description)
        ~descriptions:card_candidate.transaction.descriptions);
   error (Transaction_pattern.compile ~case_sensitive:false "[");
   error (Transaction_pattern.compile ~case_sensitive:false " ")
@@ -387,7 +448,8 @@ let () =
     "Bank categories"
     [ ( "review"
       , List.map
-          [ "unclassified batch is atomic", unclassified_batch_is_atomic
+          [ "rereview checks all previous decisions atomically", rereview_atomic
+          ; "unclassified batch is atomic", unclassified_batch_is_atomic
           ; "rule batches reject stale previews atomically", rule_batch_is_atomic
           ; "similarity preview", similarity
           ; "persistent replay and reset", replay

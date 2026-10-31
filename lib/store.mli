@@ -208,6 +208,14 @@ val set_bank_categories
   -> Bank_category.t list
   -> int Or_error.t
 
+(** Atomically apply reviewed decisions only if each prior account and reason
+    still matches the snapshot. *)
+val review_bank_categories
+  :  t
+  -> expected:(int64 * (string * string) option) list
+  -> Bank_category.t list
+  -> int Or_error.t
+
 type category_change =
   { id : int64
   ; event_id : int64
@@ -217,6 +225,10 @@ type category_change =
   ; changed_at : Ptime.t
   }
 
+(** Personal income and expense category accounts, including unused names. *)
+val categories : t -> string list Or_error.t
+
+val add_categories : t -> string list -> unit Or_error.t
 val bank_category_history : t -> category_change list Or_error.t
 
 type review_classification =
@@ -231,7 +243,7 @@ type bank_review =
   ; institution : string
   ; occurred : Temporal.t
   ; transaction : Movement.t
-  ; display_name : string option
+  ; description : string (** Effective description, selected from available sources. *)
   ; movement_type : Movement_type.t option
   ; imported_movement_type : Movement_type.t option
   ; movement_type_override : Movement_type.t option

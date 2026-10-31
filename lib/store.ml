@@ -28,6 +28,38 @@ let transaction db f =
 let statement sql result = Rel_sql.Stmt.v sql ~rev_args:[] ~result
 let integer = Row.(t1 (int "value"))
 
+let categories db =
+  db_result
+    (Db.fold
+       db.conn
+       (statement
+          "SELECT account FROM category_catalog ORDER BY account"
+          Row.(t1 (text "account")))
+       (fun account acc -> account :: acc)
+       [])
+  |> Result.map ~f:List.rev
+;;
+
+let add_categories db names =
+  let* names =
+    List.map names ~f:(fun name ->
+      let* decision =
+        Bank_category.create ~event_id:1L ~account:name ~reason:"category"
+      in
+      if String.equal decision.account "equity:unclassified"
+      then Or_error.error_string "category must be an income or expense account"
+      else Ok decision.account)
+    |> Or_error.combine_errors
+  in
+  transaction db (fun db ->
+    let insert =
+      Rel_sql.Stmt.(
+        func "INSERT OR IGNORE INTO category_catalog(account) VALUES (?)" (text @-> unit))
+    in
+    List.fold_result names ~init:() ~f:(fun () name ->
+      db_result (Db.exec db.conn (insert name))))
+;;
+
 let institution_definitions db =
   db_result
     (Db.fold
@@ -864,6 +896,13 @@ let apply_automatic_category
                (?,NULL,?,?)"
               (int64 @-> text @-> text @-> unit))
         in
+        let catalog =
+          Rel_sql.Stmt.(
+            func
+              "INSERT OR IGNORE INTO category_catalog(account) VALUES (?)"
+              (text @-> unit))
+        in
+        let* () = db_result (Db.exec db.conn (catalog target)) in
         let* () = db_result (Db.exec db.conn (insert event_id target reason)) in
         db_result (Db.exec db.conn (audit event_id target reason)))
   in
@@ -3080,6 +3119,17 @@ let set_bank_categories_in_transaction ?(only_unclassified = false) db decisions
                       ; Value (reason, v_reason)
                       ]
               in
+              let catalog =
+                Rel_sql.Stmt.(
+                  func
+                    "INSERT OR IGNORE INTO category_catalog(account) VALUES (?)"
+                    (text @-> unit))
+              in
+              let* () =
+                if String.equal d.account "equity:unclassified"
+                then Ok ()
+                else db_result (Db.exec db.conn (catalog d.account))
+              in
               let* () =
                 db_result (Db.exec db.conn (upsert d.event_id d.account d.reason))
               in
@@ -3099,6 +3149,27 @@ let set_bank_categories_in_transaction ?(only_unclassified = false) db decisions
 let set_bank_categories ?(only_unclassified = false) db decisions =
   transaction db (fun db ->
     set_bank_categories_in_transaction ~only_unclassified db decisions)
+;;
+
+let review_bank_categories db ~expected decisions =
+  transaction db (fun db ->
+    let* () =
+      List.fold_result expected ~init:() ~f:(fun () (event_id, before) ->
+        let* current = db_result (Db.first db.conn (find_category event_id)) in
+        if Option.equal [%equal: string * string] current before
+        then Ok ()
+        else
+          Or_error.error_string
+            "a selected transaction changed since review; review the batch again")
+    in
+    if
+      List.length expected <> List.length decisions
+      || List.contains_dup (List.map expected ~f:fst) ~compare:Int64.compare
+      || not
+           (List.for_all decisions ~f:(fun (d : Bank_category.t) ->
+              List.Assoc.mem expected d.event_id ~equal:Int64.equal))
+    then Or_error.error_string "category review expectations do not match decisions"
+    else set_bank_categories_in_transaction db decisions)
 ;;
 
 type category_change =
@@ -3142,7 +3213,7 @@ type bank_review =
   ; institution : string
   ; occurred : Temporal.t
   ; transaction : Movement.t
-  ; display_name : string option
+  ; description : string
   ; movement_type : Movement_type.t option
   ; imported_movement_type : Movement_type.t option
   ; movement_type_override : Movement_type.t option
@@ -3218,6 +3289,7 @@ let review_metadata db =
 ;;
 
 let bank_review_from
+      db
       source
       table
       (categories, transfers, settlements, reversals)
@@ -3241,6 +3313,44 @@ let bank_review_from
          | [ value ] -> Some value
          | _ -> None
        in
+       let preferred =
+         consensus ~compare:String.compare (fun (a : Companion.annotation) ->
+           Option.bind a.display_name ~f:(fun name ->
+             Option.some_if (not (String.is_empty (String.strip name))) name))
+       in
+       let description =
+         Option.value
+           preferred
+           ~default:
+             (Option.value
+                (List.nth transaction.descriptions transaction.main_description)
+                ~default:"")
+       in
+       let* transfer_destination =
+         match transfer with
+         | None -> Ok None
+         | Some (first, second, _) ->
+           let other = if Int64.equal event_id first then second else first in
+           let* (other_event : Source_event.t) =
+             Or_error.of_option
+               (List.Assoc.find source other ~equal:Int64.equal)
+               ~error:(Error.of_string "confirmed transfer references missing movement")
+           in
+           let* other_movement = stored table other in
+           let* mapped =
+             db_result
+               (Db.first db.conn (find_mapping other_event.venue other_event.account))
+           in
+           let* account =
+             match mapped with
+             | Some name -> Ok name
+             | None ->
+               Bank_projection.ledger_account
+                 ~institution:other_event.venue
+                 other_movement.account
+           in
+           Ok (Some account)
+       in
        (* The stored type already follows the rules, companion columns included. *)
        let imported_movement_type = transaction.movement_type in
        let movement_type_override = Hashtbl.find overrides event_id in
@@ -3249,9 +3359,7 @@ let bank_review_from
          ; institution = event.venue
          ; occurred = event.occurred
          ; transaction
-         ; display_name =
-             consensus ~compare:String.compare (fun (a : Companion.annotation) ->
-               a.display_name)
+         ; description
          ; movement_type = Option.first_some movement_type_override imported_movement_type
          ; imported_movement_type
          ; movement_type_override
@@ -3270,7 +3378,7 @@ let bank_review_from
          ; counter_account =
              (match reversal, transfer with
               | Some (original, reversed, _), _ -> reversal_account original reversed
-              | None, Some (first, second, _) -> Bank_transfer.account first second
+              | None, Some _ -> Option.value_exn transfer_destination
               | None, None ->
                 (match settlement with
                  | Some (account, _) -> account
@@ -3350,7 +3458,7 @@ let bank_review db =
         { Source_evidence.card_reference
         ; withdrawal_reversal = String.equal reversal "yes"
         });
-  bank_review_from source table metadata details overrides evidence
+  bank_review_from db source table metadata details overrides evidence
 ;;
 
 let observed_provider_movement_types db =
@@ -4687,7 +4795,7 @@ let preview_classification_rule db (rule : Classification_rule.t) =
                   ~default:""
                   ~f:String.strip
               ] )
-          | Review | Disabled -> row.display_name, row.transaction.descriptions
+          | Review | Disabled -> None, [ row.description ]
         in
         Transaction_pattern.matches p ~display_name ~descriptions))
   in

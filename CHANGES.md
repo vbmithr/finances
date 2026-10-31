@@ -8,6 +8,88 @@ short line of their own.
 
 ## Unreleased
 
+- Remove the 20-result cap from fuzzy category review, showing every match above
+  the existing similarity threshold.
+
+- Make `all` in category review select every selectable displayed match, including
+  fuzzy and previously categorized transactions, before the final confirmation.
+
+- Add `make run ARGS='...'` for incremental checkout execution, and
+  `make package-fast` / `make install-fast` for cached development packages.
+  Fast packages skip tests; the existing package and install targets remain clean
+  tested builds. Package scratch defaults to `~/.cache/codex/scratch/finances-arch`.
+
+- Allow `fin tx cat review` to change an existing category and explicitly select
+  categorized similar movements. Changes are confirmed together and applied only
+  if every selected decision still matches the reviewed snapshot.
+
+- Add `fin tx cat set EVENT-ID ACCOUNT` to assign, change or reset one category
+  without preparing a JSON file or entering a reason.
+
+- Export confirmed transfers as one direct bank-to-bank transaction, retaining
+  both source event IDs, per-leg booking dates and fee postings. Transaction lists
+  show the other bank account as counter-account. SQLite still keeps internal
+  per-movement clearing projections for review and undo. **Action required:**
+  regenerate exported journals and update reports or scripts that relied on
+  `assets:transfers:pair-*` accounts. Date-filtered reports between different
+  booking dates have no in-transit asset and may appear temporarily unbalanced.
+
+- Show the actual counter-account in `fin tx list`, with `-` for unclassified
+  movements. **Action required:** the decision-kind filter is now `--decision`
+  (formerly `--classification`); transaction and review JSON use `decision`
+  instead of `classification`. Update scripts accordingly.
+
+- Show fuzzy suggestions immediately alongside exact matches in category review.
+  Select or deselect multiple rows using comma-separated numbers and ranges;
+  `all` selects all selectable displayed matches.
+
+- Clarify the category-review prompt by separating number selection instructions
+  from the commands users can enter.
+
+- Use one effective transaction description in review, listings, similarity and
+  bank journal exports. A consistent nonempty Wise companion `Merchant` wins;
+  otherwise use the primary source's main description. Original sources remain
+  available for inspection. Review-mode rule matching uses that description.
+  **Action required:** transaction/review JSON now has one `description` and no
+  `display_name`; update scripts and regenerate exported journals. Automatic
+  import-time rules still use the primary description available at import.
+
+- Make category review results easier to scan by showing a source-provided display
+  name when available, instead of repeating it alongside the transaction description.
+  Both texts remain searchable.
+
+- Rank approximate category-review matches across institutions by
+  character-trigram similarity; users select results and confirm the batch.
+
+- Add interactive substring search during category review, with selections that
+  can be toggled across searches. Existing classifications appear as context;
+  explicitly selected categories can be changed after confirmation.
+
+- Search across institutions for similar category-review transactions. A card
+  descriptions can match across providers, and interactive candidates show their
+  institution. Conflicting classifications remain visible.
+
+- Map the Wise CSV companion description to `Merchant` instead of `Description`.
+  The original CAMT and CSV fields are retained as source evidence. **Action required:** existing databases retain their installed definition;
+  source interpretation changes require removing Wise imported evidence and installing
+  the updated definition before reimporting. Preserve and recreate affected reviews
+  and rules as needed.
+
+- Move category catalog commands to `fin category` (`fin cat`); transaction
+  category review commands remain under `fin transaction category` (`fin tx cat`).
+
+- Add a personal category catalog with `fin cat add` and an interactive
+  `fin cat init` for selecting optional starter categories. Category decisions
+  add their account to the catalog; `list` now includes unused categories.
+  **Action required:** schema 31 adds the catalog. Rebuild the database from
+  statements and recreate rules and review decisions; reapplied decisions populate
+  the catalog. Existing databases are not migrated.
+
+- Add `cat` as a shortcut for top-level `category` and for `transaction category`.
+
+- Add `fin category list` to list income and expense
+  accounts, with `--json` for scripts.
+
 ### 2026-10-31
 
 - CAMT+CSV institution definitions no longer take `payee` or `details_type` in

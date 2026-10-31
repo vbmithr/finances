@@ -32,14 +32,6 @@ let table ?(out = stdout) headers rows =
     Out_channel.output_char out '\n')
 ;;
 
-let classification = function
-  | Store.Unclassified -> "unclassified"
-  | Category -> "category"
-  | Transfer -> "transfer"
-  | Settlement -> "settlement"
-  | Reversal -> "reversal"
-;;
-
 let account (a : Store.bank_account_info) =
   Stdio.printf "%s  %s\n" (text a.mapping.institution) (text a.mapping.ledger_account);
   Stdio.printf "  ID: %s\n" (Bank_account_mapping.id a.mapping);
@@ -108,8 +100,7 @@ let review rows =
         (text (Iso4217.to_alpha_code tx.account.currency))
         (Quantity.to_string tx.fee)
         (text (Iso4217.to_alpha_code tx.account.currency));
-      let description = String.concat ~sep:" | " tx.descriptions in
-      Option.iter r.display_name ~f:(fun name -> Stdio.printf "  Name: %s\n" (text name));
+      let description = r.description in
       Option.iter r.movement_type ~f:(fun kind ->
         Stdio.printf "  Type: %s\n" (text (Movement_type.to_string kind)));
       Option.iter r.movement_type_override ~f:(fun _ ->
@@ -138,7 +129,7 @@ let transactions ?(out = stdout) rows =
       ; "INSTITUTION"
       ; "ACCOUNT ID"
       ; "TYPE"
-      ; "CLASSIFICATION"
+      ; "COUNTER-ACCOUNT"
       ; "DESCRIPTION"
       ; "EVENT"
       ]
@@ -150,10 +141,10 @@ let transactions ?(out = stdout) rows =
          ; r.institution
          ; row.account_id
          ; Option.value_map r.movement_type ~default:"-" ~f:Movement_type.to_string
-         ; classification r.classification
-         ; Option.value
-             r.display_name
-             ~default:(String.concat ~sep:" | " r.transaction.descriptions)
+         ; (if String.equal r.counter_account "equity:unclassified"
+            then "-"
+            else r.counter_account)
+         ; r.description
          ; Int64.to_string r.event_id
          ]))
 ;;
