@@ -10,6 +10,28 @@ short line of their own.
 
 ### 2026-10-31
 
+- One kind of type rule. `reported-type` and `reported-other` are gone: a bank's own
+  code is an ordinary column, so a rule names the column with `--field` and the first
+  matching rule in priority order decides, whether the column belongs to the
+  transaction's own source or to a matched companion file. Wise's rules now test
+  `Transaction Details Type` and `TransferWise ID`, Revolut's test `Type`, and the
+  catch-alls keep an unrecognised code as `wise:{value}` or `revolut:{value}`, where
+  `{value}` takes the text the rule matched. Removed: `fin rule add-reported-type`
+  (use `fin rule add --field COLUMN --automatic`), `Movement.reported_code` and the
+  companion annotation's `reported_type`, and the Wise rule for the `UNKNOWN` code,
+  which now falls into the catch-all as `wise:UNKNOWN`. `fin tx
+  refresh-reported-types` is now `fin tx refresh-companion-types`. Bundled rules keep
+  their own names and priorities when installed. `fin rule explain` shows two stages
+  after the override, the rules over the transaction's fields and the companion
+  file's types. The definition format drops the two actions and accepts `field` on
+  `type` rules. **Action required:** schema 29 changes the kinds the rules table
+  accepts, so rebuild the database from your statements, then recreate your rules and
+  review decisions; rules you added with `add-reported-type` become `fin rule add
+  --field COLUMN --automatic`, and definitions you wrote with the old actions must use
+  `type`. OCaml consumers: `Registry.create` takes `?type_rules`, `Source_typing.decide`
+  and `matched_value` return the matched value, and `Reported_type_defaults` is
+  replaced by `Type_default`.
+
 - Keep every column of a CSV primary beside its transaction, so type rules can match
   any of them with `--field COLUMN`, named by the file's header: Revolut's `Type`,
   `Product`, `State` and `Balance`, and any column of a bank you added yourself.
@@ -50,7 +72,8 @@ short line of their own.
   companion row with every column under its header name, the match policy and
   what its type rules matched. Read-only.
 
-- Let reported-type rules match any column of a companion file: `fin rule
+- (Superseded by the single rule form above.) Let reported-type rules match any column
+  of a companion file: `fin rule
   add-reported-type NAME INSTITUTION REGEX TYPE --field COLUMN`, with COLUMN named as
   in the file's header. On a Wise archive, `--field 'TransferWise ID'` with `^FEE-`
   and `^BALANCE_CASHBACK-` types the 187 fee lines and 29 cashback rows that the
@@ -79,7 +102,7 @@ short line of their own.
 - Type Revolut movements from the `Type` column of the CSV: Card Payment and Card
   Refund become `card`, Deposit `deposit`, Transfer `transfer`, ATM `withdrawal`
   and Charge `fee`; other codes are kept as `revolut:CODE`. The mapping is ordinary
-  reported-type rules in `institutions/revolut.json`, editable with `fin rule`, and
+  rules in `institutions/revolut.json`, editable with `fin rule`, and
   applies to a primary CSV as well as to companion rows. A movement carries the
   bank's own code (`Movement.reported_code`), and description rules see the type
   it gives. **Action required:** the bundled rules are installed into a new

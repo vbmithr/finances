@@ -17,8 +17,6 @@ type action =
   | Type
   | Card_reference
   | Withdrawal_reversal
-  | Reported_type
-  | Reported_other
 
 type rule =
   { name : string
@@ -42,8 +40,6 @@ let action_codec =
     [ "type", Type
     ; "card-reference", Card_reference
     ; "withdrawal-reversal", Withdrawal_reversal
-    ; "reported-type", Reported_type
-    ; "reported-other", Reported_other
     ]
 ;;
 
@@ -277,47 +273,24 @@ let names t = institution t :: aliases t
    definition's [Type] rules are named [INSTITUTION-default-NN] with priority
    NN-1, which is how the store names them when it installs them. *)
 
-let default_source_typing t =
-  let rules =
-    List.filter_map t.rules ~f:(fun r ->
-      match r.action with
-      | Type ->
-        Some
-          (Source_typing.make_rule
-             ?field:r.field
-             r.pattern
-             r.account_type
-             r.case_sensitive
-             r.target
-           |> Or_error.ok_exn
-           |> fun rule -> Source_typing.with_match_type rule r.match_type)
-      | Card_reference | Withdrawal_reversal | Reported_type | Reported_other -> None)
-  in
-  (* Reported-type rules also type the bank's own code in a primary source. *)
-  let reported =
-    List.filter_map t.rules ~f:(fun r ->
-      (* A rule that names a companion column does not apply to a primary's code. *)
-      let make action =
-        if Option.is_some r.field
-        then None
-        else
-          Some
-            (Source_typing.make_reported_rule r.pattern r.case_sensitive action
-             |> Or_error.ok_exn)
-      in
-      match r.action with
-      | Reported_type ->
-        make
-          (Source_typing.Kind
-             (if String.equal r.target "unknown"
-              then None
-              else Some (Movement_type.of_string r.target)))
-      | Reported_other -> make (Source_typing.Other_prefix r.target)
-      | Type | Card_reference | Withdrawal_reversal -> None)
-  in
-  if List.is_empty rules && List.is_empty reported
-  then None
-  else Some (Source_typing.create ~reported ~institution:(institution t) rules)
+(* The type rules that ship with the institution. They keep their own names and
+   priorities when installed, and a rule that names a field tests that field. *)
+let default_type_rules t =
+  List.filter_map t.rules ~f:(fun r ->
+    match r.action with
+    | Type ->
+      Some
+        { Type_default.institution = institution t
+        ; name = r.name
+        ; priority = r.priority
+        ; pattern = r.pattern
+        ; case_sensitive = r.case_sensitive
+        ; account_type = r.account_type
+        ; match_type = r.match_type
+        ; field = r.field
+        ; target = r.target
+        }
+    | Card_reference | Withdrawal_reversal -> None)
 ;;
 
 let default_source_evidence t =
@@ -334,31 +307,7 @@ let default_source_evidence t =
     match r.action with
     | Card_reference -> default Source_evidence.Card_reference
     | Withdrawal_reversal -> default Source_evidence.Withdrawal_reversal
-    | Type | Reported_type | Reported_other -> None)
-;;
-
-let default_reported_types t =
-  List.filter_map t.rules ~f:(fun r ->
-    let default action =
-      Some
-        { Reported_type_defaults.institution = institution t
-        ; name = r.name
-        ; priority = r.priority
-        ; pattern = r.pattern
-        ; case_sensitive = r.case_sensitive
-        ; action
-        ; field = r.field
-        }
-    in
-    match r.action with
-    | Reported_type ->
-      default
-        (Reported_type_defaults.Type
-           (if String.equal r.target "unknown"
-            then None
-            else Some (Movement_type.of_string r.target)))
-    | Reported_other -> default (Reported_type_defaults.Other r.target)
-    | Type | Card_reference | Withdrawal_reversal -> None)
+    | Type -> None)
 ;;
 
 type description =
@@ -447,7 +396,7 @@ let describe t =
       (List.map fields ~f:snd)
       [ "the first CAMT description (type rules)"
       ; Printf.sprintf
-          "the CSV column %S as the bank's code (reported-type rules)"
+          "any column of the CSV companion, such as %S, with --field (type rules)"
           c.details_type
       ]
   | Running_csv p ->
@@ -471,9 +420,9 @@ let describe t =
       p.header
       (List.map fields ~f:snd)
       [ Printf.sprintf "the description column %S (type rules)" c.description
-      ; "any column of the file, named by its header, with --field (type rules)"
       ; Printf.sprintf
-          "the column %S as the bank's code (reported-type rules)"
+          "any column of the file, named by its header, such as %S, with --field (type \
+           rules)"
           c.transaction_type
       ]
   | Mt940_csv p ->

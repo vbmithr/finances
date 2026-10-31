@@ -30,9 +30,6 @@ type t = private
   ; descriptions : string list (** Free texts, in source order. *)
   ; counterparty_iban : Iban.t option
   ; movement_type : Movement_type.t option
-  ; reported_code : string option
-    (** The bank's own transaction code in a primary source, such as a CSV
-            type column; typing rules may map it to a movement type. *)
   ; fields : (string * string) list
     (** Named values the source carries besides the canonical ones, such as an
             OFX name and memo, in source order. *)
@@ -49,7 +46,6 @@ val create
   -> ?fee:Quantity.t
   -> ?counterparty_iban:Iban.t
   -> ?movement_type:Movement_type.t
-  -> ?reported_code:string
   -> ?fields:(string * string) list
   -> ?main_description:int
   -> string list

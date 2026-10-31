@@ -5,18 +5,17 @@ type t =
   ; kinds : Set.M(String).t
   ; fallbacks : (string * (Source_event.t -> Movement.t Or_error.t)) list
   ; fallback_institutions : Set.M(String).t
+  ; type_rules : Type_default.t list
   ; source_typing : Source_typing.t Map.M(String).t
   ; source_evidence : Source_evidence.default list
-  ; reported_types : Reported_type_defaults.t list
   }
 
 let create
       ?fallback
       ?(fallbacks = [])
       ?(fallback_institutions = [])
-      ?(source_typing = [])
+      ?(type_rules = [])
       ?(source_evidence = [])
-      ?(reported_types = [])
       adapters
   =
   let fallback_institutions = Set.of_list (module String) fallback_institutions in
@@ -50,22 +49,43 @@ let create
       |> List.concat_map ~f:(fun (module A : Adapter.S) -> A.kinds)
       |> Set.of_list (module String)
     in
-    (match
-       Map.of_alist
-         (module String)
-         (List.map source_typing ~f:(fun p -> Source_typing.institution p, p))
-     with
-     | `Duplicate_key name -> Or_error.errorf "duplicate source typing profile: %s" name
-     | `Ok source_typing ->
-       Ok
-         { adapters
-         ; kinds
-         ; fallbacks
-         ; fallback_institutions
-         ; source_typing
-         ; source_evidence
-         ; reported_types
-         })
+    let%bind profiles =
+      let by_institution = Hashtbl.create (module String) in
+      List.iter type_rules ~f:(fun (r : Type_default.t) ->
+        Hashtbl.add_multi by_institution ~key:r.institution ~data:r);
+      Hashtbl.to_alist by_institution
+      |> List.map ~f:(fun (institution, rules) ->
+        let ordered =
+          List.sort rules ~compare:(fun (a : Type_default.t) (b : Type_default.t) ->
+            match Int.compare a.priority b.priority with
+            | 0 -> String.compare a.name b.name
+            | c -> c)
+        in
+        let%map typing =
+          List.map ordered ~f:(fun (r : Type_default.t) ->
+            let%map rule =
+              Source_typing.make_rule
+                ?field:r.field
+                r.pattern
+                r.account_type
+                r.case_sensitive
+                r.target
+            in
+            Source_typing.with_match_type rule r.match_type)
+          |> Or_error.combine_errors
+        in
+        institution, Source_typing.create ~institution typing)
+      |> Or_error.combine_errors
+    in
+    Ok
+      { adapters
+      ; kinds
+      ; fallbacks
+      ; fallback_institutions
+      ; type_rules
+      ; source_typing = Map.of_alist_exn (module String) profiles
+      ; source_evidence
+      }
 ;;
 
 let institutions t = Map.keys t.adapters
@@ -80,7 +100,7 @@ let aliases t institution =
 let is_movement t (event : Source_event.t) = Set.mem t.kinds event.kind
 let default_source_typing t institution = Map.find t.source_typing institution
 let default_source_evidence t = t.source_evidence
-let default_reported_types t = t.reported_types
+let default_type_rules t = t.type_rules
 
 let movement ?source_typing t (event : Source_event.t) =
   let result =

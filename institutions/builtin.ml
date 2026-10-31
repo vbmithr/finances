@@ -54,27 +54,14 @@ let adapters : (module Adapter.S) list =
 let companion_layout name = Option.map (ofx_preset name) ~f:(fun p -> p.layout)
 let fallback = "csv-movement", Csv_movement.decode
 let fallbacks = [ "bank-transaction", Ofx_bank.decode ]
-
-let source_typing =
-  List.filter_map definitions ~f:Institution_definition.default_source_typing
-;;
+let type_rules = List.concat_map definitions ~f:Institution_definition.default_type_rules
 
 let source_evidence =
   List.concat_map definitions ~f:Institution_definition.default_source_evidence
 ;;
 
-let reported_types =
-  List.concat_map definitions ~f:Institution_definition.default_reported_types
-;;
-
 let registry =
-  Registry.create
-    ~fallback
-    ~fallbacks
-    ~source_typing
-    ~source_evidence
-    ~reported_types
-    adapters
+  Registry.create ~fallback ~fallbacks ~type_rules ~source_evidence adapters
   |> Or_error.ok_exn
 ;;
 
@@ -100,9 +87,8 @@ let registry_with_companions ?(definitions = []) profiles =
   Registry.create
     ~fallback
     ~fallbacks
-    ~source_typing
+    ~type_rules
     ~source_evidence
-    ~reported_types
     ~fallback_institutions:(List.map profiles ~f:fst)
     (dynamic @ List.map definitions ~f:Institution_definition.adapter @ adapters)
   |> Or_error.ok_exn
@@ -134,9 +120,8 @@ let registry_with_csv_profile
   Registry.create
     ~fallback
     ~fallbacks
-    ~source_typing
+    ~type_rules
     ~source_evidence
-    ~reported_types
     ~fallback_institutions:(institution :: List.map companions ~f:fst)
     ((Csv_adapter.make ~institution ~profile () :: dynamic)
      @ List.map definitions ~f:Institution_definition.adapter
@@ -168,9 +153,8 @@ let registry_with_ofx ?(definitions = []) ?(companions = []) ~institution () =
   Registry.create
     ~fallback
     ~fallbacks
-    ~source_typing
+    ~type_rules
     ~source_evidence
-    ~reported_types
     ~fallback_institutions:(institution :: List.map companions ~f:fst)
     (extra @ dynamic @ List.map definitions ~f:Institution_definition.adapter @ adapters)
   |> Or_error.ok_exn

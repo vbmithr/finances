@@ -18,3 +18,12 @@ type t =
 val to_string : t -> string
 val of_string : string -> t
 val common : (t * string) list
+
+(** The text a rule target may contain where the value its expression matched
+    goes, so that [wise:{value}] keeps a provider code as a provider-specific type. *)
+val placeholder : string
+
+val has_placeholder : t -> bool
+
+(** Replace the placeholder in a provider-specific type; other types are unchanged. *)
+val expand : t -> value:string -> t

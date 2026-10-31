@@ -1,3 +1,5 @@
+open Base
+
 type t =
   | Card
   | Card_settlement
@@ -55,4 +57,18 @@ let common =
   ; Cheque, "Cheque issued"
   ; Bonus, "Bonus or promotional credit"
   ]
+;;
+
+let placeholder = "{value}"
+
+let has_placeholder = function
+  | Other value -> String.is_substring value ~substring:placeholder
+  | _ -> false
+;;
+
+let expand t ~value =
+  match t with
+  | Other text when String.is_substring text ~substring:placeholder ->
+    Other (String.substr_replace_all text ~pattern:placeholder ~with_:value)
+  | t -> t
 ;;

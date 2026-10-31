@@ -76,7 +76,6 @@ let make ~snapshot ~format ~policy ~layout : Companion.t =
       { Companion.value_on = row.value_on
       ; display_name = None
       ; movement_type = None
-      ; reported_type = None
       ; tags =
           List.filter_opt
             [ Option.map row.category ~f:(fun s -> "bank-category", s)

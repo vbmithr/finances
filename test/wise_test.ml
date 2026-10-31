@@ -435,28 +435,29 @@ let reported_type_rules () =
            ~institution:(Some "wise")
            ~match_type:None
            ~case_sensitive:true
-           ~action:(Reported_type (Some Bonus))
+           ~action:(Type Bonus)
+           ~field:"Transaction Details Type"
            ())
     in
     ok (Store.add_classification_rule db rule);
     check
       "all observations previewed"
       3
-      (List.length (ok (Store.preview_reported_types ~institution:"wise" db)));
+      (List.length (ok (Store.preview_companion_types ~institution:"wise" db)));
     accepted (import db "first.csv" (csv ()));
     let before = ok (Store.bank_review db) in
     Alcotest.(check (option string))
       "reimport does not change snapshot"
       (Some "card")
       (Option.map (List.hd_exn before).imported_movement_type ~f:Movement_type.to_string);
-    let preview = ok (Store.preview_reported_types ~institution:"wise" db) in
+    let preview = ok (Store.preview_companion_types ~institution:"wise" db) in
     ok (Store.set_classification_rule_mode db "card-as-bonus" Disabled);
-    error (Store.refresh_reported_types ~institution:"wise" db ~expected:preview);
+    error (Store.refresh_companion_types ~institution:"wise" db ~expected:preview);
     ok (Store.set_classification_rule_mode db "card-as-bonus" Automatic);
     check
       "refreshed rows"
       3
-      (ok (Store.refresh_reported_types ~institution:"wise" db ~expected:preview));
+      (ok (Store.refresh_companion_types ~institution:"wise" db ~expected:preview));
     let updated = ok (Store.bank_review db) in
     List.iter updated ~f:(fun row ->
       Alcotest.(check (option string))
@@ -482,8 +483,8 @@ let reported_type_fallbacks () =
       (ok (Store.bank_review db))
       ~f:(fun row ->
         Alcotest.(check (option string))
-          "unknown code stays untyped"
-          None
+          "an UNKNOWN code is kept as a provider-specific type"
+          (Some "wise:UNKNOWN")
           (Option.map row.movement_type ~f:Movement_type.to_string)));
   memory (fun db ->
     let csv_other = replace (csv ()) ",CARD\n" ",NEW_CODE\n" in

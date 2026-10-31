@@ -12,9 +12,8 @@ val create
   :  ?fallback:string * (Source_event.t -> Movement.t Or_error.t)
   -> ?fallbacks:(string * (Source_event.t -> Movement.t Or_error.t)) list
   -> ?fallback_institutions:string list
-  -> ?source_typing:Source_typing.t list
+  -> ?type_rules:Type_default.t list
   -> ?source_evidence:Source_evidence.default list
-  -> ?reported_types:Reported_type_defaults.t list
   -> (module Adapter.S) list
   -> t Or_error.t
 
@@ -35,7 +34,9 @@ val is_movement : t -> Source_event.t -> bool
 val default_source_typing : t -> string -> Source_typing.t option
 
 val default_source_evidence : t -> Source_evidence.default list
-val default_reported_types : t -> Reported_type_defaults.t list
+
+(** The type rules that ship with the institutions, as installed into a database. *)
+val default_type_rules : t -> Type_default.t list
 
 (** Decode with the venue adapter or an applicable format fallback. *)
 val movement

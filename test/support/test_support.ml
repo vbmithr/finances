@@ -13,7 +13,10 @@ end
 
 let registry =
   Registry.create
-    ~reported_types:Builtin.reported_types
+    ~type_rules:
+      (* The rules that name a column (Wise and Revolut); BoursoBank's description
+         rules are not installed, so its tests start from untyped movements. *)
+      (List.filter Builtin.type_rules ~f:(fun r -> Option.is_some r.Type_default.field))
     (Builtin.adapters @ [ (module Other_bank : Adapter.S) ])
   |> Or_error.ok_exn
 ;;

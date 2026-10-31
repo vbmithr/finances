@@ -230,7 +230,7 @@ let reported_code () =
          (List.map (types db) ~f:(fun (d, t) ->
             d, Option.map t ~f:Movement_type.to_string));
        check_int "no gaps" 0 (List.length (ok (Store.description_gaps db)));
-       (* Editing the code rule changes types only after an explicit refresh. *)
+       (* Editing the column rule changes types only after an explicit refresh. *)
        let fee =
          ok
            (Classification_rule.create
@@ -242,7 +242,8 @@ let reported_code () =
               ~institution:(Some "revolut")
               ~match_type:None
               ~case_sensitive:true
-              ~action:(Reported_type (Some (Movement_type.of_string "fee")))
+              ~action:(Type (Movement_type.of_string "fee"))
+              ~field:"Type"
               ())
        in
        ok (Store.replace_classification_rule db fee);
@@ -252,24 +253,28 @@ let reported_code () =
          "three refreshed"
          3
          (ok (Store.refresh_movement_types ~institution:"revolut" db ~expected:changes));
-       (* A description rule sees the code-derived type and may refine it. *)
-       let refine =
+       (* One list of rules: a description rule that runs earlier wins, a later one
+          is shadowed by the column rule. *)
+       let to_bank priority =
          ok
            (Classification_rule.create
               ~mode:Automatic
               ~account_type:None
-              ~priority:1000
+              ~priority
               ~name:"to-bank"
               ~pattern:(Some "^Transfer to")
               ~institution:(Some "revolut")
-              ~match_type:(Some (Is (Movement_type.of_string "fee")))
+              ~match_type:None
               ~case_sensitive:false
               ~action:(Type (Movement_type.of_string "withdrawal"))
               ())
        in
-       let t = ok (Store.test_type_rule db refine) in
-       Alcotest.(check (list string)) "refines the code type" [ "changed" ] (outcomes t);
-       (match t.matches with
+       let early = ok (Store.test_type_rule db (to_bank 1)) in
+       Alcotest.(check (list string))
+         "an earlier rule wins"
+         [ "changed" ]
+         (outcomes early);
+       (match early.matches with
         | [ r ] ->
           Alcotest.(check (option string))
             "before"
@@ -280,6 +285,11 @@ let reported_code () =
             (Some "withdrawal")
             (Option.map r.after ~f:Movement_type.to_string)
         | _ -> Alcotest.fail "one match expected");
+       let late = ok (Store.test_type_rule db (to_bank 1000)) in
+       Alcotest.(check (list string))
+         "a later rule is shadowed"
+         [ "shadowed:revolut-reported-transfer" ]
+         (outcomes late);
        Ok ()))
 ;;
 
@@ -362,14 +372,13 @@ let explain () =
        in
        let deposit = id_of "Initial deposit" in
        let e = ok (Store.explain_movement db deposit) in
-       Alcotest.(check (option string)) "bank code" (Some "Deposit") e.reported_code;
        Alcotest.(check (option string))
          "effective"
          (Some "deposit")
          (Option.map e.effective ~f:Movement_type.to_string);
        Alcotest.(check bool) "from import rules" true (Poly.equal e.source Import_rules);
        (match
-          List.find e.code_checks ~f:(fun c ->
+          List.find e.description_checks ~f:(fun c ->
             match c.verdict with
             | Decides _ -> true
             | _ -> false)
@@ -383,7 +392,7 @@ let explain () =
        Alcotest.(check bool)
          "earlier rules that do not match are listed"
          true
-         (List.exists e.code_checks ~f:(fun c ->
+         (List.exists e.description_checks ~f:(fun c ->
             String.equal c.name "revolut-reported-card-payment"
             &&
             match c.verdict with
@@ -392,7 +401,7 @@ let explain () =
        Alcotest.(check bool)
          "the catch-all also matches"
          true
-         (List.exists e.code_checks ~f:(fun c ->
+         (List.exists e.description_checks ~f:(fun c ->
             String.equal c.name "revolut-reported-other"
             && Poly.equal c.verdict Also_matches));
        Alcotest.(check bool)
@@ -482,7 +491,7 @@ let field_rule () =
          ~institution:(Some "wise")
          ~match_type:None
          ~case_sensitive:true
-         ~action:(Reported_type (Some (Movement_type.of_string "bonus")))
+         ~action:(Type (Movement_type.of_string "bonus"))
          ~field:"TransferWise ID"
          ())
   in
@@ -516,7 +525,7 @@ let field_rule () =
        Alcotest.(check int)
          "nothing to refresh"
          0
-         (List.length (ok (Store.preview_reported_types db)));
+         (List.length (ok (Store.preview_companion_types db)));
        Ok ()));
   (* A rule added afterwards changes the type through the refresh, and removing it
      puts the bank code back. *)
@@ -525,7 +534,7 @@ let field_rule () =
        import db;
        Alcotest.check pairs "before" [ "card", 3 ] (types db);
        ok (Store.add_classification_rule db id_rule);
-       let changes = ok (Store.preview_reported_types db) in
+       let changes = ok (Store.preview_companion_types db) in
        Alcotest.(check int) "one row changes" 1 (List.length changes);
        (match changes with
         | [ c ] ->
@@ -542,14 +551,14 @@ let field_rule () =
        Alcotest.(check int)
          "refreshed"
          1
-         (ok (Store.refresh_reported_types db ~expected:changes));
+         (ok (Store.refresh_companion_types db ~expected:changes));
        Alcotest.check pairs "after" [ "bonus", 1; "card", 2 ] (types db);
        ok (Store.delete_classification_rule db "id-cashback");
-       let back = ok (Store.preview_reported_types db) in
+       let back = ok (Store.preview_companion_types db) in
        Alcotest.(check int)
          "refreshed back"
          1
-         (ok (Store.refresh_reported_types db ~expected:back));
+         (ok (Store.refresh_companion_types db ~expected:back));
        Alcotest.check pairs "restored" [ "card", 3 ] (types db);
        Ok ()));
   (* A review-mode type rule cannot name a field (it works from stored transactions,
@@ -593,7 +602,7 @@ let field_rule () =
               ~institution:(Some "wise")
               ~match_type:None
               ~case_sensitive:true
-              ~action:(Reported_type (Some (Movement_type.of_string "bonus")))
+              ~action:(Type (Movement_type.of_string "bonus"))
               ~field:"No Such Column"
               ())
        in
@@ -634,8 +643,8 @@ let shipped_wise_rules () =
          (Some (Some "TransferWise ID"))
          (List.Assoc.find rules "wise-id-fee" ~equal:String.equal);
        Alcotest.(check (option (option string)))
-         "code rules name no column"
-         (Some None)
+         "the code rules name their column too"
+         (Some (Some "Transaction Details Type"))
          (List.Assoc.find rules "wise-reported-card" ~equal:String.equal);
        Ok ()))
 ;;

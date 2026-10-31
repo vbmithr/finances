@@ -10,7 +10,6 @@ let make ~profile ~csv_profile ?(aliases = []) ~csv ~policy ~metadata_prefix ()
     { value_on = None
     ; display_name = row.merchant
     ; movement_type = None
-    ; reported_type = row.details_type
     ; tags =
         List.filter_opt
           [ Some (metadata_prefix ^ "-reported-fees", Quantity.to_string row.fees)

@@ -302,9 +302,11 @@ definition:
 ]
 ```
 
-Supported actions are `type`, `card-reference`, `withdrawal-reversal`,
-`reported-type`, and `reported-other`. Rules may specify `priority`,
-`case_sensitive`, `account_type` and `match_type` where applicable. Use
+Supported actions are `type`, `card-reference` and `withdrawal-reversal`. A `type`
+rule may also name a `field` to test (see "What a type rule matches"), and its
+`target` may contain `{value}`, which takes the text the rule matched, so that
+`wise:{value}` keeps a provider code as a provider-specific type. Rules may specify
+`priority`, `case_sensitive`, `account_type` and `match_type` where applicable. Use
 `fin rule add` for personal accounting rules. The CAMT interpreter supports the
 policies exposed by the Wise-shaped profile rather than every bank's CAMT format;
 likewise, the MT940 profile currently covers the observed Bunq-style structure,
@@ -881,10 +883,11 @@ fin rule mode cafes automatic
 Rules are ordered by priority (lower first), then name. Set the order on
 creation with `--priority`; the first matching type action and first matching
 category action win independently. Automatic typing is determined before
-automatic categories. Automatic rules match the first trimmed source
-description and can constrain the source account type with `--account-type`.
-Rules with a type action match `--match-type` against the type reported by
-the parser; category-only rules match it against the resulting imported type.
+automatic categories. Automatic rules match the main description, or the field the
+rule names with `--field`, and can constrain the source account type with
+`--account-type`. Rules with a type action match `--match-type` against the type
+the parser reported (usually none); category-only rules match it against the
+resulting imported type.
 Manual overrides and reviewed accounting decisions remain authoritative.
 Settlement rules require review and cannot run automatically.
 
@@ -901,23 +904,21 @@ institution's definition, one file per institution:
 `fin institution definition show INSTITUTION` prints the same file.
 `fin institution show INSTITUTION` summarizes one in plain text: its kind, what fin
 reads from each source column by role, the columns it does not read, what rules
-can match (a type rule sees the first description; a reported-type rule sees the
-bank's own code column), its default rules and, when a database exists, how many
+can match (type rules test the main description, or any field a rule names, such as
+a column of the CSV), its default rules and, when a database exists, how many
 movements are imported by type. It also works for installed definitions.
-Reported-type rules use the same rule list. They match a bank's own code, or a
-named companion column, not the transaction description. Wise's definition maps
-the codes of its companion CSV (including `MONEY_ADDED` to `deposit`) and, ahead of
-them, the prefix of the `TransferWise ID` column: `FEE-` to `fee` and
-`BALANCE_CASHBACK-` to `bonus`.
-Revolut's maps the `Type` column of its primary CSV: Card Payment and Card Refund
-to `card`, Deposit to `deposit`, Transfer to `transfer`, ATM to `withdrawal` and
-Charge to `fee`. Both preserve any other code as a provider-specific type
-(`wise:CODE`, `revolut:CODE`). For a primary CSV the code gives the type that
-description rules then see (`--match-type`), so a description rule may refine it.
-Imports apply the rules; for movements already imported, edit the rules and run
-`fin transaction refresh-types --institution revolut`. The bundled rules are
-installed into a new database; an existing database needs them added, for example
-with `fin rule add-reported-type`, or rebuilding.
+
+There is one kind of type rule. A bank's own type code is just a column: Wise's
+definition maps its `Transaction Details Type` column and, ahead of it, the prefix
+of the `TransferWise ID` column (`FEE-` to `fee`, `BALANCE_CASHBACK-` to `bonus`);
+Revolut's maps its `Type` column (Card Payment and Card Refund to `card`, Deposit to
+`deposit`, Transfer to `transfer`, ATM to `withdrawal`, Charge to `fee`). Both end
+with a catch-all that keeps any other code as a provider-specific type
+(`wise:{value}`, `revolut:{value}`). The first rule that matches, in priority order,
+decides. Imports apply the rules; for movements already imported, edit the rules and
+run `fin transaction refresh-types --institution revolut`. The bundled rules are
+installed into a new database; an existing database needs them added with `fin rule
+add`, or rebuilding.
 
 #### See everything stored about a transaction
 
@@ -971,12 +972,11 @@ exposed so far. `fin rule gaps` groups by the main description, like the rules.
 
 `fin rule explain EVENT-ID` (the event ID is in `fin tx list`) traces how one
 movement got its type, in the order fin applies the sources: a manual override; the
-reported-type rules on the bank's own code in a primary source; the type rules on
-the first description, which see the type the code gave; and the code of a matched
-companion file, used only when the import rules give no type. Each stage shows the
-rule that decides, the later rules that also match but lose to it, and a count of
-rules that did not match (`--all` lists them with the reason, such as a different
-account type). It also shows the type saved with the movement and says when the
+type rules over the transaction's own fields, the first that matches deciding; and
+the type that matched companion-file rows agree on, used only when no rule decided.
+Each stage shows the rule that decides and the text it matched, the later rules
+that also match but lose to it, and a count of rules that did not match (`--all`
+lists them with the reason, such as a different account type). It also shows the type saved with the movement and says when the
 rules now give another one, which `fin transaction refresh-types` would update, and
 any recorded category. Category rules are not traced; use `fin rule preview`.
 
@@ -1020,43 +1020,39 @@ applies the preview without prompting. Omit `--institution` for all institutions
 It does not change event IDs, transactions, accounting classifications or review
 history. It rechecks the preview and applies the type changes atomically. Types
 from matched companion files are separate and are not changed by this command.
-For reported codes from companion CSVs, add an automatic rule and preview the
-changes to previously imported CSV rows:
+A type rule that names a column also applies to the rows of a matched companion
+file, tested on that file's own columns. Add one and refresh the companion rows that
+were imported earlier:
 
 ```sh
-fin rule add-reported-type wise-card wise '^CARD$' card --case-sensitive
-fin tx refresh-reported-types --institution wise
+fin rule add wise-card --institution wise --field 'Transaction Details Type' \
+  --description '^CARD$' --set-type card --case-sensitive --automatic
+fin tx refresh-companion-types --institution wise
 ```
 
-A reported-type rule can match any column of the companion file instead of the
-bank's type code. Name the column as it appears in the file's header with
-`--field`; the rule matches when any cell under that header matches. For Wise the
-`TransferWise ID` prefix separates fee lines and cashback from the bank code
-`CARD`. Wise ships those two as `wise-id-fee` and `wise-id-cashback`; add your own
-the same way, for example to type card orders:
+Name the column as it appears in the file's header; the rule matches when any cell
+under that header matches. For Wise the `TransferWise ID` prefix separates fee lines
+and cashback from the bank code `CARD`. Wise ships those rules as `wise-id-fee` and
+`wise-id-cashback`; add your own the same way, for example to type card orders:
 
 ```sh
-fin rule add-reported-type wise-id-card-order wise '^CARD_ORDER_CHECKOUT-' fee \
-  --field 'TransferWise ID' --case-sensitive --priority=-2000
-fin tx refresh-reported-types --institution wise
+fin rule add wise-id-card-order --institution wise --field 'TransferWise ID' \
+  --description '^CARD_ORDER_CHECKOUT-' --set-type fee --case-sensitive --automatic \
+  --priority=-2000
+fin tx refresh-companion-types --institution wise
 ```
 
-The first rule that matches, in priority order, decides, so a column rule with a
-lower priority number outranks the code rules. A column that the file does not
-have matches nothing, and a row that no rule decides keeps its bank code. The
-value the deciding rule matched is what `fin rule explain` shows for the companion
-file. `fin rule list` shows the column (`field=code` for the bank's code), and
-column rules apply to companion files only: a primary CSV's own `Type` column is
-matched by rules without `--field`.
-
-The positional arguments are rule name, institution, code expression and type.
-The special type `unknown` leaves a matching code untyped; `other:PREFIX`
-retains the code as a provider-specific type prefixed by `PREFIX`. Lower
-priorities run first; new rules default to -1000, ahead of bundled defaults.
-The refresh shows affected CSV rows and matched transaction IDs, asks for
-confirmation and rechecks the preview atomically; `--yes` accepts it. An
-unmatched CSV row is refreshed too, so a later CAMT import uses its stored type.
-Rule edits and reimports do not change previously stored results until refresh.
+The first rule that matches, in priority order, decides, so a rule with a lower
+priority number outranks the others. A column that the file does not have matches
+nothing, and a row that no rule decides has no type of its own. The value the
+deciding rule matched is what `fin rule explain` shows for the companion file, and
+`fin rule list` shows the field of each rule. A type that contains `{value}` keeps
+the matched text as a provider-specific type. Lower priorities run first; new rules
+default to 1000, so give a rule a negative priority to outrank the bundled ones. The
+companion refresh shows affected CSV rows and matched transaction IDs, asks for
+confirmation and rechecks the preview atomically; `--yes` accepts it. An unmatched
+CSV row is refreshed too, so a later CAMT import uses its stored type. Rule edits and
+reimports do not change previously stored results until refresh.
 Manual type overrides and accounting decisions are preserved. Use
 `fin transaction review` for unclassified items and hledger for accounting
 reports and running balances.
@@ -1196,7 +1192,7 @@ belongs to hledger; `fin` tracks import evidence, account identity and review st
 ## Library and dependency changes
 
 This build uses Base, decimal, Ptime and Bos, with no Core or Bigdecimal
-dependency. Version 1 account snapshots remain compatible; databases use schema 28 and
+dependency. Version 1 account snapshots remain compatible; databases use schema 29 and
 are rebuilt from the original statements (see above).
 
 OCaml callers use `Quantity.t` (a `Decimal.t` alias) and `Date.t` (a `Ptime.date`

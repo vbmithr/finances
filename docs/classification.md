@@ -350,9 +350,16 @@ Staging, each step usable alone:
      flattening. Deferred until a rule needs a tag that is not exposed; today only
      the named fields above are.
    - Canonical fields `direction`, `amount` and `date` come with 2b or later.
-3. One rule form: `--field` on type rules, the bundled reported-type rules
-   converted to type rules on a field, the definition format bumped, and the role
-   columns dropped from definitions.
+3. One rule form (implemented 2026-10-31): `reported-type` and `reported-other` are
+   gone. A bank's own code is an ordinary column, so one `type` rule with `--field`
+   serves both a transaction's own source and a matched companion file; the first
+   matching rule in priority order decides; and a target may contain `{value}`, which
+   takes the matched text (`wise:{value}`). The bundled Wise and Revolut rules were
+   rewritten as `type` rules on their columns, bundled rules keep their own names and
+   priorities when installed, and `Movement.reported_code` is removed. Two separate
+   evaluation sites remain, the stored type at import and the companion rows' types,
+   which step 4 merges; and a definition's role columns for merchant, payee, details
+   type and payment reference are still there to drop.
 4. Derive types: recompute after import and rule edit, log the changes, remove the
    refresh commands.
 5. Remove the old action kinds and the staged `rule explain` output.

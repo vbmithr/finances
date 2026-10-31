@@ -44,56 +44,63 @@
       "pattern": "^Card Payment$",
       "case_sensitive": true,
       "priority": 0,
-      "action": "reported-type",
-      "target": "card"
+      "action": "type",
+      "target": "card",
+      "field": "Type"
     },
     {
       "name": "revolut-reported-card-refund",
       "pattern": "^Card Refund$",
       "case_sensitive": true,
       "priority": 1,
-      "action": "reported-type",
-      "target": "card"
+      "action": "type",
+      "target": "card",
+      "field": "Type"
     },
     {
       "name": "revolut-reported-deposit",
       "pattern": "^Deposit$",
       "case_sensitive": true,
       "priority": 2,
-      "action": "reported-type",
-      "target": "deposit"
+      "action": "type",
+      "target": "deposit",
+      "field": "Type"
     },
     {
       "name": "revolut-reported-transfer",
       "pattern": "^Transfer$",
       "case_sensitive": true,
       "priority": 3,
-      "action": "reported-type",
-      "target": "transfer"
+      "action": "type",
+      "target": "transfer",
+      "field": "Type"
     },
     {
       "name": "revolut-reported-atm",
       "pattern": "^ATM$",
       "case_sensitive": true,
       "priority": 4,
-      "action": "reported-type",
-      "target": "withdrawal"
+      "action": "type",
+      "target": "withdrawal",
+      "field": "Type"
     },
     {
       "name": "revolut-reported-charge",
       "pattern": "^Charge$",
       "case_sensitive": true,
       "priority": 5,
-      "action": "reported-type",
-      "target": "fee"
+      "action": "type",
+      "target": "fee",
+      "field": "Type"
     },
     {
       "name": "revolut-reported-other",
       "pattern": ".+",
       "case_sensitive": true,
       "priority": 100,
-      "action": "reported-other",
-      "target": "revolut:"
+      "action": "type",
+      "target": "revolut:{value}",
+      "field": "Type"
     }
   ]
 }

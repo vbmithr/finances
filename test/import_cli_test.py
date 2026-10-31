@@ -1013,8 +1013,9 @@ class ImportOnboarding(unittest.TestCase):
         deposit = next(r['event_id'] for r in rows if r['description'] == 'Initial deposit')
         out = self.run_fin('rule', 'explain', deposit).stdout
         self.assertIn('Type: deposit  (import rules)', out)
-        self.assertIn('Bank code "Deposit", reported-type rules:', out)
+        self.assertIn('Type rules, each on the field it names', out)
         self.assertIn('decides  revolut-reported-deposit', out)
+        self.assertIn('[Type: Deposit]', out)
         self.assertIn('rules did not match (use --all)', out)
         self.assertNotIn('no match  revolut-reported-card-payment', out)
         full = self.run_fin('rule', 'explain', deposit, '--all').stdout
@@ -1028,7 +1029,7 @@ class ImportOnboarding(unittest.TestCase):
     def test_institution_show_describes_fields_rules_and_data(self):
         before = self.run_fin('institution', 'show', 'revolut').stdout
         self.assertIn('Running-balance CSV (primary)', before)
-        self.assertIn('the column "Type" as the bank\'s code (reported-type rules)', before)
+        self.assertIn('any column of the file, named by its header, such as "Type", with --field', before)
         self.assertIn('Default rules (7):', before)
         self.assertIn('Imported data: none.', before)
         self.run_fin('import', 'revolut', self.csv, '--account-id', 'main')
@@ -1483,17 +1484,19 @@ class ImportOnboarding(unittest.TestCase):
         self.run_fin('import', 'wise', 'fixtures/wise.csv', 'fixtures/wise.xml')
         rules = json.loads(self.run_fin('rule', 'list', '--json').stdout)
         self.assertTrue(any(r['name'] == 'wise-reported-card' for r in rules))
-        self.run_fin('rule', 'add-reported-type', 'my-card', 'wise', '^CARD$', 'bonus')
+        self.run_fin('rule', 'add', 'my-card', '--institution', 'wise', '--field', 'Transaction Details Type',
+                     '--description', '^CARD$', '--set-type', 'bonus', '--case-sensitive', '--automatic',
+                     '--priority=-1000')
         before = json.loads(self.run_fin('tx', 'list', '--institution', 'wise', '--json').stdout)
         self.assertTrue(all(r['movement_type'] == 'card' for r in before))
-        preview = self.terminal(['tx', 'refresh-reported-types', '--institution', 'wise'],
-                                [('Apply these reported type changes?', 'n')])
-        self.assertIn('Proposed reported type changes: 3', preview)
+        preview = self.terminal(['tx', 'refresh-companion-types', '--institution', 'wise'],
+                                [('Apply these companion type changes?', 'n')])
+        self.assertIn('Proposed companion type changes: 3', preview)
         self.assertIn('Nothing changed.', preview)
-        self.assertIn('reported_types_changed=3', self.run_fin('tx', 'refresh-reported-types', '--institution', 'wise', '--yes').stdout)
+        self.assertIn('companion_types_changed=3', self.run_fin('tx', 'refresh-companion-types', '--institution', 'wise', '--yes').stdout)
         after = json.loads(self.run_fin('tx', 'list', '--institution', 'wise', '--json').stdout)
         self.assertTrue(all(r['movement_type'] == 'bonus' for r in after))
-        self.assertIn('No reported type changes.', self.run_fin('tx', 'refresh-reported-types').stdout)
+        self.assertIn('No companion type changes.', self.run_fin('tx', 'refresh-companion-types').stdout)
 
     def test_every_column_of_a_primary_csv_is_a_field(self):
         # Revolut: the columns the payload drops are kept beside the event.
@@ -1577,21 +1580,22 @@ class ImportOnboarding(unittest.TestCase):
             self.run_fin('rule', 'delete', name, '--yes')
         self.run_fin('import', 'wise', 'fixtures/wise.csv', 'fixtures/wise.xml')
         # The cashback row's bank code is CARD; its TransferWise ID says otherwise.
-        self.run_fin('rule', 'add-reported-type', 'id-cashback', 'wise', '^BALANCE_CASHBACK-', 'bonus',
-                     '--case-sensitive', '--field', 'TransferWise ID', '--priority=-2000')
+        self.run_fin('rule', 'add', 'id-cashback', '--institution', 'wise', '--field', 'TransferWise ID',
+                     '--description', '^BALANCE_CASHBACK-', '--set-type', 'bonus', '--case-sensitive',
+                     '--automatic', '--priority=-2000')
         listed = {r['name']: r for r in json.loads(self.run_fin('rule', 'list', '--json').stdout)}
         self.assertEqual(listed['id-cashback']['field'], 'TransferWise ID')
-        self.assertIsNone(listed['wise-reported-card']['field'])
-        preview = self.run_fin('tx', 'refresh-reported-types', '--institution', 'wise', check=False)
+        self.assertEqual(listed['wise-reported-card']['field'], 'Transaction Details Type')
+        preview = self.run_fin('tx', 'refresh-companion-types', '--institution', 'wise', check=False)
         self.assertNotEqual(preview.returncode, 0)  # a preview needs a terminal or --yes
-        out = self.run_fin('tx', 'refresh-reported-types', '--institution', 'wise', '--yes').stdout
-        self.assertIn('reported_types_changed=1', out)
+        out = self.run_fin('tx', 'refresh-companion-types', '--institution', 'wise', '--yes').stdout
+        self.assertIn('companion_types_changed=1', out)
         types = sorted(r['movement_type'] for r in json.loads(self.run_fin('tx', 'list', '--institution', 'wise', '--json').stdout))
         self.assertEqual(types, ['bonus', 'card', 'card'])
-        self.assertIn('No reported type changes.', self.run_fin('tx', 'refresh-reported-types').stdout)
+        self.assertIn('No companion type changes.', self.run_fin('tx', 'refresh-companion-types').stdout)
         # Removing the rule puts the bank code back.
         self.run_fin('rule', 'delete', 'id-cashback', '--yes')
-        self.assertIn('reported_types_changed=1', self.run_fin('tx', 'refresh-reported-types', '--yes').stdout)
+        self.assertIn('companion_types_changed=1', self.run_fin('tx', 'refresh-companion-types', '--yes').stdout)
         types = sorted(r['movement_type'] for r in json.loads(self.run_fin('tx', 'list', '--institution', 'wise', '--json').stdout))
         self.assertEqual(types, ['card', 'card', 'card'])
         # Only reported-type rules may name a column.

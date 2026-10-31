@@ -258,28 +258,35 @@ let initialize db =
         Rel_sql.Stmt.(
           func
             "INSERT INTO \
-             classification_rules(mode,account_type,priority,name,pattern,institution,match_type,case_mode,action_kind,target,action_type) \
-             VALUES ('automatic',?,?,?,?,?,NULL,?,'type',?,NULL)"
-            (option text @-> int @-> text @-> text @-> text @-> text @-> text @-> unit))
+             classification_rules(mode,account_type,priority,name,pattern,institution,match_type,case_mode,action_kind,target,action_type,field) \
+             VALUES ('automatic',?,?,?,?,?,?,?,'type',?,NULL,?)"
+            (option text
+             @-> int
+             @-> text
+             @-> text
+             @-> text
+             @-> option text
+             @-> text
+             @-> text
+             @-> option text
+             @-> unit))
       in
       let* () =
-        Registry.institutions db.registry
-        |> List.concat_map ~f:(fun institution ->
-          match Registry.default_source_typing db.registry institution with
-          | None -> []
-          | Some profile ->
-            List.mapi (Source_typing.rules profile) ~f:(fun i rule ->
-              db_result
-                (Db.exec
-                   db.conn
-                   (sql
-                      rule.account_type
-                      i
-                      (Printf.sprintf "%s-default-%02d" institution (i + 1))
-                      rule.description
-                      institution
-                      (if rule.case_sensitive then "sensitive" else "insensitive")
-                      (Movement_type.to_string rule.kind)))))
+        Registry.default_type_rules db.registry
+        |> List.map ~f:(fun (rule : Type_default.t) ->
+          db_result
+            (Db.exec
+               db.conn
+               (sql
+                  rule.account_type
+                  rule.priority
+                  rule.name
+                  rule.pattern
+                  rule.institution
+                  rule.match_type
+                  (if rule.case_sensitive then "sensitive" else "insensitive")
+                  rule.target
+                  rule.field)))
         |> Or_error.combine_errors_unit
       in
       let evidence_sql =
@@ -314,44 +321,7 @@ let initialize db =
                   kind)))
         |> Or_error.combine_errors_unit
       in
-      let sql =
-        Rel_sql.Stmt.(
-          func
-            "INSERT INTO \
-             classification_rules(mode,account_type,priority,name,pattern,institution,match_type,case_mode,action_kind,target,action_type,field) \
-             VALUES ('automatic',NULL,?,?,?, ?,NULL,?,?,?,NULL,?)"
-            (int
-             @-> text
-             @-> text
-             @-> text
-             @-> text
-             @-> text
-             @-> text
-             @-> option text
-             @-> unit))
-      in
-      Registry.default_reported_types db.registry
-      |> List.map ~f:(fun (rule : Reported_type_defaults.t) ->
-        let action, target =
-          match rule.action with
-          | Type kind ->
-            ( "reported-type"
-            , Option.value_map kind ~default:"unknown" ~f:Movement_type.to_string )
-          | Other prefix -> "reported-other", prefix
-        in
-        db_result
-          (Db.exec
-             db.conn
-             (sql
-                rule.priority
-                rule.name
-                rule.pattern
-                rule.institution
-                (if rule.case_sensitive then "sensitive" else "insensitive")
-                action
-                target
-                rule.field)))
-      |> Or_error.combine_errors_unit
+      Ok ()
     | Some version when version = Db_schema.version -> Ok ()
     | _ ->
       Or_error.errorf
@@ -740,41 +710,7 @@ let source_typing_profile db institution =
           ~f:(fun r -> Source_typing.with_match_type r match_type))
       |> Or_error.combine_errors
     in
-    let reported_query =
-      Rel_sql.Stmt.(
-        func
-          "SELECT pattern,case_mode,action_kind,target FROM classification_rules WHERE \
-           mode='automatic' AND action_kind IN ('reported-type','reported-other') AND \
-           field IS NULL AND institution=? ORDER BY priority,name"
-          (text
-           @-> ret
-                 Row.(
-                   t4
-                     (option Rel.Type.text "pattern")
-                     (text "case_mode")
-                     (text "action_kind")
-                     (text "target"))))
-    in
-    let* reported_rows =
-      db_result
-        (Db.fold db.conn (reported_query institution) (fun row acc -> row :: acc) [])
-    in
-    let* reported =
-      List.rev reported_rows
-      |> List.map ~f:(fun (pattern, case_mode, action_kind, target) ->
-        Source_typing.make_reported_rule
-          (Option.value pattern ~default:".+")
-          (String.equal case_mode "sensitive")
-          (if String.equal action_kind "reported-other"
-           then Source_typing.Other_prefix target
-           else
-             Source_typing.Kind
-               (if String.equal target "unknown"
-                then None
-                else Some (Movement_type.of_string target))))
-      |> Or_error.combine_errors
-    in
-    let profile = Source_typing.create ~reported ~institution rules in
+    let profile = Source_typing.create ~institution rules in
     Hashtbl.set db.source_typing_cache ~key:institution ~data:profile;
     Ok profile
 ;;
@@ -1044,53 +980,37 @@ let registered_companions ?institution db =
     Option.for_all institution ~f:(String.equal owner))
 ;;
 
-let reported_type_rules db institution =
+(* A type rule that names a column also applies to the rows of a companion file:
+   the same rule, tested on the file's own columns once its rows match. *)
+let companion_type_rules db institution =
   let* rules = classification_rules db in
   rules
-  |> List.filter ~f:(fun (r : Classification_rule.t) ->
-    Poly.equal r.mode Automatic
-    && Option.value_map r.institution ~default:false ~f:(String.equal institution)
-    &&
-    match r.action with
-    | Reported_type _ | Reported_other _ -> true
-    | _ -> false)
-  |> traverse (fun (rule : Classification_rule.t) ->
+  |> List.filter_map ~f:(fun (r : Classification_rule.t) ->
+    match r.action, r.field with
+    | Type kind, Some field
+      when Poly.equal r.mode Automatic
+           && Option.value_map r.institution ~default:true ~f:(String.equal institution)
+      -> Some (r, field, kind)
+    | _ -> None)
+  |> traverse (fun ((rule : Classification_rule.t), field, kind) ->
     let* pattern =
       Transaction_pattern.compile
         ~case_sensitive:rule.case_sensitive
         (Option.value_exn rule.pattern)
     in
-    Ok (rule.field, pattern, rule.action))
+    Ok (field, pattern, kind))
 ;;
 
-(* A reported-type rule tests the bank's code, or every cell of the companion row
-   under the column it names. The first rule that matches decides; the value it
-   matched is what the table records as the reported type. A code that no rule
-   matches is recorded without a type. *)
-let resolve_reported rules ~code ~fields =
-  let decided =
-    List.find_map rules ~f:(fun (field, pattern, action) ->
-      let values =
-        match field with
-        | None -> Option.to_list code
-        | Some name ->
-          List.filter_map fields ~f:(fun (column, value) ->
-            Option.some_if (String.equal column name) value)
-      in
-      List.find_map values ~f:(fun value ->
-        if Transaction_pattern.matches pattern ~display_name:None ~descriptions:[ value ]
-        then
-          Some
-            ( value
-            , match action with
-              | Classification_rule.Reported_type kind -> kind
-              | Reported_other prefix -> Some (Movement_type.Other (prefix ^ value))
-              | _ -> None )
-        else None))
-  in
-  match decided with
-  | Some _ as decision -> decision
-  | None -> Option.map code ~f:(fun code -> code, None)
+(* The first rule that matches a column of the row decides; the value it matched is
+   what the table records. A row no rule decides has no entry. *)
+let resolve_companion rules ~fields =
+  List.find_map rules ~f:(fun (field, pattern, kind) ->
+    List.find_map fields ~f:(fun (column, value) ->
+      Option.some_if
+        (String.equal column field
+         && Transaction_pattern.matches pattern ~display_name:None ~descriptions:[ value ]
+        )
+        (value, Movement_type.expand kind ~value)))
 ;;
 
 let add_classification_rule db (rule : Classification_rule.t) =
@@ -1267,9 +1187,10 @@ let set_classification_rule_mode db name mode =
     in
     let* () =
       match mode, rule.action with
-      | ( Classification_rule.Review
-        , (Card_reference | Withdrawal_reversal_hint | Reported_type _ | Reported_other _)
-        ) -> Or_error.error_string "evidence rules must be automatic or disabled"
+      | Classification_rule.Review, (Card_reference | Withdrawal_reversal_hint) ->
+        Or_error.error_string "evidence rules must be automatic or disabled"
+      | Classification_rule.Review, Type _ when Option.is_some rule.field ->
+        Or_error.error_string "a type rule that names a field must be automatic"
       | Classification_rule.Automatic, Settlement _ ->
         Or_error.error_string "settlement rules require review"
       | _ -> Ok ()
@@ -1530,7 +1451,7 @@ let store_companion_rows db ~document_id ~institution ~format ~context ~companio
     List.find companions ~f:(fun (c : Companion.t) -> String.equal c.format format)
     |> Or_error.of_option ~error:(Error.of_string "unregistered companion format")
   in
-  let* rules = reported_type_rules db institution in
+  let* rules = companion_type_rules db institution in
   let find =
     let open Db_schema.Companion_rows in
     select_by_pair table document_id row_number fields_json
@@ -1575,15 +1496,11 @@ let store_companion_rows db ~document_id ~institution ~format ~context ~companio
            ; context
            }
          in
-         let* annotation = companion.annotate row in
          let* columns = companion.fields row in
          let* () =
-           match
-             resolve_reported rules ~code:annotation.reported_type ~fields:columns
-           with
+           match resolve_companion rules ~fields:columns with
            | None -> Ok ()
-           | Some (code, kind) ->
-             let kind = Option.map kind ~f:Movement_type.to_string in
+           | Some (value, kind) ->
              let sql =
                Rel_sql.Stmt.(
                  func
@@ -1592,7 +1509,8 @@ let store_companion_rows db ~document_id ~institution ~format ~context ~companio
                     (?,?,?)"
                    (int64 @-> text @-> option text @-> unit))
              in
-             db_result (Db.exec db.conn (sql row_id code kind))
+             db_result
+               (Db.exec db.conn (sql row_id value (Some (Movement_type.to_string kind))))
          in
          store (added + 1) reused rest)
   in
@@ -2884,7 +2802,7 @@ let save_csv_results
     }
 ;;
 
-type reported_type_change =
+type companion_type_change =
   { row_id : int64
   ; event_id : int64 option
   ; institution : string
@@ -2896,7 +2814,7 @@ type reported_type_change =
 
 (* Recompute every companion row's decision from the rules and the row's own
    columns, and compare it with what is stored. *)
-let preview_reported_types ?institution db =
+let preview_companion_types ?institution db =
   let* existing =
     collect
       db
@@ -2922,14 +2840,14 @@ let preview_reported_types ?institution db =
   let* changes =
     traverse
       (fun (owner, (companion : Companion.t)) ->
-         let* rules = reported_type_rules db owner in
+         let* rules = companion_type_rules db owner in
          let* rows = companion_rows db ~institution:owner ~format:companion.format in
          traverse
            (fun (row : Companion.row) ->
-              let* annotation = companion.annotate row in
               let* columns = companion.fields row in
               let decision =
-                resolve_reported rules ~code:annotation.reported_type ~fields:columns
+                resolve_companion rules ~fields:columns
+                |> Option.map ~f:(fun (value, kind) -> value, Some kind)
               in
               let before = Hashtbl.find existing row.row_id in
               let same =
@@ -2956,9 +2874,9 @@ let preview_reported_types ?institution db =
   Ok (List.concat changes)
 ;;
 
-let refresh_reported_types ?institution db ~expected =
+let refresh_companion_types ?institution db ~expected =
   transaction db (fun db ->
-    let* current = preview_reported_types ?institution db in
+    let* current = preview_companion_types ?institution db in
     if not (Poly.equal current expected)
     then Or_error.error_string "reported types changed since preview; review again"
     else (
@@ -4895,11 +4813,7 @@ let preview_classification_rule db (rule : Classification_rule.t) =
        let account_requested =
          match rule.action with
          | Category _ | Settlement _ | Type_and_category _ -> true
-         | Type _
-         | Card_reference
-         | Withdrawal_reversal_hint
-         | Reported_type _
-         | Reported_other _ -> false
+         | Type _ | Card_reference | Withdrawal_reversal_hint -> false
        in
        let type_block = type_requested && Option.is_some row.movement_type_override in
        let already_reviewed =
@@ -5033,8 +4947,7 @@ let apply_classification_rule db ~expected ~selected =
             Option.some_if m.apply_account m.transaction.event_id)
         in
         match current.action with
-        | Card_reference | Withdrawal_reversal_hint | Reported_type _ | Reported_other _
-          ->
+        | Card_reference | Withdrawal_reversal_hint ->
           Or_error.error_string
             "evidence rules apply during import; refresh stored evidence to update \
              existing transactions"
@@ -5937,14 +5850,7 @@ let test_type_rule db (draft : Classification_rule.t) =
   let* results =
     traverse
       (fun (event_id, (event : Source_event.t)) ->
-         (* The parser-reported type includes the type the bank's own code maps to. *)
-         let* current = source_typing_profile db event.venue in
-         let base =
-           Source_typing.create
-             ~reported:(Source_typing.reported_rules current)
-             ~institution:event.venue
-             []
-         in
+         let base = Source_typing.create ~institution:event.venue [] in
          let* movement = Registry.movement ~source_typing:base db.registry event in
          let before_rules = ordered (for_venue ~without_draft:false event.venue) in
          let after_rules =
@@ -6152,16 +6058,6 @@ let explain_movement db event_id =
      | Review | Disabled -> false)
     && Option.value_map r.institution ~default:true ~f:(String.equal venue)
   in
-  (* Stage 1: the bank's own code. The first matching rule decides. *)
-  let code_rules =
-    List.filter rules ~f:(fun r ->
-      automatic r
-      && Option.is_none r.field
-      &&
-      match r.action with
-      | Reported_type _ | Reported_other _ -> true
-      | _ -> false)
-  in
   let first_hit = ref false in
   let decide checks_for =
     (* Mark the first match as the decider and the later ones as shadowed. *)
@@ -6178,50 +6074,8 @@ let explain_movement db event_id =
       in
       { Explanation.name; pattern; input; verdict })
   in
-  let* code_checks =
-    match parsed.reported_code with
-    | None -> Ok []
-    | Some code ->
-      let* entries =
-        traverse
-          (fun (r : Classification_rule.t) ->
-             let pattern = Option.value r.pattern ~default:".+" in
-             let* compiled =
-               Transaction_pattern.compile ~case_sensitive:r.case_sensitive pattern
-             in
-             let outcome =
-               if
-                 Transaction_pattern.matches
-                   compiled
-                   ~display_name:None
-                   ~descriptions:[ code ]
-               then
-                 Ok
-                   (match r.action with
-                    | Reported_type kind -> kind
-                    | Reported_other prefix -> Some (Movement_type.Other (prefix ^ code))
-                    | _ -> None)
-               else Error "the code does not match"
-             in
-             Ok (r.name, pattern, code, outcome))
-          code_rules
-      in
-      Ok (decide entries)
-  in
-  let code_type =
-    List.find_map code_checks ~f:(fun c ->
-      match c.verdict with
-      | Decides kind -> Some kind
-      | _ -> None)
-    |> Option.join
-  in
-  let after_code =
-    match code_type with
-    | None -> parsed
-    | Some kind -> Movement.with_movement_type parsed (Some kind)
-  in
-  (* Stage 2: type rules on the first description, which see the type above. *)
-  first_hit := false;
+  let after_code = parsed in
+  (* Type rules over every field of the movement; the first that matches decides. *)
   let* description_entries =
     List.filter rules ~f:(fun r ->
       automatic r && Option.is_some (Classification_rule.action_type r.action))
@@ -6354,9 +6208,7 @@ let explain_movement db event_id =
     ; currency = Iso4217.to_alpha_code stored.account.currency
     ; account_type = stored.account.account_type
     ; descriptions = stored.descriptions
-    ; reported_code = parsed.reported_code
     ; override
-    ; code_checks
     ; description_checks
     ; rules_type
     ; companion

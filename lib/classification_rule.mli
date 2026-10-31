@@ -7,8 +7,6 @@ type action =
   | Type_and_category of Movement_type.t * string
   | Card_reference
   | Withdrawal_reversal_hint
-  | Reported_type of Movement_type.t option
-  | Reported_other of string
 
 type type_condition =
   | Unknown
@@ -30,11 +28,10 @@ type t = private
   ; case_sensitive : bool
   ; action : action
   ; field : string option
-    (** The field a rule matches. A reported-type rule names a column of the
-        companion file by its header (the bank's own code when absent). A type rule
-        names a field of the movement: [text] for any description, or a named one
-        such as [name], [memo] or [reference]; the main description when absent.
-        It must be automatic. Other rules have none. *)
+    (** The field a type rule tests: [text] for any description, a named one such as
+        [name], [memo] or [reference], a column of a CSV primary, or a column of a
+        matched companion file, all by their names; the main description when
+        absent. It must be automatic. Other rules have none. *)
   }
 
 val create

@@ -22,7 +22,6 @@ type t =
   ; descriptions : string list
   ; counterparty_iban : Iban.t option
   ; movement_type : Movement_type.t option
-  ; reported_code : string option
   ; fields : (string * string) list
   ; main_description : int
   }
@@ -36,7 +35,6 @@ let create
       ?(fee = Quantity.zero)
       ?counterparty_iban
       ?movement_type
-      ?reported_code
       ?(fields = [])
       ?(main_description = 0)
       descriptions
@@ -58,7 +56,6 @@ let create
       ; descriptions
       ; counterparty_iban
       ; movement_type
-      ; reported_code
       ; fields
       ; main_description
       }

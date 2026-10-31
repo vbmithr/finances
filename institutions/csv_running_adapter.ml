@@ -47,7 +47,6 @@ let make (profile : Csv_running_profile.t) =
         ~booked_on:tx.booked_on
         ~amount:tx.amount
         ~fee:tx.fee
-        ~reported_code:tx.transaction_type
         [ tx.description ])
     ()
 ;;

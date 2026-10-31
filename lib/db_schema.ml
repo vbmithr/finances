@@ -3,7 +3,7 @@ open Rel
 
 (** One current experimental baseline; older databases must be reimported. Banks
     have no tables of their own. *)
-let version = 28
+let version = 29
 
 let timestamp = `Expr "(strftime('%Y-%m-%dT%H:%M:%f','now') || '000000000Z')"
 
@@ -2000,8 +2000,6 @@ module Classification_rules = struct
               ; "type-category"
               ; "card-reference"
               ; "withdrawal-reversal"
-              ; "reported-type"
-              ; "reported-other"
               ]
           ]
       table

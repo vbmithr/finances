@@ -30,9 +30,7 @@ type t =
   ; currency : string
   ; account_type : string
   ; descriptions : string list
-  ; reported_code : string option (** The bank's own code in the primary source. *)
   ; override : Movement_type.t option
-  ; code_checks : check list (** Reported-type rules on the bank's code. *)
   ; description_checks : check list (** Type rules on the first description. *)
   ; rules_type : Movement_type.t option (** What the two stages above give. *)
   ; companion : (string * Movement_type.t option) list

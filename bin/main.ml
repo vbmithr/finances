@@ -1778,17 +1778,17 @@ let refresh_transaction_types database institution yes =
         printf "movement_types_changed=%d\n" count)))
 ;;
 
-let refresh_reported_types database institution yes =
+let refresh_companion_types database institution yes =
   with_database database (fun db ->
-    let%bind changes = Store.preview_reported_types ?institution db in
+    let%bind changes = Store.preview_companion_types ?institution db in
     let name = Option.value_map ~default:"unknown" ~f:Movement_type.to_string in
     if List.is_empty changes
     then (
-      print_endline "No reported type changes.";
+      print_endline "No companion type changes.";
       Ok ())
     else (
-      printf "Proposed reported type changes: %d\n" (List.length changes);
-      List.iter changes ~f:(fun (c : Store.reported_type_change) ->
+      printf "Proposed companion type changes: %d\n" (List.length changes);
+      List.iter changes ~f:(fun (c : Store.companion_type_change) ->
         printf
           "  CSV row #%Ld%s  %s  %s  %s -> %s\n"
           c.row_id
@@ -1807,26 +1807,26 @@ let refresh_reported_types database institution yes =
         then
           Ok
             (Option.value_map
-               (prompt "Apply these reported type changes? [Y/n]: ")
+               (prompt "Apply these companion type changes? [Y/n]: ")
                ~default:false
                ~f:confirm_default_yes)
-        else Or_error.error_string "reported type refresh requires a terminal or --yes"
+        else Or_error.error_string "companion type refresh requires a terminal or --yes"
       in
       if not confirmed
       then (
         print_endline "Nothing changed.";
         Ok ())
       else (
-        let%map count = Store.refresh_reported_types ?institution db ~expected:changes in
-        printf "reported_types_changed=%d\n" count)))
+        let%map count = Store.refresh_companion_types ?institution db ~expected:changes in
+        printf "companion_types_changed=%d\n" count)))
 ;;
 
-let refresh_reported_types_cmd =
+let refresh_companion_types_cmd =
   command
-    "refresh-reported-types"
-    "Preview and refresh types from imported provider codes."
+    "refresh-companion-types"
+    "Preview and refresh types from the columns of matched companion files."
     Term.(
-      const refresh_reported_types
+      const refresh_companion_types
       $ database
       $ institution_filter
       $ Arg.(value & flag & info [ "yes" ] ~doc:"Apply the preview without prompting."))
@@ -2088,8 +2088,6 @@ let print_institution_rules (definition : Institution_definition.t) =
       | Type -> "type"
       | Card_reference -> "card-reference"
       | Withdrawal_reversal -> "withdrawal-reversal"
-      | Reported_type -> "reported-type"
-      | Reported_other -> "reported-other"
     in
     printf
       "    %3d  %-18s %-40s /%s/%s -> %s\n"
@@ -2251,8 +2249,6 @@ let definition_rules (definition : Institution_definition.t) =
       | Type -> "type"
       | Card_reference -> "card-reference"
       | Withdrawal_reversal -> "withdrawal-reversal"
-      | Reported_type -> "reported-type"
-      | Reported_other -> "reported-other"
     in
     let%bind action = Classification_rule.action_of_fields kind r.target None in
     Classification_rule.create
@@ -3279,9 +3275,7 @@ let rule_add
     match automatic, action with
     | true, (Classification_rule.Type _ | Category _ | Type_and_category _) -> Ok ()
     | true, Settlement _ -> Or_error.error_string "settlement rules require review"
-    | ( true
-      , (Card_reference | Withdrawal_reversal_hint | Reported_type _ | Reported_other _) )
-      -> Ok ()
+    | true, (Card_reference | Withdrawal_reversal_hint) -> Ok ()
     | false, _ -> Ok ()
   in
   let%bind rule =
@@ -3575,103 +3569,6 @@ let rule_add_evidence_cmd =
       $ Arg.(value & flag & info [ "replace" ] ~doc:"Replace an existing rule."))
 ;;
 
-let rule_add_reported_type
-      database
-      name
-      institution
-      pattern
-      target
-      case_sensitive
-      priority
-      field
-      replace
-  =
-  let action =
-    if String.is_prefix target ~prefix:"other:"
-    then Classification_rule.Reported_other (String.drop_prefix target 6)
-    else
-      Reported_type
-        (if String.equal target "unknown"
-         then None
-         else Some (Movement_type.of_string target))
-  in
-  let%bind rule =
-    Classification_rule.create
-      ~mode:Automatic
-      ~account_type:None
-      ~priority
-      ~name
-      ~pattern:(Some pattern)
-      ~institution:(Some institution)
-      ~match_type:None
-      ~case_sensitive
-      ~action
-      ?field
-      ()
-  in
-  with_database database (fun db ->
-    let%bind () =
-      if replace
-      then Store.replace_classification_rule db rule
-      else Store.add_classification_rule db rule
-    in
-    printf
-      "Saved reported-type rule %s. It applies to future imports; run fin tx \
-       refresh-reported-types to preview existing changes.\n"
-      (Terminal.text name);
-    Ok ())
-;;
-
-let rule_add_reported_type_cmd =
-  command
-    "add-reported-type"
-    "Map an institution's reported type code, or a named companion-file column, to a \
-     movement type."
-    Term.(
-      const rule_add_reported_type
-      $ database
-      $ Arg.(
-          required
-          & pos 0 (some string) None
-          & info [] ~docv:"NAME" ~doc:"Unique rule name.")
-      $ Arg.(
-          required
-          & pos 1 (some string) None
-          & info [] ~docv:"INSTITUTION" ~doc:"Institution whose source codes are matched.")
-      $ Arg.(
-          required
-          & pos 2 (some string) None
-          & info
-              []
-              ~docv:"REGEX"
-              ~doc:"Expression matched against the reported type code.")
-      $ Arg.(
-          required
-          & pos 3 (some string) None
-          & info
-              []
-              ~docv:"TYPE"
-              ~doc:"Movement type, unknown, or other:PREFIX to retain unrecognized codes.")
-      $ Arg.(value & flag & info [ "case-sensitive" ] ~doc:"Match case sensitively.")
-      $ Arg.(
-          value
-          & opt int (-1000)
-          & info
-              [ "priority" ]
-              ~docv:"NUMBER"
-              ~doc:"Lower numbers run first (default: -1000).")
-      $ Arg.(
-          value
-          & opt (some string) None
-          & info
-              [ "field" ]
-              ~docv:"COLUMN"
-              ~doc:
-                "Match this column of the institution's companion file, named as in its \
-                 header, instead of the bank's type code.")
-      $ Arg.(value & flag & info [ "replace" ] ~doc:"Replace an existing rule."))
-;;
-
 let rule_list database json_output =
   with_database database (fun db ->
     let%map rules = Store.classification_rules db in
@@ -3794,9 +3691,10 @@ let rule_preview database name json_output =
       | Card_reference | Withdrawal_reversal_hint ->
         Or_error.error_string
           "use fin tx refresh-evidence to preview automatic evidence changes"
-      | Reported_type _ | Reported_other _ ->
+      | Type _ when Option.is_some rule.field ->
         Or_error.error_string
-          "use fin tx refresh-reported-types to preview automatic reported type changes"
+          "this rule names a field and applies on import; use fin rule test to preview \
+           it and fin tx refresh-types to apply it"
       | _ -> Ok ()
     in
     let%map matches = Store.preview_classification_rule db rule in
@@ -3827,9 +3725,9 @@ let rule_apply database name yes =
       | Card_reference | Withdrawal_reversal_hint ->
         Or_error.error_string
           "use fin tx refresh-evidence to preview and apply evidence changes"
-      | Reported_type _ | Reported_other _ ->
+      | Type _ when Option.is_some rule.field ->
         Or_error.error_string
-          "use fin tx refresh-reported-types to preview and apply reported type changes"
+          "this rule names a field and applies on import; use fin tx refresh-types"
       | _ -> Ok ()
     in
     let%bind matches = Store.preview_classification_rule db rule in
@@ -4205,19 +4103,14 @@ let print_explanation ~all (e : Explanation.t) =
   printf
     "  1. Manual override: %s\n"
     (Option.value_map e.override ~default:"none" ~f:Movement_type.to_string);
-  (match e.reported_code with
-   | None -> print_endline "  2. Bank code: this source has none"
-   | Some code ->
-     printf "  2. Bank code %S, reported-type rules:\n" (Terminal.text code);
-     print_explain_checks ~all e.code_checks);
-  printf "  3. Description rules, on the field each rule names (default: description):\n";
+  printf "  2. Type rules, each on the field it names (default: description):\n";
   print_explain_checks ~all e.description_checks;
   printf "     import rules give: %s\n" (type_name e.rules_type);
   (match e.companion with
-   | [] -> print_endline "  4. Companion file: no matched rows with a code"
+   | [] -> print_endline "  3. Companion file: no matched row decided a type"
    | codes ->
      printf
-       "  4. Companion file codes: %s\n"
+       "  3. Companion file values the rules matched: %s\n"
        (String.concat
           ~sep:", "
           (List.map codes ~f:(fun (code, kind) ->
@@ -5575,7 +5468,6 @@ let () =
               ; rule_add_cmd ~settlement:false
               ; rule_add_cmd ~settlement:true
               ; rule_add_evidence_cmd
-              ; rule_add_reported_type_cmd
               ; rule_preview_cmd
               ; rule_apply_cmd
               ; rule_delete_cmd
@@ -5606,7 +5498,7 @@ let () =
               [ transaction_list_cmd
               ; transaction_show_cmd
               ; refresh_transaction_types_cmd
-              ; refresh_reported_types_cmd
+              ; refresh_companion_types_cmd
               ; refresh_transaction_evidence_cmd
               ; group
                   "type"

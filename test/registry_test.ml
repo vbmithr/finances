@@ -229,17 +229,13 @@ let bundled_definitions () =
       (String.strip text)
       (String.strip
          (Json.encode ~format:Jsont.Indent Institution_definition.codec definition));
-    (* The store names installed type rules by position. *)
-    List.filter definition.rules ~f:(fun r ->
-      match r.action with
-      | Type -> true
-      | _ -> false)
-    |> List.iteri ~f:(fun i (r : Institution_definition.rule) ->
-      Alcotest.(check string)
-        (name ^ " type rule name")
-        (Printf.sprintf "%s-default-%02d" name (i + 1))
-        r.name;
-      Alcotest.(check int) (name ^ " type rule priority") i r.priority));
+    (* A bundled rule keeps its own name and priority when installed. *)
+    List.iter definition.rules ~f:(fun (r : Institution_definition.rule) ->
+      Alcotest.(check bool)
+        (name ^ " rule names start with the institution")
+        true
+        (String.is_prefix r.name ~prefix:(name ^ "-")));
+    ());
   let names =
     List.concat_map Builtin.definitions ~f:(fun d ->
       List.map d.rules ~f:(fun r -> r.name))
@@ -248,14 +244,7 @@ let bundled_definitions () =
     "rule names are unique across bundled institutions"
     false
     (List.contains_dup names ~compare:String.compare);
-  let derived =
-    List.length Builtin.source_evidence
-    + List.length Builtin.reported_types
-    + List.sum
-        (module Int)
-        Builtin.source_typing
-        ~f:(fun p -> List.length (Source_typing.rules p))
-  in
+  let derived = List.length Builtin.source_evidence + List.length Builtin.type_rules in
   Alcotest.(check int)
     "every bundled rule becomes a default"
     (List.sum (module Int) Builtin.definitions ~f:(fun d -> List.length d.rules))

@@ -93,7 +93,6 @@ let companion (profile : Mt940_profile.t) engine : Companion.t =
       { Companion.value_on = None
       ; display_name = None
       ; movement_type = None
-      ; reported_type = None
       ; tags =
           (if String.is_empty row.counterparty
            then []

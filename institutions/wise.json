@@ -80,7 +80,7 @@
       "pattern": "^FEE-",
       "case_sensitive": true,
       "priority": -100,
-      "action": "reported-type",
+      "action": "type",
       "target": "fee",
       "field": "TransferWise ID"
     },
@@ -89,7 +89,7 @@
       "pattern": "^BALANCE_CASHBACK-",
       "case_sensitive": true,
       "priority": -99,
-      "action": "reported-type",
+      "action": "type",
       "target": "bonus",
       "field": "TransferWise ID"
     },
@@ -98,64 +98,63 @@
       "pattern": "^CARD$",
       "case_sensitive": true,
       "priority": 0,
-      "action": "reported-type",
-      "target": "card"
+      "action": "type",
+      "target": "card",
+      "field": "Transaction Details Type"
     },
     {
       "name": "wise-reported-transfer",
       "pattern": "^TRANSFER$",
       "case_sensitive": true,
       "priority": 1,
-      "action": "reported-type",
-      "target": "transfer"
+      "action": "type",
+      "target": "transfer",
+      "field": "Transaction Details Type"
     },
     {
       "name": "wise-reported-conversion",
       "pattern": "^CONVERSION$",
       "case_sensitive": true,
       "priority": 2,
-      "action": "reported-type",
-      "target": "conversion"
+      "action": "type",
+      "target": "conversion",
+      "field": "Transaction Details Type"
     },
     {
       "name": "wise-reported-direct-debit",
       "pattern": "^DIRECT_DEBIT$",
       "case_sensitive": true,
       "priority": 3,
-      "action": "reported-type",
-      "target": "direct-debit"
+      "action": "type",
+      "target": "direct-debit",
+      "field": "Transaction Details Type"
     },
     {
       "name": "wise-reported-deposit",
       "pattern": "^DEPOSIT$",
       "case_sensitive": true,
       "priority": 4,
-      "action": "reported-type",
-      "target": "deposit"
-    },
-    {
-      "name": "wise-reported-unknown",
-      "pattern": "^UNKNOWN$",
-      "case_sensitive": true,
-      "priority": 5,
-      "action": "reported-type",
-      "target": "unknown"
+      "action": "type",
+      "target": "deposit",
+      "field": "Transaction Details Type"
     },
     {
       "name": "wise-reported-money-added",
       "pattern": "^MONEY_ADDED$",
       "case_sensitive": true,
       "priority": 6,
-      "action": "reported-type",
-      "target": "deposit"
+      "action": "type",
+      "target": "deposit",
+      "field": "Transaction Details Type"
     },
     {
       "name": "wise-reported-other",
       "pattern": ".+",
       "case_sensitive": true,
       "priority": 100,
-      "action": "reported-other",
-      "target": "wise:"
+      "action": "type",
+      "target": "wise:{value}",
+      "field": "Transaction Details Type"
     }
   ]
 }

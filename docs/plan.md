@@ -199,12 +199,14 @@ configurable yet.
 - [ ] Simpler rule model ([proposal](classification.md#a-simpler-rule-model-proposal)):
   one rule form (field, expression, type or category), named fields, derived
   types. Every column of every source is a field named as the source names it.
-  Decide the open questions there, then stage it: companion fields (step 1, done:
-  `add-reported-type --field`), primary fields (2a done: named fields from the
-  payload, `description` as the adapter's main text, `text` for any, `--field` on
-  automatic type rules; 2b done for CSV: the `source_event_fields` side table and
-  the stored main-text index; tag-format flattening deferred), one rule form, derived types without the refresh
-  commands, remove the old action kinds.
+  Decide the open questions there, then stage it: companion fields (step 1, done),
+  primary fields (2a done: named fields from the payload, `description` as the
+  adapter's main text, `text` for any, `--field` on automatic type rules; 2b done for
+  CSV: the `source_event_fields` side table and the stored main-text index; tag-format
+  flattening deferred), one rule form (step 3, done 2026-10-31: `reported-type` and
+  `reported-other` removed, a bank's code is a column, `{value}` templates), then
+  derived types without the refresh commands (step 4) and removing the remaining old
+  action kinds (step 5).
 - [x] Wise rules shipped in `wise.json` (2026-10-31), on the `TransferWise ID`
   column rather than the description: `FEE-` to `fee` (187 rows), `BALANCE_CASHBACK-`
   to `bonus` (29) and the `MONEY_ADDED` code to `deposit` (2). They are ordinary
