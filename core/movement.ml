@@ -22,6 +22,7 @@ type t =
   ; descriptions : string list
   ; counterparty_iban : Iban.t option
   ; movement_type : Movement_type.t option
+  ; reported_code : string option
   }
 
 let create
@@ -33,6 +34,7 @@ let create
       ?(fee = Quantity.zero)
       ?counterparty_iban
       ?movement_type
+      ?reported_code
       descriptions
   =
   let open Or_error.Let_syntax in
@@ -52,6 +54,7 @@ let create
       ; descriptions
       ; counterparty_iban
       ; movement_type
+      ; reported_code
       }
 ;;
 

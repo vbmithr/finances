@@ -199,11 +199,12 @@ configurable yet.
 - [x] `fin rule gaps`: movements with no type, grouped by the first words of their
   description, with a suggested expression (2026-10-31). The grouping key is a
   heuristic to tune on real data.
-- [ ] Revolut typing: its CSV has a `Type` column of six values (Card Payment,
-  Deposit, Transfer, ATM, Card Refund, Charge) that the profile reads but does
-  not turn into a movement type, and its 668 card payments have 372 distinct
-  description keys, so description rules cannot type them. Decide how rules reach
-  a primary CSV's reported code (see `docs/classification.md`).
+- [x] Revolut typing from its CSV `Type` column (2026-10-31): six values plus a
+  catch-all, as reported-type rules in `institutions/revolut.json`. A movement
+  carries the bank's own code and `Source_typing` applies reported rules as the
+  base type before description rules. Existing databases need the rules added
+  (the bundled rules are installed only into a new database), which is the
+  provenance and update work below.
 - [x] Express each bundled institution as one institution definition file
   (`institutions/{boursobank,wise,bunq,revolut}.json`), replacing nine files of
   presets, profiles and default rules. Verified 2026-10-31: `definition show`

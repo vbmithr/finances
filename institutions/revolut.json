@@ -38,5 +38,62 @@
     "completed_value": "COMPLETED",
     "reverted_value": "REVERTED"
   },
-  "rules": []
+  "rules": [
+    {
+      "name": "revolut-reported-card-payment",
+      "pattern": "^Card Payment$",
+      "case_sensitive": true,
+      "priority": 0,
+      "action": "reported-type",
+      "target": "card"
+    },
+    {
+      "name": "revolut-reported-card-refund",
+      "pattern": "^Card Refund$",
+      "case_sensitive": true,
+      "priority": 1,
+      "action": "reported-type",
+      "target": "card"
+    },
+    {
+      "name": "revolut-reported-deposit",
+      "pattern": "^Deposit$",
+      "case_sensitive": true,
+      "priority": 2,
+      "action": "reported-type",
+      "target": "deposit"
+    },
+    {
+      "name": "revolut-reported-transfer",
+      "pattern": "^Transfer$",
+      "case_sensitive": true,
+      "priority": 3,
+      "action": "reported-type",
+      "target": "transfer"
+    },
+    {
+      "name": "revolut-reported-atm",
+      "pattern": "^ATM$",
+      "case_sensitive": true,
+      "priority": 4,
+      "action": "reported-type",
+      "target": "withdrawal"
+    },
+    {
+      "name": "revolut-reported-charge",
+      "pattern": "^Charge$",
+      "case_sensitive": true,
+      "priority": 5,
+      "action": "reported-type",
+      "target": "fee"
+    },
+    {
+      "name": "revolut-reported-other",
+      "pattern": ".+",
+      "case_sensitive": true,
+      "priority": 100,
+      "action": "reported-other",
+      "target": "revolut:"
+    }
+  ]
 }

@@ -1007,7 +1007,27 @@ class ImportOnboarding(unittest.TestCase):
         self.run_fin('rule', 'delete', 'renamed', '--yes')
         self.assertEqual(len(json.loads(self.run_fin('transaction', 'category', 'history').stdout)), 3)
 
+    def test_revolut_types_come_from_the_type_column(self):
+        self.run_fin('import', 'revolut', self.csv, '--account-id', 'main')
+        rows = json.loads(self.run_fin('tx', 'list', '--json').stdout)
+        self.assertEqual(
+            sorted((r['description'], r['movement_type']) for r in rows),
+            [('Initial deposit', 'deposit'), ('Repeated transfer', 'transfer'),
+             ('Repeated transfer', 'transfer'), ('Transfer to another bank', 'transfer')])
+        self.assertIn('Every movement has a type.', self.run_fin('rule', 'gaps', '--institution', 'revolut').stdout)
+        # An unmapped code is kept as a provider-specific type, not dropped.
+        extra = self.root / 'revolut-other.csv'
+        extra.write_text('Type,Product,Started Date,Completed Date,Description,Amount,Fee,Currency,State,Balance\n'
+                         'Cashback,Current,2026-01-05 10:00:00,2026-01-05 10:00:01,Reward,1.00,0.00,EUR,COMPLETED,90.50\n')
+        self.run_fin('import', 'revolut', extra, '--account-id', 'main')
+        row = next(r for r in json.loads(self.run_fin('tx', 'list', '--json').stdout) if r['booked_on'] == '2026-01-05')
+        self.assertEqual(row['movement_type'], 'revolut:Cashback')
+
     def test_rule_type_and_category_actions_are_independent(self):
+        # These rules are tested on movements without a type, so drop the bundled
+        # mapping of Revolut's own Type column first.
+        for code in ('card-payment', 'card-refund', 'deposit', 'transfer', 'atm', 'charge', 'other'):
+            self.run_fin('rule', 'delete', 'revolut-reported-' + code, '--yes')
         self.run_fin('import', 'revolut', self.csv, '--account-id', 'main')
         later = self.root / 'rule-extra.csv'
         later.write_text('Type,Product,Started Date,Completed Date,Description,Amount,Fee,Currency,State,Balance\n'

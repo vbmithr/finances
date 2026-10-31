@@ -364,7 +364,7 @@ Keep a separate inbox for each bank. Supply the formats below:
 | BoursoBank | OFX 2.x XML | BoursoBank CSV |
 | Wise | CAMT.053 XML | Wise CSV |
 | Bunq | MT940 | Bunq seven-column CSV |
-| Revolut | Supported ten-column Current-account CSV | None |
+| Revolut | Supported ten-column Current-account CSV (its `Type` column sets the movement type) | None |
 
 Companion CSV files enrich the primary records; they do not create a second
 transaction stream. Currencies must be ISO 4217 alphabetic codes such as `EUR`;
@@ -898,9 +898,17 @@ institution's definition, one file per institution:
 [BoursoBank](../institutions/boursobank.json), [Wise](../institutions/wise.json),
 [Bunq](../institutions/bunq.json) and [Revolut](../institutions/revolut.json).
 `fin institution definition show INSTITUTION` prints the same file.
-Wise companion CSV type codes use the same rule list: its definition maps known
-codes and preserves other codes as provider-specific types. These rules match the
-reported code, not the transaction description.
+Reported-type rules use the same rule list. They match a bank's own code, not the
+transaction description. Wise's definition maps the codes of its companion CSV.
+Revolut's maps the `Type` column of its primary CSV: Card Payment and Card Refund
+to `card`, Deposit to `deposit`, Transfer to `transfer`, ATM to `withdrawal` and
+Charge to `fee`. Both preserve any other code as a provider-specific type
+(`wise:CODE`, `revolut:CODE`). For a primary CSV the code gives the type that
+description rules then see (`--match-type`), so a description rule may refine it.
+Imports apply the rules; for movements already imported, edit the rules and run
+`fin transaction refresh-types --institution revolut`. The bundled rules are
+installed into a new database; an existing database needs them added, for example
+with `fin rule add-reported-type`, or rebuilding.
 
 #### Find untyped movements and test a rule before saving it
 

@@ -221,11 +221,14 @@ for the small types (`Top-up by`, `Payment from`, `Cash withdrawal`,
 payments, whose descriptions are merchants (372 distinct two-word keys). Typing
 Revolut therefore needs the reported `Type` column, as Wise's companion CSV codes
 already are, not description rules. The existing `reported-type` rules (an
-institution, a code expression and a type) are the right shape; the open work is
-applying them to the primary CSV's `Type` field at import and refresh, instead
-of only to companion rows. A plausible mapping is Card Payment and Card Refund to
-`card`, Deposit to `deposit`, Transfer to `transfer`, ATM to `withdrawal` and
-Charge to `fee`; Revolut's REVERTED rows are already handled separately.
+institution, a code expression and a type) are the right shape. Implemented
+2026-10-31: a movement carries the bank's own code (`Movement.reported_code`),
+and `Source_typing` applies the institution's reported-type rules to it as the
+base type, so description rules and their `--match-type` conditions see it.
+Revolut's definition maps Card Payment and Card Refund to `card`, Deposit to
+`deposit`, Transfer to `transfer`, ATM to `withdrawal` and Charge to `fee`, and
+keeps other codes as `revolut:CODE`. Revolut's REVERTED rows are handled
+separately.
 
 ### Distribution and trust
 

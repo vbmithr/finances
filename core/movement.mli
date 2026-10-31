@@ -30,6 +30,9 @@ type t = private
   ; descriptions : string list (** Free texts, in source order. *)
   ; counterparty_iban : Iban.t option
   ; movement_type : Movement_type.t option
+  ; reported_code : string option
+    (** The bank's own transaction code in a primary source, such as a CSV
+            type column; typing rules may map it to a movement type. *)
   }
 
 val create
@@ -41,6 +44,7 @@ val create
   -> ?fee:Quantity.t
   -> ?counterparty_iban:Iban.t
   -> ?movement_type:Movement_type.t
+  -> ?reported_code:string
   -> string list
   -> t Or_error.t
 

@@ -6,19 +6,37 @@ let ok = Or_error.ok_exn
 let check_int = Alcotest.(check int)
 let check_string = Alcotest.(check string)
 
+let import_revolut db =
+  ignore
+    (ok
+       (Test_support.import
+          db
+          ~account_label:"main"
+          ~institution:"revolut"
+          ~path:"revolut.csv"
+          (In_channel.read_all "fixtures/revolut.csv")))
+;;
+
+(* With the bundled code mapping removed, every Revolut movement is untyped, which
+   is what the description-rule tests need. *)
 let memory f =
   ok
     (Store.with_open ~registry:Test_support.registry ":memory:" (fun db ->
-       ignore
-         (ok
-            (Test_support.import
-               db
-               ~account_label:"main"
-               ~institution:"revolut"
-               ~path:"revolut.csv"
-               (In_channel.read_all "fixtures/revolut.csv")));
+       List.iter
+         (ok (Store.classification_rules db))
+         ~f:(fun r ->
+           if String.is_prefix r.name ~prefix:"revolut-reported-"
+           then ok (Store.delete_classification_rule db r.name));
+       import_revolut db;
        f db;
        Ok ()))
+;;
+
+let types db =
+  List.map
+    (ok (Store.bank_review db))
+    ~f:(fun r -> List.hd_exn r.transaction.descriptions, r.movement_type)
+  |> List.sort ~compare:(fun (a, _) (b, _) -> String.compare a b)
 ;;
 
 let rule ?(priority = 1000) ?(mode = Classification_rule.Automatic) name pattern kind =
@@ -194,6 +212,72 @@ let override () =
       (List.length (ok (Store.description_gaps db))))
 ;;
 
+let reported_code () =
+  (* The bundled Revolut rules map the CSV Type column. *)
+  ok
+    (Store.with_open ~registry:Test_support.registry ":memory:" (fun db ->
+       import_revolut db;
+       Alcotest.(check (list (pair string (option string))))
+         "typed from the Type column"
+         [ "Initial deposit", Some "deposit"
+         ; "Repeated transfer", Some "transfer"
+         ; "Repeated transfer", Some "transfer"
+         ; "Transfer to another bank", Some "transfer"
+         ]
+         (List.map (types db) ~f:(fun (d, t) ->
+            d, Option.map t ~f:Movement_type.to_string));
+       check_int "no gaps" 0 (List.length (ok (Store.description_gaps db)));
+       (* Editing the code rule changes types only after an explicit refresh. *)
+       let fee =
+         ok
+           (Classification_rule.create
+              ~mode:Automatic
+              ~account_type:None
+              ~priority:3
+              ~name:"revolut-reported-transfer"
+              ~pattern:(Some "^Transfer$")
+              ~institution:(Some "revolut")
+              ~match_type:None
+              ~case_sensitive:true
+              ~action:(Reported_type (Some (Movement_type.of_string "fee"))))
+       in
+       ok (Store.replace_classification_rule db fee);
+       let changes = ok (Store.preview_movement_types ~institution:"revolut" db) in
+       check_int "three transfers would change" 3 (List.length changes);
+       check_int
+         "three refreshed"
+         3
+         (ok (Store.refresh_movement_types ~institution:"revolut" db ~expected:changes));
+       (* A description rule sees the code-derived type and may refine it. *)
+       let refine =
+         ok
+           (Classification_rule.create
+              ~mode:Automatic
+              ~account_type:None
+              ~priority:1000
+              ~name:"to-bank"
+              ~pattern:(Some "^Transfer to")
+              ~institution:(Some "revolut")
+              ~match_type:(Some (Is (Movement_type.of_string "fee")))
+              ~case_sensitive:false
+              ~action:(Type (Movement_type.of_string "withdrawal")))
+       in
+       let t = ok (Store.test_type_rule db refine) in
+       Alcotest.(check (list string)) "refines the code type" [ "changed" ] (outcomes t);
+       (match t.matches with
+        | [ r ] ->
+          Alcotest.(check (option string))
+            "before"
+            (Some "fee")
+            (Option.map r.before ~f:Movement_type.to_string);
+          Alcotest.(check (option string))
+            "after"
+            (Some "withdrawal")
+            (Option.map r.after ~f:Movement_type.to_string)
+        | _ -> Alcotest.fail "one match expected");
+       Ok ()))
+;;
+
 let () =
   Alcotest.run
     "typing rules"
@@ -202,6 +286,7 @@ let () =
         ; Alcotest.test_case "gaps" `Quick gaps
         ; Alcotest.test_case "draft rules" `Quick draft
         ; Alcotest.test_case "manual override" `Quick override
+        ; Alcotest.test_case "primary CSV type column" `Quick reported_code
         ] )
     ]
 ;;

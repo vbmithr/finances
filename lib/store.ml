@@ -714,7 +714,41 @@ let source_typing_profile db institution =
           ~f:(fun r -> Source_typing.with_match_type r match_type))
       |> Or_error.combine_errors
     in
-    let profile = Source_typing.create ~institution rules in
+    let reported_query =
+      Rel_sql.Stmt.(
+        func
+          "SELECT pattern,case_mode,action_kind,target FROM classification_rules WHERE \
+           mode='automatic' AND action_kind IN ('reported-type','reported-other') AND \
+           institution=? ORDER BY priority,name"
+          (text
+           @-> ret
+                 Row.(
+                   t4
+                     (option Rel.Type.text "pattern")
+                     (text "case_mode")
+                     (text "action_kind")
+                     (text "target"))))
+    in
+    let* reported_rows =
+      db_result
+        (Db.fold db.conn (reported_query institution) (fun row acc -> row :: acc) [])
+    in
+    let* reported =
+      List.rev reported_rows
+      |> List.map ~f:(fun (pattern, case_mode, action_kind, target) ->
+        Source_typing.make_reported_rule
+          (Option.value pattern ~default:".+")
+          (String.equal case_mode "sensitive")
+          (if String.equal action_kind "reported-other"
+           then Source_typing.Other_prefix target
+           else
+             Source_typing.Kind
+               (if String.equal target "unknown"
+                then None
+                else Some (Movement_type.of_string target))))
+      |> Or_error.combine_errors
+    in
+    let profile = Source_typing.create ~reported ~institution rules in
     Hashtbl.set db.source_typing_cache ~key:institution ~data:profile;
     Ok profile
 ;;
@@ -5770,8 +5804,15 @@ let test_type_rule db (draft : Classification_rule.t) =
   let* results =
     traverse
       (fun (event_id, (event : Source_event.t)) ->
-         let* empty = Source_typing.empty event.venue in
-         let* movement = Registry.movement ~source_typing:empty db.registry event in
+         (* The parser-reported type includes the type the bank's own code maps to. *)
+         let* current = source_typing_profile db event.venue in
+         let base =
+           Source_typing.create
+             ~reported:(Source_typing.reported_rules current)
+             ~institution:event.venue
+             []
+         in
+         let* movement = Registry.movement ~source_typing:base db.registry event in
          let before_rules = ordered (for_venue ~without_draft:false event.venue) in
          let after_rules =
            ordered

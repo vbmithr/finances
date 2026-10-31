@@ -275,9 +275,27 @@ let default_source_typing t =
            |> fun rule -> Source_typing.with_match_type rule r.match_type)
       | Card_reference | Withdrawal_reversal | Reported_type | Reported_other -> None)
   in
-  if List.is_empty rules
+  (* Reported-type rules also type the bank's own code in a primary source. *)
+  let reported =
+    List.filter_map t.rules ~f:(fun r ->
+      let make action =
+        Some
+          (Source_typing.make_reported_rule r.pattern r.case_sensitive action
+           |> Or_error.ok_exn)
+      in
+      match r.action with
+      | Reported_type ->
+        make
+          (Source_typing.Kind
+             (if String.equal r.target "unknown"
+              then None
+              else Some (Movement_type.of_string r.target)))
+      | Reported_other -> make (Source_typing.Other_prefix r.target)
+      | Type | Card_reference | Withdrawal_reversal -> None)
+  in
+  if List.is_empty rules && List.is_empty reported
   then None
-  else Some (Source_typing.create ~institution:(institution t) rules)
+  else Some (Source_typing.create ~reported ~institution:(institution t) rules)
 ;;
 
 let default_source_evidence t =

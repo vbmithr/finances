@@ -10,6 +10,17 @@ short line of their own.
 
 ### 2026-10-31
 
+- Type Revolut movements from the `Type` column of the CSV: Card Payment and Card
+  Refund become `card`, Deposit `deposit`, Transfer `transfer`, ATM `withdrawal`
+  and Charge `fee`; other codes are kept as `revolut:CODE`. The mapping is ordinary
+  reported-type rules in `institutions/revolut.json`, editable with `fin rule`, and
+  applies to a primary CSV as well as to companion rows. A movement carries the
+  bank's own code (`Movement.reported_code`), and description rules see the type
+  it gives. **Action required:** the bundled rules are installed into a new
+  database only. For an existing database, add them with `fin rule
+  add-reported-type` (see the manual) or rebuild it, then run `fin transaction
+  refresh-types --institution revolut`. The schema is unchanged.
+
 - Add `fin rule gaps` to list movements without a type, grouped by how their
   descriptions start with a suggested expression, and `fin rule test` to evaluate
   a draft type rule against stored movements without saving it. Both are
