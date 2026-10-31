@@ -1,22 +1,10 @@
 # Transaction classification and review
 
-Status: first implementation stage, 2026-10-29. Fin stores explicit reviewed
-category decisions, lists transactions and reviews normalized card-merchant or
-description matches. Saved rules can match source descriptions and effective
-types, and can explicitly apply type overrides, categories or card settlements.
-An experimental full-screen
-settlement review is available; user-managed tags are not implemented.
-
-## Unified rules
-
-Bundled BoursoBank typing defaults and user rules share one ordered rule set.
-Rules can run automatically on import, require review, or be disabled. Automatic
-type and category actions apply to new movements; settlement actions require
-review. Manual overrides and reviewed accounting decisions take precedence. Automatic evidence rules also record card references and
-withdrawal-reversal clues without confirming a settlement or reversal.
-Changing a rule never silently rewrites previously imported movements: type
-refresh and rule application preview historical changes and apply atomically.
-See the [manual](manual.md#transaction-rules) for the current workflow.
+Status: updated 2026-10-31. Fin stores explicit reviewed category decisions,
+lists transactions, previews similar movements and applies reusable regular-
+expression rules to imports and existing transactions (see "Rules today"). Rule
+provenance, bundled institutions as shareable definitions, a rule-authoring workflow, user-managed tags and
+the full-screen interface are not implemented.
 
 ## Purpose
 
@@ -75,9 +63,9 @@ that might share its category. Separate these operations:
   batch, preview the effects and apply them atomically. Do not overwrite an
   existing reviewed decision without an explicit correction.
 - **Create a rule.** Offer to save a reusable, inspectable condition for future
-  imports. The user should control its scope, edit it and disable it. Automatic
-  application should be a deliberate choice, not a side effect of accepting a
-  batch of suggestions.
+  imports. The user controls its scope, can edit it and disable it. Automatic
+  application is a deliberate choice, not a side effect of accepting a batch.
+  Rules exist (below); creating one from a reviewed batch does not yet.
 
 The first implemented preview is `fin transaction category similar EVENT_ID`. The
 example must have a reviewed income or expense category. Within the same
@@ -102,6 +90,173 @@ reason when rules conflict. Record whether a decision came from the user or a
 rule, the relevant rule version and its supporting evidence. Preserve the
 existing audit history and correction workflow. Suggestions are not decisions:
 never feed unreviewed predictions back as if the user had confirmed them.
+
+## Rules today
+
+Rules are stored in the `classification_rules` table and managed with `fin rule`
+(`add`, `list`, `mode`, `preview`, `apply`, `rename`, `add-evidence`,
+`add-reported-type`). A rule has:
+
+- a **condition**: a regular expression on the first trimmed source description
+  (case-insensitive by default), optionally limited by institution, account type
+  and a movement-type condition (`unknown` or a given type). The engine is `Re`,
+  which has no backtracking, so a pattern cannot cause pathological matching;
+- an **action**: a category, a movement type, both, a settlement, or one of the
+  source-evidence actions (card reference, withdrawal reversal, reported-type
+  mapping);
+- a **mode**: `automatic` (applied to new imports), `review` (applied only after
+  `rule preview` and `rule apply`) or `disabled`. Settlement rules cannot be
+  automatic, and evidence rules cannot be `review`;
+- a **priority** (lower runs first, then name). The first matching type action
+  and the first matching category action win independently, and typing runs
+  before categorizing.
+
+Category targets must be expense or income accounts. Manual overrides and
+reviewed decisions remain authoritative. Editing or deleting a rule affects
+future imports only; existing results change through an explicit refresh or
+`rule apply`. Institution definitions may carry `rules` (type, evidence and
+reported-type actions); bundled defaults live in each bundled institution's definition
+(`institutions/<institution>.json`) and are installed only into a fresh database.
+
+Gaps:
+
+- Rules are keyed by name alone. They do not record where they came from (bundled,
+  user, a definition) or a version, so an updated default cannot be told apart
+  from a user's edit.
+- Conditions cannot test the amount or direction of a movement.
+- There is no workflow for writing a rule beyond the command line, and no summary
+  of what a draft rule would change.
+
+## Shared definitions and a rule editor
+
+Status: design for discussion, 2026-10-31; not implemented. The goal is a rule
+editor for one's own rules, and definitions that others can write for their
+institutions and distribute with fin or separately.
+
+### Scope: interpretation rules only
+
+Decided 2026-10-31. Only **interpretation rules** (type, evidence, reported-type)
+are shared or shipped. They state how an institution words its movements, are
+objective, and apply to everyone with that institution. **Accounting rules**
+(category, type and category) depend on a person's own chart of accounts and are
+strictly personal: fin never bundles, exports for sharing or installs them from a
+definition. A definition therefore cannot contain a category action, and
+installation rejects one.
+
+### How the existing rules came about
+
+Nothing generated them. They were written by hand, a few at a time, from real
+exports: an unrecognized description prefix turned up, a regular expression was
+added to the bundled defaults (first in code, then as institution typing
+profiles, then as unified rules in `institutions/*_defaults.json`, now in each
+institution's definition), and
+`fin transaction refresh-types` re-applied them. `CHANGES.md` records the
+increments: card payments, interest labels, fees, cheques, malformed
+deferred-card labels "found in exports". Today the defaults cover BoursoBank
+description prefixes (ten patterns), BoursoBank evidence (card reference,
+withdrawal reversal) and Wise reported codes. The editor should support this
+loop directly: find movements with no type, group their descriptions, draft a
+pattern, test it, save it, refresh.
+
+### Institution definitions are the sharing format
+
+Updated 2026-10-31. A separate ruleset format would duplicate what exists. An
+institution definition (`fin institution definition show/check/set`) is already a
+versioned JSON file holding a source profile (primary CSV, OFX with CSV companion,
+CAMT with CSV, running-balance CSV or MT940 with CSV) and `rules` limited to
+interpretation actions (`type`, `card-reference`, `withdrawal-reversal`,
+`reported-type`, `reported-other`). That file is the unit that describes an
+institution's customization, and the way to share one.
+
+What is missing:
+
+- Bundled institutions are definitions (done 2026-10-31): `institutions/boursobank.json`,
+  `wise.json`, `bunq.json` and `revolut.json` each hold the source profile and the
+  default rules, and `fin institution definition show` prints the same file.
+  Contributing a bank and contributing rules are therefore the same operation.
+- Definitions carry no metadata or examples. Add an id, definition version, title,
+  authors, license and `examples` (a description or reported code and its expected
+  type, and near misses that must not match). `fin institution definition check`
+  runs them. This is the quality bar for contributions and detects a rule that
+  stopped matching.
+- A rules-only definition that extends a bundled institution without restating its
+  source is not possible (open question below).
+
+Accounting rules never appear in a definition.
+
+### Provenance and updates
+
+Each rule records its definition, definition version and origin (bundled,
+imported, user), and names are unique within a definition rather than globally.
+Installing or updating a definition previews added, changed and removed rules and conflicts with
+existing ones. A rule the user has edited is kept and reported, not overwritten.
+This also fixes the bundled defaults being installed only for a fresh database.
+
+### Rule editor
+
+Build the engine before an interface, so both scripts and a terminal editor use
+it:
+
+- `fin rule test` evaluates a draft against stored transactions without saving:
+  how many it matches, how many would be newly classified, which existing rules
+  overlap it and which would win, conflicts with reviewed decisions, and a sample
+  of matches and near misses.
+- Pattern helpers build the condition from a chosen transaction: starts with,
+  contains or exact, escaped and compiled to the regular expression, which is
+  always shown.
+- `fin rule gaps` (name provisional) lists movements with no type, grouped by
+  normalized description prefix with counts and examples, so the next pattern is
+  chosen from evidence. A group can seed a draft.
+- A terminal front end (the Notty option above) comes later on the same engine.
+  Authors can also edit a definition file and run `fin institution definition check`.
+
+### Distribution and trust
+
+Bundled definitions live in the repository, reviewed by pull request and
+installed by the package. Third-party definitions are installed from a file by
+`fin institution definition set`, as today; nothing is fetched automatically. A
+definition is data, never code. Validate its size and patterns. Authors must not
+publish patterns or examples derived from personal data such as names, IBANs or
+card numbers; `definition check` should warn about IBAN-like, card-like and long
+digit sequences.
+
+### Exporting and upstreaming rules
+
+Planned workflow for contributing rules found with `rule gaps` and `rule test`:
+
+1. Save the rule locally with `fin rule add`.
+2. `fin rule export --institution NAME [RULE...]` writes the selected
+   interpretation rules as the `rules` of a definition fragment. It refuses
+   category, settlement and other personal actions. It never writes descriptions
+   from the database; it may print candidate descriptions to the terminal so the
+   author can write anonymized examples by hand. The repository is public.
+3. The author adds the rules and synthetic examples to the institution's bundled
+   definition and runs `fin institution definition check`.
+4. A dune test runs `check` over every bundled definition, so CI covers the
+   examples and the patterns.
+5. Open a pull request. A contributed rule should be anchored and as narrow as the
+   evidence allows, state its case flag, restrict `account_type` where the wording
+   differs between account types, have at least one positive example and one near
+   miss, come from a real export (noted without pasting data) and belong to an
+   institution that has an adapter in fin.
+
+Bundled rules reach a fresh database only, which is acceptable while fin is in
+beta and databases are rebuilt. Updating existing databases depends on rule
+provenance above. Bundled priorities need a convention that does not clash with
+the local default of -1000.
+
+### Open questions
+
+- Whether to add amount, direction and recurrence conditions, and whether the
+  need is real beyond cases like salary credits.
+- Whether to offer plain conditions (starts with, contains) as the stored form,
+  with the regular expression only as an advanced option.
+- Whether a rules-only definition may extend a bundled institution, or only a full
+  definition may replace it.
+- Whether and when ML suggestions rank candidate rules; they must not bypass
+  rule precedence or become decisions.
+- Whether the personal category rules need an editor of their own, separate from
+  the shared interpretation rules.
 
 ## Review interface
 

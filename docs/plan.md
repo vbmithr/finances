@@ -169,6 +169,51 @@ configurable yet.
 - [ ] Extend configurable CAMT format policies beyond the Wise-shaped profile. Keep
   explicit source identity, overlap and correction policies.
 
+### Statement observations and matching
+
+- [x] Compare the available Wise CAMT, MT940 and CSV archives; record matching
+  evidence and ambiguities in [statement observations](statement-observations.md).
+- [x] Evaluate a source-neutral observation model with auditable transaction
+  links. Deferred: formats of one account are requested together for the same
+  period, so primary/companion remains the model. See
+  [observation model](observation-model.md) and the revised decisions in
+  [reconciliation design](reconciliation-design.md).
+- [ ] Allow several companions per primary institution source, when a bank needs
+  it. Wise no longer does: it uses CAMT and a CSV companion.
+- [ ] Improve companion matching: institution-scoped reference normalization
+  (the Wise suffix case), a mutual-unique candidate rule with a one-day date
+  tolerance, and a way to resolve the 8 ambiguous BoursoBank CSV rows. Report
+  disagreeing fields as conflicts.
+- [x] Decide whether Wise MT940 is worth parsing: no. It adds only a SWIFT type
+  code derivable from the reference prefix and direction; see
+  [statement observations](statement-observations.md#outcome-wise-mt940-is-not-parsed).
+  Wise keeps CAMT as primary and CSV as companion.
+
+### Rule editor and shared definitions (`docs/classification.md`)
+
+- [x] Document the existing rules and sketch a rule editor and the sharing of
+  interpretation rules through institution definitions.
+- [ ] `fin rule test` for a draft rule: matches, newly classified movements,
+  overlaps, conflicts with reviewed decisions and near misses.
+- [ ] `fin rule gaps`: movements with no type, grouped by description prefix.
+- [x] Express each bundled institution as one institution definition file
+  (`institutions/{boursobank,wise,bunq,revolut}.json`), replacing nine files of
+  presets, profiles and default rules. Verified 2026-10-31: `definition show`
+  output and the 19 default rules of a fresh database are byte-identical to
+  before, and a registry test pins the canonical form, rule naming and unique
+  rule names.
+- [ ] Add metadata and `examples` to definitions; `fin institution definition
+  check` runs the examples and warns about personal-looking text. A dune test
+  checks every bundled definition.
+- [ ] `fin rule export` writes selected interpretation rules as a definition
+  fragment, refuses personal actions and never writes database descriptions.
+- [ ] Contribution recipe in the manual: gaps, test, add, export, synthetic
+  examples, pull request.
+- [ ] Rule provenance and updates for existing databases (definition, version,
+  origin), and a priority convention for bundled rules.
+- [ ] Decide on amount and direction conditions from real cases.
+- [ ] Terminal rule editor on the same engine.
+
 ### 1. Bank adapters (`docs/bank-adapters.md`)
 
 - [x] Baseline, `iban` library, kernel types and registry, schema 11, import behind
@@ -225,14 +270,11 @@ The import side is done; turning movements into accounting is not.
 - [x] Transaction listings show accounting classification and use a terminal pager;
   settlement rule batches reuse loaded data across decisions.
 - [x] CSV enrichment, with ambiguous matches visible.
-- [ ] [Classification and review](classification.md): interactive review now
-  classifies a movement and selected normalized card-merchant or description matches in one
-  confirmed batch. Saved rules match descriptions or effective types and preview
-  type, category or card settlement decisions explicitly. User tags,
-  richer similarity and a richer review interface
-  remain to be designed and implemented. An experimental
-  settlement queue now uses a pinned Notty fork submodule; evaluate it and extend
-  it to classification.
+- [ ] [Classification and review](classification.md): rules (regular expressions
+  with automatic, review and disabled modes, priorities, type and category
+  actions), previews and interactive review exist. User tags, richer similarity,
+  rule provenance and shareable institution definitions, a rule-authoring workflow and a possible
+  vendored Notty interface remain to be designed and implemented.
 - [ ] Transfer matching: the review workflow exists; the 4 candidates await
   decisions. FX and split transfers are not handled.
 - [ ] Reconciliation and reporting: Wise and Bunq statements reconcile; opening
