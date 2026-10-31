@@ -2,13 +2,25 @@ open Base
 open Stdio
 open Finances
 
-module Bunq_profile = struct
-  let profile = Option.value_exn (Mt940_profile.find "bunq")
+let bunq_profile = Option.value_exn (Mt940_presets.find "bunq")
+let bunq_engine = Mt940_transaction.make bunq_profile
+
+module Bunq_transaction = struct
+  include Mt940_transaction
+
+  let source_transaction = source_transaction bunq_engine
 end
 
-module Bunq_transaction = Mt940_transaction.Make (Bunq_profile)
-module Bunq_mt940 = Mt940_source.Make (Bunq_profile)
-module Bunq_csv = Mt940_csv_companion.Make (Bunq_profile)
+module Bunq_mt940 = struct
+  let parse = Mt940_source.parse bunq_engine
+end
+
+module Bunq_csv = struct
+  include Mt940_csv_companion
+
+  let parse = parse bunq_profile
+  let match_rows = match_rows bunq_profile
+end
 
 let ok = Or_error.ok_exn
 let check = Alcotest.(check int)
@@ -69,7 +81,7 @@ let parser () =
 ;;
 
 let reusable_profile () =
-  let original = Bunq_profile.profile in
+  let original = bunq_profile in
   let profile =
     { original with
       institution = "example"
@@ -99,7 +111,8 @@ let reusable_profile () =
     Alcotest.(check string)
       "configured source institution"
       "example"
-      movement.account.bank_id);
+      movement.account.bank_id;
+    error (Mt940_transaction.source_transaction bunq_engine event));
   let companion = List.hd_exn A.companions in
   let observed =
     ok

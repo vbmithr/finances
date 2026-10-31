@@ -16,7 +16,7 @@ let adapters : (module Adapter.S) list =
       Institution_definition.adapter { source = Running_csv p; rules = [] })
   in
   let mt940 =
-    List.map Mt940_profile.all ~f:(fun p ->
+    List.map Mt940_presets.all ~f:(fun p ->
       Institution_definition.adapter { source = Mt940_csv p; rules = [] })
   in
   presets @ camt_presets @ running @ mt940 @ [ (module Csv_adapter) ]

@@ -75,6 +75,35 @@ let companion ~format ~policy ~of_fields ~input ~candidate ~match_rows ~annotate
     ~decode_row:(fun (r : Companion.row) -> of_fields ~row_number:r.row_number r.fields)
 ;;
 
+(** Package ordinary adapter functions for the registry. *)
+let adapter
+      ~institution
+      ~aliases
+      ~kinds
+      ~formats
+      ~takes_account_label
+      ~overlap
+      ~companions
+      ~decode
+      ~probe
+      ~parse
+      ()
+  : (module Adapter.S)
+  =
+  (module struct
+    let institution = institution
+    let aliases = aliases
+    let kinds = kinds
+    let formats = formats
+    let takes_account_label = takes_account_label
+    let overlap = overlap
+    let companions = companions
+    let decode = decode
+    let probe = probe
+    let parse = parse
+  end)
+;;
+
 let csv_adapter
       ~institution
       ?(aliases = [])
@@ -90,23 +119,24 @@ let csv_adapter
       ()
   : (module Adapter.S)
   =
-  (module struct
-    let institution = institution
-    let aliases = aliases
-    let kinds = [ kind ]
-    let formats = [ format ]
-    let takes_account_label = takes_account_label
-    let overlap = overlap
-    let companions = companions
-    let decode = decode
-    let probe ~filename:_ contents = Option.some_if (recognizes contents) format
-
-    let parse ~(context : Adapter.context) ~format:_ contents =
-      if takes_account_label && Option.is_none context.account_label
-      then Or_error.error_string account_label_error
-      else parse ~context contents
-    ;;
-  end)
+  let probe ~filename:_ contents = Option.some_if (recognizes contents) format in
+  let parse ~(context : Adapter.context) ~format:_ contents =
+    if takes_account_label && Option.is_none context.account_label
+    then Or_error.error_string account_label_error
+    else parse ~context contents
+  in
+  adapter
+    ~institution
+    ~aliases
+    ~kinds:[ kind ]
+    ~formats:[ format ]
+    ~takes_account_label
+    ~overlap
+    ~companions
+    ~decode
+    ~probe
+    ~parse
+    ()
 ;;
 
 let schema_adapter

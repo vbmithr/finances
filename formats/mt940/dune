@@ -1,0 +1,9 @@
+(library
+ (name mt940)
+ (public_name finances.mt940)
+ (wrapped false)
+ (flags
+  (:standard -open Finances_core))
+ (libraries finances.core base iso4217 jsont re digestif)
+ (preprocess
+  (pps ppx_let)))

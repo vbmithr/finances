@@ -21,5 +21,8 @@ Bigdecimal or a home-grown standard-library compatibility layer.
 Use OCaml variants rather than strings to represent low-cardinality data. For
 open-ended domains, use an explicit extensible case for provider-specific values.
 
+Fin is in beta. Prefer a clean design over backward compatibility; document
+schema rebuilds and user-visible breaking changes.
+
 Every Git commit must include a detailed body describing what changed and how
 it was verified, followed by a `Co-Authored-By:` trailer.

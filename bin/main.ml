@@ -2382,7 +2382,7 @@ let show_institution_definition database name =
       |> fun result ->
       Option.first_some
         result
-        (List.find Mt940_profile.all ~f:(fun p ->
+        (List.find Mt940_presets.all ~f:(fun p ->
            List.mem (p.institution :: p.aliases) name ~equal:String.equal)
          |> Option.map ~f:(fun p ->
            { Institution_definition.source = Mt940_csv p

@@ -13,8 +13,9 @@ Last updated: 2026-10-31.
 
 - Import orchestration lives in `import/workflow.ml`, file and archive scanning
   in `import/files.ml`, institution definitions and adapters in `institutions/`,
-  and reusable statement sources in `formats/statement/`. The public OCaml
-  libraries are `finances.import` and `finances.institutions`.
+  and reusable statement sources in `formats/statement/`. MT940 has its own
+  `formats/mt940/` directory and `finances.mt940` library. The workflow and
+  institution libraries are `finances.import` and `finances.institutions`.
 - All four banks import: BoursoBank (OFX, CSV companion), Wise (CAMT.053, CSV
   companion), Bunq (MT940, CSV companion) and Revolut (CSV). All use bundled
   profiles and shared import components; none has a dedicated bank module.
@@ -177,6 +178,9 @@ configurable yet.
   balance and entry views; use a profile-driven source interpreter for Wise.
 - [x] Move Bunq and Revolut onto shared MT940/CSV and running-balance CSV
   components and bundled profiles, preserving identities and observed behavior.
+- [x] Extract the profile-driven MT940 source and transaction codec into the
+  `finances.mt940` library, using runtime profile values rather than functors.
+  The adapter uses ordinary functions and a shared registry constructor.
 - [ ] Broaden generic CAMT and MT940 parsing beyond the supported profile shapes;
   broader CAMT support may need a `Bic.t` (ISO 9362).
 - [ ] Step 7: an external adapter example and a conformance suite every adapter

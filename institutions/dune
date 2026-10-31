@@ -87,6 +87,7 @@
   iso4217
   ofx
   camt
+  mt940
   base
   jsont
   xmlm

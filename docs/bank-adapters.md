@@ -31,7 +31,8 @@ These are invariants, not goals. Tests enforce them (see Enforcement).
 ## Layers
 
 ```
-format libraries     iban   camt   mt940   ofx         (no finances dependency)
+format libraries     iban   camt   ofx                 (no finances dependency)
+MT940 interpreter    finances.mt940                    (depends on finances.core)
         |
 bank adapters        boursobank  wise  bunq  revolut    (no Rel/SQLite dependency)
         |
@@ -46,11 +47,13 @@ adapters) lists which adapters are linked.
 
 ## Format libraries
 
-Each library is a faithful, typed reader for one standard. It knows the
-standard, not banks and not accounting.
+The standalone IBAN, OFX and CAMT readers aim to describe their standards
+without bank or accounting policy. The separate MT940 library currently also
+contains a profile-driven source interpreter and depends on `finances.core`;
+it is not yet an institution-independent MT940 grammar.
 
-- Depends only on Base, decimal, Ptime, xmlm or re as needed. It must not depend
-  on `finances`, so it can be extracted into its own repository like
+- The IBAN, OFX and CAMT readers depend only on their format libraries and
+  utilities; they do not depend on `finances`, so they can be extracted like
   `ocaml-hledger` once stable.
 - Is lossless where the standard is loose: it keeps raw strings for fields
   banks commonly abuse (OFX `DTUSER`, MT940 `:86:`), and exposes typed views
@@ -120,9 +123,10 @@ CAMT/CSV profile shape without rebuilding fin.
 
 ### `mt940`: SWIFT MT940/MT942
 
-The shared MT940 source currently supports the observed Bunq-style statement
-shape and a profile for institution identity, framing, entry expression, memo
-markers and its CSV companion. It preserves dated occurrence identities and
+The `finances.mt940` library supports the observed Bunq-style statement shape
+and a profile for institution identity, framing, entry expression and memo
+markers. The CSV companion remains in `finances.institutions`. A reusable
+runtime engine binds the profile and codec without functors. It preserves dated occurrence identities and
 checks opening plus movements equals closing. Other MT940 variants, including
 other field forms and memo structures, still need format support; this is not a
 complete MT940/MT942 library.
@@ -298,8 +302,9 @@ rebuilt with the previous build against one rebuilt with the new build.
    rebuild from the personal inboxes gives the same events, entries, match
    states and reconciliations; journal provenance is one `companion-row-ids`
    tag.
-6. **Format libraries for the remaining banks:** the `camt.053` reader is shared;
-   extract `mt940` under Bunq and complete generic CAMT import.
+6. **Format libraries for the remaining banks:** `camt.053` and the current
+   profile-driven MT940 interpreter are separate libraries. Broaden their
+   supported forms and separate MT940 grammar from institution policy.
 7. **External adapter example and conformance suite,** written against the
    finished interface.
 

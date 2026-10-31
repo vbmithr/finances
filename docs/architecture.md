@@ -391,7 +391,9 @@ The main libraries separate the kernel, institution handling and import workflow
 Independent libraries under `formats/` include `finances.iban` (ISO 13616),
 `finances.ofx` (OFX 2.x) and `finances.camt` (CAMT.053). Shared statement
 sources in `formats/statement/` compile into `finances.institutions`, alongside
-the institution adapters and presets.
+the institution adapters and presets. The separate `finances.mt940` library
+contains the MT940 source and transaction codec and depends on `finances.core`;
+the CSV companion and bundled profiles remain in `institutions/`.
 
 `Store.with_open ~registry` receives the banks it may decode; the CLI passes
 `Builtin.registry`. When a bank event is stored, `Registry.movement` dispatches by
@@ -454,8 +456,9 @@ states; rendering must run again after applying decisions.
 
 ## Bunq MT940 and CSV preset
 
-The profile-driven `Mt940_source` parses the observed MT940 form and verifies exact
-opening balance plus movements equals closing balance. `Mt940_transaction` builds canonical payloads
+The profile-driven `Mt940_source` in `finances.mt940` parses the observed MT940
+form and verifies exact opening balance plus movements equals closing balance.
+`Mt940_transaction` builds canonical payloads
 and identities including occurrence numbers, so identical repeated payments remain
 separate. Its generic source events use kind `bunq-transaction` and dated booking
 occurrences.

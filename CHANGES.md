@@ -10,6 +10,14 @@ short line of their own.
 
 ### 2026-10-31
 
+- Express the MT940 adapter as ordinary profile-bound functions, using the
+  shared registry adapter constructor. Its import behavior is unchanged.
+
+- Move MT940 source and transaction handling into `finances.mt940`; replace
+  profile functors with runtime values and retain the CSV companion in the
+  institution library. **Action required:** OCaml consumers must link the new
+  library and update MT940 API references. CLI behavior and schema are unchanged.
+
 - Rename the internal import workflow and file-scanning modules from `Sync` and
   `Inbox` to `Workflow` and `Files`. **Action required:** OCaml consumers of
   `finances.import` must update these module and report-field references; the CLI
