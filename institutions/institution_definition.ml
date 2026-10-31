@@ -381,11 +381,9 @@ let describe t =
       ; "description", c.description
       ; "payment reference", c.payment_reference
       ; "running balance", c.running_balance
-      ; "payee", c.payee
       ; "merchant", c.merchant
       ; "fees", c.fees
       ; "direction", c.direction
-      ; "reported code", c.details_type
       ]
       @ List.map p.csv_profile.conflict_columns ~f:(fun n -> "compared for conflicts", n)
     in
@@ -395,9 +393,7 @@ let describe t =
       p.csv_profile.header
       (List.map fields ~f:snd)
       [ "the first CAMT description (type rules)"
-      ; Printf.sprintf
-          "any column of the CSV companion, such as %S, with --field (type rules)"
-          c.details_type
+      ; "any column of the CSV companion, with --field (type rules)"
       ]
   | Running_csv p ->
     let c = p.columns in

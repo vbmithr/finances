@@ -126,8 +126,6 @@ let make ~profile ~csv_profile ?(aliases = []) ~csv ~policy ~metadata_prefix ()
             ; "running_balance", Some (quantity row.running_balance)
             ; "payment_reference", row.payment_reference
             ; "merchant", row.merchant
-            ; "payee", row.payee
-            ; "details_type", row.details_type
             ])
     ;;
 

@@ -10,6 +10,11 @@ short line of their own.
 
 ### 2026-10-31
 
+- CAMT+CSV institution definitions no longer take `payee` or `details_type` in
+  `columns`; nothing read them, since a rule can match any column by header with
+  `--field`. **Action required:** remove both keys from a user-written definition,
+  which is otherwise rejected. `fin institution show` no longer lists them.
+
 - Types are derived. A movement's type is recomputed from the type rules whenever
   they could change: after an import, a companion match, and any rule or institution
   definition change. A manual override still wins. Editing a rule therefore retypes

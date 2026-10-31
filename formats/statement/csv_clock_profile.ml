@@ -9,11 +9,9 @@ type columns =
   ; description : string
   ; payment_reference : string
   ; running_balance : string
-  ; payee : string
   ; merchant : string
   ; fees : string
   ; direction : string
-  ; details_type : string
   }
 
 type t =
@@ -35,11 +33,9 @@ let columns_codec =
          description
          payment_reference
          running_balance
-         payee
          merchant
          fees
          direction
-         details_type
        ->
        { reference
        ; date
@@ -49,11 +45,9 @@ let columns_codec =
        ; description
        ; payment_reference
        ; running_balance
-       ; payee
        ; merchant
        ; fees
        ; direction
-       ; details_type
        })
   |> Jsont.Object.mem "reference" Jsont.string ~enc:(fun p -> p.reference)
   |> Jsont.Object.mem "date" Jsont.string ~enc:(fun p -> p.date)
@@ -63,11 +57,9 @@ let columns_codec =
   |> Jsont.Object.mem "description" Jsont.string ~enc:(fun p -> p.description)
   |> Jsont.Object.mem "payment_reference" Jsont.string ~enc:(fun p -> p.payment_reference)
   |> Jsont.Object.mem "running_balance" Jsont.string ~enc:(fun p -> p.running_balance)
-  |> Jsont.Object.mem "payee" Jsont.string ~enc:(fun p -> p.payee)
   |> Jsont.Object.mem "merchant" Jsont.string ~enc:(fun p -> p.merchant)
   |> Jsont.Object.mem "fees" Jsont.string ~enc:(fun p -> p.fees)
   |> Jsont.Object.mem "direction" Jsont.string ~enc:(fun p -> p.direction)
-  |> Jsont.Object.mem "details_type" Jsont.string ~enc:(fun p -> p.details_type)
   |> Jsont.Object.error_unknown
   |> Jsont.Object.finish
 ;;
@@ -88,11 +80,9 @@ let codec =
       ; columns.description
       ; columns.payment_reference
       ; columns.running_balance
-      ; columns.payee
       ; columns.merchant
       ; columns.fees
       ; columns.direction
-      ; columns.details_type
       ]
       @ conflict_columns
     in

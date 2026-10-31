@@ -11,8 +11,6 @@ type row =
   ; fees : Quantity.t
   ; payment_reference : string option
   ; merchant : string option
-  ; payee : string option
-  ; details_type : string option
   ; fields : string list
   }
 
@@ -48,11 +46,9 @@ let schema (profile : Csv_clock_profile.t) camt_profile =
          description
          payment_reference
          running_balance
-         payee
          merchant
          fees
          direction
-         details_type
          fields
        ->
        if not (Date.equal day (Ptime.to_date ~tz_offset_s:0 booked_at))
@@ -72,8 +68,6 @@ let schema (profile : Csv_clock_profile.t) camt_profile =
        ; fees
        ; payment_reference
        ; merchant
-       ; payee
-       ; details_type
        ; fields
        })
   |> row_number
@@ -92,7 +86,6 @@ let schema (profile : Csv_clock_profile.t) camt_profile =
   |> col_name columns.description Cell.string
   |> col_name columns.payment_reference (Cell.opt Cell.string)
   |> col_name columns.running_balance decimal
-  |> col_name columns.payee (Cell.opt Cell.string)
   |> col_name columns.merchant (Cell.opt Cell.string)
   |> col_name columns.fees decimal
   |> col_name
@@ -100,7 +93,6 @@ let schema (profile : Csv_clock_profile.t) camt_profile =
        (Cell.one_of
           ~message:("invalid " ^ name ^ " CSV transaction direction")
           [ "DEBIT"; "CREDIT" ])
-  |> col_name columns.details_type (Cell.opt Cell.string)
   |> raw_fields
   |> create
        ~name

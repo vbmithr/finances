@@ -1892,7 +1892,7 @@ module Classification_rules = struct
     Col.make "action_type" Type.(option text) (fun (r : t) -> r.action_type)
   ;;
 
-  (* The companion column a reported-type rule matches; the bank's code if absent. *)
+  (* The field a type rule matches; the canonical description if absent. *)
   let field = Col.make "field" Type.(option text) (fun (r : t) -> r.field)
 
   let row =

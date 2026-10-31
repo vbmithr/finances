@@ -358,8 +358,7 @@ Staging, each step usable alone:
    rewritten as `type` rules on their columns, bundled rules keep their own names and
    priorities when installed, and `Movement.reported_code` is removed. Two separate
    evaluation sites remain, the stored type at import and the companion rows' types,
-   which step 4 merged; and a definition's role columns for merchant, payee, details
-   type and payment reference are still there to drop.
+   which step 4 merged.
 4. Derive types (implemented 2026-10-31, schema 30): `movements.movement_type` is the
    derived result, recomputed by `Store.retype` over the movement's fields plus its
    matched companion columns after every import, companion match, rule change and
@@ -367,8 +366,12 @@ Staging, each step usable alone:
    each change is logged in `movement_type_changes` with the reason. The refresh
    commands and `companion_reported_types` are gone, and `rule explain` has two
    stages, override and rules.
-5. Remaining: drop a definition's role columns for merchant, payee, details type and
-   payment reference, and remove any leftover old action kinds.
+5. Cleanup (implemented 2026-10-31): the unused role columns `payee` and
+   `details_type` are gone from CAMT+CSV definitions (every column is already a
+   field). No old action kinds were left after step 3. `merchant` and
+   `payment_reference` stay: they still feed the display name and the journal
+   metadata (`wise-merchant`, `wise-payment-reference`). Making the display name a
+   setting that names a field is left until a second institution needs it.
 
 ### Distribution and trust
 

@@ -60,11 +60,9 @@
         "description": "Description",
         "payment_reference": "Payment Reference",
         "running_balance": "Running Balance",
-        "payee": "Payee Name",
         "merchant": "Merchant",
         "fees": "Total fees",
-        "direction": "Transaction Type",
-        "details_type": "Transaction Details Type"
+        "direction": "Transaction Type"
       },
       "conflict_columns": [
         "Exchange From",
