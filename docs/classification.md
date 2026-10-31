@@ -358,11 +358,17 @@ Staging, each step usable alone:
    rewritten as `type` rules on their columns, bundled rules keep their own names and
    priorities when installed, and `Movement.reported_code` is removed. Two separate
    evaluation sites remain, the stored type at import and the companion rows' types,
-   which step 4 merges; and a definition's role columns for merchant, payee, details
+   which step 4 merged; and a definition's role columns for merchant, payee, details
    type and payment reference are still there to drop.
-4. Derive types: recompute after import and rule edit, log the changes, remove the
-   refresh commands.
-5. Remove the old action kinds and the staged `rule explain` output.
+4. Derive types (implemented 2026-10-31, schema 30): `movements.movement_type` is the
+   derived result, recomputed by `Store.retype` over the movement's fields plus its
+   matched companion columns after every import, companion match, rule change and
+   definition change. It is the one column of `movements` that may be updated, and
+   each change is logged in `movement_type_changes` with the reason. The refresh
+   commands and `companion_reported_types` are gone, and `rule explain` has two
+   stages, override and rules.
+5. Remaining: drop a definition's role columns for merchant, payee, details type and
+   payment reference, and remove any leftover old action kinds.
 
 ### Distribution and trust
 

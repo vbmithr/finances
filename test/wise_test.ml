@@ -413,7 +413,7 @@ let reported_type_rules () =
     check "all transactions imported" 3 (List.length rows);
     List.iter rows ~f:(fun row ->
       Alcotest.(check (option string))
-        "default from imported code"
+        "default from the imported column"
         (Some "card")
         (Option.map row.movement_type ~f:Movement_type.to_string));
     let event_id = (List.hd_exn rows).event_id in
@@ -439,33 +439,31 @@ let reported_type_rules () =
            ~field:"Transaction Details Type"
            ())
     in
+    (* Types are derived: the rule applies as soon as it is saved. *)
     ok (Store.add_classification_rule db rule);
-    check
-      "all observations previewed"
-      3
-      (List.length (ok (Store.preview_companion_types ~institution:"wise" db)));
+    let types () =
+      List.map
+        (ok (Store.bank_review db))
+        ~f:(fun r ->
+          r.event_id, Option.map r.imported_movement_type ~f:Movement_type.to_string)
+    in
+    List.iter (types ()) ~f:(fun (_, t) ->
+      Alcotest.(check (option string)) "retyped at once" (Some "bonus") t);
+    (* Reimporting a file does not change what the rules give. *)
     accepted (import db "first.csv" (csv ()));
-    let before = ok (Store.bank_review db) in
-    Alcotest.(check (option string))
-      "reimport does not change snapshot"
-      (Some "card")
-      (Option.map (List.hd_exn before).imported_movement_type ~f:Movement_type.to_string);
-    let preview = ok (Store.preview_companion_types ~institution:"wise" db) in
+    List.iter (types ()) ~f:(fun (_, t) ->
+      Alcotest.(check (option string)) "unchanged by a reimport" (Some "bonus") t);
+    (* Disabling the rule retypes again, enabling it restores. *)
     ok (Store.set_classification_rule_mode db "card-as-bonus" Disabled);
-    error (Store.refresh_companion_types ~institution:"wise" db ~expected:preview);
+    List.iter (types ()) ~f:(fun (_, t) ->
+      Alcotest.(check (option string)) "back to the column's rule" (Some "card") t);
     ok (Store.set_classification_rule_mode db "card-as-bonus" Automatic);
-    check
-      "refreshed rows"
-      3
-      (ok (Store.refresh_companion_types ~institution:"wise" db ~expected:preview));
-    let updated = ok (Store.bank_review db) in
-    List.iter updated ~f:(fun row ->
-      Alcotest.(check (option string))
-        "refreshed imported type"
-        (Some "bonus")
-        (Option.map row.imported_movement_type ~f:Movement_type.to_string));
+    List.iter (types ()) ~f:(fun (_, t) ->
+      Alcotest.(check (option string)) "enabled again" (Some "bonus") t);
     let overridden =
-      List.find_exn updated ~f:(fun r -> Int64.equal r.event_id event_id)
+      List.find_exn
+        (ok (Store.bank_review db))
+        ~f:(fun r -> Int64.equal r.event_id event_id)
     in
     Alcotest.(check (option string))
       "manual override preserved"

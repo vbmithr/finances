@@ -538,8 +538,8 @@ also record card references and withdrawal reversals at import. See the
 Use `fin tx type list` to see available movement types, then run
 `fin tx type set EVENT-ID TYPE` to record a manual override. The imported type
 remains available, and `fin tx type reset EVENT-ID` removes the override.
-After importer improvements, `fin transaction refresh-types` previews updates
-to stored movement types and asks before applying them, without changing accounting
+Types are derived from the type rules and recomputed whenever a rule, an institution
+definition or a matched companion file changes, without changing accounting
 decisions.
 Filter by `--account ID`, `--institution NAME`, inclusive `--from` and `--to`
 dates, `--search TEXT`, or `--limit COUNT`; add `--json` for scripts. See the

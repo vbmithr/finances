@@ -290,27 +290,6 @@ type reversal_history_entry =
 
 val reversal_history : t -> reversal_history_entry list Or_error.t
 
-type companion_type_change =
-  { row_id : int64
-  ; event_id : int64 option
-  ; institution : string
-  ; code : string option
-    (** The value the deciding rule matched; none if nothing decides it now. *)
-  ; before : Movement_type.t option
-  ; after : Movement_type.t option
-  }
-
-val preview_companion_types
-  :  ?institution:string
-  -> t
-  -> companion_type_change list Or_error.t
-
-val refresh_companion_types
-  :  ?institution:string
-  -> t
-  -> expected:companion_type_change list
-  -> int Or_error.t
-
 type source_evidence_change =
   { event_id : int64
   ; institution : string
@@ -328,25 +307,6 @@ val refresh_source_evidence
   :  ?institution:string
   -> t
   -> expected:source_evidence_change list
-  -> int Or_error.t
-
-type movement_type_change =
-  { event_id : int64
-  ; institution : string
-  ; description : string
-  ; before : Movement_type.t option
-  ; after : Movement_type.t option
-  }
-
-val preview_movement_types
-  :  ?institution:string
-  -> t
-  -> movement_type_change list Or_error.t
-
-val refresh_movement_types
-  :  ?institution:string
-  -> t
-  -> expected:movement_type_change list
   -> int Or_error.t
 
 (** Explicit same-currency transfer decisions; a confirmation asserts ownership
@@ -590,3 +550,9 @@ val explain_movement : t -> int64 -> Explanation.t Or_error.t
     with every column, the type trace, and category and transfer decisions.
     Nothing is changed. *)
 val show_movement : t -> int64 -> Transaction_detail.t Or_error.t
+
+(** Recompute the type of every movement from the current rules, over its own
+    fields and the columns of its matched companion rows, and return how many
+    changed. This happens by itself after a rule changes and after companion rows
+    match. With [reason], each change is also recorded in the type history. *)
+val retype : ?institution:string -> ?reason:string -> t -> int Or_error.t

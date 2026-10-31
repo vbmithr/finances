@@ -980,39 +980,6 @@ let registered_companions ?institution db =
     Option.for_all institution ~f:(String.equal owner))
 ;;
 
-(* A type rule that names a column also applies to the rows of a companion file:
-   the same rule, tested on the file's own columns once its rows match. *)
-let companion_type_rules db institution =
-  let* rules = classification_rules db in
-  rules
-  |> List.filter_map ~f:(fun (r : Classification_rule.t) ->
-    match r.action, r.field with
-    | Type kind, Some field
-      when Poly.equal r.mode Automatic
-           && Option.value_map r.institution ~default:true ~f:(String.equal institution)
-      -> Some (r, field, kind)
-    | _ -> None)
-  |> traverse (fun ((rule : Classification_rule.t), field, kind) ->
-    let* pattern =
-      Transaction_pattern.compile
-        ~case_sensitive:rule.case_sensitive
-        (Option.value_exn rule.pattern)
-    in
-    Ok (field, pattern, kind))
-;;
-
-(* The first rule that matches a column of the row decides; the value it matched is
-   what the table records. A row no rule decides has no entry. *)
-let resolve_companion rules ~fields =
-  List.find_map rules ~f:(fun (field, pattern, kind) ->
-    List.find_map fields ~f:(fun (column, value) ->
-      Option.some_if
-        (String.equal column field
-         && Transaction_pattern.matches pattern ~display_name:None ~descriptions:[ value ]
-        )
-        (value, Movement_type.expand kind ~value)))
-;;
-
 let add_classification_rule db (rule : Classification_rule.t) =
   let* rule =
     Classification_rule.create
@@ -1446,12 +1413,11 @@ let accepted_document =
 let encode_fields = Json.encode (Jsont.list Jsont.string)
 let decode_fields = Json.decode (Jsont.list Jsont.string)
 
-let store_companion_rows db ~document_id ~institution ~format ~context ~companions rows =
-  let* companion =
+let store_companion_rows db ~document_id ~institution ~format ~context:_ ~companions rows =
+  let* (_ : Companion.t) =
     List.find companions ~f:(fun (c : Companion.t) -> String.equal c.format format)
     |> Or_error.of_option ~error:(Error.of_string "unregistered companion format")
   in
-  let* rules = companion_type_rules db institution in
   let find =
     let open Db_schema.Companion_rows in
     select_by_pair table document_id row_number fields_json
@@ -1472,7 +1438,6 @@ let store_companion_rows db ~document_id ~institution ~format ~context ~companio
   let rec store added reused = function
     | [] -> Ok (added, reused)
     | (row_number, fields) :: rest ->
-      let raw_fields = fields in
       let fields = encode_fields fields in
       let* previous = db_result (Db.first db.conn (find document_id row_number)) in
       (match previous with
@@ -1484,33 +1449,6 @@ let store_companion_rows db ~document_id ~institution ~format ~context ~companio
          let* () =
            db_result
              (Db.exec db.conn (insert document_id row_number institution format fields))
-         in
-         let row_id = Db.last_insert_rowid db.conn in
-         let row : Companion.row =
-           { row_id
-           ; document_id
-           ; institution
-           ; format
-           ; row_number
-           ; fields = raw_fields
-           ; context
-           }
-         in
-         let* columns = companion.fields row in
-         let* () =
-           match resolve_companion rules ~fields:columns with
-           | None -> Ok ()
-           | Some (value, kind) ->
-             let sql =
-               Rel_sql.Stmt.(
-                 func
-                   "INSERT INTO \
-                    companion_reported_types(row_id,reported_type,movement_type) VALUES \
-                    (?,?,?)"
-                   (int64 @-> text @-> option text @-> unit))
-             in
-             db_result
-               (Db.exec db.conn (sql row_id value (Some (Movement_type.to_string kind))))
          in
          store (added + 1) reused rest)
   in
@@ -2067,83 +2005,6 @@ let refresh_source_evidence ?institution db ~expected =
           current
         |> Result.map ~f:ignore
       in
-      Ok (List.length current))
-;;
-
-type movement_type_change =
-  { event_id : int64
-  ; institution : string
-  ; description : string
-  ; before : Movement_type.t option
-  ; after : Movement_type.t option
-  }
-
-let preview_movement_types ?institution db =
-  let* source = events db in
-  let* table = movement_table db in
-  source
-  |> List.filter ~f:(fun (_, e) ->
-    Registry.is_movement db.registry e
-    && Option.value_map institution ~default:true ~f:(String.equal e.Source_event.venue))
-  |> traverse (fun (event_id, event) ->
-    let* old =
-      Hashtbl.find table event_id
-      |> Or_error.of_option ~error:(Error.of_string "missing stored movement")
-    in
-    let* profile = source_typing_profile db event.Source_event.venue in
-    let* updated = Registry.movement ~source_typing:profile db.registry event in
-    if Option.equal Poly.equal old.movement_type updated.movement_type
-    then Ok None
-    else
-      Ok
-        (Some
-           { event_id
-           ; institution = event.venue
-           ; description = String.concat ~sep:" | " updated.descriptions
-           ; before = old.movement_type
-           ; after = updated.movement_type
-           }))
-  |> Result.map ~f:List.filter_opt
-;;
-
-let refresh_movement_types ?institution db ~expected =
-  transaction db (fun db ->
-    let* current = preview_movement_types ?institution db in
-    if not (Poly.equal current expected)
-    then Or_error.error_string "movement types changed since preview; review again"
-    else
-      let* trigger =
-        db_result
-          (Db.first
-             db.conn
-             (statement
-                "SELECT sql FROM sqlite_schema WHERE type='trigger' AND \
-                 name='movements_no_update'"
-                Row.(t1 (text "sql"))))
-      in
-      let* trigger =
-        Or_error.of_option
-          trigger
-          ~error:(Error.of_string "missing movement immutability trigger")
-      in
-      let exec sql = db_result (Db.exec_sql db.conn sql) in
-      let* () = exec "DROP TRIGGER movements_no_update" in
-      let update =
-        Rel_sql.Stmt.(
-          func
-            "UPDATE movements SET movement_type=? WHERE event_id=?"
-            (option text @-> int64 @-> unit))
-      in
-      let* () =
-        List.fold_result current ~init:() ~f:(fun () change ->
-          db_result
-            (Db.exec
-               db.conn
-               (update
-                  (Option.map change.after ~f:Movement_type.to_string)
-                  change.event_id)))
-      in
-      let* () = exec trigger in
       Ok (List.length current))
 ;;
 
@@ -2802,33 +2663,9 @@ let save_csv_results
     }
 ;;
 
-type companion_type_change =
-  { row_id : int64
-  ; event_id : int64 option
-  ; institution : string
-  ; code : string option
-    (** The value the deciding rule matched; none if no longer decided. *)
-  ; before : Movement_type.t option
-  ; after : Movement_type.t option
-  }
-
-(* Recompute every companion row's decision from the rules and the row's own
-   columns, and compare it with what is stored. *)
-let preview_companion_types ?institution db =
-  let* existing =
-    collect
-      db
-      (statement
-         "SELECT row_id,reported_type,movement_type FROM companion_reported_types"
-         Db_schema.Companion_reported_types.row)
-  in
-  let existing =
-    Hashtbl.of_alist_exn
-      (module Int64)
-      (List.map existing ~f:(fun (r : Db_schema.Companion_reported_types.t) ->
-         r.row_id, (r.reported_type, Option.map r.movement_type ~f:Movement_type.of_string)))
-  in
-  let* matched =
+(* The columns of the companion rows matched to each movement, by event, in row order. *)
+let companion_columns ?institution db =
+  let* matches =
     collect
       db
       (statement
@@ -2836,83 +2673,93 @@ let preview_companion_types ?institution db =
           event_id IS NOT NULL"
          Row.(t2 (int64 "row_id") (int64 "event_id")))
   in
-  let event_of = Hashtbl.of_alist_exn (module Int64) matched in
-  let* changes =
+  let event_of = Hashtbl.of_alist_exn (module Int64) matches in
+  let by_event = Hashtbl.create (module Int64) in
+  let* () =
     traverse
       (fun (owner, (companion : Companion.t)) ->
-         let* rules = companion_type_rules db owner in
          let* rows = companion_rows db ~institution:owner ~format:companion.format in
          traverse
            (fun (row : Companion.row) ->
-              let* columns = companion.fields row in
-              let decision =
-                resolve_companion rules ~fields:columns
-                |> Option.map ~f:(fun (value, kind) -> value, Some kind)
-              in
-              let before = Hashtbl.find existing row.row_id in
-              let same =
-                match before, decision with
-                | None, None -> true
-                | Some (value, kind), Some (value', kind') ->
-                  String.equal value value' && Option.equal Poly.equal kind kind'
-                | _ -> false
-              in
-              Ok
-                (Option.some_if
-                   (not same)
-                   { row_id = row.row_id
-                   ; event_id = Hashtbl.find event_of row.row_id
-                   ; institution = owner
-                   ; code = Option.map decision ~f:fst
-                   ; before = Option.bind before ~f:snd
-                   ; after = Option.bind decision ~f:snd
-                   }))
+              match Hashtbl.find event_of row.row_id with
+              | None -> Ok ()
+              | Some event_id ->
+                let* columns = companion.fields row in
+                Hashtbl.add_multi by_event ~key:event_id ~data:columns;
+                Ok ())
            rows
-         |> Result.map ~f:List.filter_opt)
+         |> Result.map ~f:ignore)
       (registered_companions ?institution db)
+    |> Result.map ~f:ignore
   in
-  Ok (List.concat changes)
+  Ok (Hashtbl.map by_event ~f:(fun lists -> List.concat (List.rev lists)))
 ;;
 
-let refresh_companion_types ?institution db ~expected =
-  transaction db (fun db ->
-    let* current = preview_companion_types ?institution db in
-    if not (Poly.equal current expected)
-    then Or_error.error_string "reported types changed since preview; review again"
-    else (
-      let upsert =
-        Rel_sql.Stmt.(
-          func
-            "INSERT INTO companion_reported_types(row_id,reported_type,movement_type) \
-             VALUES (?,?,?) ON CONFLICT(row_id) DO UPDATE SET \
-             reported_type=excluded.reported_type, movement_type=excluded.movement_type"
-            (int64 @-> text @-> option text @-> unit))
-      in
-      let delete =
-        Rel_sql.Stmt.(
-          func "DELETE FROM companion_reported_types WHERE row_id=?" (int64 @-> unit))
-      in
-      let* () =
-        traverse
-          (fun change ->
-             db_result
-               (Db.exec
-                  db.conn
-                  (match change.code with
-                   | Some code ->
-                     upsert
-                       change.row_id
-                       code
-                       (Option.map change.after ~f:Movement_type.to_string)
-                   | None -> delete change.row_id)))
-          current
-        |> Result.map ~f:ignore
-      in
-      Ok (List.length current)))
+(* A movement's type is derived: the first type rule that matches its own fields and
+   the columns of its matched companion rows. Recompute it after anything that changes
+   the rules or the matches. When [reason] is given, each change is also written to the
+   type history. Returns how many movements changed type. *)
+let retype ?institution ?reason db =
+  let* source = events db in
+  let source =
+    List.filter source ~f:(fun (_, (e : Source_event.t)) ->
+      Registry.is_movement db.registry e
+      && Option.for_all institution ~f:(String.equal e.venue))
+  in
+  let* columns = companion_columns ?institution db in
+  let* stored =
+    collect
+      db
+      (statement
+         "SELECT event_id,movement_type FROM movements"
+         Row.(t2 (int64 "event_id") (option Rel.Type.text "movement_type")))
+  in
+  let stored = Hashtbl.of_alist_exn (module Int64) stored in
+  let update =
+    Rel_sql.Stmt.(
+      func
+        "UPDATE movements SET movement_type=? WHERE event_id=?"
+        (option text @-> int64 @-> unit))
+  in
+  let log =
+    Rel_sql.Stmt.(
+      func
+        "INSERT INTO movement_type_changes(event_id,previous_type,movement_type,reason) \
+         VALUES (?,?,?,?)"
+        (int64 @-> option text @-> option text @-> text @-> unit))
+  in
+  let* changed =
+    traverse
+      (fun (event_id, (event : Source_event.t)) ->
+         let* empty = Source_typing.empty event.venue in
+         let* parsed = Registry.movement ~source_typing:empty db.registry event in
+         let parsed =
+           match Hashtbl.find columns event_id with
+           | None -> parsed
+           | Some more -> Movement.with_fields parsed (parsed.fields @ more)
+         in
+         let* profile = source_typing_profile db event.venue in
+         let after =
+           (Source_typing.apply profile parsed).movement_type
+           |> Option.map ~f:Movement_type.to_string
+         in
+         let before = Option.join (Hashtbl.find stored event_id) in
+         if Option.equal String.equal before after
+         then Ok 0
+         else
+           let* () = db_result (Db.exec db.conn (update after event_id)) in
+           let* () =
+             match reason with
+             | None -> Ok ()
+             | Some reason ->
+               db_result (Db.exec db.conn (log event_id before after reason))
+           in
+           Ok 1)
+      source
+  in
+  Ok (List.fold changed ~init:0 ~f:( + ))
 ;;
 
-(* Each companion format is matched by its adapter against the owning
-   institution's own movements; results and their audit are stored here. *)
 let match_companions ?institution db =
   transaction db (fun db ->
     let* source = events db in
@@ -2931,6 +2778,7 @@ let match_companions ?institution db =
            save_csv_results db ~matching_policy:companion.policy previous results)
         (registered_companions ?institution db)
     in
+    let* (_ : int) = retype ?institution db in
     Ok
       (List.fold
          reports
@@ -2942,6 +2790,67 @@ let match_companions ?institution db =
            ; conflicts = a.conflicts + b.conflicts
            ; changed = a.changed + b.changed
            })))
+;;
+
+(* Types follow the rules, so a change to the rules retypes the movements it can
+   affect, in a second transaction of its own. *)
+let retype_after db ?institution reason =
+  transaction db (fun db -> retype ?institution ~reason db) |> Result.map ~f:ignore
+;;
+
+let add_classification_rule db (rule : Classification_rule.t) =
+  let* () = add_classification_rule db rule in
+  retype_after db ?institution:rule.institution (Printf.sprintf "rule %s added" rule.name)
+;;
+
+let replace_classification_rule db (rule : Classification_rule.t) =
+  let* () = replace_classification_rule db rule in
+  retype_after
+    db
+    ?institution:rule.institution
+    (Printf.sprintf "rule %s changed" rule.name)
+;;
+
+let delete_classification_rule db name =
+  let* () = delete_classification_rule db name in
+  retype_after db (Printf.sprintf "rule %s deleted" name)
+;;
+
+let set_classification_rule_mode db name mode =
+  let* () = set_classification_rule_mode db name mode in
+  retype_after db (Printf.sprintf "rule %s mode changed" name)
+;;
+
+let rename_classification_rule db ~old_name ~new_name =
+  let* () = rename_classification_rule db ~old_name ~new_name in
+  retype_after db (Printf.sprintf "rule %s renamed to %s" old_name new_name)
+;;
+
+let set_institution_definition
+      ?(dry_run = false)
+      db
+      ~name
+      ~definition
+      ~expected
+      ~expected_rules
+      ~rules
+      ~source_unchanged
+  =
+  let* result =
+    set_institution_definition
+      ~dry_run
+      db
+      ~name
+      ~definition
+      ~expected
+      ~expected_rules
+      ~rules
+      ~source_unchanged
+  in
+  let* () =
+    if dry_run then Ok () else retype_after db ~institution:name "definition installed"
+  in
+  Ok result
 ;;
 
 let companion_observations ?institution db =
@@ -3332,13 +3241,8 @@ let bank_review_from
          | [ value ] -> Some value
          | _ -> None
        in
-       let imported_movement_type =
-         match transaction.movement_type with
-         | Some _ as kind -> kind
-         | None ->
-           consensus ~compare:Poly.compare (fun (a : Companion.annotation) ->
-             a.movement_type)
-       in
+       (* The stored type already follows the rules, companion columns included. *)
+       let imported_movement_type = transaction.movement_type in
        let movement_type_override = Hashtbl.find overrides event_id in
        Ok
          { event_id
@@ -3405,19 +3309,6 @@ let bank_review db =
          r.event_id, Movement_type.of_string r.movement_type))
   in
   let* observations = companion_observations db in
-  let* reported =
-    collect
-      db
-      (statement
-         "SELECT row_id,reported_type,movement_type FROM companion_reported_types"
-         Db_schema.Companion_reported_types.row)
-  in
-  let reported =
-    Hashtbl.of_alist_exn
-      (module Int64)
-      (List.map reported ~f:(fun (r : Db_schema.Companion_reported_types.t) ->
-         r.row_id, Option.map r.movement_type ~f:Movement_type.of_string))
-  in
   let companions = registered_companions db in
   let details = Hashtbl.create (module Int64) in
   let* () =
@@ -3433,11 +3324,6 @@ let bank_review db =
                   ~error:(Error.of_string "unregistered companion format")
            in
            let* annotation = (snd companion).annotate row in
-           let annotation =
-             match Hashtbl.find reported row.row_id with
-             | None -> annotation
-             | Some movement_type -> { annotation with movement_type }
-           in
            Hashtbl.add_multi details ~key:event_id ~data:(row.row_id, annotation);
            Ok ()
          | _ -> Ok ())
@@ -5827,6 +5713,7 @@ let test_type_rule db (draft : Classification_rule.t) =
   let source =
     List.filter source ~f:(fun (_, (e : Source_event.t)) -> draft_applies e.venue)
   in
+  let* columns = companion_columns db in
   let* override_rows =
     collect
       db
@@ -5852,6 +5739,11 @@ let test_type_rule db (draft : Classification_rule.t) =
       (fun (event_id, (event : Source_event.t)) ->
          let base = Source_typing.create ~institution:event.venue [] in
          let* movement = Registry.movement ~source_typing:base db.registry event in
+         let movement =
+           match Hashtbl.find columns event_id with
+           | None -> movement
+           | Some more -> Movement.with_fields movement (movement.fields @ more)
+         in
          let before_rules = ordered (for_venue ~without_draft:false event.venue) in
          let after_rules =
            ordered
@@ -5990,36 +5882,9 @@ let institution_summary db institution =
          (fun row acc -> row :: acc)
          [])
   in
-  (* Companion rows give a type only through the stored reported types, and the
-     matched rows of one movement must agree on a single one. *)
-  let* companion =
-    db_result
-      (Db.fold
-         db.conn
-         (Rel_sql.Stmt.(
-            func
-              "SELECT DISTINCT c.event_id,r.movement_type FROM companion_matches c JOIN \
-               companion_reported_types r ON r.row_id=c.row_id JOIN source_events e ON \
-               e.id=c.event_id WHERE c.state='matched' AND e.venue=? AND r.movement_type \
-               IS NOT NULL"
-              (text
-               @-> ret Row.(t2 (option Rel.Type.int64 "event_id") (text "movement_type"))
-              ))
-            institution)
-         (fun row acc -> row :: acc)
-         [])
-  in
-  let companion_types = Hashtbl.create (module Int64) in
-  List.iter companion ~f:(fun (event_id, kind) ->
-    Option.iter event_id ~f:(fun id ->
-      Hashtbl.add_multi companion_types ~key:id ~data:kind));
-  let effective (event_id, _, primary, override) =
-    match Option.first_some override primary with
-    | Some kind -> Some (Movement_type.of_string kind)
-    | None ->
-      (match Hashtbl.find companion_types event_id with
-       | Some [ kind ] -> Some (Movement_type.of_string kind)
-       | _ -> None)
+  (* The stored type already follows the rules, companion columns included. *)
+  let effective (_, _, primary, override) =
+    Option.map (Option.first_some override primary) ~f:Movement_type.of_string
   in
   let counts = Hashtbl.create (module String) in
   List.iter rows ~f:(fun row ->
@@ -6045,11 +5910,71 @@ let institution_summary db institution =
     }
 ;;
 
+(* The columns of the companion rows matched to one movement. *)
+let companion_columns_of_event db event_id =
+  let* rows =
+    collect
+      db
+      (Rel_sql.Stmt.(
+         func
+           "SELECT r.id,r.document_id,r.row_number,r.institution,r.format,r.fields_json \
+            FROM companion_matches c JOIN companion_rows r ON r.id=c.row_id WHERE \
+            c.event_id=? AND c.state='matched' ORDER BY r.id"
+           (int64
+            @-> ret
+                  Row.(
+                    unit (fun a b c d e f -> a, b, c, d, e, f)
+                    * int64 "id"
+                    * int64 "document_id"
+                    * int "row_number"
+                    * text "institution"
+                    * text "format"
+                    * text "fields_json")))
+         event_id)
+  in
+  traverse
+    (fun (row_id, document_id, row_number, institution, format, fields_json) ->
+       let* companion =
+         List.find (registered_companions db) ~f:(fun (owner, (c : Companion.t)) ->
+           String.equal owner institution && String.equal c.format format)
+         |> Option.map ~f:snd
+         |> Or_error.of_option ~error:(Error.of_string "unregistered companion format")
+       in
+       let* fields = decode_fields fields_json in
+       let* context_rows =
+         collect
+           db
+           (Rel_sql.Stmt.(
+              func
+                "SELECT context_json FROM document_contexts WHERE document_id=?"
+                (int64 @-> ret Row.(t1 (text "context_json"))))
+              document_id)
+       in
+       let* context =
+         match context_rows with
+         | [] -> Ok []
+         | json :: _ -> Json.decode Json.string_map json
+       in
+       companion.fields
+         { Companion.row_id
+         ; document_id
+         ; institution
+         ; format
+         ; row_number
+         ; fields
+         ; context
+         })
+    rows
+  |> Result.map ~f:List.concat
+;;
+
 let explain_movement db event_id =
   let* event = event_by_id db event_id in
   let venue = event.Source_event.venue in
   let* empty = Source_typing.empty venue in
   let* parsed = Registry.movement ~source_typing:empty db.registry event in
+  let* more = companion_columns_of_event db event_id in
+  let parsed = Movement.with_fields parsed (parsed.fields @ more) in
   let* stored = movement db event_id in
   let* rules = classification_rules db in
   let automatic (r : Classification_rule.t) =
@@ -6139,45 +6064,16 @@ let explain_movement db event_id =
           | Some reason -> Error reason
           | None -> Ok (Some kind) ))
   in
-  let description_checks = decide description_entries in
+  let checks = decide description_entries in
   let rules_type =
     match
-      List.find_map description_checks ~f:(fun c ->
+      List.find_map checks ~f:(fun c ->
         match c.verdict with
         | Decides kind -> kind
         | _ -> None)
     with
     | Some kind -> Some kind
     | None -> after_code.movement_type
-  in
-  (* Stage 3: the type matched companion rows agree on. *)
-  let* companion_rows =
-    db_result
-      (Db.fold
-         db.conn
-         (Rel_sql.Stmt.(
-            func
-              "SELECT DISTINCT r.reported_type,r.movement_type FROM companion_matches c \
-               JOIN companion_reported_types r ON r.row_id=c.row_id WHERE c.event_id=? \
-               AND c.state='matched' ORDER BY r.reported_type"
-              (int64
-               @-> ret
-                     Row.(
-                       t2 (text "reported_type") (option Rel.Type.text "movement_type"))))
-            event_id)
-         (fun row acc -> row :: acc)
-         [])
-  in
-  let companion =
-    List.rev_map companion_rows ~f:(fun (code, kind) ->
-      code, Option.map kind ~f:Movement_type.of_string)
-  in
-  let companion_type =
-    match
-      List.filter_map companion ~f:snd |> List.dedup_and_sort ~compare:Poly.compare
-    with
-    | [ kind ] -> Some kind
-    | _ -> None
   in
   let* override_rows =
     db_result
@@ -6194,11 +6090,10 @@ let explain_movement db event_id =
   let override = List.hd override_rows |> Option.map ~f:Movement_type.of_string in
   let* category = db_result (Db.first db.conn (find_category event_id)) in
   let effective, source =
-    match override, rules_type, companion_type with
-    | Some kind, _, _ -> Some kind, Explanation.Manual_override
-    | None, Some kind, _ -> Some kind, Import_rules
-    | None, None, Some kind -> Some kind, Companion_code
-    | None, None, None -> None, Untyped
+    match override, rules_type with
+    | Some kind, _ -> Some kind, Explanation.Manual_override
+    | None, Some kind -> Some kind, Rules
+    | None, None -> None, Untyped
   in
   Ok
     { Explanation.event_id
@@ -6209,13 +6104,10 @@ let explain_movement db event_id =
     ; account_type = stored.account.account_type
     ; descriptions = stored.descriptions
     ; override
-    ; description_checks
+    ; checks
     ; rules_type
-    ; companion
-    ; companion_type
     ; effective
     ; source
-    ; stored = stored.movement_type
     ; category
     }
 ;;
@@ -6346,23 +6238,6 @@ let show_movement db event_id =
                     * text "policy")))
          event_id)
   in
-  let* reported_rows =
-    collect
-      db
-      (Rel_sql.Stmt.(
-         func
-           "SELECT r.row_id,r.reported_type,r.movement_type FROM \
-            companion_reported_types r JOIN companion_matches c ON c.row_id=r.row_id \
-            WHERE c.event_id=?"
-           (int64
-            @-> ret
-                  Row.(
-                    t3
-                      (int64 "row_id")
-                      (text "reported_type")
-                      (option Rel.Type.text "movement_type"))))
-         event_id)
-  in
   let* companions =
     traverse
       (fun ( row_id
@@ -6410,11 +6285,6 @@ let show_movement db event_id =
            ; state
            ; reason
            ; policy
-           ; reported =
-               List.find_map reported_rows ~f:(fun (id, value, kind) ->
-                 Option.some_if
-                   (Int64.equal id row_id)
-                   (value, Option.map kind ~f:Movement_type.of_string))
            ; display_name = annotation.display_name
            ; tags = annotation.tags
            })

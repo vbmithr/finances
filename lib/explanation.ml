@@ -18,8 +18,7 @@ type check =
 
 type source =
   | Manual_override
-  | Import_rules
-  | Companion_code
+  | Rules
   | Untyped
 
 type t =
@@ -31,14 +30,10 @@ type t =
   ; account_type : string
   ; descriptions : string list
   ; override : Movement_type.t option
-  ; description_checks : check list (** Type rules on the first description. *)
-  ; rules_type : Movement_type.t option (** What the two stages above give. *)
-  ; companion : (string * Movement_type.t option) list
-    (** Codes of matched companion rows and the type each maps to. *)
-  ; companion_type : Movement_type.t option
-    (** The type those rows agree on, if they agree on one. *)
+  ; checks : check list
+    (** The type rules, over the movement's fields and its companion rows' columns. *)
+  ; rules_type : Movement_type.t option (** What the rules give, before any override. *)
   ; effective : Movement_type.t option
   ; source : source
-  ; stored : Movement_type.t option (** The type saved at import or last refresh. *)
   ; category : (string * string) option (** Recorded account and reason. *)
   }

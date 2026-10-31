@@ -1739,99 +1739,6 @@ let transaction_list_cmd =
       $ json_output)
 ;;
 
-let refresh_transaction_types database institution yes =
-  with_database database (fun db ->
-    let%bind changes = Store.preview_movement_types ?institution db in
-    let name = Option.value_map ~default:"unknown" ~f:Movement_type.to_string in
-    if List.is_empty changes
-    then (
-      print_endline "No movement type changes.";
-      Ok ())
-    else (
-      printf "Proposed movement type changes: %d\n" (List.length changes);
-      List.iter changes ~f:(fun (change : Store.movement_type_change) ->
-        printf
-          "  #%Ld  %s  %s -> %s  %s\n"
-          change.event_id
-          (Terminal.text change.institution)
-          (name change.before)
-          (name change.after)
-          (Terminal.text change.description));
-      let%bind confirmed =
-        if yes
-        then Ok true
-        else if Unix.isatty Unix.stdin
-        then
-          Ok
-            (Option.value_map
-               (prompt "Apply these movement type changes? [Y/n]: ")
-               ~default:false
-               ~f:confirm_default_yes)
-        else Or_error.error_string "type refresh requires a terminal or --yes"
-      in
-      if not confirmed
-      then (
-        print_endline "Nothing changed.";
-        Ok ())
-      else (
-        let%map count = Store.refresh_movement_types ?institution db ~expected:changes in
-        printf "movement_types_changed=%d\n" count)))
-;;
-
-let refresh_companion_types database institution yes =
-  with_database database (fun db ->
-    let%bind changes = Store.preview_companion_types ?institution db in
-    let name = Option.value_map ~default:"unknown" ~f:Movement_type.to_string in
-    if List.is_empty changes
-    then (
-      print_endline "No companion type changes.";
-      Ok ())
-    else (
-      printf "Proposed companion type changes: %d\n" (List.length changes);
-      List.iter changes ~f:(fun (c : Store.companion_type_change) ->
-        printf
-          "  CSV row #%Ld%s  %s  %s  %s -> %s\n"
-          c.row_id
-          (Option.value_map
-             c.event_id
-             ~default:""
-             ~f:(Printf.sprintf " (transaction #%Ld)"))
-          (Terminal.text c.institution)
-          (Terminal.text (Option.value c.code ~default:"(no longer decided)"))
-          (name c.before)
-          (name c.after));
-      let%bind confirmed =
-        if yes
-        then Ok true
-        else if Unix.isatty Unix.stdin
-        then
-          Ok
-            (Option.value_map
-               (prompt "Apply these companion type changes? [Y/n]: ")
-               ~default:false
-               ~f:confirm_default_yes)
-        else Or_error.error_string "companion type refresh requires a terminal or --yes"
-      in
-      if not confirmed
-      then (
-        print_endline "Nothing changed.";
-        Ok ())
-      else (
-        let%map count = Store.refresh_companion_types ?institution db ~expected:changes in
-        printf "companion_types_changed=%d\n" count)))
-;;
-
-let refresh_companion_types_cmd =
-  command
-    "refresh-companion-types"
-    "Preview and refresh types from the columns of matched companion files."
-    Term.(
-      const refresh_companion_types
-      $ database
-      $ institution_filter
-      $ Arg.(value & flag & info [ "yes" ] ~doc:"Apply the preview without prompting."))
-;;
-
 let refresh_transaction_evidence database institution yes =
   with_database database (fun db ->
     let%bind changes = Store.preview_source_evidence ?institution db in
@@ -1882,17 +1789,6 @@ let refresh_transaction_evidence_cmd =
     "Preview and refresh imported settlement and reversal evidence."
     Term.(
       const refresh_transaction_evidence
-      $ database
-      $ institution_filter
-      $ Arg.(value & flag & info [ "yes" ] ~doc:"Apply the preview without prompting."))
-;;
-
-let refresh_transaction_types_cmd =
-  command
-    "refresh-types"
-    "Preview and refresh imported movement types from stored source evidence."
-    Term.(
-      const refresh_transaction_types
       $ database
       $ institution_filter
       $ Arg.(value & flag & info [ "yes" ] ~doc:"Apply the preview without prompting."))
@@ -3693,8 +3589,8 @@ let rule_preview database name json_output =
           "use fin tx refresh-evidence to preview automatic evidence changes"
       | Type _ when Option.is_some rule.field ->
         Or_error.error_string
-          "this rule names a field and applies on import; use fin rule test to preview \
-           it and fin tx refresh-types to apply it"
+          "this rule names a field and applies automatically; use fin rule test to \
+           preview it"
       | _ -> Ok ()
     in
     let%map matches = Store.preview_classification_rule db rule in
@@ -3727,7 +3623,8 @@ let rule_apply database name yes =
           "use fin tx refresh-evidence to preview and apply evidence changes"
       | Type _ when Option.is_some rule.field ->
         Or_error.error_string
-          "this rule names a field and applies on import; use fin tx refresh-types"
+          "this rule names a field and applies automatically; use fin rule test to \
+           preview it"
       | _ -> Ok ()
     in
     let%bind matches = Store.preview_classification_rule db rule in
@@ -4097,38 +3994,16 @@ let print_explanation ~all (e : Explanation.t) =
     (type_name e.effective)
     (match e.source with
      | Manual_override -> "manual override"
-     | Import_rules -> "import rules"
-     | Companion_code -> "the companion file's code"
+     | Rules -> "type rules"
      | Untyped -> "nothing decides it");
   printf
     "  1. Manual override: %s\n"
     (Option.value_map e.override ~default:"none" ~f:Movement_type.to_string);
-  printf "  2. Type rules, each on the field it names (default: description):\n";
-  print_explain_checks ~all e.description_checks;
-  printf "     import rules give: %s\n" (type_name e.rules_type);
-  (match e.companion with
-   | [] -> print_endline "  3. Companion file: no matched row decided a type"
-   | codes ->
-     printf
-       "  3. Companion file values the rules matched: %s\n"
-       (String.concat
-          ~sep:", "
-          (List.map codes ~f:(fun (code, kind) ->
-             Printf.sprintf "%s -> %s" (Terminal.text code) (type_name kind))));
-     printf
-       "     they agree on: %s (used only when import rules give no type)\n"
-       (type_name e.companion_type));
   printf
-    "\n\
-     Type saved with the movement at import (before overrides and the companion): %s%s\n"
-    (type_name e.stored)
-    (if Option.equal Poly.equal e.stored e.rules_type
-     then ", the same as the import rules now give"
-     else
-       Printf.sprintf
-         "; the import rules now give %s, so fin transaction refresh-types would update \
-          it"
-         (type_name e.rules_type));
+    "  2. Type rules, each on the field it names (default: description). Companion \
+     columns count as fields:\n";
+  print_explain_checks ~all e.checks;
+  printf "     the rules give: %s\n\n" (type_name e.rules_type);
   match e.category with
   | Some (account, reason) ->
     printf "Category: %s (%s)\n" (Terminal.text account) (Terminal.text reason)
@@ -4192,8 +4067,7 @@ let print_transaction_detail (t : Transaction_detail.t) =
     (type_name e.effective)
     (match e.source with
      | Manual_override -> "manual override"
-     | Import_rules -> "import rules"
-     | Companion_code -> "the companion file's code"
+     | Rules -> "type rules"
      | Untyped -> "nothing decides it");
   printf
     "  Category: %s\n"
@@ -4254,9 +4128,7 @@ let print_transaction_detail (t : Transaction_detail.t) =
        Option.iter c.display_name ~f:(fun name ->
          printf "    display name: %s\n" (Terminal.text name));
        List.iter c.tags ~f:(fun (tag, value) ->
-         printf "    tag %s: %s\n" (Terminal.text tag) (Terminal.text value));
-       Option.iter c.reported ~f:(fun (value, kind) ->
-         printf "    type rules matched %s: %s\n" (Terminal.text value) (type_name kind))));
+         printf "    tag %s: %s\n" (Terminal.text tag) (Terminal.text value))));
   printf "\nHow its type was decided: fin rule explain %Ld\n" e.event_id
 ;;
 
@@ -5497,8 +5369,6 @@ let () =
               "Inspect and classify imported transactions."
               [ transaction_list_cmd
               ; transaction_show_cmd
-              ; refresh_transaction_types_cmd
-              ; refresh_companion_types_cmd
               ; refresh_transaction_evidence_cmd
               ; group
                   "type"

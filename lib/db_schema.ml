@@ -3,7 +3,7 @@ open Rel
 
 (** One current experimental baseline; older databases must be reimported. Banks
     have no tables of their own. *)
-let version = 29
+let version = 30
 
 let timestamp = `Expr "(strftime('%Y-%m-%dT%H:%M:%f','now') || '000000000Z')"
 
@@ -289,6 +289,7 @@ module Movements = struct
           ; nonnegative main_description
           ]
       ~immutable:"movements are derived from immutable source events"
+      ~mutable_columns:[ "movement_type" ]
       table
   ;;
 end
@@ -867,47 +868,6 @@ module Companion_rows = struct
       ~immutable:"companion observations are immutable"
       table
   ;;
-end
-
-module Companion_reported_types = struct
-  type t =
-    { row_id : int64
-    ; reported_type : string
-    ; movement_type : string option
-    }
-
-  let row_id = Col.make "row_id" Type.int64 (fun (r : t) -> r.row_id)
-  let reported_type = Col.make "reported_type" Type.text (fun (r : t) -> r.reported_type)
-
-  let movement_type =
-    Col.make "movement_type" Type.(option text) (fun (r : t) -> r.movement_type)
-  ;;
-
-  let row =
-    Row.(
-      unit (fun row_id reported_type movement_type ->
-        { row_id; reported_type; movement_type })
-      * row_id
-      * reported_type
-      * movement_type)
-  ;;
-
-  let table =
-    Table.make
-      ~primary_key:(Table.Primary_key.make [ Col.Def row_id ])
-      ~foreign_keys:
-        [ Table.Foreign_key.make
-            ~cols:[ Col.Def row_id ]
-            ~parent:
-              (Table.Foreign_key.Table
-                 (Companion_rows.table, [ Col.Def Companion_rows.id ]))
-            ()
-        ]
-      "companion_reported_types"
-      row
-  ;;
-
-  let definition = Sqlite_schema.table table
 end
 
 module Companion_matches = struct
@@ -2251,7 +2211,6 @@ let definitions =
   ; Statements.definition
   ; Statement_events.definition
   ; Companion_rows.definition
-  ; Companion_reported_types.definition
   ; Companion_matches.definition
   ; Companion_match_changes.definition
   ; Bank_categories.definition

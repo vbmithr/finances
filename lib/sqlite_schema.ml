@@ -74,9 +74,15 @@ end = struct
   let sql (Check s) = s
 end
 
-type t = Definition : 'r Table.t * 'r Check.t list * string option -> t
+type t = Definition : 'r Table.t * 'r Check.t list * (string * string list) option -> t
 
-let table ?(checks = []) ?immutable table = Definition (table, checks, immutable)
+(* [mutable_columns] are exempt from the update trigger of an immutable table: the
+   rest of each row is evidence, but derived values such as a type may be recomputed. *)
+let table ?(checks = []) ?immutable ?(mutable_columns = []) table =
+  Definition
+    (table, checks, Option.map immutable ~f:(fun message -> message, mutable_columns))
+;;
+
 let rel_table (Definition (table, _, _)) = Table.Def table
 
 let statements (Definition (table, checks, immutable)) =
@@ -114,10 +120,21 @@ let statements (Definition (table, checks, immutable)) =
   let triggers =
     match immutable with
     | None -> []
-    | Some message ->
+    | Some (message, mutable_columns) ->
+      let guarded =
+        List.filter_map (Table.cols table) ~f:(fun (Col.Def col) ->
+          Option.some_if
+            (not (List.mem mutable_columns (Col.name col) ~equal:String.equal))
+            (Rel_sql.Syntax.id (Col.name col)))
+      in
       List.map
         [ "UPDATE", "no_update"; "DELETE", "no_delete" ]
         ~f:(fun (op, suffix) ->
+          let op =
+            if String.equal op "UPDATE" && not (List.is_empty mutable_columns)
+            then "UPDATE OF " ^ String.concat ~sep:", " guarded
+            else op
+          in
           Printf.sprintf
             "CREATE TRIGGER %s BEFORE %s ON %s BEGIN SELECT RAISE(ABORT, %s); END;"
             (Rel_sql.Syntax.id (Table.name table ^ "_" ^ suffix))

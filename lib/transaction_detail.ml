@@ -29,8 +29,6 @@ type companion =
   ; state : string
   ; reason : string
   ; policy : string
-  ; reported : (string * Movement_type.t option) option
-    (** The value the deciding type rule matched, and the type it gave. *)
   ; display_name : string option
   ; tags : (string * string) list
   }

@@ -420,21 +420,22 @@ class ImportOnboarding(unittest.TestCase):
         self.assertIn('manual override', self.run_fin('tx', 'type', 'show', event).stdout)
         self.assertEqual([r['event_id'] for r in json.loads(self.run_fin('tx', 'list', '--type', 'bonus', '--json').stdout)], [event])
         self.run_fin('import', 'boursobank', 'fixtures/bank.ofx')
-        with sqlite3.connect(self.root / 'data/fin/fin.sqlite3') as db:
-            trigger = db.execute("SELECT sql FROM sqlite_schema WHERE name='movements_no_update'").fetchone()[0]
-            db.execute('DROP TRIGGER movements_no_update')
-            db.execute("UPDATE movements SET movement_type='fee' WHERE event_id=?", (event,))
-            db.execute(trigger)
-        self.assertIn('movement_types_changed=1', self.run_fin('tx', 'refresh-types', '--yes').stdout)
+        # Types are derived: a rule retypes at once, and a manual override still wins.
+        self.run_fin('rule', 'add', 'retype-me', '--institution', 'boursobank', '--description', '.',
+                     '--set-type', 'fee', '--automatic', '--priority=-5')
         row = next(r for r in json.loads(self.run_fin('tx', 'list', '--json').stdout) if r['event_id'] == event)
+        self.assertEqual(row['imported_movement_type'], 'fee')
         self.assertEqual(row['movement_type_override'], 'bonus')
+        self.assertEqual(row['movement_type'], 'bonus')
+        self.run_fin('rule', 'delete', 'retype-me', '--yes')
         self.run_fin('tx', 'type', 'set', event, 'fee')
         self.run_fin('tx', 'type', 'reset', event)
         self.run_fin('tx', 'type', 'reset', event)
         row = next(r for r in json.loads(self.run_fin('tx', 'list', '--json').stdout) if r['event_id'] == event)
         self.assertEqual(row['movement_type'], before['movement_type'])
         self.assertIsNone(row['movement_type_override'])
-        history = json.loads(self.run_fin('tx', 'type', 'history', '--json').stdout)
+        history = [r for r in json.loads(self.run_fin('tx', 'type', 'history', '--json').stdout)
+                   if not (r.get('reason') or '').startswith('rule ')]
         self.assertEqual([(r['previous_type'], r['movement_type']) for r in history],
                          [(None, 'bonus'), ('bonus', 'fee'), ('fee', None)])
         self.assertTrue(all(r['event_id'] == event for r in history))
@@ -471,7 +472,6 @@ class ImportOnboarding(unittest.TestCase):
         self.assertEqual(row['movement_type'], 'card')
         self.run_fin('tx', 'type', 'set', row['event_id'], 'fee')
         self.run_fin('rule', 'delete', 'my-card', '--yes')
-        self.run_fin('tx', 'refresh-types', '--institution', 'boursobank', '--yes')
         row = next(r for r in json.loads(self.run_fin('tx', 'list', '--json').stdout) if r['event_id'] == row['event_id'])
         self.assertEqual(row['movement_type'], 'fee')
         self.assertIsNone(row['imported_movement_type'])
@@ -494,7 +494,8 @@ class ImportOnboarding(unittest.TestCase):
         self.run_fin('import', 'boursobank', 'fixtures/bank.ofx')
         row2 = next(r for r in json.loads(self.run_fin('tx', 'list', '--json').stdout) if r['event_id'] == row['event_id'])
         self.assertEqual(row2['counter_account'], 'expenses:shopping')
-        self.assertEqual(row2['movement_type'], 'card')
+        # Types are derived: with the only matching rule disabled, nothing types the movement.
+        self.assertIsNone(row2['movement_type'])
 
     def test_user_institution_imports_generic_ofx(self):
         self.run_fin('institution', 'add', 'provider')
@@ -505,7 +506,6 @@ class ImportOnboarding(unittest.TestCase):
         self.assertTrue(all(row['institution'] == 'provider' for row in rows))
         self.assertTrue(json.loads(self.run_fin('account', 'export').stdout)['accounts'])
         self.run_fin('status')
-        self.run_fin('tx', 'refresh-types', '--institution', 'provider', '--yes')
         self.assertIn('unchanged=1', self.run_fin('import', 'provider', 'fixtures/bank.ofx').stdout)
         directory = self.root / 'generic-ofx'
         directory.mkdir()
@@ -889,12 +889,6 @@ class ImportOnboarding(unittest.TestCase):
         self.assertIn(f'assets:reversals:pair-{a}-{b}', journal)
         self.assertIn('No unreviewed reversal candidates.', self.run_fin('reversal', 'candidates').stdout)
         self.assertIn('confirmed', self.run_fin('reversal', 'history').stdout)
-        with sqlite3.connect(self.root / 'data/fin/fin.sqlite3') as db:
-            trigger = db.execute("SELECT sql FROM sqlite_schema WHERE name='movements_no_update'").fetchone()[0]
-            db.execute('DROP TRIGGER movements_no_update')
-            db.execute("UPDATE movements SET movement_type = 'withdrawal-reversal' WHERE event_id = ?", (b,))
-            db.execute(trigger)
-        self.assertIn('movement_types_changed=1', self.run_fin('tx', 'refresh-types', '--yes').stdout)
         refreshed = json.loads(self.run_fin('tx', 'list', '--classification', 'reversal', '--json').stdout)
         self.assertTrue(all(r['movement_type'] == 'withdrawal' for r in refreshed))
         self.assertNotEqual(self.run_fin('reversal', 'review', a, b, '--yes', check=False).returncode, 0)
@@ -931,16 +925,11 @@ class ImportOnboarding(unittest.TestCase):
         self.assertTrue(all(r['counter_account'] == 'equity:unclassified' for r in rows))
         interest = next(r for r in rows if r['movement_type'] == 'interest')
         with sqlite3.connect(self.root / 'data/fin/fin.sqlite3') as db:
-            trigger = db.execute("SELECT sql FROM sqlite_schema WHERE name='movements_no_update'").fetchone()[0]
-            db.execute('DROP TRIGGER movements_no_update')
-            db.execute('UPDATE movements SET movement_type = NULL WHERE event_id = ?', (interest['event_id'],))
-            db.execute(trigger)
-        self.assertIn('movement_types_changed=1', self.run_fin('transaction', 'refresh-types', '--yes').stdout)
-        updated = json.loads(self.run_fin('transaction', 'list', '--json').stdout)
-        self.assertEqual(next(r for r in updated if r['event_id'] == interest['event_id'])['movement_type'], 'interest')
-        with sqlite3.connect(self.root / 'data/fin/fin.sqlite3') as db:
+            # The derived type may be recomputed, the evidence it comes from may not.
             with self.assertRaises(sqlite3.IntegrityError):
-                db.execute('UPDATE movements SET movement_type = NULL WHERE event_id = ?', (interest['event_id'],))
+                db.execute("UPDATE movements SET amount = '1' WHERE event_id = ?", (interest['event_id'],))
+            with self.assertRaises(sqlite3.IntegrityError):
+                db.execute('DELETE FROM movements WHERE event_id = ?', (interest['event_id'],))
 
     def test_boursobank_fee_cheque_and_interest_types(self):
         examples = [('*CION CB OPERAT.ETRANGER EN DEV', '-1.20', 'fee'),
@@ -1012,7 +1001,7 @@ class ImportOnboarding(unittest.TestCase):
         rows = json.loads(self.run_fin('tx', 'list', '--json').stdout)
         deposit = next(r['event_id'] for r in rows if r['description'] == 'Initial deposit')
         out = self.run_fin('rule', 'explain', deposit).stdout
-        self.assertIn('Type: deposit  (import rules)', out)
+        self.assertIn('Type: deposit  (type rules)', out)
         self.assertIn('Type rules, each on the field it names', out)
         self.assertIn('decides  revolut-reported-deposit', out)
         self.assertIn('[Type: Deposit]', out)
@@ -1158,27 +1147,17 @@ class ImportOnboarding(unittest.TestCase):
         self.assertEqual(json.loads(self.run_fin('tx', 'list', '--type', 'interest', '--classification', 'settlement', '--json').stdout), [])
         self.assertTrue(all(r['movement_type'] is None for r in json.loads(
             self.run_fin('tx', 'list', '--type', 'unknown', '--json').stdout)))
-        database = self.root / 'data/fin/fin.sqlite3'
-        with sqlite3.connect(database) as db:
-            trigger = db.execute("SELECT sql FROM sqlite_schema WHERE name='movements_no_update'").fetchone()[0]
-            db.execute('DROP TRIGGER movements_no_update')
-            db.executemany('UPDATE movements SET movement_type = NULL WHERE event_id = ?',
-                           [(r['event_id'],) for r in settlements])
-            db.execute(trigger)
+        # Retyping on a rule change leaves reviewed settlements, their history and the
+        # journal untouched.
         history = self.run_fin('settlement', 'history').stdout
         journal = self.run_fin('journal', 'export').stdout
-        preview = self.terminal(['transaction', 'refresh-types', '--institution', 'boursobank'],
-            [('Apply these movement type changes? [Y/n]:', 'n')])
-        self.assertIn('unknown -> card-settlement', preview)
-        self.assertIn('Nothing changed.', preview)
-        self.assertIn('movement_types_changed=2', self.run_fin('transaction', 'refresh-types', '--yes').stdout)
+        self.run_fin('rule', 'add', 'noop-type', '--institution', 'boursobank', '--description',
+                     '^NO SUCH DESCRIPTION$', '--set-type', 'fee', '--automatic')
         restored = json.loads(self.run_fin('transaction', 'list', '--json').stdout)
         self.assertTrue(all(r['classification'] == 'settlement' and r['movement_type'] == 'card-settlement'
                             for r in restored if r['event_id'] in [s['event_id'] for s in settlements]))
         self.assertEqual(self.run_fin('settlement', 'history').stdout, history)
         self.assertEqual(self.run_fin('journal', 'export').stdout, journal)
-        self.assertIn('No movement type changes.', self.run_fin('transaction', 'refresh-types').stdout)
-        self.assertNotEqual(self.run_fin('transaction', 'refresh-types', '--dry-run', check=False).returncode, 0)
         self.env['PAGER'] = 'sed s/CLASSIFICATION/PAGED/'
         output = self.terminal(['transaction', 'list'], [])
         self.assertIn('PAGED', output)
@@ -1477,7 +1456,7 @@ class ImportOnboarding(unittest.TestCase):
         definition.write_text(json.dumps(invalid))
         self.assertNotEqual(self.run_fin('institution', 'definition', 'check', definition, check=False).returncode, 0)
 
-    def test_reported_type_rules_apply_on_import_and_preview_refresh(self):
+    def test_column_rules_retype_at_once(self):
         # This is about the bank's code, so drop the bundled rules on TransferWise ID.
         for name in ('wise-id-fee', 'wise-id-cashback'):
             self.run_fin('rule', 'delete', name, '--yes')
@@ -1487,16 +1466,18 @@ class ImportOnboarding(unittest.TestCase):
         self.run_fin('rule', 'add', 'my-card', '--institution', 'wise', '--field', 'Transaction Details Type',
                      '--description', '^CARD$', '--set-type', 'bonus', '--case-sensitive', '--automatic',
                      '--priority=-1000')
-        before = json.loads(self.run_fin('tx', 'list', '--institution', 'wise', '--json').stdout)
-        self.assertTrue(all(r['movement_type'] == 'card' for r in before))
-        preview = self.terminal(['tx', 'refresh-companion-types', '--institution', 'wise'],
-                                [('Apply these companion type changes?', 'n')])
-        self.assertIn('Proposed companion type changes: 3', preview)
-        self.assertIn('Nothing changed.', preview)
-        self.assertIn('companion_types_changed=3', self.run_fin('tx', 'refresh-companion-types', '--institution', 'wise', '--yes').stdout)
+        # Types are derived from the rules: saving, disabling and deleting a rule retype at once.
         after = json.loads(self.run_fin('tx', 'list', '--institution', 'wise', '--json').stdout)
         self.assertTrue(all(r['movement_type'] == 'bonus' for r in after))
-        self.assertIn('No companion type changes.', self.run_fin('tx', 'refresh-companion-types').stdout)
+        self.run_fin('rule', 'mode', 'my-card', 'disabled')
+        off = json.loads(self.run_fin('tx', 'list', '--institution', 'wise', '--json').stdout)
+        self.assertTrue(all(r['movement_type'] == 'card' for r in off))
+        self.run_fin('rule', 'mode', 'my-card', 'automatic')
+        on = json.loads(self.run_fin('tx', 'list', '--institution', 'wise', '--json').stdout)
+        self.assertTrue(all(r['movement_type'] == 'bonus' for r in on))
+        # Every change is in the type history, with the rule that caused it.
+        history = self.run_fin('tx', 'type', 'history').stdout
+        self.assertIn('rule my-card', history)
 
     def test_every_column_of_a_primary_csv_is_a_field(self):
         # Revolut: the columns the payload drops are kept beside the event.
@@ -1546,7 +1527,6 @@ class ImportOnboarding(unittest.TestCase):
                      '--description', '^BALANCE_CASHBACK-', '--set-type', 'bonus', '--automatic')
         listed = {r['name']: r for r in json.loads(self.run_fin('rule', 'list', '--json').stdout)}
         self.assertEqual(listed['by-ref']['field'], 'reference')
-        self.assertIn('movement_types_changed=1', self.run_fin('tx', 'refresh-types', '--institution', 'wise', '--yes').stdout)
         rows = json.loads(self.run_fin('tx', 'list', '--institution', 'wise', '--json').stdout)
         self.assertEqual(sorted(r['movement_type'] or '' for r in rows), ['', '', 'bonus'])
         event = next(r['event_id'] for r in rows if r['movement_type'] == 'bonus')
@@ -1559,7 +1539,7 @@ class ImportOnboarding(unittest.TestCase):
         rows = json.loads(self.run_fin('tx', 'list', '--json').stdout)
         deposit = next(r['event_id'] for r in rows if r['description'] == 'Initial deposit')
         out = self.run_fin('tx', 'show', deposit).stdout
-        self.assertIn('Type: deposit (import rules)', out)
+        self.assertIn('Type: deposit (type rules)', out)
         self.assertIn('Imported from', out)
         self.assertIn('file: ' + str(self.csv), out)
         self.assertIn('"transaction_type": "Deposit"', out)
@@ -1575,7 +1555,7 @@ class ImportOnboarding(unittest.TestCase):
         self.assertIn('wise-csv-v1', out)
         self.assertNotEqual(self.run_fin('tx', 'show', '999999', check=False).returncode, 0)
 
-    def test_reported_type_rules_can_match_any_companion_column(self):
+    def test_type_rules_can_match_any_companion_column(self):
         for name in ('wise-id-fee', 'wise-id-cashback'):
             self.run_fin('rule', 'delete', name, '--yes')
         self.run_fin('import', 'wise', 'fixtures/wise.csv', 'fixtures/wise.xml')
@@ -1586,19 +1566,18 @@ class ImportOnboarding(unittest.TestCase):
         listed = {r['name']: r for r in json.loads(self.run_fin('rule', 'list', '--json').stdout)}
         self.assertEqual(listed['id-cashback']['field'], 'TransferWise ID')
         self.assertEqual(listed['wise-reported-card']['field'], 'Transaction Details Type')
-        preview = self.run_fin('tx', 'refresh-companion-types', '--institution', 'wise', check=False)
-        self.assertNotEqual(preview.returncode, 0)  # a preview needs a terminal or --yes
-        out = self.run_fin('tx', 'refresh-companion-types', '--institution', 'wise', '--yes').stdout
-        self.assertIn('companion_types_changed=1', out)
+        # The rule retypes at once; no refresh step exists any more.
         types = sorted(r['movement_type'] for r in json.loads(self.run_fin('tx', 'list', '--institution', 'wise', '--json').stdout))
         self.assertEqual(types, ['bonus', 'card', 'card'])
-        self.assertIn('No companion type changes.', self.run_fin('tx', 'refresh-companion-types').stdout)
-        # Removing the rule puts the bank code back.
+        self.assertNotEqual(self.run_fin('tx', 'refresh-types', check=False).returncode, 0)
+        # Removing the rule puts the bank code back, and both changes are in the history.
         self.run_fin('rule', 'delete', 'id-cashback', '--yes')
-        self.assertIn('companion_types_changed=1', self.run_fin('tx', 'refresh-companion-types', '--yes').stdout)
         types = sorted(r['movement_type'] for r in json.loads(self.run_fin('tx', 'list', '--institution', 'wise', '--json').stdout))
         self.assertEqual(types, ['card', 'card', 'card'])
-        # Only reported-type rules may name a column.
+        history = json.loads(self.run_fin('tx', 'type', 'history', '--json').stdout)
+        self.assertEqual(sorted(h['reason'] for h in history),
+                         ['rule id-cashback added', 'rule id-cashback deleted'])
+        # Only automatic type rules may name a column.
         bad = self.run_fin('rule', 'add', 'x', '--description', 'a', '--set-type', 'card', '--field', 'A', check=False)
         self.assertNotEqual(bad.returncode, 0)
 

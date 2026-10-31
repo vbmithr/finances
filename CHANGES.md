@@ -10,6 +10,19 @@ short line of their own.
 
 ### 2026-10-31
 
+- Types are derived. A movement's type is recomputed from the type rules whenever
+  they could change: after an import, a companion match, and any rule or institution
+  definition change. A manual override still wins. Editing a rule therefore retypes
+  imported movements at once, and each change is recorded in `fin tx type history`
+  with the rule that caused it. Matched companion columns now count as fields of the
+  movement, so one rule form covers both. **Action required:** schema 30 drops
+  `companion_reported_types` and lets `movements.movement_type` be updated (and
+  nothing else); rebuild the database from your inboxes. Removed: `fin tx
+  refresh-types`, `fin tx refresh-companion-types`, `Store.preview_*` and
+  `Store.refresh_*` for types; new `Store.retype`. `fin rule explain` has two stages,
+  the manual override and the rules, and `fin tx show` no longer lists a separate
+  companion type.
+
 - One kind of type rule. `reported-type` and `reported-other` are gone: a bank's own
   code is an ordinary column, so a rule names the column with `--field` and the first
   matching rule in priority order decides, whether the column belongs to the

@@ -746,8 +746,7 @@ account. The balance clears when both movements are included. Undo restores both
 to review. `--yes` skips confirmation on `review` and `undo`. This workflow covers
 full ATM withdrawal reversals; partial reversals and fees need separate work.
 BoursoBank `ANNUL RETRAIT DAB` movements have type `withdrawal` and recorded
-reversal evidence. Refresh older types with `fin tx refresh-types --institution
-boursobank` and source evidence with `fin tx refresh-evidence --institution boursobank`.
+reversal evidence. Types follow the rules at once; refresh source evidence with `fin tx refresh-evidence --institution boursobank`.
 
 To undo a confirmed transfer, use its two event IDs (shown by
 `fin transfer candidates --all` or `fin transfer history`):
@@ -847,8 +846,8 @@ fin tx type reset EVENT-ID
 `type list` shows common types and provider-specific types observed in imported
 data; use one of those values with `type set`. `unknown` is a list filter, not a
 type. Manual types are overrides: they do not change the source movement or its
-accounting classification, survive reimports and `refresh-types`, and take
-precedence over imported and companion types. `type show` and transaction-list
+accounting classification, survive reimports and rule changes, and take
+precedence over derived types. `type show` and transaction-list
 JSON expose the imported type and any override. `type reset` removes the override
 and returns to the imported type. The append-only history records changes;
 `fin tx type history --json` is available for scripts.
@@ -892,9 +891,9 @@ Manual overrides and reviewed accounting decisions remain authoritative.
 Settlement rules require review and cannot run automatically.
 
 Replace a rule with `fin rule add NAME ... --replace`, supplying its complete
-new conditions, action, mode and priority. Changing, disabling or deleting a
-rule affects future imports, not existing transactions. Run `fin tx refresh-types --institution boursobank` to preview
-and refresh imported types. Use `fin rule preview NAME` and `fin rule apply
+new conditions, action, mode and priority. Adding, changing, disabling or deleting a
+type rule retypes existing transactions at once, and the type history records the
+rule. Category rules affect future imports only. Use `fin rule preview NAME` and `fin rule apply
 NAME` to review and apply decisions to existing transactions. Reimporting the
 same source does not rerun automatic rules. The database and backups contain
 rules; the bundled defaults are installed for a fresh database from each bundled
@@ -915,8 +914,8 @@ Revolut's maps its `Type` column (Card Payment and Card Refund to `card`, Deposi
 `deposit`, Transfer to `transfer`, ATM to `withdrawal`, Charge to `fee`). Both end
 with a catch-all that keeps any other code as a provider-specific type
 (`wise:{value}`, `revolut:{value}`). The first rule that matches, in priority order,
-decides. Imports apply the rules; for movements already imported, edit the rules and
-run `fin transaction refresh-types --institution revolut`. The bundled rules are
+decides. Types are derived from the rules, so editing a rule retypes imported movements at
+once. The bundled rules are
 installed into a new database; an existing database needs them added with `fin rule
 add`, or rebuilding.
 
@@ -953,15 +952,14 @@ which comes first in the list), and the single description for Wise and Revolut.
 A rule matches when any value under the field matches. A field that a transaction
 does not have matches nothing, and `fin rule explain` says so. A rule that names a
 field must be automatic (`--automatic`), because reviewed rules work from stored
-transactions, which do not keep fields; use `fin transaction refresh-types` to apply
-it to what is already imported.
+transactions, which do not keep fields. An automatic rule applies to what is already
+imported as soon as it is saved; use `fin rule test` to preview it.
 
 ```sh
 fin rule test wise-ref-fee --institution wise --field reference \
   --description '^FEE-' --set-type fee
 fin rule add wise-ref-fee --institution wise --field reference \
   --description '^FEE-' --set-type fee --automatic
-fin transaction refresh-types --institution wise
 ```
 
 On a Wise CAMT statement alone, with no CSV, that types every fee line. Fields of
@@ -971,14 +969,11 @@ exposed so far. `fin rule gaps` groups by the main description, like the rules.
 #### Explain a movement's type
 
 `fin rule explain EVENT-ID` (the event ID is in `fin tx list`) traces how one
-movement got its type, in the order fin applies the sources: a manual override; the
-type rules over the transaction's own fields, the first that matches deciding; and
-the type that matched companion-file rows agree on, used only when no rule decided.
-Each stage shows the rule that decides and the text it matched, the later rules
+movement got its type, in the order fin applies the sources: a manual override, then the
+type rules over the transaction's fields, matched companion columns counting as
+fields, the first rule that matches deciding. Each stage shows the rule that decides and the text it matched, the later rules
 that also match but lose to it, and a count of rules that did not match (`--all`
-lists them with the reason, such as a different account type). It also shows the type saved with the movement and says when the
-rules now give another one, which `fin transaction refresh-types` would update, and
-any recorded category. Category rules are not traced; use `fin rule preview`.
+lists them with the reason, such as a different account type). It also shows any recorded category. Category rules are not traced; use `fin rule preview`.
 
 #### Find untyped movements and test a rule before saving it
 
@@ -992,7 +987,6 @@ example description and a starting expression. Use `--institution` and `--limit`
 fin rule gaps --institution boursobank
 fin rule test cafes '^CAFE(?:\s|$)' --institution boursobank --set-type card
 fin rule add cafes '^CAFE(?:\s|$)' --institution boursobank --set-type card --automatic
-fin transaction refresh-types --institution boursobank
 ```
 
 `fin rule test NAME [REGEX]` evaluates a draft type rule as if it were saved as an
@@ -1009,25 +1003,15 @@ lists up to `--limit` examples (default 10) per outcome, or prints everything wi
 `--json`. Only automatic rules take part, because only they type movements on
 import.
 
-Refresh existing types from stored source evidence after importer improvements:
-
-```sh
-fin transaction refresh-types --institution boursobank
-```
-
-The command previews changed stored types and asks for confirmation; `--yes`
-applies the preview without prompting. Omit `--institution` for all institutions.
-It does not change event IDs, transactions, accounting classifications or review
-history. It rechecks the preview and applies the type changes atomically. Types
-from matched companion files are separate and are not changed by this command.
+Types are never refreshed by hand: fin recomputes them after every import, rule
+change and institution-definition change, and records each change in `fin tx type
+history`. Event IDs, accounting classifications and review history are untouched.
 A type rule that names a column also applies to the rows of a matched companion
-file, tested on that file's own columns. Add one and refresh the companion rows that
-were imported earlier:
+file, tested on that file's own columns:
 
 ```sh
 fin rule add wise-card --institution wise --field 'Transaction Details Type' \
   --description '^CARD$' --set-type card --case-sensitive --automatic
-fin tx refresh-companion-types --institution wise
 ```
 
 Name the column as it appears in the file's header; the rule matches when any cell
@@ -1039,7 +1023,6 @@ and cashback from the bank code `CARD`. Wise ships those rules as `wise-id-fee` 
 fin rule add wise-id-card-order --institution wise --field 'TransferWise ID' \
   --description '^CARD_ORDER_CHECKOUT-' --set-type fee --case-sensitive --automatic \
   --priority=-2000
-fin tx refresh-companion-types --institution wise
 ```
 
 The first rule that matches, in priority order, decides, so a rule with a lower
@@ -1049,10 +1032,8 @@ deciding rule matched is what `fin rule explain` shows for the companion file, a
 `fin rule list` shows the field of each rule. A type that contains `{value}` keeps
 the matched text as a provider-specific type. Lower priorities run first; new rules
 default to 1000, so give a rule a negative priority to outrank the bundled ones. The
-companion refresh shows affected CSV rows and matched transaction IDs, asks for
-confirmation and rechecks the preview atomically; `--yes` accepts it. An unmatched
-CSV row is refreshed too, so a later CAMT import uses its stored type. Rule edits and
-reimports do not change previously stored results until refresh.
+A row of a companion
+file that is not matched yet affects nothing until its transaction arrives.
 Manual type overrides and accounting decisions are preserved. Use
 `fin transaction review` for unclassified items and hledger for accounting
 reports and running balances.
@@ -1087,8 +1068,7 @@ A hint is only evidence: settlement and reversal candidates still need their
 normal account, amount and date checks and explicit confirmation. Changing,
 disabling or replacing a rule affects future imports. `fin tx refresh-evidence`
 previews changes to stored clues and asks before applying them; it does not
-change types, classifications or reviewed decisions. If type rules also
-changed, refresh types first. Transaction-list JSON exposes the recorded clues
+change types, classifications or reviewed decisions. Transaction-list JSON exposes the recorded clues
 as `source_card_reference` and `source_withdrawal_reversal`.
 
 ## Transaction rules
@@ -1192,7 +1172,7 @@ belongs to hledger; `fin` tracks import evidence, account identity and review st
 ## Library and dependency changes
 
 This build uses Base, decimal, Ptime and Bos, with no Core or Bigdecimal
-dependency. Version 1 account snapshots remain compatible; databases use schema 29 and
+dependency. Version 1 account snapshots remain compatible; databases use schema 30 and
 are rebuilt from the original statements (see above).
 
 OCaml callers use `Quantity.t` (a `Decimal.t` alias) and `Date.t` (a `Ptime.date`

@@ -205,8 +205,8 @@ configurable yet.
   CSV: the `source_event_fields` side table and the stored main-text index; tag-format
   flattening deferred), one rule form (step 3, done 2026-10-31: `reported-type` and
   `reported-other` removed, a bank's code is a column, `{value}` templates), then
-  derived types without the refresh commands (step 4) and removing the remaining old
-  action kinds (step 5).
+  derived types without the refresh commands (step 4, done 2026-10-31, schema 30) and
+  removing the remaining old action kinds and definition role columns (step 5).
 - [x] Wise rules shipped in `wise.json` (2026-10-31), on the `TransferWise ID`
   column rather than the description: `FEE-` to `fee` (187 rows), `BALANCE_CASHBACK-`
   to `bonus` (29) and the `MONEY_ADDED` code to `deposit` (2). They are ordinary

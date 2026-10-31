@@ -109,9 +109,8 @@ let gaps () =
       0
       (List.length (ok (Store.description_gaps ~institution:"wise" db)));
     ok (Store.add_classification_rule db (rule "deposits" "^Initial" "deposit"));
-    (* Saving a rule changes nothing until types are refreshed, so the gap list
-       reads the effective type, which an automatic rule has not yet changed. *)
-    check_int "unchanged until refresh" 3 (List.length (ok (Store.description_gaps db))))
+    (* Saving a rule types the movements it matches at once, so they leave the list. *)
+    check_int "typed at once" 2 (List.length (ok (Store.description_gaps db))))
 ;;
 
 let draft () =
@@ -246,13 +245,22 @@ let reported_code () =
               ~field:"Type"
               ())
        in
+       (* Types are derived: editing the rule retypes at once, and says why. *)
        ok (Store.replace_classification_rule db fee);
-       let changes = ok (Store.preview_movement_types ~institution:"revolut" db) in
-       check_int "three transfers would change" 3 (List.length changes);
-       check_int
-         "three refreshed"
-         3
-         (ok (Store.refresh_movement_types ~institution:"revolut" db ~expected:changes));
+       Alcotest.(check (list string))
+         "the three transfers are now fees"
+         [ "fee"; "fee"; "fee" ]
+         (List.filter_map (types db) ~f:(fun (_, t) ->
+            match t with
+            | Some Movement_type.Fee -> Some "fee"
+            | _ -> None));
+       let history = ok (Store.movement_type_history db) in
+       check_int "each change is in the type history" 3 (List.length history);
+       List.iter history ~f:(fun (h : Store.movement_type_history_entry) ->
+         Alcotest.(check string)
+           "reason"
+           "rule revolut-reported-transfer changed"
+           h.reason);
        (* One list of rules: a description rule that runs earlier wins, a later one
           is shadowed by the column rule. *)
        let to_bank priority =
@@ -376,9 +384,9 @@ let explain () =
          "effective"
          (Some "deposit")
          (Option.map e.effective ~f:Movement_type.to_string);
-       Alcotest.(check bool) "from import rules" true (Poly.equal e.source Import_rules);
+       Alcotest.(check bool) "from the rules" true (Poly.equal e.source Rules);
        (match
-          List.find e.description_checks ~f:(fun c ->
+          List.find e.checks ~f:(fun c ->
             match c.verdict with
             | Decides _ -> true
             | _ -> false)
@@ -392,7 +400,7 @@ let explain () =
        Alcotest.(check bool)
          "earlier rules that do not match are listed"
          true
-         (List.exists e.description_checks ~f:(fun c ->
+         (List.exists e.checks ~f:(fun c ->
             String.equal c.name "revolut-reported-card-payment"
             &&
             match c.verdict with
@@ -401,15 +409,10 @@ let explain () =
        Alcotest.(check bool)
          "the catch-all also matches"
          true
-         (List.exists e.description_checks ~f:(fun c ->
+         (List.exists e.checks ~f:(fun c ->
             String.equal c.name "revolut-reported-other"
             && Poly.equal c.verdict Also_matches));
-       Alcotest.(check bool)
-         "stored matches the rules"
-         true
-         (Option.equal Poly.equal e.stored e.rules_type);
-       (* A description rule refines the type; the stored type is then stale until
-          a refresh, and the explanation says so. *)
+       (* An earlier description rule takes over at once: the stored type follows. *)
        ok
          (Store.add_classification_rule
             db
@@ -420,13 +423,17 @@ let explain () =
          (Some "bonus")
          (Option.map e.rules_type ~f:Movement_type.to_string);
        Alcotest.(check (option string))
-         "stored is stale"
-         (Some "deposit")
-         (Option.map e.stored ~f:Movement_type.to_string);
+         "and so does the stored type"
+         (Some "bonus")
+         (List.find_map
+            (ok (Store.bank_review db))
+            ~f:(fun r -> Option.some_if (Int64.equal r.event_id deposit) r.movement_type)
+          |> Option.join
+          |> Option.map ~f:Movement_type.to_string);
        Alcotest.(check bool)
          "description rule decides"
          true
-         (List.exists e.description_checks ~f:(fun c ->
+         (List.exists e.checks ~f:(fun c ->
             String.equal c.name "initial-to-bonus"
             && Poly.equal c.verdict (Decides (Some (Movement_type.of_string "bonus")))));
        (* A manual override outranks every rule. *)
@@ -457,23 +464,27 @@ let explain_companion () =
                  ~path
                  (In_channel.read_all ("fixtures/" ^ path)))));
        ignore (ok (Store.match_companions ~institution:"wise" db));
-       let from_companion =
-         List.filter_map
+       (* The columns of the matched CSV rows are fields: a rule on one of them decides,
+          and the explanation shows the value it matched. *)
+       let all =
+         List.map
            (ok (Store.bank_review db))
-           ~f:(fun r ->
-             let e = ok (Store.explain_movement db r.event_id) in
-             Option.some_if (Poly.equal e.source Companion_code) e)
+           ~f:(fun r -> ok (Store.explain_movement db r.event_id))
        in
-       Alcotest.(check bool)
-         "some movement is typed by its companion code"
-         true
-         (not (List.is_empty from_companion));
-       List.iter from_companion ~f:(fun e ->
-         Alcotest.(check bool) "has a code" true (not (List.is_empty e.companion));
+       check_int
+         "every movement is typed by a rule"
+         3
+         (List.count all ~f:(fun e -> Poly.equal e.source Rules));
+       List.iter all ~f:(fun e ->
          Alcotest.(check bool)
-           "effective is the companion type"
+           "a rule on a companion column decides"
            true
-           (Option.equal Poly.equal e.effective e.companion_type));
+           (List.exists e.checks ~f:(fun c ->
+              (match c.verdict with
+               | Decides _ -> true
+               | _ -> false)
+              && (String.is_prefix c.input ~prefix:"Transaction Details Type: "
+                  || String.is_prefix c.input ~prefix:"TransferWise ID: "))));
        Ok ()))
 ;;
 
@@ -521,45 +532,40 @@ let field_rule () =
     (Store.with_open ~registry:Test_support.registry ":memory:" (fun db ->
        ok (Store.add_classification_rule db id_rule);
        import db;
-       Alcotest.check pairs "typed at import" [ "bonus", 1; "card", 2 ] (types db);
-       Alcotest.(check int)
-         "nothing to refresh"
-         0
-         (List.length (ok (Store.preview_companion_types db)));
+       Alcotest.check
+         pairs
+         "typed once the rows match"
+         [ "bonus", 1; "card", 2 ]
+         (types db);
        Ok ()));
-  (* A rule added afterwards changes the type through the refresh, and removing it
-     puts the bank code back. *)
+  (* A rule added afterwards retypes at once, and removing it puts the bank code back. *)
   ok
     (Store.with_open ~registry:Test_support.registry ":memory:" (fun db ->
        import db;
        Alcotest.check pairs "before" [ "card", 3 ] (types db);
        ok (Store.add_classification_rule db id_rule);
-       let changes = ok (Store.preview_companion_types db) in
-       Alcotest.(check int) "one row changes" 1 (List.length changes);
-       (match changes with
-        | [ c ] ->
-          Alcotest.(check (option string))
-            "the value the rule matched"
-            (Some "BALANCE_CASHBACK-abcdef01-2345-6789-abcd-ef0123456789")
-            c.code;
+       Alcotest.check pairs "after" [ "bonus", 1; "card", 2 ] (types db);
+       (match ok (Store.movement_type_history db) with
+        | [ h ] ->
+          Alcotest.(check string) "why" "rule id-cashback added" h.reason;
           Alcotest.(check bool)
             "from card to bonus"
             true
-            (Option.equal Poly.equal c.before (Some (Movement_type.of_string "card"))
-             && Option.equal Poly.equal c.after (Some (Movement_type.of_string "bonus")))
-        | _ -> ());
-       Alcotest.(check int)
-         "refreshed"
-         1
-         (ok (Store.refresh_companion_types db ~expected:changes));
-       Alcotest.check pairs "after" [ "bonus", 1; "card", 2 ] (types db);
+            (Option.equal
+               Poly.equal
+               h.previous_type
+               (Some (Movement_type.of_string "card"))
+             && Option.equal
+                  Poly.equal
+                  h.movement_type
+                  (Some (Movement_type.of_string "bonus")))
+        | other -> Alcotest.failf "one history entry expected, got %d" (List.length other));
        ok (Store.delete_classification_rule db "id-cashback");
-       let back = ok (Store.preview_companion_types db) in
-       Alcotest.(check int)
-         "refreshed back"
-         1
-         (ok (Store.refresh_companion_types db ~expected:back));
        Alcotest.check pairs "restored" [ "card", 3 ] (types db);
+       check_int
+         "both changes are recorded"
+         2
+         (List.length (ok (Store.movement_type_history db)));
        Ok ()));
   (* A review-mode type rule cannot name a field (it works from stored transactions,
      which keep none), nor can a category rule. An absent column matches nothing. *)
@@ -785,14 +791,15 @@ let primary_fields () =
                ~field:"reference"
                ~institution:"wise"
                "^BALANCE_CASHBACK-"));
-       let changes = ok (Store.preview_movement_types ~institution:"wise" db) in
-       check_int "one movement changes" 1 (List.length changes);
-       let event_id = (List.hd_exn changes).event_id in
+       (* The saved rule retypes at once; explain shows the value it matched. *)
+       let history = ok (Store.movement_type_history db) in
+       check_int "one movement changes" 1 (List.length history);
+       let event_id = (List.hd_exn history).event_id in
        let e = ok (Store.explain_movement db event_id) in
        Alcotest.(check bool)
          "explain shows the field's value"
          true
-         (List.exists e.description_checks ~f:(fun c ->
+         (List.exists e.checks ~f:(fun c ->
             String.equal c.name "ref-cashback"
             && String.is_prefix c.input ~prefix:"reference: BALANCE_CASHBACK-"));
        Ok ()))
@@ -833,10 +840,7 @@ let show () =
             "the file it came from"
             [ "wise.csv" ]
             c.document.paths;
-          Alcotest.(check bool)
-            "a type rule matched its code"
-            true
-            (Option.is_some c.reported)
+          ()
         | _ -> Alcotest.fail "expected one matched companion row");
        Alcotest.(check bool)
          "unknown id"
