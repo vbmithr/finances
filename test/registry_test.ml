@@ -3,7 +3,7 @@ open Stdio
 open Finances
 
 module Revolut_csv = Csv_running_source.Make (struct
-    let profile = Option.value_exn (Csv_running_profile.find "revolut")
+    let profile = Option.value_exn (Builtin.running_profile "revolut")
   end)
 
 let ok = Or_error.ok_exn
@@ -208,6 +208,59 @@ let reverted () =
           ]))
 ;;
 
+(* The bundled institutions are one definition file each. *)
+let bundled_definitions () =
+  let raw =
+    [ "boursobank", Bundled_definitions.boursobank
+    ; "wise", Bundled_definitions.wise
+    ; "revolut", Bundled_definitions.revolut
+    ; "bunq", Bundled_definitions.bunq
+    ]
+  in
+  Alcotest.(check (list string))
+    "institutions"
+    (List.map raw ~f:fst)
+    (List.map Builtin.definitions ~f:Institution_definition.institution);
+  List.iter2_exn raw Builtin.definitions ~f:(fun (name, text) definition ->
+    (* The file is the canonical encoding, so [definition show] prints it unchanged. *)
+    Alcotest.(check string)
+      (name ^ " is canonical")
+      (String.strip text)
+      (String.strip
+         (Json.encode ~format:Jsont.Indent Institution_definition.codec definition));
+    (* The store names installed type rules by position. *)
+    List.filter definition.rules ~f:(fun r ->
+      match r.action with
+      | Type -> true
+      | _ -> false)
+    |> List.iteri ~f:(fun i (r : Institution_definition.rule) ->
+      Alcotest.(check string)
+        (name ^ " type rule name")
+        (Printf.sprintf "%s-default-%02d" name (i + 1))
+        r.name;
+      Alcotest.(check int) (name ^ " type rule priority") i r.priority));
+  let names =
+    List.concat_map Builtin.definitions ~f:(fun d ->
+      List.map d.rules ~f:(fun r -> r.name))
+  in
+  Alcotest.(check bool)
+    "rule names are unique across bundled institutions"
+    false
+    (List.contains_dup names ~compare:String.compare);
+  let derived =
+    List.length Builtin.source_evidence
+    + List.length Builtin.reported_types
+    + List.sum
+        (module Int)
+        Builtin.source_typing
+        ~f:(fun p -> List.length (Source_typing.rules p))
+  in
+  Alcotest.(check int)
+    "every bundled rule becomes a default"
+    (List.sum (module Int) Builtin.definitions ~f:(fun d -> List.length d.rules))
+    derived
+;;
+
 let () =
   Alcotest.run
     "registry"
@@ -218,6 +271,7 @@ let () =
         ; Alcotest.test_case "unregistered institution import" `Quick unregistered_import
         ; Alcotest.test_case "ISO 4217 currencies" `Quick currencies
         ; Alcotest.test_case "reverted Revolut rows" `Quick reverted
+        ; Alcotest.test_case "bundled definitions" `Quick bundled_definitions
         ] )
     ]
 ;;

@@ -33,10 +33,3 @@ let codec =
   |> Jsont.Object.error_unknown
   |> Jsont.Object.finish
 ;;
-
-let all = Json.decode (Jsont.list codec) Institution_presets_data.json |> Or_error.ok_exn
-
-let find name =
-  List.find all ~f:(fun p ->
-    List.mem (p.institution :: p.aliases) name ~equal:String.equal)
-;;

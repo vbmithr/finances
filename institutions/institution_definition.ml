@@ -248,3 +248,74 @@ let adapter t =
       ~metadata_prefix:p.metadata_prefix
       ()
 ;;
+
+let aliases t =
+  match t.source with
+  | Ofx_csv p -> p.aliases
+  | Camt_csv p -> p.aliases
+  | Csv p -> p.aliases
+  | Running_csv p -> p.aliases
+  | Mt940_csv p -> p.aliases
+;;
+
+let names t = institution t :: aliases t
+
+(* Default rules, in the shapes the registry and the store consume. A bundled
+   definition's [Type] rules are named [INSTITUTION-default-NN] with priority
+   NN-1, which is how the store names them when it installs them. *)
+
+let default_source_typing t =
+  let rules =
+    List.filter_map t.rules ~f:(fun r ->
+      match r.action with
+      | Type ->
+        Some
+          (Source_typing.make_rule r.pattern r.account_type r.case_sensitive r.target
+           |> Or_error.ok_exn
+           |> fun rule -> Source_typing.with_match_type rule r.match_type)
+      | Card_reference | Withdrawal_reversal | Reported_type | Reported_other -> None)
+  in
+  if List.is_empty rules
+  then None
+  else Some (Source_typing.create ~institution:(institution t) rules)
+;;
+
+let default_source_evidence t =
+  List.filter_map t.rules ~f:(fun r ->
+    let default action =
+      Some
+        { Source_evidence.institution = institution t
+        ; name = r.name
+        ; pattern = r.pattern
+        ; case_sensitive = r.case_sensitive
+        ; action
+        }
+    in
+    match r.action with
+    | Card_reference -> default Source_evidence.Card_reference
+    | Withdrawal_reversal -> default Source_evidence.Withdrawal_reversal
+    | Type | Reported_type | Reported_other -> None)
+;;
+
+let default_reported_types t =
+  List.filter_map t.rules ~f:(fun r ->
+    let default action =
+      Some
+        { Reported_type_defaults.institution = institution t
+        ; name = r.name
+        ; priority = r.priority
+        ; pattern = r.pattern
+        ; case_sensitive = r.case_sensitive
+        ; action
+        }
+    in
+    match r.action with
+    | Reported_type ->
+      default
+        (Reported_type_defaults.Type
+           (if String.equal r.target "unknown"
+            then None
+            else Some (Movement_type.of_string r.target)))
+    | Reported_other -> default (Reported_type_defaults.Other r.target)
+    | Type | Card_reference | Withdrawal_reversal -> None)
+;;

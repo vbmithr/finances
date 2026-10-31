@@ -1,47 +1,70 @@
 open Base
 
-(** The banks built into [fin]. External adapters are added by building a
-    custom executable with a longer list. *)
+(** The banks built into [fin], one definition each: source profile and default
+    rules. [fin institution definition show] prints the same files. External
+    adapters are added by building a custom executable with a longer list. *)
+let definitions : Institution_definition.t list =
+  List.map
+    [ Bundled_definitions.boursobank
+    ; Bundled_definitions.wise
+    ; Bundled_definitions.revolut
+    ; Bundled_definitions.bunq
+    ]
+    ~f:(fun json -> Json.decode Institution_definition.codec json |> Or_error.ok_exn)
+;;
+
+let definition name =
+  List.find definitions ~f:(fun d ->
+    List.mem (Institution_definition.names d) name ~equal:String.equal)
+;;
+
+(* Typed accessors for tests and tools that need one bundled profile. *)
+let ofx_preset name =
+  Option.bind (definition name) ~f:(fun d ->
+    match d.source with
+    | Ofx_csv p -> Some p
+    | Camt_csv _ | Csv _ | Running_csv _ | Mt940_csv _ -> None)
+;;
+
+let camt_preset name =
+  Option.bind (definition name) ~f:(fun d ->
+    match d.source with
+    | Camt_csv p -> Some p
+    | Ofx_csv _ | Csv _ | Running_csv _ | Mt940_csv _ -> None)
+;;
+
+let running_profile name =
+  Option.bind (definition name) ~f:(fun d ->
+    match d.source with
+    | Running_csv p -> Some p
+    | Ofx_csv _ | Camt_csv _ | Csv _ | Mt940_csv _ -> None)
+;;
+
+let mt940_profile name =
+  Option.bind (definition name) ~f:(fun d ->
+    match d.source with
+    | Mt940_csv p -> Some p
+    | Ofx_csv _ | Camt_csv _ | Csv _ | Running_csv _ -> None)
+;;
+
 let adapters : (module Adapter.S) list =
-  let presets =
-    List.map Institution_preset.all ~f:(fun p ->
-      Institution_definition.adapter { source = Ofx_csv p; rules = [] })
-  in
-  let camt_presets =
-    List.map Camt_institution_preset.all ~f:(fun p ->
-      Institution_definition.adapter { source = Camt_csv p; rules = [] })
-  in
-  let running =
-    List.map Csv_running_profile.all ~f:(fun p ->
-      Institution_definition.adapter { source = Running_csv p; rules = [] })
-  in
-  let mt940 =
-    List.map Mt940_presets.all ~f:(fun p ->
-      Institution_definition.adapter { source = Mt940_csv p; rules = [] })
-  in
-  presets @ camt_presets @ running @ mt940 @ [ (module Csv_adapter) ]
+  List.map definitions ~f:Institution_definition.adapter @ [ (module Csv_adapter) ]
 ;;
 
-let companion_layout name =
-  Option.map (Institution_preset.find name) ~f:(fun p -> p.layout)
-;;
-
+let companion_layout name = Option.map (ofx_preset name) ~f:(fun p -> p.layout)
 let fallback = "csv-movement", Csv_movement.decode
 let fallbacks = [ "bank-transaction", Ofx_bank.decode ]
 
 let source_typing =
-  Json.decode (Jsont.list Source_typing.codec) Source_type_defaults.json
-  |> Or_error.ok_exn
+  List.filter_map definitions ~f:Institution_definition.default_source_typing
 ;;
 
 let source_evidence =
-  Json.decode (Jsont.list Source_evidence.default_codec) Source_evidence_defaults.json
-  |> Or_error.ok_exn
+  List.concat_map definitions ~f:Institution_definition.default_source_evidence
 ;;
 
 let reported_types =
-  Json.decode (Jsont.list Reported_type_defaults.codec) Reported_type_defaults_data.json
-  |> Or_error.ok_exn
+  List.concat_map definitions ~f:Institution_definition.default_reported_types
 ;;
 
 let registry =

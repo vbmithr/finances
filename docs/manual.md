@@ -893,12 +893,14 @@ rule affects future imports, not existing transactions. Run `fin tx refresh-type
 and refresh imported types. Use `fin rule preview NAME` and `fin rule apply
 NAME` to review and apply decisions to existing transactions. Reimporting the
 same source does not rerun automatic rules. The database and backups contain
-rules; the bundled defaults are installed for a fresh database from
-[`institutions/source_type_defaults.json`](../institutions/source_type_defaults.json).
-Wise companion CSV type codes use the same rule list. The bundled
-[`institutions/reported_type_defaults.json`](../institutions/reported_type_defaults.json)
-maps known codes and preserves other codes as provider-specific types. These
-rules match the reported code, not the transaction description.
+rules; the bundled defaults are installed for a fresh database from each bundled
+institution's definition, one file per institution:
+[BoursoBank](../institutions/boursobank.json), [Wise](../institutions/wise.json),
+[Bunq](../institutions/bunq.json) and [Revolut](../institutions/revolut.json).
+`fin institution definition show INSTITUTION` prints the same file.
+Wise companion CSV type codes use the same rule list: its definition maps known
+codes and preserves other codes as provider-specific types. These rules match the
+reported code, not the transaction description.
 
 Refresh existing types from stored source evidence after importer improvements:
 

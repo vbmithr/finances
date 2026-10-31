@@ -1,0 +1,135 @@
+{
+  "version": 1,
+  "kind": "camt-csv",
+  "camt": {
+    "institution": "wise",
+    "aliases": [],
+    "companion_format": "wise_csv",
+    "matching_policy": "wise-csv-v1",
+    "metadata_prefix": "wise",
+    "camt_profile": {
+      "version": 1,
+      "institution": "wise",
+      "namespace": "urn:iso:std:iso:20022:tech:xsd:camt.053.001.10",
+      "servicer_contains": "wise",
+      "account_type_prefix": "balance-",
+      "event_kind": "wise-transaction",
+      "payload_tag": "wise-camt-v1",
+      "reference_field": "proprietary-code",
+      "reference_normalization": {
+        "prefix": "BALANCE_CASHBACK-",
+        "description": "cashback",
+        "length": 32
+      }
+    },
+    "csv_profile": {
+      "version": 1,
+      "institution": "wise",
+      "name": "Wise",
+      "header": [
+        "TransferWise ID",
+        "Date",
+        "Date Time",
+        "Amount",
+        "Currency",
+        "Description",
+        "Payment Reference",
+        "Running Balance",
+        "Exchange From",
+        "Exchange To",
+        "Exchange Rate",
+        "Payer Name",
+        "Payee Name",
+        "Payee Account Number",
+        "Merchant",
+        "Card Last Four Digits",
+        "Card Holder Full Name",
+        "Attachment",
+        "Note",
+        "Total fees",
+        "Exchange To Amount",
+        "Transaction Type",
+        "Transaction Details Type"
+      ],
+      "columns": {
+        "reference": "TransferWise ID",
+        "date": "Date",
+        "datetime": "Date Time",
+        "amount": "Amount",
+        "currency": "Currency",
+        "description": "Description",
+        "payment_reference": "Payment Reference",
+        "running_balance": "Running Balance",
+        "payee": "Payee Name",
+        "merchant": "Merchant",
+        "fees": "Total fees",
+        "direction": "Transaction Type",
+        "details_type": "Transaction Details Type"
+      },
+      "conflict_columns": [
+        "Exchange From",
+        "Exchange To",
+        "Exchange Rate",
+        "Exchange To Amount"
+      ]
+    }
+  },
+  "rules": [
+    {
+      "name": "wise-reported-card",
+      "pattern": "^CARD$",
+      "case_sensitive": true,
+      "priority": 0,
+      "action": "reported-type",
+      "target": "card"
+    },
+    {
+      "name": "wise-reported-transfer",
+      "pattern": "^TRANSFER$",
+      "case_sensitive": true,
+      "priority": 1,
+      "action": "reported-type",
+      "target": "transfer"
+    },
+    {
+      "name": "wise-reported-conversion",
+      "pattern": "^CONVERSION$",
+      "case_sensitive": true,
+      "priority": 2,
+      "action": "reported-type",
+      "target": "conversion"
+    },
+    {
+      "name": "wise-reported-direct-debit",
+      "pattern": "^DIRECT_DEBIT$",
+      "case_sensitive": true,
+      "priority": 3,
+      "action": "reported-type",
+      "target": "direct-debit"
+    },
+    {
+      "name": "wise-reported-deposit",
+      "pattern": "^DEPOSIT$",
+      "case_sensitive": true,
+      "priority": 4,
+      "action": "reported-type",
+      "target": "deposit"
+    },
+    {
+      "name": "wise-reported-unknown",
+      "pattern": "^UNKNOWN$",
+      "case_sensitive": true,
+      "priority": 5,
+      "action": "reported-type",
+      "target": "unknown"
+    },
+    {
+      "name": "wise-reported-other",
+      "pattern": ".+",
+      "case_sensitive": true,
+      "priority": 100,
+      "action": "reported-other",
+      "target": "wise:"
+    }
+  ]
+}

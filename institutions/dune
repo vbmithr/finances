@@ -6,73 +6,15 @@
 
 (copy_files ../formats/statement/*.mli)
 
+; Bundled institutions are one definition each: source profile and default rules.
+
 (rule
- (targets source_type_defaults.ml)
- (deps source_type_defaults.json)
+ (targets bundled_definitions.ml)
+ (deps boursobank.json wise.json revolut.json bunq.json)
  (action
   (write-file
    %{targets}
-   "let json = {fin|%{read:source_type_defaults.json}|fin}")))
-
-(rule
- (targets institution_presets_data.ml)
- (deps institution_presets.json)
- (action
-  (write-file
-   %{targets}
-   "let json = {fin|%{read:institution_presets.json}|fin}")))
-
-(rule
- (targets source_evidence_defaults.ml)
- (deps source_evidence_defaults.json)
- (action
-  (write-file
-   %{targets}
-   "let json = {fin|%{read:source_evidence_defaults.json}|fin}")))
-
-(rule
- (targets camt_profiles_data.ml)
- (deps camt_profiles.json)
- (action
-  (write-file %{targets} "let json = {fin|%{read:camt_profiles.json}|fin}")))
-
-(rule
- (targets csv_clock_profiles_data.ml)
- (deps csv_clock_profiles.json)
- (action
-  (write-file
-   %{targets}
-   "let json = {fin|%{read:csv_clock_profiles.json}|fin}")))
-
-(rule
- (targets reported_type_defaults_data.ml)
- (deps reported_type_defaults.json)
- (action
-  (write-file
-   %{targets}
-   "let json = {fin|%{read:reported_type_defaults.json}|fin}")))
-
-(rule
- (targets camt_institution_presets_data.ml)
- (deps camt_institution_presets.json)
- (action
-  (write-file
-   %{targets}
-   "let json = {fin|%{read:camt_institution_presets.json}|fin}")))
-
-(rule
- (targets csv_running_profiles_data.ml)
- (deps csv_running_profiles.json)
- (action
-  (write-file
-   %{targets}
-   "let json = {fin|%{read:csv_running_profiles.json}|fin}")))
-
-(rule
- (targets mt940_profiles_data.ml)
- (deps mt940_profiles.json)
- (action
-  (write-file %{targets} "let json = {fin|%{read:mt940_profiles.json}|fin}")))
+   "let boursobank = {fin|%{read:boursobank.json}|fin}\n\nlet wise = {fin|%{read:wise.json}|fin}\n\nlet revolut = {fin|%{read:revolut.json}|fin}\n\nlet bunq = {fin|%{read:bunq.json}|fin}\n")))
 
 ; Adapters are pure: no Rel or SQLite dependency, enforced here.
 

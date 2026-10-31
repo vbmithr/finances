@@ -110,11 +110,3 @@ let codec =
   |> Jsont.Object.error_unknown
   |> Jsont.Object.finish
 ;;
-
-let profiles =
-  Json.decode (Jsont.list codec) Csv_clock_profiles_data.json |> Or_error.ok_exn
-;;
-
-let find institution =
-  List.find profiles ~f:(fun p -> String.equal p.institution institution)
-;;

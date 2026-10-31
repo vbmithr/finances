@@ -9,14 +9,14 @@ let replace s a b = String.substr_replace_all s ~pattern:a ~with_:b
 module Wise_csv = struct
   include Csv_clock_companion
 
-  let profile = Option.value_exn (Csv_clock_profile.find "wise")
-  let camt = Option.value_exn (Camt_profile.find "wise")
+  let profile = (Option.value_exn (Builtin.camt_preset "wise")).csv_profile
+  let camt = (Option.value_exn (Builtin.camt_preset "wise")).camt_profile
   let parse = parse profile camt
   let match_rows = match_rows profile
 end
 
 module Wise_camt = struct
-  let profile = Option.value_exn (Camt_profile.find "wise")
+  let profile = (Option.value_exn (Builtin.camt_preset "wise")).camt_profile
   let source = Camt_source.create profile
   let parse = Camt_source.parse source
   let source_transaction = Camt_source.source_transaction source
@@ -85,8 +85,8 @@ let parser () =
 ;;
 
 let reusable_clock_csv () =
-  let wise = Option.value_exn (Csv_clock_profile.find "wise") in
-  let camt = Option.value_exn (Camt_profile.find "wise") in
+  let wise = (Option.value_exn (Builtin.camt_preset "wise")).csv_profile in
+  let camt = (Option.value_exn (Builtin.camt_preset "wise")).camt_profile in
   let header =
     List.map wise.header ~f:(fun s ->
       if String.equal s "TransferWise ID" then "Reference" else s)
@@ -133,7 +133,7 @@ let reusable_clock_csv () =
 ;;
 
 let reusable_camt_source () =
-  let wise = Option.value_exn (Camt_profile.find "wise") in
+  let wise = (Option.value_exn (Builtin.camt_preset "wise")).camt_profile in
   let profile =
     { wise with
       institution = "example"

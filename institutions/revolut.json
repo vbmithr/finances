@@ -1,5 +1,7 @@
-[
-  {
+{
+  "version": 1,
+  "kind": "running-csv",
+  "running": {
     "version": 1,
     "institution": "revolut",
     "name": "Revolut",
@@ -35,5 +37,6 @@
     "product_value": "Current",
     "completed_value": "COMPLETED",
     "reverted_value": "REVERTED"
-  }
-]
+  },
+  "rules": []
+}

@@ -3,7 +3,7 @@ open Stdio
 open Finances
 
 module Revolut_csv = Csv_running_source.Make (struct
-    let profile = Option.value_exn (Csv_running_profile.find "revolut")
+    let profile = Option.value_exn (Builtin.running_profile "revolut")
   end)
 
 let ok = Or_error.ok_exn
@@ -84,7 +84,7 @@ let entries db id =
 let counter db id = (List.nth_exn (entries db id).postings 1).account
 
 let reusable_running_csv () =
-  let original = Option.value_exn (Csv_running_profile.find "revolut") in
+  let original = Option.value_exn (Builtin.running_profile "revolut") in
   let profile =
     { original with
       institution = "example"

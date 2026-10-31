@@ -1,5 +1,7 @@
-[
-  {
+{
+  "version": 1,
+  "kind": "mt940-csv",
+  "mt940": {
     "version": 1,
     "institution": "bunq",
     "name": "Bunq",
@@ -34,5 +36,6 @@
       "description": "Description"
     },
     "metadata_prefix": "bunq"
-  }
-]
+  },
+  "rules": []
+}

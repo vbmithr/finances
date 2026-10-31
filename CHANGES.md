@@ -10,6 +10,16 @@ short line of their own.
 
 ### 2026-10-31
 
+- Ship each bundled institution as one definition file (`institutions/boursobank.json`,
+  `wise.json`, `bunq.json`, `revolut.json`) holding its source profile and default
+  rules, replacing nine preset, profile and default-rule files. `fin institution
+  definition show` prints the same files; the default rules of a new database are
+  unchanged. **Action required:** OCaml consumers must replace
+  `Institution_preset.all`/`find`, `Camt_institution_preset.all`,
+  `Camt_profile.find`, `Csv_clock_profile.find`, `Csv_running_profile.all`/`find`
+  and `Mt940_presets` with `Builtin.definitions` and its accessors. The CLI and
+  database are unchanged.
+
 - Express the MT940 adapter as ordinary profile-bound functions, using the
   shared registry adapter constructor. Its import behavior is unchanged.
 
