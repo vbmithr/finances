@@ -196,6 +196,10 @@ configurable yet.
 - [x] `fin rule test` for a draft type rule: matches, newly typed and changed
   movements, rules that shadow it and manual overrides; read-only (2026-10-31).
   Conflicts with reviewed decisions and near misses are not reported yet.
+- [x] `fin rule explain EVENT-ID` (2026-10-31): type trace by stage, stale-type
+  warning. Category rules are not traced yet; `--json` is not implemented.
+- [x] `fin institution show INSTITUTION` (2026-10-31): fields read and unread, what
+  rules can match, default rules, imported types.
 - [x] `fin rule gaps`: movements with no type, grouped by the first words of their
   description, with a suggested expression (2026-10-31). The grouping key is a
   heuristic to tune on real data.

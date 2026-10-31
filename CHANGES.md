@@ -10,6 +10,19 @@ short line of their own.
 
 ### 2026-10-31
 
+- Add `fin rule explain EVENT-ID` to trace how a movement got its type: manual
+  override, the bank's code, description rules and the companion file's code, with
+  the deciding rule, the rules that lose to it and whether the saved type is stale.
+  Read-only; `--all` lists the rules that did not match.
+
+- Add `fin institution show INSTITUTION`: kind, what fin reads from each source
+  column, columns it does not read, what rules can match, default rules and
+  imported movements by type. Read-only; it reads stored rows without decoding
+  payloads, so it takes about 5 ms on 4,000 movements.
+
+- `fin delete` now asks `[y/N]`: only `y` or `yes` confirms, and Enter declines.
+  Other confirmations are unchanged.
+
 - Type Revolut movements from the `Type` column of the CSV: Card Payment and Card
   Refund become `card`, Deposit `deposit`, Transfer `transfer`, ATM `withdrawal`
   and Charge `fee`; other codes are kept as `revolut:CODE`. The mapping is ordinary

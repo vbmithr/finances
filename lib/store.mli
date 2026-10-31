@@ -566,3 +566,20 @@ type description_gap =
   }
 
 val description_gaps : ?institution:string -> t -> description_gap list Or_error.t
+
+(** Imported movements of one institution: how many, over what dates, and by
+    effective type (a manual override, else the primary's type, else the type the
+    matched companion rows agree on; [None] is untyped). It reads stored rows with
+    three queries and decodes no payloads, so it is cheap on a large database. *)
+type institution_summary =
+  { movements : int
+  ; first_on : string option
+  ; last_on : string option
+  ; by_type : (Movement_type.t option * int) list (** Largest first. *)
+  }
+
+val institution_summary : t -> string -> institution_summary Or_error.t
+
+(** Trace how a movement got its type, step by step, and report its recorded
+    category. Reads one movement; nothing is changed. *)
+val explain_movement : t -> int64 -> Explanation.t Or_error.t

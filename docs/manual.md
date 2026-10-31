@@ -144,7 +144,8 @@ Use `fin journal export` to render the restored entries. Original statement
 files and exported settings snapshots are kept.
 
 `fin delete` lists the database, SQLite sidecars, generated journal and any pending
-account edit draft, then asks you to type `yes`. Your statement folders and
+account edit draft, then asks `Delete these files? [y/N]`; only `y` or `yes`
+confirms, and Enter declines. Your statement folders and
 exported account snapshots are never touched. In a script, `fin delete --yes`
 skips the question; without a terminal and without `--yes` it refuses.
 `--database FILE` selects which database and associated files to delete.
@@ -898,6 +899,11 @@ institution's definition, one file per institution:
 [BoursoBank](../institutions/boursobank.json), [Wise](../institutions/wise.json),
 [Bunq](../institutions/bunq.json) and [Revolut](../institutions/revolut.json).
 `fin institution definition show INSTITUTION` prints the same file.
+`fin institution show INSTITUTION` summarizes one in plain text: its kind, what fin
+reads from each source column by role, the columns it does not read, what rules
+can match (a type rule sees the first description; a reported-type rule sees the
+bank's own code column), its default rules and, when a database exists, how many
+movements are imported by type. It also works for installed definitions.
 Reported-type rules use the same rule list. They match a bank's own code, not the
 transaction description. Wise's definition maps the codes of its companion CSV.
 Revolut's maps the `Type` column of its primary CSV: Card Payment and Card Refund
@@ -909,6 +915,19 @@ Imports apply the rules; for movements already imported, edit the rules and run
 `fin transaction refresh-types --institution revolut`. The bundled rules are
 installed into a new database; an existing database needs them added, for example
 with `fin rule add-reported-type`, or rebuilding.
+
+#### Explain a movement's type
+
+`fin rule explain EVENT-ID` (the event ID is in `fin tx list`) traces how one
+movement got its type, in the order fin applies the sources: a manual override; the
+reported-type rules on the bank's own code in a primary source; the type rules on
+the first description, which see the type the code gave; and the code of a matched
+companion file, used only when the import rules give no type. Each stage shows the
+rule that decides, the later rules that also match but lose to it, and a count of
+rules that did not match (`--all` lists them with the reason, such as a different
+account type). It also shows the type saved with the movement and says when the
+rules now give another one, which `fin transaction refresh-types` would update, and
+any recorded category. Category rules are not traced; use `fin rule preview`.
 
 #### Find untyped movements and test a rule before saving it
 

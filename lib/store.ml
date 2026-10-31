@@ -5919,3 +5919,311 @@ let description_gaps ?institution db =
     | c -> c)
   |> fun gaps -> Ok gaps
 ;;
+
+type institution_summary =
+  { movements : int
+  ; first_on : string option
+  ; last_on : string option
+  ; by_type : (Movement_type.t option * int) list
+  }
+
+let institution_summary db institution =
+  let* rows =
+    db_result
+      (Db.fold
+         db.conn
+         (Rel_sql.Stmt.(
+            func
+              "SELECT m.event_id,m.booked_on,m.movement_type,o.movement_type FROM \
+               movements m JOIN source_events e ON e.id=m.event_id LEFT JOIN \
+               movement_type_overrides o ON o.event_id=m.event_id WHERE e.venue=?"
+              (text
+               @-> ret
+                     Row.(
+                       t4
+                         (int64 "event_id")
+                         (text "booked_on")
+                         (option Rel.Type.text "movement_type")
+                         (option Rel.Type.text "override"))))
+            institution)
+         (fun row acc -> row :: acc)
+         [])
+  in
+  (* Companion rows give a type only through the stored reported types, and the
+     matched rows of one movement must agree on a single one. *)
+  let* companion =
+    db_result
+      (Db.fold
+         db.conn
+         (Rel_sql.Stmt.(
+            func
+              "SELECT DISTINCT c.event_id,r.movement_type FROM companion_matches c JOIN \
+               companion_reported_types r ON r.row_id=c.row_id JOIN source_events e ON \
+               e.id=c.event_id WHERE c.state='matched' AND e.venue=? AND r.movement_type \
+               IS NOT NULL"
+              (text
+               @-> ret Row.(t2 (option Rel.Type.int64 "event_id") (text "movement_type"))
+              ))
+            institution)
+         (fun row acc -> row :: acc)
+         [])
+  in
+  let companion_types = Hashtbl.create (module Int64) in
+  List.iter companion ~f:(fun (event_id, kind) ->
+    Option.iter event_id ~f:(fun id ->
+      Hashtbl.add_multi companion_types ~key:id ~data:kind));
+  let effective (event_id, _, primary, override) =
+    match Option.first_some override primary with
+    | Some kind -> Some (Movement_type.of_string kind)
+    | None ->
+      (match Hashtbl.find companion_types event_id with
+       | Some [ kind ] -> Some (Movement_type.of_string kind)
+       | _ -> None)
+  in
+  let counts = Hashtbl.create (module String) in
+  List.iter rows ~f:(fun row ->
+    let kind = effective row in
+    Hashtbl.update
+      counts
+      (Option.value_map kind ~default:"" ~f:Movement_type.to_string)
+      ~f:(fun n -> kind, 1 + Option.value_map n ~default:0 ~f:snd));
+  let dates = List.map rows ~f:(fun (_, d, _, _) -> d) in
+  Ok
+    { movements = List.length rows
+    ; first_on = List.min_elt dates ~compare:String.compare
+    ; last_on = List.max_elt dates ~compare:String.compare
+    ; by_type =
+        Hashtbl.data counts
+        |> List.sort ~compare:(fun (a, x) (b, y) ->
+          match Int.compare y x with
+          | 0 ->
+            String.compare
+              (Option.value_map a ~default:"" ~f:Movement_type.to_string)
+              (Option.value_map b ~default:"" ~f:Movement_type.to_string)
+          | c -> c)
+    }
+;;
+
+let explain_movement db event_id =
+  let* source_events = events db in
+  let* event =
+    List.Assoc.find source_events event_id ~equal:Int64.equal
+    |> Or_error.of_option ~error:(Error.of_string "unknown transaction event ID")
+  in
+  let venue = event.Source_event.venue in
+  let* empty = Source_typing.empty venue in
+  let* parsed = Registry.movement ~source_typing:empty db.registry event in
+  let* stored = movement db event_id in
+  let* rules = classification_rules db in
+  let automatic (r : Classification_rule.t) =
+    (match r.mode with
+     | Automatic -> true
+     | Review | Disabled -> false)
+    && Option.value_map r.institution ~default:true ~f:(String.equal venue)
+  in
+  (* Stage 1: the bank's own code. The first matching rule decides. *)
+  let code_rules =
+    List.filter rules ~f:(fun r ->
+      automatic r
+      &&
+      match r.action with
+      | Reported_type _ | Reported_other _ -> true
+      | _ -> false)
+  in
+  let first_hit = ref false in
+  let decide checks_for =
+    (* Mark the first match as the decider and the later ones as shadowed. *)
+    List.map checks_for ~f:(fun (name, pattern, input, outcome) ->
+      let verdict =
+        match outcome with
+        | Error reason -> Explanation.Does_not_match reason
+        | Ok kind ->
+          if !first_hit
+          then Also_matches
+          else (
+            first_hit := true;
+            Decides kind)
+      in
+      { Explanation.name; pattern; input; verdict })
+  in
+  let* code_checks =
+    match parsed.reported_code with
+    | None -> Ok []
+    | Some code ->
+      let* entries =
+        traverse
+          (fun (r : Classification_rule.t) ->
+             let pattern = Option.value r.pattern ~default:".+" in
+             let* compiled =
+               Transaction_pattern.compile ~case_sensitive:r.case_sensitive pattern
+             in
+             let outcome =
+               if
+                 Transaction_pattern.matches
+                   compiled
+                   ~display_name:None
+                   ~descriptions:[ code ]
+               then
+                 Ok
+                   (match r.action with
+                    | Reported_type kind -> kind
+                    | Reported_other prefix -> Some (Movement_type.Other (prefix ^ code))
+                    | _ -> None)
+               else Error "the code does not match"
+             in
+             Ok (r.name, pattern, code, outcome))
+          code_rules
+      in
+      Ok (decide entries)
+  in
+  let code_type =
+    List.find_map code_checks ~f:(fun c ->
+      match c.verdict with
+      | Decides kind -> Some kind
+      | _ -> None)
+    |> Option.join
+  in
+  let after_code =
+    match code_type with
+    | None -> parsed
+    | Some kind -> Movement.with_movement_type parsed (Some kind)
+  in
+  (* Stage 2: type rules on the first description, which see the type above. *)
+  first_hit := false;
+  let description =
+    Option.value_map (List.hd after_code.descriptions) ~default:"" ~f:String.strip
+  in
+  let* description_entries =
+    List.filter rules ~f:(fun r ->
+      automatic r && Option.is_some (Classification_rule.action_type r.action))
+    |> traverse (fun (r : Classification_rule.t) ->
+      let kind = Option.value_exn (Classification_rule.action_type r.action) in
+      let* typing = typing_rule r kind in
+      let pattern = Option.value r.pattern ~default:"any description" in
+      let reason =
+        if
+          not
+            (Option.value_map
+               r.account_type
+               ~default:true
+               ~f:(String.equal after_code.account.account_type))
+        then
+          Some
+            (Printf.sprintf
+               "account type is %s, not %s"
+               after_code.account.account_type
+               (Option.value_exn r.account_type))
+        else if
+          not
+            (Option.value_map r.match_type ~default:true ~f:(fun cond ->
+               match cond, after_code.movement_type with
+               | Classification_rule.Unknown, None -> true
+               | Unknown, Some _ -> false
+               | Is wanted, Some have -> Poly.equal wanted have
+               | Is _, None -> false))
+        then
+          Some
+            (Printf.sprintf
+               "parser type is %s, the rule wants %s"
+               (Option.value_map
+                  after_code.movement_type
+                  ~default:"unknown"
+                  ~f:Movement_type.to_string)
+               (Option.value_map
+                  r.match_type
+                  ~default:"any"
+                  ~f:Classification_rule.condition_name))
+        else if not (Source_typing.matches typing after_code)
+        then Some "the description does not match"
+        else None
+      in
+      Ok
+        ( r.name
+        , pattern
+        , description
+        , match reason with
+          | Some reason -> Error reason
+          | None -> Ok (Some kind) ))
+  in
+  let description_checks = decide description_entries in
+  let rules_type =
+    match
+      List.find_map description_checks ~f:(fun c ->
+        match c.verdict with
+        | Decides kind -> kind
+        | _ -> None)
+    with
+    | Some kind -> Some kind
+    | None -> after_code.movement_type
+  in
+  (* Stage 3: the type matched companion rows agree on. *)
+  let* companion_rows =
+    db_result
+      (Db.fold
+         db.conn
+         (Rel_sql.Stmt.(
+            func
+              "SELECT DISTINCT r.reported_type,r.movement_type FROM companion_matches c \
+               JOIN companion_reported_types r ON r.row_id=c.row_id WHERE c.event_id=? \
+               AND c.state='matched' ORDER BY r.reported_type"
+              (int64
+               @-> ret
+                     Row.(
+                       t2 (text "reported_type") (option Rel.Type.text "movement_type"))))
+            event_id)
+         (fun row acc -> row :: acc)
+         [])
+  in
+  let companion =
+    List.rev_map companion_rows ~f:(fun (code, kind) ->
+      code, Option.map kind ~f:Movement_type.of_string)
+  in
+  let companion_type =
+    match
+      List.filter_map companion ~f:snd |> List.dedup_and_sort ~compare:Poly.compare
+    with
+    | [ kind ] -> Some kind
+    | _ -> None
+  in
+  let* override_rows =
+    db_result
+      (Db.fold
+         db.conn
+         (Rel_sql.Stmt.(
+            func
+              "SELECT movement_type FROM movement_type_overrides WHERE event_id=?"
+              (int64 @-> ret Row.(t1 (text "movement_type"))))
+            event_id)
+         (fun row acc -> row :: acc)
+         [])
+  in
+  let override = List.hd override_rows |> Option.map ~f:Movement_type.of_string in
+  let* category = db_result (Db.first db.conn (find_category event_id)) in
+  let effective, source =
+    match override, rules_type, companion_type with
+    | Some kind, _, _ -> Some kind, Explanation.Manual_override
+    | None, Some kind, _ -> Some kind, Import_rules
+    | None, None, Some kind -> Some kind, Companion_code
+    | None, None, None -> None, Untyped
+  in
+  Ok
+    { Explanation.event_id
+    ; institution = venue
+    ; booked_on = Date.to_string stored.booked_on
+    ; amount = Quantity.to_string stored.amount
+    ; currency = Iso4217.to_alpha_code stored.account.currency
+    ; account_type = stored.account.account_type
+    ; descriptions = stored.descriptions
+    ; reported_code = parsed.reported_code
+    ; override
+    ; code_checks
+    ; description_checks
+    ; rules_type
+    ; companion
+    ; companion_type
+    ; effective
+    ; source
+    ; stored = stored.movement_type
+    ; category
+    }
+;;

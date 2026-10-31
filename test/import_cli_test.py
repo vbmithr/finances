@@ -1007,6 +1007,51 @@ class ImportOnboarding(unittest.TestCase):
         self.run_fin('rule', 'delete', 'renamed', '--yes')
         self.assertEqual(len(json.loads(self.run_fin('transaction', 'category', 'history').stdout)), 3)
 
+    def test_rule_explain_traces_the_type(self):
+        self.run_fin('import', 'revolut', self.csv, '--account-id', 'main')
+        rows = json.loads(self.run_fin('tx', 'list', '--json').stdout)
+        deposit = next(r['event_id'] for r in rows if r['description'] == 'Initial deposit')
+        out = self.run_fin('rule', 'explain', deposit).stdout
+        self.assertIn('Type: deposit  (import rules)', out)
+        self.assertIn('Bank code "Deposit", reported-type rules:', out)
+        self.assertIn('decides  revolut-reported-deposit', out)
+        self.assertIn('rules did not match (use --all)', out)
+        self.assertNotIn('no match  revolut-reported-card-payment', out)
+        full = self.run_fin('rule', 'explain', deposit, '--all').stdout
+        self.assertIn('no match  revolut-reported-card-payment', full)
+        self.assertIn('Category: none recorded.', out)
+        # A manual override outranks the rules and is reported as such.
+        self.run_fin('tx', 'type', 'set', deposit, 'bonus')
+        self.assertIn('Type: bonus  (manual override)', self.run_fin('rule', 'explain', deposit).stdout)
+        self.assertNotEqual(self.run_fin('rule', 'explain', '999999', check=False).returncode, 0)
+
+    def test_institution_show_describes_fields_rules_and_data(self):
+        before = self.run_fin('institution', 'show', 'revolut').stdout
+        self.assertIn('Running-balance CSV (primary)', before)
+        self.assertIn('the column "Type" as the bank\'s code (reported-type rules)', before)
+        self.assertIn('Default rules (7):', before)
+        self.assertIn('Imported data: none.', before)
+        self.run_fin('import', 'revolut', self.csv, '--account-id', 'main')
+        after = self.run_fin('institution', 'show', 'revolut').stdout
+        self.assertIn('Imported data: 4 movements', after)
+        self.assertRegex(after, r'\n\s+3\s+transfer\n')
+        wise = self.run_fin('institution', 'show', 'wise').stdout
+        self.assertIn('Columns fin does not read:', wise)
+        self.assertIn('Transaction Details Type', wise)
+        self.assertNotEqual(self.run_fin('institution', 'show', 'nosuchbank', check=False).returncode, 0)
+
+    def test_delete_confirmation_defaults_to_no(self):
+        self.run_fin('import', 'revolut', self.csv, '--account-id', 'main')
+        database = self.root / 'data/fin/fin.sqlite3'
+        self.assertTrue(database.exists())
+        for answer in ('', 'n', 'maybe'):
+            output = self.terminal(['delete'], [('Delete these files? [y/N]', answer)])
+            self.assertIn('Nothing deleted.', output, answer)
+            self.assertTrue(database.exists(), answer)
+        output = self.terminal(['delete'], [('Delete these files? [y/N]', 'y')])
+        self.assertIn('Deleted.', output)
+        self.assertFalse(database.exists())
+
     def test_revolut_types_come_from_the_type_column(self):
         self.run_fin('import', 'revolut', self.csv, '--account-id', 'main')
         rows = json.loads(self.run_fin('tx', 'list', '--json').stdout)

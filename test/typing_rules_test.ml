@@ -278,6 +278,191 @@ let reported_code () =
        Ok ()))
 ;;
 
+(* The summary reads stored rows; it must agree with the full review. *)
+let summary_matches_review () =
+  ok
+    (Store.with_open ~registry:Test_support.registry ":memory:" (fun db ->
+       List.iter [ "wise.xml"; "wise.csv" ] ~f:(fun path ->
+         ignore
+           (ok
+              (Test_support.import
+                 db
+                 ~institution:"wise"
+                 ~path
+                 (In_channel.read_all ("fixtures/" ^ path)))));
+       ignore (ok (Store.match_companions ~institution:"wise" db));
+       import_revolut db;
+       let from_review institution =
+         let rows =
+           List.filter
+             (ok (Store.bank_review db))
+             ~f:(fun r -> String.equal r.institution institution)
+         in
+         ( List.length rows
+         , List.map rows ~f:(fun r ->
+             Option.value_map r.movement_type ~default:"" ~f:Movement_type.to_string)
+           |> List.sort ~compare:String.compare )
+       in
+       let from_summary institution =
+         let s = ok (Store.institution_summary db institution) in
+         ( s.movements
+         , List.concat_map s.by_type ~f:(fun (kind, n) ->
+             List.init n ~f:(fun _ ->
+               Option.value_map kind ~default:"" ~f:Movement_type.to_string))
+           |> List.sort ~compare:String.compare )
+       in
+       let check name =
+         let count, types = from_review name in
+         let count', types' = from_summary name in
+         check_int (name ^ " movements") count count';
+         Alcotest.(check (list string)) (name ^ " types") types types'
+       in
+       check "wise";
+       check "revolut";
+       Alcotest.(check bool)
+         "typed through the companion"
+         true
+         (List.exists (snd (from_summary "wise")) ~f:(fun t -> not (String.is_empty t)));
+       (* A manual override takes precedence everywhere. *)
+       let event_id =
+         List.find_map_exn
+           (ok (Store.bank_review db))
+           ~f:(fun r -> Option.some_if (String.equal r.institution "revolut") r.event_id)
+       in
+       ignore
+         (ok
+            (Store.set_movement_type_override
+               db
+               ~event_id
+               ~movement_type:(Some (Movement_type.of_string "bonus"))));
+       check "revolut";
+       check "wise";
+       let none = ok (Store.institution_summary db "bunq") in
+       check_int "no data" 0 none.movements;
+       Alcotest.(check (option string)) "no dates" None none.first_on;
+       Ok ()))
+;;
+
+let explain () =
+  ok
+    (Store.with_open ~registry:Test_support.registry ":memory:" (fun db ->
+       import_revolut db;
+       let id_of text =
+         List.find_map_exn
+           (ok (Store.bank_review db))
+           ~f:(fun r ->
+             Option.some_if
+               (String.equal (List.hd_exn r.transaction.descriptions) text)
+               r.event_id)
+       in
+       let deposit = id_of "Initial deposit" in
+       let e = ok (Store.explain_movement db deposit) in
+       Alcotest.(check (option string)) "bank code" (Some "Deposit") e.reported_code;
+       Alcotest.(check (option string))
+         "effective"
+         (Some "deposit")
+         (Option.map e.effective ~f:Movement_type.to_string);
+       Alcotest.(check bool) "from import rules" true (Poly.equal e.source Import_rules);
+       (match
+          List.find e.code_checks ~f:(fun c ->
+            match c.verdict with
+            | Decides _ -> true
+            | _ -> false)
+        with
+        | Some decider ->
+          Alcotest.(check string)
+            "first match decides"
+            "revolut-reported-deposit"
+            decider.name
+        | None -> Alcotest.fail "expected a deciding rule");
+       Alcotest.(check bool)
+         "earlier rules that do not match are listed"
+         true
+         (List.exists e.code_checks ~f:(fun c ->
+            String.equal c.name "revolut-reported-card-payment"
+            &&
+            match c.verdict with
+            | Does_not_match _ -> true
+            | _ -> false));
+       Alcotest.(check bool)
+         "the catch-all also matches"
+         true
+         (List.exists e.code_checks ~f:(fun c ->
+            String.equal c.name "revolut-reported-other"
+            && Poly.equal c.verdict Also_matches));
+       Alcotest.(check bool)
+         "stored matches the rules"
+         true
+         (Option.equal Poly.equal e.stored e.rules_type);
+       (* A description rule refines the type; the stored type is then stale until
+          a refresh, and the explanation says so. *)
+       ok
+         (Store.add_classification_rule
+            db
+            (rule ~priority:1 "initial-to-bonus" "^Initial" "bonus"));
+       let e = ok (Store.explain_movement db deposit) in
+       Alcotest.(check (option string))
+         "rules now give"
+         (Some "bonus")
+         (Option.map e.rules_type ~f:Movement_type.to_string);
+       Alcotest.(check (option string))
+         "stored is stale"
+         (Some "deposit")
+         (Option.map e.stored ~f:Movement_type.to_string);
+       Alcotest.(check bool)
+         "description rule decides"
+         true
+         (List.exists e.description_checks ~f:(fun c ->
+            String.equal c.name "initial-to-bonus"
+            && Poly.equal c.verdict (Decides (Some (Movement_type.of_string "bonus")))));
+       (* A manual override outranks every rule. *)
+       ignore
+         (ok
+            (Store.set_movement_type_override
+               db
+               ~event_id:deposit
+               ~movement_type:(Some (Movement_type.of_string "interest"))));
+       let e = ok (Store.explain_movement db deposit) in
+       Alcotest.(check bool) "override wins" true (Poly.equal e.source Manual_override);
+       Alcotest.(check bool)
+         "unknown id"
+         true
+         (Result.is_error (Store.explain_movement db 999999L));
+       Ok ()))
+;;
+
+let explain_companion () =
+  ok
+    (Store.with_open ~registry:Test_support.registry ":memory:" (fun db ->
+       List.iter [ "wise.xml"; "wise.csv" ] ~f:(fun path ->
+         ignore
+           (ok
+              (Test_support.import
+                 db
+                 ~institution:"wise"
+                 ~path
+                 (In_channel.read_all ("fixtures/" ^ path)))));
+       ignore (ok (Store.match_companions ~institution:"wise" db));
+       let from_companion =
+         List.filter_map
+           (ok (Store.bank_review db))
+           ~f:(fun r ->
+             let e = ok (Store.explain_movement db r.event_id) in
+             Option.some_if (Poly.equal e.source Companion_code) e)
+       in
+       Alcotest.(check bool)
+         "some movement is typed by its companion code"
+         true
+         (not (List.is_empty from_companion));
+       List.iter from_companion ~f:(fun e ->
+         Alcotest.(check bool) "has a code" true (not (List.is_empty e.companion));
+         Alcotest.(check bool)
+           "effective is the companion type"
+           true
+           (Option.equal Poly.equal e.effective e.companion_type));
+       Ok ()))
+;;
+
 let () =
   Alcotest.run
     "typing rules"
@@ -287,6 +472,9 @@ let () =
         ; Alcotest.test_case "draft rules" `Quick draft
         ; Alcotest.test_case "manual override" `Quick override
         ; Alcotest.test_case "primary CSV type column" `Quick reported_code
+        ; Alcotest.test_case "institution summary" `Quick summary_matches_review
+        ; Alcotest.test_case "explain" `Quick explain
+        ; Alcotest.test_case "explain companion code" `Quick explain_companion
         ] )
     ]
 ;;

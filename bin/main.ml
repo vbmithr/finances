@@ -8,6 +8,11 @@ let confirm_default_yes value =
   List.mem [ ""; "y"; "yes" ] (String.lowercase (String.strip value)) ~equal:String.equal
 ;;
 
+(* For destructive actions: only an explicit yes confirms; Enter declines. *)
+let confirm_default_no value =
+  List.mem [ "y"; "yes" ] (String.lowercase (String.strip value)) ~equal:String.equal
+;;
+
 let paths =
   let home =
     match Sys.getenv "HOME" with
@@ -326,13 +331,13 @@ let delete database yes =
       then Ok true
       else if Unix.isatty Unix.stdin
       then (
-        Out_channel.output_string stdout "Delete these files? [Y/n]: ";
+        Out_channel.output_string stdout "Delete these files? [y/N]: ";
         Out_channel.flush stdout;
         Ok
           (Option.value_map
              (In_channel.input_line In_channel.stdin)
              ~default:false
-             ~f:confirm_default_yes))
+             ~f:confirm_default_no))
       else
         Or_error.error_string
           "refusing to delete without confirmation: run fin delete in a terminal, or \
@@ -2054,6 +2059,102 @@ let institution_list_cmd =
     "list"
     "List built-in and user-added institutions."
     Term.(const institution_list $ database)
+;;
+
+let print_institution_description (d : Institution_definition.description) =
+  printf "%s\n" (Terminal.text d.institution);
+  printf "  Kind: %s\n" d.kind;
+  printf
+    "  Aliases: %s\n"
+    (if List.is_empty d.aliases
+     then "none"
+     else String.concat ~sep:", " (List.map d.aliases ~f:Terminal.text));
+  print_endline "\n  What fin reads, by role:";
+  List.iter d.fields ~f:(fun (role, name) ->
+    printf "    %-24s %s\n" role (Terminal.text name));
+  if not (List.is_empty d.unread)
+  then (
+    print_endline "\n  Columns fin does not read:";
+    printf "    %s\n" (String.concat ~sep:", " (List.map d.unread ~f:Terminal.text)));
+  print_endline "\n  Rules can match:";
+  List.iter d.rule_inputs ~f:(fun input -> printf "    %s\n" input)
+;;
+
+let print_institution_rules (definition : Institution_definition.t) =
+  printf "\n  Default rules (%d):\n" (List.length definition.rules);
+  List.iter definition.rules ~f:(fun r ->
+    let action =
+      match r.action with
+      | Type -> "type"
+      | Card_reference -> "card-reference"
+      | Withdrawal_reversal -> "withdrawal-reversal"
+      | Reported_type -> "reported-type"
+      | Reported_other -> "reported-other"
+    in
+    printf
+      "    %3d  %-18s %-40s /%s/ -> %s\n"
+      r.priority
+      action
+      (Terminal.text r.name)
+      (Terminal.text r.pattern)
+      (Terminal.text r.target))
+;;
+
+let print_institution_data db institution =
+  let%map summary = Store.institution_summary db institution in
+  match summary.first_on, summary.last_on with
+  | Some first, Some last ->
+    printf
+      "\n  Imported data: %d movements, %s to %s.\n  By type:\n"
+      summary.movements
+      first
+      last;
+    List.iter summary.by_type ~f:(fun (kind, n) ->
+      printf
+        "    %6d  %s\n"
+        n
+        (Option.value_map kind ~default:"(no type)" ~f:(fun kind ->
+           Terminal.text (Movement_type.to_string kind))))
+  | _ -> print_endline "\n  Imported data: none."
+;;
+
+let institution_show database name =
+  let%bind installed =
+    if Stdlib.Sys.file_exists database then institution_definitions database else Ok []
+  in
+  let%bind definition =
+    match
+      List.find installed ~f:(fun d ->
+        List.mem (Institution_definition.names d) name ~equal:String.equal)
+    with
+    | Some d -> Ok d
+    | None ->
+      Builtin.definition name
+      |> Or_error.of_option
+           ~error:
+             (Error.of_string
+                "unknown institution, or one without a definition; see fin institution \
+                 list")
+  in
+  print_institution_description (Institution_definition.describe definition);
+  print_institution_rules definition;
+  if Stdlib.Sys.file_exists database
+  then
+    with_database database (fun db ->
+      print_institution_data db (Institution_definition.institution definition))
+  else (
+    print_endline "\n  Imported data: no database yet.";
+    Ok ())
+;;
+
+let institution_show_cmd =
+  command
+    "show"
+    "Show what fin reads for an institution, its default rules and what is imported."
+    Term.(
+      const institution_show
+      $ database
+      $ Arg.(required & pos 0 (some string) None & info [] ~docv:"INSTITUTION"))
 ;;
 
 let institution_add database name sample =
@@ -4009,6 +4110,122 @@ let rule_test_cmd =
       $ json_output)
 ;;
 
+let type_name = Option.value_map ~default:"no type" ~f:Movement_type.to_string
+
+let print_explain_checks ~all (checks : Explanation.check list) =
+  let hidden = ref 0 in
+  List.iter checks ~f:(fun c ->
+    match c.verdict with
+    | Decides kind ->
+      printf
+        "       decides  %s  /%s/ -> %s\n"
+        (Terminal.text c.name)
+        (Terminal.text c.pattern)
+        (match kind with
+         | Some kind -> Terminal.text (Movement_type.to_string kind)
+         | None -> "leaves it untyped")
+    | Also_matches ->
+      printf
+        "       matches too, but an earlier rule decides  %s  /%s/\n"
+        (Terminal.text c.name)
+        (Terminal.text c.pattern)
+    | Does_not_match reason ->
+      if all
+      then
+        printf
+          "       no match  %s  /%s/: %s\n"
+          (Terminal.text c.name)
+          (Terminal.text c.pattern)
+          reason
+      else Int.incr hidden);
+  if !hidden > 0 then printf "       %d rules did not match (use --all)\n" !hidden;
+  if List.is_empty checks then print_endline "       no rules apply"
+;;
+
+let print_explanation ~all (e : Explanation.t) =
+  printf
+    "Movement #%Ld  %s  %s  %s %s  (account type %s)\n"
+    e.event_id
+    (Terminal.text e.institution)
+    e.booked_on
+    e.amount
+    e.currency
+    (Terminal.text e.account_type);
+  List.iter e.descriptions ~f:(fun d -> printf "  Description: %s\n" (Terminal.text d));
+  printf
+    "\nType: %s  (%s)\n"
+    (type_name e.effective)
+    (match e.source with
+     | Manual_override -> "manual override"
+     | Import_rules -> "import rules"
+     | Companion_code -> "the companion file's code"
+     | Untyped -> "nothing decides it");
+  printf
+    "  1. Manual override: %s\n"
+    (Option.value_map e.override ~default:"none" ~f:Movement_type.to_string);
+  (match e.reported_code with
+   | None -> print_endline "  2. Bank code: this source has none"
+   | Some code ->
+     printf "  2. Bank code %S, reported-type rules:\n" (Terminal.text code);
+     print_explain_checks ~all e.code_checks);
+  printf
+    "  3. First description %S, type rules:\n"
+    (Terminal.text (Option.value (List.hd e.descriptions) ~default:""));
+  print_explain_checks ~all e.description_checks;
+  printf "     import rules give: %s\n" (type_name e.rules_type);
+  (match e.companion with
+   | [] -> print_endline "  4. Companion file: no matched rows with a code"
+   | codes ->
+     printf
+       "  4. Companion file codes: %s\n"
+       (String.concat
+          ~sep:", "
+          (List.map codes ~f:(fun (code, kind) ->
+             Printf.sprintf "%s -> %s" (Terminal.text code) (type_name kind))));
+     printf
+       "     they agree on: %s (used only when import rules give no type)\n"
+       (type_name e.companion_type));
+  printf
+    "\n\
+     Type saved with the movement at import (before overrides and the companion): %s%s\n"
+    (type_name e.stored)
+    (if Option.equal Poly.equal e.stored e.rules_type
+     then ", the same as the import rules now give"
+     else
+       Printf.sprintf
+         "; the import rules now give %s, so fin transaction refresh-types would update \
+          it"
+         (type_name e.rules_type));
+  match e.category with
+  | Some (account, reason) ->
+    printf "Category: %s (%s)\n" (Terminal.text account) (Terminal.text reason)
+  | None ->
+    print_endline "Category: none recorded. Category rules: see fin rule preview NAME."
+;;
+
+let rule_explain database event_id all =
+  with_database database (fun db ->
+    let%map explanation = Store.explain_movement db event_id in
+    print_explanation ~all explanation)
+;;
+
+let rule_explain_cmd =
+  command
+    "explain"
+    "Explain how a movement got its type, rule by rule."
+    Term.(
+      const rule_explain
+      $ database
+      $ Arg.(
+          required
+          & pos 0 (some int64) None
+          & info [] ~docv:"EVENT-ID" ~doc:"Transaction event ID from fin tx list.")
+      $ Arg.(
+          value
+          & flag
+          & info [ "all" ] ~doc:"Also list the rules that did not match, with the reason."))
+;;
+
 let print_description_gaps gaps =
   if List.is_empty gaps
   then print_endline "Every movement has a type."
@@ -5154,6 +5371,7 @@ let () =
               "institution"
               "Manage institutions and their importers."
               [ institution_list_cmd
+              ; institution_show_cmd
               ; institution_add_cmd
               ; institution_delete_cmd
               ; group
@@ -5202,6 +5420,7 @@ let () =
               ; rule_delete_cmd
               ; rule_rename_cmd
               ; rule_test_cmd
+              ; rule_explain_cmd
               ; rule_gaps_cmd
               ]
           ; group

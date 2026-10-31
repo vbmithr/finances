@@ -337,3 +337,153 @@ let default_reported_types t =
     | Reported_other -> default (Reported_type_defaults.Other r.target)
     | Type | Card_reference | Withdrawal_reversal -> None)
 ;;
+
+type description =
+  { institution : string
+  ; aliases : string list
+  ; kind : string
+  ; fields : (string * string) list
+  ; unread : string list
+  ; rule_inputs : string list
+  }
+
+(* What fin reads from a source, by role, and what it leaves unread. Rules can
+   match less than fin reads: see [rule_inputs]. *)
+let describe t =
+  let unread header used =
+    List.filter header ~f:(fun name -> not (List.mem used name ~equal:String.equal))
+    |> List.dedup_and_sort ~compare:String.compare
+  in
+  let base kind fields header used rule_inputs =
+    { institution = institution t
+    ; aliases = aliases t
+    ; kind
+    ; fields
+    ; unread = unread header used
+    ; rule_inputs
+    }
+  in
+  match t.source with
+  | Ofx_csv p ->
+    let layout = p.layout in
+    let name i = List.nth layout.header i |> Option.value ~default:"?" in
+    let required =
+      [ "account", layout.account_id
+      ; "booked on", layout.booked_on
+      ; "amount", layout.amount
+      ; "description", layout.description
+      ]
+    in
+    let optional =
+      [ "value date", layout.value_on
+      ; "suggested description", layout.suggested_description
+      ; "category", layout.category
+      ; "parent category", layout.parent_category
+      ; "comment", layout.comment
+      ; "account label", layout.account_label
+      ; "reported balance", layout.reported_balance
+      ; "pointage", layout.pointage
+      ]
+    in
+    let fields =
+      List.map required ~f:(fun (role, i) -> role, name i)
+      @ List.filter_map optional ~f:(fun (role, i) ->
+        Option.map i ~f:(fun i -> role, name i))
+    in
+    base
+      "OFX primary with CSV companion"
+      fields
+      layout.header
+      (List.map fields ~f:snd)
+      [ "the first OFX description (type rules); the CSV companion's columns are not \
+         available to rules"
+      ]
+  | Camt_csv p ->
+    let c = p.csv_profile.columns in
+    let fields =
+      [ "reference", c.reference
+      ; "date", c.date
+      ; "date and time", c.datetime
+      ; "amount", c.amount
+      ; "currency", c.currency
+      ; "description", c.description
+      ; "payment reference", c.payment_reference
+      ; "running balance", c.running_balance
+      ; "payee", c.payee
+      ; "merchant", c.merchant
+      ; "fees", c.fees
+      ; "direction", c.direction
+      ; "reported code", c.details_type
+      ]
+      @ List.map p.csv_profile.conflict_columns ~f:(fun n -> "compared for conflicts", n)
+    in
+    base
+      "CAMT.053 primary with CSV companion"
+      fields
+      p.csv_profile.header
+      (List.map fields ~f:snd)
+      [ "the first CAMT description (type rules)"
+      ; Printf.sprintf
+          "the CSV column %S as the bank's code (reported-type rules)"
+          c.details_type
+      ]
+  | Running_csv p ->
+    let c = p.columns in
+    let fields =
+      [ "type (reported code)", c.transaction_type
+      ; "product", c.product
+      ; "started", c.started
+      ; "completed", c.completed
+      ; "description", c.description
+      ; "amount", c.amount
+      ; "fee", c.fee
+      ; "currency", c.currency
+      ; "state", c.state
+      ; "balance", c.balance
+      ]
+    in
+    base
+      "Running-balance CSV (primary)"
+      fields
+      p.header
+      (List.map fields ~f:snd)
+      [ Printf.sprintf "the description column %S (type rules)" c.description
+      ; Printf.sprintf
+          "the column %S as the bank's code (reported-type rules)"
+          c.transaction_type
+      ]
+  | Mt940_csv p ->
+    let c = p.columns in
+    let fields =
+      [ "booked on", c.booked_on
+      ; "value date", c.value_on
+      ; "amount", c.amount
+      ; "account", c.account_id
+      ; "counterparty", c.counterparty
+      ; "name", c.name
+      ; "description", c.description
+      ]
+    in
+    base
+      "MT940 primary with CSV companion"
+      fields
+      p.header
+      (List.map fields ~f:snd)
+      [ "the first MT940 description (type rules)" ]
+  | Csv p ->
+    let profile = p.profile in
+    let fields =
+      [ "date", profile.date_column
+      ; "description", profile.description_column
+      ; "amount", profile.amount_column
+      ]
+      @ Option.to_list (Option.map profile.skip_when ~f:(fun (n, _) -> "skip rows by", n))
+    in
+    base
+      "Generic CSV (primary)"
+      fields
+      profile.header
+      (List.map fields ~f:snd)
+      [ Printf.sprintf "the description column %S (type rules)" profile.description_column
+      ]
+;;
