@@ -25,4 +25,5 @@ type t =
       row list -> (int64 * Source_event.t) list -> Bank_match.result list Or_error.t
   ; annotate : row -> annotation Or_error.t
   ; describe : row -> (string * string option) list Or_error.t
+  ; fields : row -> (string * string) list Or_error.t
   }

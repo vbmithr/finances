@@ -10,6 +10,25 @@ short line of their own.
 
 ### 2026-10-31
 
+- Add `fin tx show EVENT-ID`: everything stored about a transaction. Its type,
+  category and confirmed transfer, the source event and payload fields, the stored
+  document and every file it was imported from, the statement, and each matched
+  companion row with every column under its header name, the match policy and
+  what its type rules matched. Read-only.
+
+- Let reported-type rules match any column of a companion file: `fin rule
+  add-reported-type NAME INSTITUTION REGEX TYPE --field COLUMN`, with COLUMN named as
+  in the file's header. On a Wise archive, `--field 'TransferWise ID'` with `^FEE-`
+  and `^BALANCE_CASHBACK-` types the 187 fee lines and 29 cashback rows that the
+  bank code `CARD` or `UNKNOWN` left wrong or untyped. Every companion now exposes
+  its raw columns by header name, `fin tx refresh-reported-types` recomputes every
+  companion row from the rules (inserting and removing as needed), the definition
+  rule format gains an optional `field`, and `fin rule list` shows it.
+  **Action required:** schema 27 adds a `field` column to the rules table, so
+  rebuild the database from your statements, then recreate your rules and review
+  decisions. OCaml consumers: `Classification_rule.create` takes `?field` and a
+  trailing `()`, and `Companion.t` has a `fields` function.
+
 - Add `fin rule explain EVENT-ID` to trace how a movement got its type: manual
   override, the bank's code, description rules and the companion file's code, with
   the deciding rule, the rules that lose to it and whether the saved type is stale.

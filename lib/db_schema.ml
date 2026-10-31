@@ -3,7 +3,7 @@ open Rel
 
 (** One current experimental baseline; older databases must be reimported. Banks
     have no tables of their own. *)
-let version = 26
+let version = 27
 
 let timestamp = `Expr "(strftime('%Y-%m-%dT%H:%M:%f','now') || '000000000Z')"
 
@@ -1853,6 +1853,7 @@ module Classification_rules = struct
     ; action_kind : string
     ; target : string
     ; action_type : string option
+    ; field : string option
     }
 
   let mode = Col.make "mode" Type.text (fun (r : t) -> r.mode)
@@ -1878,6 +1879,9 @@ module Classification_rules = struct
     Col.make "action_type" Type.(option text) (fun (r : t) -> r.action_type)
   ;;
 
+  (* The companion column a reported-type rule matches; the bank's code if absent. *)
+  let field = Col.make "field" Type.(option text) (fun (r : t) -> r.field)
+
   let row =
     Row.(
       unit
@@ -1893,6 +1897,7 @@ module Classification_rules = struct
              action_kind
              target
              action_type
+             field
            ->
            { mode
            ; account_type
@@ -1905,6 +1910,7 @@ module Classification_rules = struct
            ; action_kind
            ; target
            ; action_type
+           ; field
            })
       * mode
       * account_type
@@ -1916,7 +1922,8 @@ module Classification_rules = struct
       * case_mode
       * action_kind
       * target
-      * action_type)
+      * action_type
+      * field)
   ;;
 
   let table =

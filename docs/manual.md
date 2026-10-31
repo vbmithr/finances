@@ -916,6 +916,19 @@ Imports apply the rules; for movements already imported, edit the rules and run
 installed into a new database; an existing database needs them added, for example
 with `fin rule add-reported-type`, or rebuilding.
 
+#### See everything stored about a transaction
+
+`fin tx show EVENT-ID` prints what fin knows about one transaction in plain text: its
+type, category and confirmed transfer; the source event (institution, account,
+kind, source identifier, occurrence and retrieval time); where it was imported from
+(the stored document with its hash and import time, every file it was read from,
+and the statement with its period and balances); the source's own fields as stored
+(the payload, indented); and each matched companion row with every column under its
+header name, the match state and policy, the display name and tags it gave, and the
+value the type rules matched. It changes nothing. Companion rows include the
+personal columns of the file, such as a cardholder's name, so be careful when
+pasting the output. `fin rule explain EVENT-ID` shows how the type was decided.
+
 #### Explain a movement's type
 
 `fin rule explain EVENT-ID` (the event ID is in `fin tx list`) traces how one
@@ -976,6 +989,28 @@ changes to previously imported CSV rows:
 fin rule add-reported-type wise-card wise '^CARD$' card --case-sensitive
 fin tx refresh-reported-types --institution wise
 ```
+
+A reported-type rule can match any column of the companion file instead of the
+bank's type code. Name the column as it appears in the file's header with
+`--field`; the rule matches when any cell under that header matches. For Wise the
+`TransferWise ID` prefix separates fee lines and cashback from the bank code
+`CARD`:
+
+```sh
+fin rule add-reported-type wise-id-fee wise '^FEE-' fee \
+  --field 'TransferWise ID' --case-sensitive --priority=-2000
+fin rule add-reported-type wise-id-cashback wise '^BALANCE_CASHBACK-' bonus \
+  --field 'TransferWise ID' --case-sensitive --priority=-2000
+fin tx refresh-reported-types --institution wise
+```
+
+The first rule that matches, in priority order, decides, so a column rule with a
+lower priority number outranks the code rules. A column that the file does not
+have matches nothing, and a row that no rule decides keeps its bank code. The
+value the deciding rule matched is what `fin rule explain` shows for the companion
+file. `fin rule list` shows the column (`field=code` for the bank's code), and
+column rules apply to companion files only: a primary CSV's own `Type` column is
+matched by rules without `--field`.
 
 The positional arguments are rule name, institution, code expression and type.
 The special type `unknown` leaves a matching code untyped; `other:PREFIX`
@@ -1124,7 +1159,7 @@ belongs to hledger; `fin` tracks import evidence, account identity and review st
 ## Library and dependency changes
 
 This build uses Base, decimal, Ptime and Bos, with no Core or Bigdecimal
-dependency. Version 1 account snapshots remain compatible; databases use schema 26 and
+dependency. Version 1 account snapshots remain compatible; databases use schema 27 and
 are rebuilt from the original statements (see above).
 
 OCaml callers use `Quantity.t` (a `Decimal.t` alias) and `Date.t` (a `Ptime.date`

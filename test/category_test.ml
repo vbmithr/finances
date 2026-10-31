@@ -230,7 +230,8 @@ let rule_batch_is_atomic () =
            ~institution:None
            ~match_type:None
            ~case_sensitive:false
-           ~action:(Type_and_category (Movement_type.Interest, "expenses:food")))
+           ~action:(Type_and_category (Movement_type.Interest, "expenses:food"))
+           ())
     in
     ok (Store.add_classification_rule db rule);
     let matches = ok (Store.preview_classification_rule db rule) in
@@ -265,7 +266,8 @@ let rule_batch_is_atomic () =
            ~institution:None
            ~match_type:None
            ~case_sensitive:false
-           ~action:(Category "expenses:food"))
+           ~action:(Category "expenses:food")
+           ())
     in
     ok (Store.add_classification_rule db replacement);
     error

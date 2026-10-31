@@ -1492,6 +1492,51 @@ class ImportOnboarding(unittest.TestCase):
         self.assertTrue(all(r['movement_type'] == 'bonus' for r in after))
         self.assertIn('No reported type changes.', self.run_fin('tx', 'refresh-reported-types').stdout)
 
+    def test_tx_show_lists_source_files_fields_and_companions(self):
+        self.run_fin('import', 'revolut', self.csv, '--account-id', 'main')
+        rows = json.loads(self.run_fin('tx', 'list', '--json').stdout)
+        deposit = next(r['event_id'] for r in rows if r['description'] == 'Initial deposit')
+        out = self.run_fin('tx', 'show', deposit).stdout
+        self.assertIn('Type: deposit (import rules)', out)
+        self.assertIn('Imported from', out)
+        self.assertIn('file: ' + str(self.csv), out)
+        self.assertIn('"transaction_type": "Deposit"', out)
+        self.assertIn('Companion files: no matched rows', out)
+        self.assertIn('fin rule explain %s' % deposit, out)
+        self.run_fin('import', 'wise', 'fixtures/wise.csv', 'fixtures/wise.xml')
+        wise = json.loads(self.run_fin('tx', 'list', '--institution', 'wise', '--json').stdout)[0]['event_id']
+        out = self.run_fin('tx', 'show', wise).stdout
+        self.assertIn('Companion files: 1 matched', out)
+        self.assertRegex(out, r'TransferWise ID\s+\S+')
+        self.assertIn('Transaction Details Type', out)
+        self.assertIn('display name: Synthetic shop', out)
+        self.assertIn('wise-csv-v1', out)
+        self.assertNotEqual(self.run_fin('tx', 'show', '999999', check=False).returncode, 0)
+
+    def test_reported_type_rules_can_match_any_companion_column(self):
+        self.run_fin('import', 'wise', 'fixtures/wise.csv', 'fixtures/wise.xml')
+        # The cashback row's bank code is CARD; its TransferWise ID says otherwise.
+        self.run_fin('rule', 'add-reported-type', 'id-cashback', 'wise', '^BALANCE_CASHBACK-', 'bonus',
+                     '--case-sensitive', '--field', 'TransferWise ID', '--priority=-2000')
+        listed = {r['name']: r for r in json.loads(self.run_fin('rule', 'list', '--json').stdout)}
+        self.assertEqual(listed['id-cashback']['field'], 'TransferWise ID')
+        self.assertIsNone(listed['wise-reported-card']['field'])
+        preview = self.run_fin('tx', 'refresh-reported-types', '--institution', 'wise', check=False)
+        self.assertNotEqual(preview.returncode, 0)  # a preview needs a terminal or --yes
+        out = self.run_fin('tx', 'refresh-reported-types', '--institution', 'wise', '--yes').stdout
+        self.assertIn('reported_types_changed=1', out)
+        types = sorted(r['movement_type'] for r in json.loads(self.run_fin('tx', 'list', '--institution', 'wise', '--json').stdout))
+        self.assertEqual(types, ['bonus', 'card', 'card'])
+        self.assertIn('No reported type changes.', self.run_fin('tx', 'refresh-reported-types').stdout)
+        # Removing the rule puts the bank code back.
+        self.run_fin('rule', 'delete', 'id-cashback', '--yes')
+        self.assertIn('reported_types_changed=1', self.run_fin('tx', 'refresh-reported-types', '--yes').stdout)
+        types = sorted(r['movement_type'] for r in json.loads(self.run_fin('tx', 'list', '--institution', 'wise', '--json').stdout))
+        self.assertEqual(types, ['card', 'card', 'card'])
+        # Only reported-type rules may name a column.
+        bad = self.run_fin('rule', 'add', 'x', '--description', 'a', '--set-type', 'card', '--field', 'A', check=False)
+        self.assertNotEqual(bad.returncode, 0)
+
     def test_wise_enrichment_shows_merchant_and_matches_different_descriptions(self):
         self.run_fin('import', 'wise', 'fixtures/wise.xml', 'fixtures/wise.csv')
         rows = json.loads(self.run_fin('transaction', 'list', '--json').stdout)

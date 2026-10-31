@@ -23,8 +23,18 @@ let make ~snapshot ~format ~policy ~layout : Companion.t =
         in
         Csv_schema.of_fields schema ~row_number:row.row_number row.fields)
   in
+  let header (row : Companion.row) =
+    if not snapshot
+    then Ok layout.header
+    else (
+      match List.Assoc.find row.context "companion_profile" ~equal:String.equal with
+      | None -> Or_error.error_string "companion document has no saved layout"
+      | Some json ->
+        Or_error.map (Json.decode Csv_companion_layout.codec json) ~f:(fun p -> p.header))
+  in
   Adapter_support.companion_with_row
     ~decode_row
+    ~header
     ~format
     ~policy
     ~input:(fun source (row : Csv_companion_layout.row) ->

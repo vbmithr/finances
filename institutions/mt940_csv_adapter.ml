@@ -85,6 +85,7 @@ let companion (profile : Mt940_profile.t) engine : Companion.t =
       let%map tx = Mt940_transaction.source_transaction engine event in
       id, tx)
     ~match_rows:(Mt940_csv_companion.match_rows profile)
+    ~header:(fun _ -> Ok profile.header)
     ~annotate:(fun row ->
       { Companion.value_on = None
       ; display_name = None

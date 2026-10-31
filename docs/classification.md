@@ -324,10 +324,13 @@ Open questions:
 
 Staging, each step usable alone:
 
-1. Companion fields. Give every companion a view of its raw columns by header name,
-   and let reported-type rules name the field they match (default: the bank's
-   code), so a rule can match `TransferWise ID`. This needs a schema bump and no
-   new storage for companions, which already keep their cells.
+1. Companion fields (implemented 2026-10-31). Every companion exposes its raw
+   columns by header name, and reported-type rules name the field they match
+   (default: the bank's code), so a rule can match `TransferWise ID`. This needed a
+   schema bump (a `field` column) and no new storage, since companions already keep
+   their cells. On the real Wise archives it types 187 fee lines and 29 cashback
+   rows. The rule still has the reported-type action and applies to companion rows
+   only; folding it into the single rule form is step 3.
 2. Primary fields. Capture all source fields at import, a generic view for CSV
    first, then the tag-based formats; canonical fields (`description`, `direction`,
    `amount`, `date`); and field rules on a primary's movements.

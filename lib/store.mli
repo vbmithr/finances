@@ -294,7 +294,8 @@ type reported_type_change =
   { row_id : int64
   ; event_id : int64 option
   ; institution : string
-  ; code : string
+  ; code : string option
+    (** The value the deciding rule matched; none if nothing decides it now. *)
   ; before : Movement_type.t option
   ; after : Movement_type.t option
   }
@@ -583,3 +584,9 @@ val institution_summary : t -> string -> institution_summary Or_error.t
 (** Trace how a movement got its type, step by step, and report its recorded
     category. Reads one movement; nothing is changed. *)
 val explain_movement : t -> int64 -> Explanation.t Or_error.t
+
+(** Everything stored about one movement: its source event and payload, the
+    documents and files it was imported from, statements, matched companion rows
+    with every column, the type trace, and category and transfer decisions.
+    Nothing is changed. *)
+val show_movement : t -> int64 -> Transaction_detail.t Or_error.t

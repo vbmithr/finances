@@ -199,14 +199,16 @@ configurable yet.
 - [ ] Simpler rule model ([proposal](classification.md#a-simpler-rule-model-proposal)):
   one rule form (field, expression, type or category), named fields, derived
   types. Every column of every source is a field named as the source names it.
-  Decide the open questions there, then stage it: companion fields (step 1,
-  started), primary fields, one rule form, derived types without the refresh
+  Decide the open questions there, then stage it: companion fields (step 1, done:
+  `add-reported-type --field`), primary fields, one rule form, derived types without the refresh
   commands, remove the old action kinds.
 - [ ] Wise description rules, available today: on the real archives
   `^Wise Charges for` to `fee` would newly type 187 fee lines now typed by their
   card, conversion or transfer code, `^Cashback` to `bonus` 29 rows, and the
   `MONEY_ADDED` code `deposit` 2 rows. Decide whether to ship them in `wise.json`
   now or with the simpler model.
+- [x] `fin tx show EVENT-ID` (2026-10-31): source, files, payload fields, statement,
+  companion rows by column, decisions.
 - [x] `fin rule explain EVENT-ID` (2026-10-31): type trace by stage, stale-type
   warning. Category rules are not traced yet; `--json` is not implemented.
 - [x] `fin institution show INSTITUTION` (2026-10-31): fields read and unread, what

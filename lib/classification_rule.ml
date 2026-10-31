@@ -39,6 +39,7 @@ type t =
   ; match_type : type_condition option
   ; case_sensitive : bool
   ; action : action
+  ; field : string option
   }
 
 let action_name = function
@@ -101,8 +102,19 @@ let create
       ~match_type
       ~case_sensitive
       ~action
+      ?field
+      ()
   =
   let open Or_error.Let_syntax in
+  let%bind field =
+    match field, action with
+    | None, _ -> Ok None
+    | Some name, (Reported_type _ | Reported_other _) ->
+      let%map name = Validation.text "field" name in
+      Some name
+    | Some _, _ ->
+      Or_error.error_string "only reported-type rules can name a field to match"
+  in
   let%bind name = Validation.token "rule name" name in
   let%bind () =
     match mode, action with
@@ -206,5 +218,6 @@ let create
     ; match_type
     ; case_sensitive
     ; action
+    ; field
     }
 ;;

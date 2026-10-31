@@ -30,6 +30,7 @@ let companion_with_row
       ~match_rows
       ~annotate
       ~describe
+      ~header
   : Companion.t
   =
   let row = decode_row in
@@ -59,10 +60,26 @@ let companion_with_row
         let open Or_error.Let_syntax in
         let%map decoded = row r in
         describe decoded)
+  ; fields =
+      (fun (r : Companion.row) ->
+        let open Or_error.Let_syntax in
+        let%map header = header r in
+        (* Cells beyond the header have no name and are left out. *)
+        let n = Int.min (List.length header) (List.length r.fields) in
+        List.zip_exn (List.take header n) (List.take r.fields n))
   }
 ;;
 
-let companion ~format ~policy ~of_fields ~input ~candidate ~match_rows ~annotate ~describe
+let companion
+      ~format
+      ~policy
+      ~of_fields
+      ~input
+      ~candidate
+      ~match_rows
+      ~annotate
+      ~describe
+      ~header
   =
   companion_with_row
     ~format
@@ -72,6 +89,7 @@ let companion ~format ~policy ~of_fields ~input ~candidate ~match_rows ~annotate
     ~match_rows
     ~annotate
     ~describe
+    ~header
     ~decode_row:(fun (r : Companion.row) -> of_fields ~row_number:r.row_number r.fields)
 ;;
 

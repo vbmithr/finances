@@ -314,6 +314,7 @@ let classification_rule =
   |> field "target" Jsont.string (fun r -> Classification_rule.action_target r.action)
   |> field "set_type" (Jsont.option Jsont.string) (fun r ->
     Option.map (Classification_rule.action_type r.action) ~f:Movement_type.to_string)
+  |> field "field" (Jsont.option Jsont.string) (fun r -> r.field)
   |> Jsont.Object.finish
 ;;
 

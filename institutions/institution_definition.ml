@@ -29,6 +29,7 @@ type rule =
   ; match_type : string option
   ; action : action
   ; target : string
+  ; field : string option
   }
 
 type t =
@@ -48,7 +49,17 @@ let action_codec =
 
 let rule_codec =
   Jsont.Object.map
-    (fun name pattern case_sensitive priority account_type match_type action target ->
+    (fun
+        name
+         pattern
+         case_sensitive
+         priority
+         account_type
+         match_type
+         action
+         target
+         field
+       ->
        let name = Validation.token "rule name" name |> Json.or_error in
        let _ = Transaction_pattern.compile ~case_sensitive pattern |> Json.or_error in
        { name
@@ -59,6 +70,7 @@ let rule_codec =
        ; match_type
        ; action
        ; target
+       ; field
        })
   |> Jsont.Object.mem "name" Jsont.string ~enc:(fun r -> r.name)
   |> Jsont.Object.mem "pattern" Jsont.string ~enc:(fun r -> r.pattern)
@@ -69,6 +81,7 @@ let rule_codec =
   |> Jsont.Object.opt_mem "match_type" Jsont.string ~enc:(fun r -> r.match_type)
   |> Jsont.Object.mem "action" action_codec ~enc:(fun r -> r.action)
   |> Jsont.Object.mem "target" Jsont.string ~enc:(fun r -> r.target)
+  |> Jsont.Object.opt_mem "field" Jsont.string ~enc:(fun r -> r.field)
   |> Jsont.Object.error_unknown
   |> Jsont.Object.finish
 ;;
@@ -278,10 +291,14 @@ let default_source_typing t =
   (* Reported-type rules also type the bank's own code in a primary source. *)
   let reported =
     List.filter_map t.rules ~f:(fun r ->
+      (* A rule that names a companion column does not apply to a primary's code. *)
       let make action =
-        Some
-          (Source_typing.make_reported_rule r.pattern r.case_sensitive action
-           |> Or_error.ok_exn)
+        if Option.is_some r.field
+        then None
+        else
+          Some
+            (Source_typing.make_reported_rule r.pattern r.case_sensitive action
+             |> Or_error.ok_exn)
       in
       match r.action with
       | Reported_type ->
@@ -325,6 +342,7 @@ let default_reported_types t =
         ; pattern = r.pattern
         ; case_sensitive = r.case_sensitive
         ; action
+        ; field = r.field
         }
     in
     match r.action with

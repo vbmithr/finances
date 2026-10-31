@@ -50,7 +50,8 @@ let rule ?(priority = 1000) ?(mode = Classification_rule.Automatic) name pattern
        ~institution:(Some "revolut")
        ~match_type:None
        ~case_sensitive:false
-       ~action:(Type (Movement_type.of_string kind)))
+       ~action:(Type (Movement_type.of_string kind))
+       ())
 ;;
 
 let outcomes (result : Store.type_rule_test) =
@@ -163,7 +164,8 @@ let draft () =
            ~institution:(Some "revolut")
            ~match_type:None
            ~case_sensitive:false
-           ~action:(Category "income:other"))
+           ~action:(Category "income:other")
+           ())
     in
     Alcotest.(check bool)
       "category rejected"
@@ -181,7 +183,8 @@ let draft () =
            ~institution:(Some "wise")
            ~match_type:None
            ~case_sensitive:false
-           ~action:(Type (Movement_type.of_string "transfer")))
+           ~action:(Type (Movement_type.of_string "transfer"))
+           ())
     in
     let none = ok (Store.test_type_rule db wise) in
     check_int "nothing in scope" 0 none.scanned)
@@ -239,7 +242,8 @@ let reported_code () =
               ~institution:(Some "revolut")
               ~match_type:None
               ~case_sensitive:true
-              ~action:(Reported_type (Some (Movement_type.of_string "fee"))))
+              ~action:(Reported_type (Some (Movement_type.of_string "fee")))
+              ())
        in
        ok (Store.replace_classification_rule db fee);
        let changes = ok (Store.preview_movement_types ~institution:"revolut" db) in
@@ -260,7 +264,8 @@ let reported_code () =
               ~institution:(Some "revolut")
               ~match_type:(Some (Is (Movement_type.of_string "fee")))
               ~case_sensitive:false
-              ~action:(Type (Movement_type.of_string "withdrawal")))
+              ~action:(Type (Movement_type.of_string "withdrawal"))
+              ())
        in
        let t = ok (Store.test_type_rule db refine) in
        Alcotest.(check (list string)) "refines the code type" [ "changed" ] (outcomes t);
@@ -463,6 +468,174 @@ let explain_companion () =
        Ok ()))
 ;;
 
+(* A rule may name a companion column: the fixture's cashback row has the bank
+   code CARD but a BALANCE_CASHBACK- identifier. *)
+let field_rule () =
+  let id_rule =
+    ok
+      (Classification_rule.create
+         ~mode:Automatic
+         ~account_type:None
+         ~priority:(-2000)
+         ~name:"id-cashback"
+         ~pattern:(Some "^BALANCE_CASHBACK-")
+         ~institution:(Some "wise")
+         ~match_type:None
+         ~case_sensitive:true
+         ~action:(Reported_type (Some (Movement_type.of_string "bonus")))
+         ~field:"TransferWise ID"
+         ())
+  in
+  let import db =
+    List.iter [ "wise.xml"; "wise.csv" ] ~f:(fun path ->
+      ignore
+        (ok
+           (Test_support.import
+              db
+              ~institution:"wise"
+              ~path
+              (In_channel.read_all ("fixtures/" ^ path)))));
+    ignore (ok (Store.match_companions ~institution:"wise" db))
+  in
+  let types db =
+    (ok (Store.institution_summary db "wise")).by_type
+    |> List.map ~f:(fun (kind, n) ->
+      Option.value_map kind ~default:"" ~f:Movement_type.to_string, n)
+    |> List.sort ~compare:Poly.compare
+  in
+  let pairs = Alcotest.(list (pair string int)) in
+  (* A rule saved before the import decides at import. *)
+  ok
+    (Store.with_open ~registry:Test_support.registry ":memory:" (fun db ->
+       ok (Store.add_classification_rule db id_rule);
+       import db;
+       Alcotest.check pairs "typed at import" [ "bonus", 1; "card", 2 ] (types db);
+       Alcotest.(check int)
+         "nothing to refresh"
+         0
+         (List.length (ok (Store.preview_reported_types db)));
+       Ok ()));
+  (* A rule added afterwards changes the type through the refresh, and removing it
+     puts the bank code back. *)
+  ok
+    (Store.with_open ~registry:Test_support.registry ":memory:" (fun db ->
+       import db;
+       Alcotest.check pairs "before" [ "card", 3 ] (types db);
+       ok (Store.add_classification_rule db id_rule);
+       let changes = ok (Store.preview_reported_types db) in
+       Alcotest.(check int) "one row changes" 1 (List.length changes);
+       (match changes with
+        | [ c ] ->
+          Alcotest.(check (option string))
+            "the value the rule matched"
+            (Some "BALANCE_CASHBACK-abcdef01-2345-6789-abcd-ef0123456789")
+            c.code;
+          Alcotest.(check bool)
+            "from card to bonus"
+            true
+            (Option.equal Poly.equal c.before (Some (Movement_type.of_string "card"))
+             && Option.equal Poly.equal c.after (Some (Movement_type.of_string "bonus")))
+        | _ -> ());
+       Alcotest.(check int)
+         "refreshed"
+         1
+         (ok (Store.refresh_reported_types db ~expected:changes));
+       Alcotest.check pairs "after" [ "bonus", 1; "card", 2 ] (types db);
+       ok (Store.delete_classification_rule db "id-cashback");
+       let back = ok (Store.preview_reported_types db) in
+       Alcotest.(check int)
+         "refreshed back"
+         1
+         (ok (Store.refresh_reported_types db ~expected:back));
+       Alcotest.check pairs "restored" [ "card", 3 ] (types db);
+       Ok ()));
+  (* Only reported-type rules can name a column, and an absent column matches nothing. *)
+  Alcotest.(check bool)
+    "field on a type rule is rejected"
+    true
+    (Result.is_error
+       (Classification_rule.create
+          ~mode:Automatic
+          ~account_type:None
+          ~priority:0
+          ~name:"bad"
+          ~pattern:(Some "x")
+          ~institution:(Some "wise")
+          ~match_type:None
+          ~case_sensitive:false
+          ~action:(Type (Movement_type.of_string "card"))
+          ~field:"TransferWise ID"
+          ()));
+  ok
+    (Store.with_open ~registry:Test_support.registry ":memory:" (fun db ->
+       let missing =
+         ok
+           (Classification_rule.create
+              ~mode:Automatic
+              ~account_type:None
+              ~priority:(-2000)
+              ~name:"missing-column"
+              ~pattern:(Some ".+")
+              ~institution:(Some "wise")
+              ~match_type:None
+              ~case_sensitive:true
+              ~action:(Reported_type (Some (Movement_type.of_string "bonus")))
+              ~field:"No Such Column"
+              ())
+       in
+       ok (Store.add_classification_rule db missing);
+       import db;
+       Alcotest.check pairs "falls back to the code" [ "card", 3 ] (types db);
+       Ok ()))
+;;
+
+let show () =
+  ok
+    (Store.with_open ~registry:Test_support.registry ":memory:" (fun db ->
+       List.iter [ "wise.xml"; "wise.csv" ] ~f:(fun path ->
+         ignore
+           (ok
+              (Test_support.import
+                 db
+                 ~institution:"wise"
+                 ~path
+                 (In_channel.read_all ("fixtures/" ^ path)))));
+       ignore (ok (Store.match_companions ~institution:"wise" db));
+       let event_id = (List.hd_exn (ok (Store.bank_review db))).event_id in
+       let d = ok (Store.show_movement db event_id) in
+       Alcotest.(check string) "institution" "wise" d.venue;
+       Alcotest.(check bool)
+         "payload is shown"
+         true
+         (String.is_substring d.payload ~substring:"wise-camt-v1");
+       Alcotest.(check (list string))
+         "imported from"
+         [ "wise.xml" ]
+         (List.concat_map d.documents ~f:(fun doc -> doc.paths));
+       (match d.companions with
+        | [ c ] ->
+          Alcotest.(check string) "format" "wise_csv" c.format;
+          Alcotest.(check bool)
+            "every column by header"
+            true
+            (List.mem (List.map c.fields ~f:fst) "TransferWise ID" ~equal:String.equal
+             && List.mem (List.map c.fields ~f:fst) "Merchant" ~equal:String.equal);
+          Alcotest.(check (list string))
+            "the file it came from"
+            [ "wise.csv" ]
+            c.document.paths;
+          Alcotest.(check bool)
+            "a type rule matched its code"
+            true
+            (Option.is_some c.reported)
+        | _ -> Alcotest.fail "expected one matched companion row");
+       Alcotest.(check bool)
+         "unknown id"
+         true
+         (Result.is_error (Store.show_movement db 999999L));
+       Ok ()))
+;;
+
 let () =
   Alcotest.run
     "typing rules"
@@ -475,6 +648,8 @@ let () =
         ; Alcotest.test_case "institution summary" `Quick summary_matches_review
         ; Alcotest.test_case "explain" `Quick explain
         ; Alcotest.test_case "explain companion code" `Quick explain_companion
+        ; Alcotest.test_case "companion column rules" `Quick field_rule
+        ; Alcotest.test_case "transaction detail" `Quick show
         ] )
     ]
 ;;

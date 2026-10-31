@@ -429,7 +429,8 @@ let reported_type_rules () =
            ~institution:(Some "wise")
            ~match_type:None
            ~case_sensitive:true
-           ~action:(Reported_type (Some Bonus)))
+           ~action:(Reported_type (Some Bonus))
+           ())
     in
     ok (Store.add_classification_rule db rule);
     check

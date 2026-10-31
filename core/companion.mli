@@ -33,4 +33,7 @@ type t =
   ; annotate : row -> annotation Or_error.t
   ; describe : row -> (string * string option) list Or_error.t
     (** Named fields for listings. *)
+  ; fields : row -> (string * string) list Or_error.t
+    (** Every raw column of the row by its header name, in column order. A header
+        name that repeats appears once per column. Rules match these. *)
   }

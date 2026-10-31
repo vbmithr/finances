@@ -1797,7 +1797,7 @@ let refresh_reported_types database institution yes =
              ~default:""
              ~f:(Printf.sprintf " (transaction #%Ld)"))
           (Terminal.text c.institution)
-          (Terminal.text c.code)
+          (Terminal.text (Option.value c.code ~default:"(no longer decided)"))
           (name c.before)
           (name c.after));
       let%bind confirmed =
@@ -2262,7 +2262,9 @@ let definition_rules (definition : Institution_definition.t) =
       ~institution:(Some name)
       ~match_type:(Option.map r.match_type ~f:Classification_rule.condition_of_string)
       ~case_sensitive:r.case_sensitive
-      ~action)
+      ~action
+      ?field:r.field
+      ())
   |> Or_error.combine_errors
 ;;
 
@@ -3289,6 +3291,7 @@ let rule_add
       ~match_type
       ~case_sensitive
       ~action
+      ()
   in
   with_database database (fun db ->
     let%bind observed = Store.observed_provider_movement_types db in
@@ -3485,6 +3488,7 @@ let rule_add_evidence
       ~match_type:(Option.map match_type ~f:Classification_rule.condition_of_string)
       ~case_sensitive
       ~action
+      ()
   in
   with_database database (fun db ->
     let%bind () =
@@ -3561,6 +3565,7 @@ let rule_add_reported_type
       target
       case_sensitive
       priority
+      field
       replace
   =
   let action =
@@ -3583,6 +3588,8 @@ let rule_add_reported_type
       ~match_type:None
       ~case_sensitive
       ~action
+      ?field
+      ()
   in
   with_database database (fun db ->
     let%bind () =
@@ -3600,7 +3607,8 @@ let rule_add_reported_type
 let rule_add_reported_type_cmd =
   command
     "add-reported-type"
-    "Map an institution's reported type code to a movement type."
+    "Map an institution's reported type code, or a named companion-file column, to a \
+     movement type."
     Term.(
       const rule_add_reported_type
       $ database
@@ -3634,6 +3642,15 @@ let rule_add_reported_type_cmd =
               [ "priority" ]
               ~docv:"NUMBER"
               ~doc:"Lower numbers run first (default: -1000).")
+      $ Arg.(
+          value
+          & opt (some string) None
+          & info
+              [ "field" ]
+              ~docv:"COLUMN"
+              ~doc:
+                "Match this column of the institution's companion file, named as in its \
+                 header, instead of the bank's type code.")
       $ Arg.(value & flag & info [ "replace" ] ~doc:"Replace an existing rule."))
 ;;
 
@@ -3648,7 +3665,7 @@ let rule_list database json_output =
       List.iter rules ~f:(fun r ->
         printf
           "%s  mode=%s  priority=%d  %s -> %s  /%s/  %s  account-type=%s  match-type=%s  \
-           set-type=%s\n"
+           set-type=%s  field=%s\n"
           (Terminal.text r.name)
           (match r.mode with
            | Automatic -> "automatic"
@@ -3667,7 +3684,8 @@ let rule_list database json_output =
           (Option.value_map
              (Classification_rule.action_type r.action)
              ~default:"none"
-             ~f:Movement_type.to_string)))
+             ~f:Movement_type.to_string)
+          (Terminal.text (Option.value r.field ~default:"code"))))
 ;;
 
 let rule_list_cmd =
@@ -4026,6 +4044,7 @@ let rule_test
       ~match_type
       ~case_sensitive
       ~action:(Classification_rule.Type kind)
+      ()
   in
   with_database database (fun db ->
     let%bind observed = Store.observed_provider_movement_types db in
@@ -4224,6 +4243,123 @@ let rule_explain_cmd =
           value
           & flag
           & info [ "all" ] ~doc:"Also list the rules that did not match, with the reason."))
+;;
+
+let print_fields indent fields =
+  let width =
+    List.fold fields ~init:0 ~f:(fun acc (name, _) -> Int.max acc (String.length name))
+  in
+  List.iter fields ~f:(fun (name, value) ->
+    printf "%s%-*s  %s\n" indent width (Terminal.text name) (Terminal.text value))
+;;
+
+let print_document indent (d : Transaction_detail.document) =
+  printf
+    "%sdocument #%Ld, sha256 %s, imported %s\n"
+    indent
+    d.id
+    (String.prefix d.sha256 12)
+    d.imported_at;
+  List.iter d.paths ~f:(fun path -> printf "%s  file: %s\n" indent (Terminal.text path))
+;;
+
+let print_transaction_detail (t : Transaction_detail.t) =
+  let e = t.explanation in
+  printf
+    "Transaction #%Ld  %s  %s  %s %s\n"
+    e.event_id
+    (Terminal.text e.institution)
+    e.booked_on
+    e.amount
+    e.currency;
+  List.iter e.descriptions ~f:(fun d -> printf "  Description: %s\n" (Terminal.text d));
+  printf
+    "  Type: %s (%s)\n"
+    (type_name e.effective)
+    (match e.source with
+     | Manual_override -> "manual override"
+     | Import_rules -> "import rules"
+     | Companion_code -> "the companion file's code"
+     | Untyped -> "nothing decides it");
+  printf
+    "  Category: %s\n"
+    (match e.category with
+     | Some (account, reason) ->
+       Printf.sprintf "%s (%s)" (Terminal.text account) (Terminal.text reason)
+     | None -> "none recorded");
+  Option.iter t.transfer ~f:(fun (first, second, reason) ->
+    printf
+      "  Transfer: confirmed with #%Ld (%s)\n"
+      (if Int64.equal first e.event_id then second else first)
+      (Terminal.text reason));
+  print_endline "\nSource";
+  print_fields
+    "  "
+    [ "institution", t.venue
+    ; "account", t.account
+    ; "account type", e.account_type
+    ; "kind", t.kind
+    ; "source id", t.source_id
+    ; "occurred", t.occurred
+    ; "retrieved", t.retrieved_at
+    ];
+  print_endline "\nImported from";
+  if List.is_empty t.documents
+  then print_endline "  no stored document"
+  else List.iter t.documents ~f:(print_document "  ");
+  List.iter t.statements ~f:(fun s ->
+    printf
+      "  statement %s: account %s %s, %s, balance %s to %s\n"
+      (Option.value_map s.reference ~default:"(no reference)" ~f:Terminal.text)
+      (Terminal.text s.source_account)
+      s.currency
+      s.period
+      s.opening
+      s.closing);
+  print_endline "\nSource fields";
+  String.split_lines t.payload
+  |> List.iter ~f:(fun line -> printf "  %s\n" (Terminal.text line));
+  (match t.companions with
+   | [] -> print_endline "\nCompanion files: no matched rows"
+   | companions ->
+     printf "\nCompanion files: %d matched\n" (List.length companions);
+     List.iter companions ~f:(fun c ->
+       printf
+         "  %s row %d, %s (%s: %s)\n"
+         (Terminal.text c.format)
+         c.row_number
+         c.state
+         (Terminal.text c.policy)
+         (Terminal.text c.reason);
+       print_document "    " c.document;
+       print_fields "    " c.fields;
+       Option.iter c.display_name ~f:(fun name ->
+         printf "    display name: %s\n" (Terminal.text name));
+       List.iter c.tags ~f:(fun (tag, value) ->
+         printf "    tag %s: %s\n" (Terminal.text tag) (Terminal.text value));
+       Option.iter c.reported ~f:(fun (value, kind) ->
+         printf "    type rules matched %s: %s\n" (Terminal.text value) (type_name kind))));
+  printf "\nHow its type was decided: fin rule explain %Ld\n" e.event_id
+;;
+
+let transaction_show database event_id =
+  with_database database (fun db ->
+    let%map detail = Store.show_movement db event_id in
+    print_transaction_detail detail)
+;;
+
+let transaction_show_cmd =
+  command
+    "show"
+    "Show everything stored about one transaction: its source, files, fields and \
+     decisions."
+    Term.(
+      const transaction_show
+      $ database
+      $ Arg.(
+          required
+          & pos 0 (some int64) None
+          & info [] ~docv:"EVENT-ID" ~doc:"Transaction event ID from fin tx list."))
 ;;
 
 let print_description_gaps gaps =
@@ -5443,6 +5579,7 @@ let () =
               "transaction"
               "Inspect and classify imported transactions."
               [ transaction_list_cmd
+              ; transaction_show_cmd
               ; refresh_transaction_types_cmd
               ; refresh_reported_types_cmd
               ; refresh_transaction_evidence_cmd

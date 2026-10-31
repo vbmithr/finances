@@ -112,6 +112,7 @@ let make ~profile ~csv_profile ?(aliases = []) ~csv ~policy ~metadata_prefix ()
           let%map tx = Camt_source.source_transaction source event in
           id, tx)
         ~match_rows:(Csv_clock_companion.match_rows csv_profile)
+        ~header:(fun _ -> Ok csv_profile.header)
         ~annotate
         ~describe:(fun row ->
           Adapter_support.

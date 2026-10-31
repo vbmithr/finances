@@ -29,6 +29,9 @@ type t = private
   ; match_type : type_condition option
   ; case_sensitive : bool
   ; action : action
+  ; field : string option
+    (** The companion-file column a reported-type rule matches, by its header;
+            the bank's own code when absent. Other rules have none. *)
   }
 
 val create
@@ -41,6 +44,8 @@ val create
   -> match_type:type_condition option
   -> case_sensitive:bool
   -> action:action
+  -> ?field:string
+  -> unit
   -> t Or_error.t
 
 val action_name : action -> string
