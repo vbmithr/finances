@@ -248,13 +248,21 @@ with a caveat on the last. The model has these moving parts:
 The proposal is one sentence: **when FIELD matches REGEX, set a type or a
 category.**
 
-- **Named fields, the same for every rule.** `description` (a rule matches when
-  any description does), `merchant` (the companion's display name), `code` (the
-  bank's own code, from a primary source or a matched companion), and later
-  `direction`, `payee` and `reference`. They come from what the sources already
-  carry: `Companion.describe` already names a companion's fields, and a primary
-  source's payload and `Movement.reported_code` the rest. The existing conditions
-  stay: institution, account type, and the type so far.
+- **Every column of every source is a field, named as the source names it.** A
+  rule says "field `TransferWise ID` matches `^BALANCE_CASHBACK-`", with no role,
+  preset or adapter code for that column. For a CSV the names are its headers
+  (Revolut's `Product` and `State`, Wise's `Payer Name` and `Note`); for a
+  structured source they are its own tags (OFX name and memo, the CAMT bank
+  transaction code and additional entry information, the MT940 `:86:`
+  subfields). Fin adds a few canonical fields for every movement so rules stay
+  portable across banks: `description` (a rule matches when any description does),
+  `direction`, `amount`, `date`, the account type and the type so far. A matched
+  companion file's fields are available once its rows match, under a prefix naming
+  the source when two sources share a name. A definition then says only how to
+  ingest (which columns give date, amount, currency, description and identity);
+  its role columns for merchant, payee, details type and payment reference become
+  ordinary fields, and the display name becomes a setting that names one field.
+  The existing conditions stay: institution, account type, and the type so far.
 - **Two actions for users.** `type` (interpretation; bundled and shareable) and
   `category` (personal; never shipped). Reported-type and reported-other become
   type rules on the `code` field. Settlement and the two evidence rules stay as
@@ -303,16 +311,32 @@ Open questions:
   step or later.
 - Whether `type and category` stays one action or becomes two rules.
 - Where recomputed types are stored and how their history is kept.
+- How primary sources keep all their fields. A companion row already stores its raw
+  cells, and the definition knows the header. A primary event does not: the Revolut
+  payload drops `Product`, `State` and `Balance`, and the OFX and CAMT payloads are
+  fixed subsets. Capture them in the payload or in a side table, without changing
+  source identity, with a generic flattening for the tag-based formats.
+- How fields are prefixed when two sources share a name, and what a rule does when
+  several matched companion rows give different values for one field.
+- Export headers vary by language and over time, so a rule on a missing field must
+  be visible: `rule test` and `rule explain` should report how many movements lack
+  it. Field values are strings; numeric conditions need their own handling.
 
 Staging, each step usable alone:
 
-1. Expose named fields. Add a single description of a movement's fields, used by
-   `rule explain`, `rule test` and `rule gaps`; no behaviour change.
-2. `--field` on type rules, with `code` and `merchant`; convert the bundled
-   reported-type rules to type rules on `code` and bump the definition format.
-3. Derive types: recompute after import and rule edit, log the changes, remove the
+1. Companion fields. Give every companion a view of its raw columns by header name,
+   and let reported-type rules name the field they match (default: the bank's
+   code), so a rule can match `TransferWise ID`. This needs a schema bump and no
+   new storage for companions, which already keep their cells.
+2. Primary fields. Capture all source fields at import, a generic view for CSV
+   first, then the tag-based formats; canonical fields (`description`, `direction`,
+   `amount`, `date`); and field rules on a primary's movements.
+3. One rule form: `--field` on type rules, the bundled reported-type rules
+   converted to type rules on a field, the definition format bumped, and the role
+   columns dropped from definitions.
+4. Derive types: recompute after import and rule edit, log the changes, remove the
    refresh commands.
-4. Remove the old action kinds and the staged `rule explain` output.
+5. Remove the old action kinds and the staged `rule explain` output.
 
 ### Distribution and trust
 

@@ -198,9 +198,10 @@ configurable yet.
   Conflicts with reviewed decisions and near misses are not reported yet.
 - [ ] Simpler rule model ([proposal](classification.md#a-simpler-rule-model-proposal)):
   one rule form (field, expression, type or category), named fields, derived
-  types. Decide the open questions there, then stage it: expose named fields,
-  `--field` on type rules and bundled `code` rules, derived types without the
-  refresh commands, remove the old action kinds.
+  types. Every column of every source is a field named as the source names it.
+  Decide the open questions there, then stage it: companion fields (step 1,
+  started), primary fields, one rule form, derived types without the refresh
+  commands, remove the old action kinds.
 - [ ] Wise description rules, available today: on the real archives
   `^Wise Charges for` to `fee` would newly type 187 fee lines now typed by their
   card, conversion or transfer code, `^Cashback` to `bonus` 29 rows, and the
