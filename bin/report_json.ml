@@ -603,3 +603,66 @@ let companion =
   |> Jsont.Object.keep_unknown (Json.members (Jsont.option Jsont.string)) ~enc:snd
   |> Jsont.Object.finish
 ;;
+
+let movement_type_option = Jsont.option Jsont.string
+
+let type_rule_outcome =
+  Jsont.map
+    Jsont.string
+    ~dec:(fun _ -> failwith "report encoding only")
+    ~enc:(function
+      | Store.Newly_typed -> "newly-typed"
+      | Changed -> "changed"
+      | Unchanged -> "unchanged"
+      | Shadowed _ -> "shadowed"
+      | Overridden -> "overridden")
+;;
+
+let type_rule_row =
+  let field name codec (enc : Store.type_rule_row -> _) map =
+    Jsont.Object.mem name codec ~enc map
+  in
+  Jsont.Object.enc_only ()
+  |> field "event_id" Json.int64_codec (fun r -> r.event_id)
+  |> field "institution" Jsont.string (fun r -> r.institution)
+  |> field "description" Jsont.string (fun r -> r.description)
+  |> field "before" movement_type_option (fun r ->
+    Option.map r.before ~f:Movement_type.to_string)
+  |> field "after" movement_type_option (fun r ->
+    Option.map r.after ~f:Movement_type.to_string)
+  |> field "outcome" type_rule_outcome (fun r -> r.outcome)
+  |> field "shadowed_by" (Jsont.option Jsont.string) (fun r ->
+    match r.outcome with
+    | Shadowed name -> Some name
+    | _ -> None)
+  |> Jsont.Object.finish
+;;
+
+let type_rule_test =
+  let field name codec (enc : Store.type_rule_test -> _) map =
+    Jsont.Object.mem name codec ~enc map
+  in
+  Jsont.Object.enc_only ()
+  |> field "scanned" Jsont.int (fun r -> r.scanned)
+  |> field "untyped_before" Jsont.int (fun r -> r.untyped_before)
+  |> field "untyped_after" Jsont.int (fun r -> r.untyped_after)
+  |> field "matches" (Jsont.list type_rule_row) (fun r -> r.matches)
+  |> Jsont.Object.finish
+;;
+
+let description_gap =
+  let field name codec (enc : Store.description_gap -> _) map =
+    Jsont.Object.mem name codec ~enc map
+  in
+  Jsont.Object.enc_only ()
+  |> field "institution" Jsont.string (fun r -> r.institution)
+  |> field "key" Jsont.string (fun r -> r.key)
+  |> field "count" Jsont.int (fun r -> r.count)
+  |> field "first_on" Jsont.string (fun r -> Date.to_string r.first_on)
+  |> field "last_on" Jsont.string (fun r -> Date.to_string r.last_on)
+  |> field "debits" Jsont.int (fun r -> r.debits)
+  |> field "credits" Jsont.int (fun r -> r.credits)
+  |> field "example" Jsont.string (fun r -> r.example)
+  |> field "suggested_pattern" Jsont.string (fun r -> r.pattern)
+  |> Jsont.Object.finish
+;;

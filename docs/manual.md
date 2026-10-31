@@ -902,6 +902,35 @@ Wise companion CSV type codes use the same rule list: its definition maps known
 codes and preserves other codes as provider-specific types. These rules match the
 reported code, not the transaction description.
 
+#### Find untyped movements and test a rule before saving it
+
+`fin rule gaps` lists movements that have no type, grouped by how their first
+description starts (the first one or two words, stopping at a word with a digit),
+largest group first. Each group shows its count, dates, debits and credits, an
+example description and a starting expression. Use `--institution` and `--limit`
+(default 20), or `--json`.
+
+```sh
+fin rule gaps --institution boursobank
+fin rule test cafes '^CAFE(?:\s|$)' --institution boursobank --set-type card
+fin rule add cafes '^CAFE(?:\s|$)' --institution boursobank --set-type card --automatic
+fin transaction refresh-types --institution boursobank
+```
+
+`fin rule test NAME [REGEX]` evaluates a draft type rule as if it were saved as an
+automatic rule, against every stored movement of its institution, and changes
+nothing. It accepts the type-rule options of `fin rule add` (`--description`,
+`--set-type`, `--institution`, `--case-sensitive`, `--match-type`, `--account-type`
+and `--priority`), and requires `--set-type`: category rules are personal and are
+not tested here. A saved rule with the same name is replaced in the test, so
+testing an edited rule shows what the edit changes. The report counts the matches
+as newly typed, type changed, already this type, decided by an earlier rule
+(named, so you can see what shadows the draft) or covered by a manual type
+override, and gives the number of movements without a type before and after. It
+lists up to `--limit` examples (default 10) per outcome, or prints everything with
+`--json`. Only automatic rules take part, because only they type movements on
+import.
+
 Refresh existing types from stored source evidence after importer improvements:
 
 ```sh

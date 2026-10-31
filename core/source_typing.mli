@@ -20,4 +20,10 @@ val of_json : string -> t Or_error.t
 val to_json : t -> string
 val institution : t -> string
 val empty : string -> t Or_error.t
+
+(** Whether the rule's conditions hold for the movement as the parser decoded it:
+    account type, parser-reported type, and the expression on the first stripped
+    description. *)
+val matches : rule -> Movement.t -> bool
+
 val apply : t -> Movement.t -> Movement.t

@@ -150,6 +150,24 @@
   rel.sqlite3))
 
 (test
+ (name typing_rules_test)
+ (modules typing_rules_test)
+ (deps
+  (glob_files fixtures/*))
+ (flags
+  (:standard -open Finances_core -open Finances_institutions))
+ (libraries
+  finances
+  test_support
+  finances.institutions
+  finances.core
+  base
+  stdio
+  alcotest
+  rel
+  rel.sqlite3))
+
+(test
  (name bunq_test)
  (modules bunq_test)
  (deps

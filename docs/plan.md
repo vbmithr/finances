@@ -193,9 +193,17 @@ configurable yet.
 
 - [x] Document the existing rules and sketch a rule editor and the sharing of
   interpretation rules through institution definitions.
-- [ ] `fin rule test` for a draft rule: matches, newly classified movements,
-  overlaps, conflicts with reviewed decisions and near misses.
-- [ ] `fin rule gaps`: movements with no type, grouped by description prefix.
+- [x] `fin rule test` for a draft type rule: matches, newly typed and changed
+  movements, rules that shadow it and manual overrides; read-only (2026-10-31).
+  Conflicts with reviewed decisions and near misses are not reported yet.
+- [x] `fin rule gaps`: movements with no type, grouped by the first words of their
+  description, with a suggested expression (2026-10-31). The grouping key is a
+  heuristic to tune on real data.
+- [ ] Revolut typing: its CSV has a `Type` column of six values (Card Payment,
+  Deposit, Transfer, ATM, Card Refund, Charge) that the profile reads but does
+  not turn into a movement type, and its 668 card payments have 372 distinct
+  description keys, so description rules cannot type them. Decide how rules reach
+  a primary CSV's reported code (see `docs/classification.md`).
 - [x] Express each bundled institution as one institution definition file
   (`institutions/{boursobank,wise,bunq,revolut}.json`), replacing nine files of
   presets, profiles and default rules. Verified 2026-10-31: `definition show`

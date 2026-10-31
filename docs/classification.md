@@ -210,6 +210,23 @@ it:
 - A terminal front end (the Notty option above) comes later on the same engine.
   Authors can also edit a definition file and run `fin institution definition check`.
 
+### First use: Revolut
+
+Checked 2026-10-31 on the two real Revolut exports (843 rows; counts only).
+`rule gaps` is the wrong lever there. The CSV carries the bank's own `Type`:
+Card Payment 668, Deposit 70, Transfer 57, ATM 46, Card Refund 1, Charge 1. The
+profile reads the column but no movement type is set from it. Descriptions work
+for the small types (`Top-up by`, `Payment from`, `Cash withdrawal`,
+`Transfer to`, `Transfer from`, `Balance migration`) but not for the 668 card
+payments, whose descriptions are merchants (372 distinct two-word keys). Typing
+Revolut therefore needs the reported `Type` column, as Wise's companion CSV codes
+already are, not description rules. The existing `reported-type` rules (an
+institution, a code expression and a type) are the right shape; the open work is
+applying them to the primary CSV's `Type` field at import and refresh, instead
+of only to companion rows. A plausible mapping is Card Payment and Card Refund to
+`card`, Deposit to `deposit`, Transfer to `transfer`, ATM to `withdrawal` and
+Charge to `fee`; Revolut's REVERTED rows are already handled separately.
+
 ### Distribution and trust
 
 Bundled definitions live in the repository, reviewed by pull request and

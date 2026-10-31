@@ -5668,3 +5668,213 @@ let delete_account ?(dry_run = false) db (mapping : Bank_account_mapping.t) =
         let* () = List.fold_result triggers ~init:() ~f:(fun () sql -> exec sql) in
         Ok { transactions; documents })
 ;;
+
+type type_rule_outcome =
+  | Newly_typed
+  | Changed
+  | Unchanged
+  | Shadowed of string
+  | Overridden
+
+type type_rule_row =
+  { event_id : int64
+  ; institution : string
+  ; description : string
+  ; before : Movement_type.t option
+  ; after : Movement_type.t option
+  ; outcome : type_rule_outcome
+  }
+
+type type_rule_test =
+  { scanned : int
+  ; matches : type_rule_row list
+  ; untyped_before : int
+  ; untyped_after : int
+  }
+
+let typing_rule (rule : Classification_rule.t) kind =
+  Source_typing.make_rule
+    (Option.value rule.pattern ~default:".*")
+    rule.account_type
+    rule.case_sensitive
+    (Movement_type.to_string kind)
+  |> Or_error.map ~f:(fun typing ->
+    Source_typing.with_match_type
+      typing
+      (Option.map rule.match_type ~f:Classification_rule.condition_name))
+;;
+
+let test_type_rule db (draft : Classification_rule.t) =
+  let* draft_kind =
+    Classification_rule.action_type draft.action
+    |> Or_error.of_option
+         ~error:(Error.of_string "only rules that set a movement type can be tested")
+  in
+  let* draft_typing = typing_rule draft draft_kind in
+  let* saved = classification_rules db in
+  let* saved =
+    List.filter saved ~f:(fun (r : Classification_rule.t) ->
+      (match r.mode with
+       | Automatic -> true
+       | Review | Disabled -> false)
+      && Option.is_some (Classification_rule.action_type r.action))
+    |> List.map ~f:(fun (r : Classification_rule.t) ->
+      let* typing =
+        typing_rule r (Option.value_exn (Classification_rule.action_type r.action))
+      in
+      Ok (r, (r.priority, r.name, typing)))
+    |> Or_error.combine_errors
+  in
+  let ordered entries =
+    List.sort entries ~compare:(fun (p1, n1, _) (p2, n2, _) ->
+      match Int.compare p1 p2 with
+      | 0 -> String.compare n1 n2
+      | c -> c)
+  in
+  (* The saved version of the draft's rule is part of "before" and absent from
+     "after", so editing a rule shows what the edit changes. *)
+  let for_venue ~without_draft venue =
+    List.filter_map saved ~f:(fun ((r : Classification_rule.t), entry) ->
+      Option.some_if
+        (Option.value_map r.institution ~default:true ~f:(String.equal venue)
+         && not (without_draft && String.equal r.name draft.name))
+        entry)
+  in
+  let draft_applies venue =
+    Option.value_map draft.institution ~default:true ~f:(String.equal venue)
+  in
+  let* source = movement_source db in
+  let source =
+    List.filter source ~f:(fun (_, (e : Source_event.t)) -> draft_applies e.venue)
+  in
+  let* override_rows =
+    collect
+      db
+      (statement
+         "SELECT event_id,movement_type FROM movement_type_overrides"
+         Db_schema.Movement_type_overrides.row)
+  in
+  let overridden =
+    Set.of_list
+      (module Int64)
+      (List.map override_rows ~f:(fun (r : Db_schema.Movement_type_overrides.t) ->
+         r.event_id))
+  in
+  let winner rules movement =
+    List.find rules ~f:(fun (_, _, r) -> Source_typing.matches r movement)
+  in
+  let type_of (movement : Movement.t) = function
+    | None -> movement.movement_type
+    | Some (_, _, (r : Source_typing.rule)) -> Some r.kind
+  in
+  let* results =
+    traverse
+      (fun (event_id, (event : Source_event.t)) ->
+         let* empty = Source_typing.empty event.venue in
+         let* movement = Registry.movement ~source_typing:empty db.registry event in
+         let before_rules = ordered (for_venue ~without_draft:false event.venue) in
+         let after_rules =
+           ordered
+             ((draft.priority, draft.name, draft_typing)
+              :: for_venue ~without_draft:true event.venue)
+         in
+         let before_winner = winner before_rules movement in
+         let after_winner = winner after_rules movement in
+         let before = type_of movement before_winner in
+         let after = type_of movement after_winner in
+         let is_overridden = Set.mem overridden event_id in
+         let row =
+           if not (Source_typing.matches draft_typing movement)
+           then None
+           else (
+             let outcome =
+               if is_overridden
+               then Overridden
+               else (
+                 match after_winner with
+                 | Some (_, name, _) when not (String.equal name draft.name) ->
+                   Shadowed name
+                 | _ ->
+                   (match before with
+                    | None -> Newly_typed
+                    | Some _ when Option.equal Poly.equal before after -> Unchanged
+                    | Some _ -> Changed))
+             in
+             Some
+               { event_id
+               ; institution = event.venue
+               ; description = String.concat ~sep:" | " movement.descriptions
+               ; before
+               ; after
+               ; outcome
+               })
+         in
+         Ok
+           ( row
+           , (not is_overridden) && Option.is_none before
+           , (not is_overridden) && Option.is_none after ))
+      source
+  in
+  Ok
+    { scanned = List.length source
+    ; matches = List.filter_map results ~f:(fun (row, _, _) -> row)
+    ; untyped_before = List.count results ~f:(fun (_, b, _) -> b)
+    ; untyped_after = List.count results ~f:(fun (_, _, a) -> a)
+    }
+;;
+
+type description_gap =
+  { institution : string
+  ; key : string
+  ; count : int
+  ; first_on : Date.t
+  ; last_on : Date.t
+  ; debits : int
+  ; credits : int
+  ; example : string
+  ; pattern : string
+  }
+
+let description_gaps ?institution db =
+  let* reviews = bank_review db in
+  let groups = Hashtbl.create (module String) in
+  List.iter reviews ~f:(fun (r : bank_review) ->
+    if
+      Option.is_none r.movement_type
+      && Option.value_map institution ~default:true ~f:(String.equal r.institution)
+    then (
+      let description =
+        Option.value_map (List.hd r.transaction.descriptions) ~default:"" ~f:String.strip
+      in
+      let key = Description_key.key description in
+      Hashtbl.add_multi
+        groups
+        ~key:(r.institution ^ "\000" ^ key)
+        ~data:(r.institution, key, description, r.transaction)));
+  Hashtbl.data groups
+  |> List.map ~f:(fun members ->
+    let institution, key, example, _ = List.hd_exn members in
+    let dates = List.map members ~f:(fun (_, _, _, (m : Movement.t)) -> m.booked_on) in
+    let debits =
+      List.count members ~f:(fun (_, _, _, (m : Movement.t)) ->
+        Quantity.(m.amount < zero))
+    in
+    { institution
+    ; key
+    ; count = List.length members
+    ; first_on = List.min_elt dates ~compare:Date.compare |> Option.value_exn
+    ; last_on = List.max_elt dates ~compare:Date.compare |> Option.value_exn
+    ; debits
+    ; credits = List.length members - debits
+    ; example
+    ; pattern = Description_key.pattern key
+    })
+  |> List.sort ~compare:(fun a b ->
+    match Int.compare b.count a.count with
+    | 0 ->
+      (match String.compare a.institution b.institution with
+       | 0 -> String.compare a.key b.key
+       | c -> c)
+    | c -> c)
+  |> fun gaps -> Ok gaps
+;;

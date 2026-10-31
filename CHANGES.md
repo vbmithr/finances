@@ -10,6 +10,12 @@ short line of their own.
 
 ### 2026-10-31
 
+- Add `fin rule gaps` to list movements without a type, grouped by how their
+  descriptions start with a suggested expression, and `fin rule test` to evaluate
+  a draft type rule against stored movements without saving it. Both are
+  read-only. The CLI and database are unchanged otherwise. Internal: `Source_typing`
+  exposes `matches`; the store gains `test_type_rule` and `description_gaps`.
+
 - Ship each bundled institution as one definition file (`institutions/boursobank.json`,
   `wise.json`, `bunq.json`, `revolut.json`) holding its source profile and default
   rules, replacing nine preset, profile and default-rule files. `fin institution

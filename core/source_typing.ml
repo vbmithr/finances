@@ -80,24 +80,25 @@ let empty institution =
     { institution; rules = [] })
 ;;
 
-let apply t movement =
+let matches (r : rule) (movement : Movement.t) =
   let description =
-    Option.value_map (List.hd movement.Movement.descriptions) ~default:"" ~f:String.strip
+    Option.value_map (List.hd movement.descriptions) ~default:"" ~f:String.strip
   in
-  match
-    List.find t.rules ~f:(fun r ->
-      Option.value_map
-        r.account_type
-        ~default:true
-        ~f:(String.equal movement.account.account_type)
-      && Option.value_map r.match_type ~default:true ~f:(fun expected ->
-        match expected, movement.movement_type with
-        | "unknown", None -> true
-        | "unknown", Some _ -> false
-        | _, Some kind -> String.equal expected (Movement_type.to_string kind)
-        | _, None -> false)
-      && Re.execp r.compiled description)
-  with
+  Option.value_map
+    r.account_type
+    ~default:true
+    ~f:(String.equal movement.account.account_type)
+  && Option.value_map r.match_type ~default:true ~f:(fun expected ->
+    match expected, movement.movement_type with
+    | "unknown", None -> true
+    | "unknown", Some _ -> false
+    | _, Some kind -> String.equal expected (Movement_type.to_string kind)
+    | _, None -> false)
+  && Re.execp r.compiled description
+;;
+
+let apply t movement =
+  match List.find t.rules ~f:(fun r -> matches r movement) with
   | None -> movement
   | Some r -> Movement.with_movement_type movement (Some r.kind)
 ;;

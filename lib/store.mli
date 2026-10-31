@@ -519,3 +519,50 @@ val delete_account
   -> t
   -> Bank_account_mapping.t
   -> account_deletion Or_error.t
+
+(** What a draft import-time type rule would do to one movement it matches. *)
+type type_rule_outcome =
+  | Newly_typed
+  | Changed
+  | Unchanged
+  | Shadowed of string
+  (** A rule that runs earlier already decides the type; it is named. *)
+  | Overridden (** A manual type override takes precedence over every rule. *)
+
+type type_rule_row =
+  { event_id : int64
+  ; institution : string
+  ; description : string
+  ; before : Movement_type.t option
+  ; after : Movement_type.t option
+  ; outcome : type_rule_outcome
+  }
+
+type type_rule_test =
+  { scanned : int (** Movements in scope: the rule's institution, or all. *)
+  ; matches : type_rule_row list
+  ; untyped_before : int (** Movements no rule or override types, as saved. *)
+  ; untyped_after : int (** The same with the draft added. *)
+  }
+
+(** Evaluate a draft type rule as an automatic import-time rule, against every
+    stored movement, without saving anything. The draft takes the place of a
+    saved rule with the same name. Only rules that set a movement type can be
+    tested. *)
+val test_type_rule : t -> Classification_rule.t -> type_rule_test Or_error.t
+
+(** Movements that have no type, grouped by the first words of their first
+    description. *)
+type description_gap =
+  { institution : string
+  ; key : string
+  ; count : int
+  ; first_on : Date.t
+  ; last_on : Date.t
+  ; debits : int
+  ; credits : int
+  ; example : string
+  ; pattern : string (** {!Description_key.pattern} of the key. *)
+  }
+
+val description_gaps : ?institution:string -> t -> description_gap list Or_error.t

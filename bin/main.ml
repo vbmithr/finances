@@ -3801,6 +3801,259 @@ let rule_rename_cmd =
           & info [] ~docv:"NEW-NAME" ~doc:"New, unused rule name."))
 ;;
 
+let print_type_rule_test
+      (rule : Classification_rule.t)
+      (result : Store.type_rule_test)
+      limit
+  =
+  let count f = List.count result.matches ~f:(fun r -> f r.Store.outcome) in
+  printf
+    "Draft rule %s (automatic on import): %s -> %s, %s.\n"
+    (Terminal.text rule.name)
+    (Terminal.text (Option.value rule.pattern ~default:"any description"))
+    (Terminal.text (Classification_rule.action_target rule.action))
+    (Option.value_map rule.institution ~default:"all institutions" ~f:Terminal.text);
+  printf "Scanned %d movements; %d match.\n" result.scanned (List.length result.matches);
+  printf
+    "  newly typed: %d\n\
+    \  type changed: %d\n\
+    \  already this type: %d\n\
+    \  decided by an earlier rule: %d\n\
+    \  manual type override: %d\n"
+    (count (function
+       | Newly_typed -> true
+       | _ -> false))
+    (count (function
+       | Changed -> true
+       | _ -> false))
+    (count (function
+       | Unchanged -> true
+       | _ -> false))
+    (count (function
+       | Shadowed _ -> true
+       | _ -> false))
+    (count (function
+       | Overridden -> true
+       | _ -> false));
+  printf
+    "Movements without a type: %d -> %d.\n"
+    result.untyped_before
+    result.untyped_after;
+  let name = Option.value_map ~default:"none" ~f:Movement_type.to_string in
+  let section title select =
+    let rows = List.filter result.matches ~f:(fun r -> select r.Store.outcome) in
+    if not (List.is_empty rows)
+    then (
+      printf "\n%s:\n" title;
+      List.iter (List.take rows limit) ~f:(fun r ->
+        printf
+          "  #%Ld  %s  %s -> %s  %s%s\n"
+          r.Store.event_id
+          (Terminal.text r.institution)
+          (name r.before)
+          (name r.after)
+          (Terminal.text r.description)
+          (match r.outcome with
+           | Shadowed rule_name -> "  [" ^ Terminal.text rule_name ^ "]"
+           | _ -> ""));
+      let hidden = List.length rows - limit in
+      if hidden > 0 then printf "  ... %d more (use --limit)\n" hidden)
+  in
+  section "Type changes" (function
+    | Store.Changed -> true
+    | _ -> false);
+  section "Decided by an earlier rule; the draft changes nothing here" (function
+    | Store.Shadowed _ -> true
+    | _ -> false);
+  section "Newly typed" (function
+    | Store.Newly_typed -> true
+    | _ -> false);
+  section "Manual type override; unchanged" (function
+    | Store.Overridden -> true
+    | _ -> false)
+;;
+
+let rule_test
+      database
+      name
+      positional_pattern
+      institution
+      case_sensitive
+      match_type
+      set_type
+      description
+      account_type
+      priority
+      limit
+      json_output
+  =
+  let%bind pattern =
+    match positional_pattern, description with
+    | Some _, Some _ ->
+      Or_error.error_string
+        "provide the description either positionally or with --description"
+    | Some p, None | None, Some p -> Ok (Some p)
+    | None, None -> Ok None
+  in
+  let parse_type = function
+    | None -> Ok None
+    | Some value when String.is_empty (String.strip value) || String.equal value "unknown"
+      -> Or_error.error_string "choose a movement type from fin tx type list"
+    | Some value -> Ok (Some (Movement_type.of_string value))
+  in
+  let%bind match_type =
+    match match_type with
+    | Some "unknown" -> Ok (Some Classification_rule.Unknown)
+    | other ->
+      let%map kind = parse_type other in
+      Option.map kind ~f:(fun kind -> Classification_rule.Is kind)
+  in
+  let%bind kind =
+    let%bind kind = parse_type set_type in
+    Or_error.of_option
+      kind
+      ~error:(Error.of_string "specify --set-type: only type rules can be tested")
+  in
+  let%bind rule =
+    Classification_rule.create
+      ~mode:Automatic
+      ~account_type
+      ~priority
+      ~name
+      ~pattern
+      ~institution
+      ~match_type
+      ~case_sensitive
+      ~action:(Classification_rule.Type kind)
+  in
+  with_database database (fun db ->
+    let%bind observed = Store.observed_provider_movement_types db in
+    let%bind () =
+      List.filter_opt
+        [ Option.bind match_type ~f:(function
+            | Is kind -> Some kind
+            | Unknown -> None)
+        ; Some kind
+        ]
+      |> List.map ~f:(function
+        | Movement_type.Other name when not (List.mem observed name ~equal:String.equal)
+          -> Or_error.error_string "unknown movement type; see fin tx type list"
+        | _ -> Ok ())
+      |> Or_error.combine_errors_unit
+    in
+    let%map result = Store.test_type_rule db rule in
+    if json_output
+    then Report_json.print Report_json.type_rule_test result
+    else print_type_rule_test rule result limit)
+;;
+
+let rule_test_cmd =
+  command
+    "test"
+    "Test a draft type rule against stored movements without saving it."
+    Term.(
+      const rule_test
+      $ database
+      $ Arg.(
+          required
+          & pos 0 (some string) None
+          & info
+              []
+              ~docv:"NAME"
+              ~doc:"Draft rule name; a saved rule with this name is replaced in the test.")
+      $ Arg.(
+          value
+          & pos 1 (some string) None
+          & info
+              []
+              ~docv:"REGEX"
+              ~doc:"Optional description expression; alternatively use --description.")
+      $ institution_filter
+      $ Arg.(
+          value
+          & flag
+          & info [ "case-sensitive" ] ~doc:"Match descriptions case sensitively.")
+      $ Arg.(
+          value
+          & opt (some string) None
+          & info
+              [ "match-type" ]
+              ~docv:"TYPE"
+              ~doc:"Match the type the parser reported, or unknown.")
+      $ Arg.(
+          value
+          & opt (some string) None
+          & info
+              [ "set-type" ]
+              ~docv:"TYPE"
+              ~doc:"The movement type the rule assigns; see fin tx type list.")
+      $ Arg.(
+          value
+          & opt (some string) None
+          & info
+              [ "description" ]
+              ~docv:"REGEX"
+              ~doc:"Perl-style expression matched against the first source description.")
+      $ Arg.(
+          value
+          & opt (some string) None
+          & info [ "account-type" ] ~docv:"TYPE" ~doc:"Match this source account type.")
+      $ Arg.(
+          value
+          & opt int 1000
+          & info [ "priority" ] ~docv:"NUMBER" ~doc:"Rule order; lower numbers run first.")
+      $ Arg.(
+          value
+          & opt int 10
+          & info [ "limit" ] ~docv:"COUNT" ~doc:"Examples shown per outcome.")
+      $ json_output)
+;;
+
+let print_description_gaps gaps =
+  if List.is_empty gaps
+  then print_endline "Every movement has a type."
+  else
+    List.iter gaps ~f:(fun (g : Store.description_gap) ->
+      printf
+        "%4d  %s  %s  %s..%s  debits %d, credits %d\n"
+        g.count
+        (Terminal.text g.institution)
+        (if String.is_empty g.key
+         then "(blank, or starts with a digit)"
+         else Terminal.text ("\"" ^ g.key ^ "\""))
+        (Date.to_string g.first_on)
+        (Date.to_string g.last_on)
+        g.debits
+        g.credits;
+      printf "      example: %s\n" (Terminal.text g.example);
+      if not (String.is_empty g.pattern)
+      then printf "      pattern: %s\n" (Terminal.text g.pattern))
+;;
+
+let rule_gaps database institution limit json_output =
+  with_database database (fun db ->
+    let%map gaps = Store.description_gaps ?institution db in
+    let gaps = List.take gaps limit in
+    if json_output
+    then Report_json.print (Jsont.list Report_json.description_gap) gaps
+    else print_description_gaps gaps)
+;;
+
+let rule_gaps_cmd =
+  command
+    "gaps"
+    "List movements without a type, grouped by how their descriptions start."
+    Term.(
+      const rule_gaps
+      $ database
+      $ institution_filter
+      $ Arg.(
+          value
+          & opt int 20
+          & info [ "limit" ] ~docv:"COUNT" ~doc:"Maximum number of groups.")
+      $ json_output)
+;;
+
 let bank_review database all json_output =
   with_database database (fun db ->
     let%bind rows = Store.bank_review db in
@@ -4948,6 +5201,8 @@ let () =
               ; rule_apply_cmd
               ; rule_delete_cmd
               ; rule_rename_cmd
+              ; rule_test_cmd
+              ; rule_gaps_cmd
               ]
           ; group
               "db"
