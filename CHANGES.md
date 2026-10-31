@@ -10,6 +10,19 @@ short line of their own.
 
 ### 2026-10-31
 
+- Let automatic type rules match a named field of the primary source:
+  `fin rule add` and `fin rule test` take `--field FIELD`. `description` is now the
+  main text the adapter declares instead of the first text, `text` matches any
+  description, and sources expose named fields: OFX `name` and `memo`, Bunq `name`
+  and `counterparty`, the Wise CAMT `reference`, and Revolut `type`. On a Wise CAMT
+  statement alone, a rule on `reference` types 187 fee lines and 29 cashback rows.
+  `fin rule explain` shows the field and value each rule tested. Bunq is the one
+  behaviour change: its automatic rules now see the payment description, which was
+  the second text, instead of the counterparty's name; it has no bundled rules.
+  `fin rule gaps` still groups by the first text. OCaml consumers: `Movement.t` has
+  `fields` and `main_description`, `Source_typing.rule` a `field`, and
+  `Movement.field_values` resolves a name.
+
 - Ship Wise rules on the `TransferWise ID` column and for the `MONEY_ADDED` code:
   `FEE-` to `fee`, `BALANCE_CASHBACK-` to `bonus`, and `MONEY_ADDED` to `deposit`. On
   the real archives they type 187 fee lines, which the bank code had typed as

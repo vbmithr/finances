@@ -9,6 +9,8 @@ type rule = private
   ; kind : Movement_type.t
   ; match_type : string option
   ; compiled : Re.re
+  ; field : string option
+    (** The field the expression is tested on; the main description if absent. *)
   }
 
 (** A rule on the bank's own transaction code ([Movement.reported_code]). *)
@@ -34,7 +36,14 @@ val create : ?reported:reported_rule list -> institution:string -> rule list -> 
 (** The type the first matching reported rule gives a code. *)
 val reported_type : t -> string -> Movement_type.t option
 
-val make_rule : string -> string option -> bool -> string -> rule Or_error.t
+val make_rule
+  :  ?field:string
+  -> string
+  -> string option
+  -> bool
+  -> string
+  -> rule Or_error.t
+
 val codec : t Jsont.t
 val of_json : string -> t Or_error.t
 val to_json : t -> string
@@ -42,8 +51,8 @@ val institution : t -> string
 val empty : string -> t Or_error.t
 
 (** Whether the rule's conditions hold for the movement as the parser decoded it:
-    account type, parser-reported type, and the expression on the first stripped
-    description. *)
+    account type, parser-reported type, and the expression on any value of the
+    rule's field (the main description by default, see {!Movement.field_values}). *)
 val matches : rule -> Movement.t -> bool
 
 (** Give the movement the type its code maps to, if any, then the type of the

@@ -30,8 +30,11 @@ type t = private
   ; case_sensitive : bool
   ; action : action
   ; field : string option
-    (** The companion-file column a reported-type rule matches, by its header;
-            the bank's own code when absent. Other rules have none. *)
+    (** The field a rule matches. A reported-type rule names a column of the
+        companion file by its header (the bank's own code when absent). A type rule
+        names a field of the movement: [text] for any description, or a named one
+        such as [name], [memo] or [reference]; the main description when absent.
+        It must be automatic. Other rules have none. *)
   }
 
 val create

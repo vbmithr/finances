@@ -932,6 +932,37 @@ value the type rules matched. It changes nothing. Companion rows include the
 personal columns of the file, such as a cardholder's name, so be careful when
 pasting the output. `fin rule explain EVENT-ID` shows how the type was decided.
 
+#### What a type rule matches
+
+A type rule tests one *field* of the transaction. Without `--field` it tests the
+`description`, which is the main text the source's adapter declares: the OFX name
+for BoursoBank, the payment description for Bunq (not the counterparty's name,
+which comes first in the list), and the single description for Wise and Revolut.
+`--field` chooses another:
+
+- `text`: any of the transaction's descriptions;
+- a named text or column the source carries: `name` and `memo` (OFX), `name` and
+  `counterparty` (Bunq), `reference` (the Wise CAMT bank transaction code, such as
+  `FEE-CARD-…`), `type` (Revolut's own type column).
+
+A rule matches when any value under the field matches. A field that a transaction
+does not have matches nothing, and `fin rule explain` says so. A rule that names a
+field must be automatic (`--automatic`), because reviewed rules work from stored
+transactions, which do not keep fields; use `fin transaction refresh-types` to apply
+it to what is already imported.
+
+```sh
+fin rule test wise-ref-fee --institution wise --field reference \
+  --description '^FEE-' --set-type fee
+fin rule add wise-ref-fee --institution wise --field reference \
+  --description '^FEE-' --set-type fee --automatic
+fin transaction refresh-types --institution wise
+```
+
+On a Wise CAMT statement alone, with no CSV, that types every fee line. Only the
+fields listed above are available for now; columns that the stored payload drops
+(Revolut's `Product`, `State` and `Balance`) are not.
+
 #### Explain a movement's type
 
 `fin rule explain EVENT-ID` (the event ID is in `fin tx list`) traces how one

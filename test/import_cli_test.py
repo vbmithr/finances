@@ -1495,6 +1495,29 @@ class ImportOnboarding(unittest.TestCase):
         self.assertTrue(all(r['movement_type'] == 'bonus' for r in after))
         self.assertIn('No reported type changes.', self.run_fin('tx', 'refresh-reported-types').stdout)
 
+    def test_type_rules_can_match_a_named_field_of_the_primary(self):
+        # A CAMT statement alone: the bank's transaction code is the field reference.
+        self.run_fin('import', 'wise', 'fixtures/wise.xml')
+        test = self.run_fin('rule', 'test', 'by-ref', '--institution', 'wise', '--field', 'reference',
+                            '--description', '^BALANCE_CASHBACK-', '--set-type', 'bonus').stdout
+        self.assertIn('1 match.', test)
+        self.assertIn('newly typed: 1', test)
+        # The field is part of the saved rule and needs an automatic rule.
+        refused = self.run_fin('rule', 'add', 'by-ref', '--institution', 'wise', '--field', 'reference',
+                               '--description', '^BALANCE_CASHBACK-', '--set-type', 'bonus', check=False)
+        self.assertNotEqual(refused.returncode, 0)
+        self.run_fin('rule', 'add', 'by-ref', '--institution', 'wise', '--field', 'reference',
+                     '--description', '^BALANCE_CASHBACK-', '--set-type', 'bonus', '--automatic')
+        listed = {r['name']: r for r in json.loads(self.run_fin('rule', 'list', '--json').stdout)}
+        self.assertEqual(listed['by-ref']['field'], 'reference')
+        self.assertIn('movement_types_changed=1', self.run_fin('tx', 'refresh-types', '--institution', 'wise', '--yes').stdout)
+        rows = json.loads(self.run_fin('tx', 'list', '--institution', 'wise', '--json').stdout)
+        self.assertEqual(sorted(r['movement_type'] or '' for r in rows), ['', '', 'bonus'])
+        event = next(r['event_id'] for r in rows if r['movement_type'] == 'bonus')
+        explain = self.run_fin('rule', 'explain', event).stdout
+        self.assertIn('decides  by-ref', explain)
+        self.assertIn('[reference: BALANCE_CASHBACK-', explain)
+
     def test_tx_show_lists_source_files_fields_and_companions(self):
         self.run_fin('import', 'revolut', self.csv, '--account-id', 'main')
         rows = json.loads(self.run_fin('tx', 'list', '--json').stdout)

@@ -552,23 +552,34 @@ let field_rule () =
          (ok (Store.refresh_reported_types db ~expected:back));
        Alcotest.check pairs "restored" [ "card", 3 ] (types db);
        Ok ()));
-  (* Only reported-type rules can name a column, and an absent column matches nothing. *)
+  (* A review-mode type rule cannot name a field (it works from stored transactions,
+     which keep none), nor can a category rule. An absent column matches nothing. *)
+  let with_field ?(mode = Classification_rule.Automatic) action =
+    Classification_rule.create
+      ~mode
+      ~account_type:None
+      ~priority:0
+      ~name:"bad"
+      ~pattern:(Some "x")
+      ~institution:(Some "wise")
+      ~match_type:None
+      ~case_sensitive:false
+      ~action
+      ~field:"TransferWise ID"
+      ()
+  in
   Alcotest.(check bool)
-    "field on a type rule is rejected"
+    "an automatic type rule may name a field"
     true
-    (Result.is_error
-       (Classification_rule.create
-          ~mode:Automatic
-          ~account_type:None
-          ~priority:0
-          ~name:"bad"
-          ~pattern:(Some "x")
-          ~institution:(Some "wise")
-          ~match_type:None
-          ~case_sensitive:false
-          ~action:(Type (Movement_type.of_string "card"))
-          ~field:"TransferWise ID"
-          ()));
+    (Result.is_ok (with_field (Type (Movement_type.of_string "card"))));
+  Alcotest.(check bool)
+    "a review-mode type rule may not"
+    true
+    (Result.is_error (with_field ~mode:Review (Type (Movement_type.of_string "card"))));
+  Alcotest.(check bool)
+    "a category rule may not"
+    true
+    (Result.is_error (with_field (Category "expenses:food")));
   ok
     (Store.with_open ~registry:Test_support.registry ":memory:" (fun db ->
        let missing =
@@ -626,6 +637,110 @@ let shipped_wise_rules () =
          "code rules name no column"
          (Some None)
          (List.Assoc.find rules "wise-reported-card" ~equal:String.equal);
+       Ok ()))
+;;
+
+(* [description] is the adapter's main text, [text] is any, and every text and
+   column the source carries has its own name. *)
+let primary_fields () =
+  let draft ?(name = "draft") ?field ~institution pattern =
+    ok
+      (Classification_rule.create
+         ~mode:Automatic
+         ~account_type:None
+         ~priority:0
+         ~name
+         ~pattern:(Some pattern)
+         ~institution:(Some institution)
+         ~match_type:None
+         ~case_sensitive:true
+         ~action:(Type (Movement_type.of_string "bonus"))
+         ?field
+         ())
+  in
+  let matches db ?field ~institution pattern =
+    List.length (ok (Store.test_type_rule db (draft ?field ~institution pattern))).matches
+  in
+  (* Bunq: the counterparty name comes first and the payment text second. *)
+  ok
+    (Store.with_open ~registry:Test_support.registry ":memory:" (fun db ->
+       ignore
+         (ok
+            (Test_support.import
+               db
+               ~institution:"bunq"
+               ~path:"bunq.mt940"
+               (In_channel.read_all "fixtures/bunq.mt940")));
+       let count = matches db ~institution:"bunq" in
+       Alcotest.(check bool)
+         "description is the payment text"
+         true
+         (count "^Purchase$" > 0);
+       check_int "the name is not the description" 0 (count "^Synthetic shop$");
+       Alcotest.(check bool)
+         "but it is a field"
+         true
+         (count ~field:"name" "^Synthetic shop$" > 0);
+       Alcotest.(check bool)
+         "text is any description"
+         true
+         (count ~field:"text" "^Synthetic shop$" > 0
+          && count ~field:"text" "^Purchase$" > 0);
+       check_int "a field the source lacks matches nothing" 0 (count ~field:"memo" ".");
+       Ok ()));
+  (* OFX: name and memo are fields; the main description is the first present. *)
+  ok
+    (Store.with_open ~registry:Test_support.registry ":memory:" (fun db ->
+       ignore
+         (ok
+            (Test_support.import_ofx
+               db
+               ~institution:"boursobank"
+               (In_channel.read_all "fixtures/bank.ofx")));
+       let count = matches db ~institution:"boursobank" in
+       Alcotest.(check bool) "name" true (count ~field:"name" "^CAF" > 0);
+       Alcotest.(check bool) "memo" true (count ~field:"memo" "^Synthetic precision" > 0);
+       check_int
+         "a memo is not in the name"
+         0
+         (count ~field:"name" "^Synthetic precision");
+       Ok ()));
+  (* CAMT: the bank transaction code is the field reference, without a CSV. *)
+  ok
+    (Store.with_open ~registry:Test_support.registry ":memory:" (fun db ->
+       ignore
+         (ok
+            (Test_support.import
+               db
+               ~institution:"wise"
+               ~path:"wise.xml"
+               (In_channel.read_all "fixtures/wise.xml")));
+       let t =
+         ok
+           (Store.test_type_rule
+              db
+              (draft ~field:"reference" ~institution:"wise" "^BALANCE_CASHBACK-"))
+       in
+       check_int "one cashback by its reference" 1 (List.length t.matches);
+       (* A saved rule on a field is applied by a refresh, and explain names the field. *)
+       ok
+         (Store.add_classification_rule
+            db
+            (draft
+               ~name:"ref-cashback"
+               ~field:"reference"
+               ~institution:"wise"
+               "^BALANCE_CASHBACK-"));
+       let changes = ok (Store.preview_movement_types ~institution:"wise" db) in
+       check_int "one movement changes" 1 (List.length changes);
+       let event_id = (List.hd_exn changes).event_id in
+       let e = ok (Store.explain_movement db event_id) in
+       Alcotest.(check bool)
+         "explain shows the field's value"
+         true
+         (List.exists e.description_checks ~f:(fun c ->
+            String.equal c.name "ref-cashback"
+            && String.is_prefix c.input ~prefix:"reference: BALANCE_CASHBACK-"));
        Ok ()))
 ;;
 
@@ -690,6 +805,7 @@ let () =
         ; Alcotest.test_case "explain companion code" `Quick explain_companion
         ; Alcotest.test_case "companion column rules" `Quick field_rule
         ; Alcotest.test_case "shipped Wise rules" `Quick shipped_wise_rules
+        ; Alcotest.test_case "primary fields" `Quick primary_fields
         ; Alcotest.test_case "transaction detail" `Quick show
         ] )
     ]

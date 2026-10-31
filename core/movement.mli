@@ -33,6 +33,11 @@ type t = private
   ; reported_code : string option
     (** The bank's own transaction code in a primary source, such as a CSV
             type column; typing rules may map it to a movement type. *)
+  ; fields : (string * string) list
+    (** Named values the source carries besides the canonical ones, such as an
+            OFX name and memo, in source order. *)
+  ; main_description : int
+    (** Which of [descriptions] the adapter declares as the main text. *)
   }
 
 val create
@@ -45,6 +50,8 @@ val create
   -> ?counterparty_iban:Iban.t
   -> ?movement_type:Movement_type.t
   -> ?reported_code:string
+  -> ?fields:(string * string) list
+  -> ?main_description:int
   -> string list
   -> t Or_error.t
 
@@ -53,3 +60,9 @@ val principal : t -> Quantity.t
 
 (** Attach a type derived from the primary source at import. *)
 val with_movement_type : t -> Movement_type.t option -> t
+
+(** The values a rule can test under a field name. [description] is the main text
+    the adapter declares, [text] is every description, and any other name is one
+    of {!t.fields}. Descriptions are stripped of surrounding whitespace, and the
+    list is empty when the movement has no such field. *)
+val field_values : t -> string -> string list

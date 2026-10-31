@@ -46,6 +46,7 @@ let make (profile : Csv_running_profile.t) =
         ~amount:tx.amount
         ~fee:tx.fee
         ~reported_code:tx.transaction_type
+        ~fields:[ "type", tx.transaction_type ]
         [ tx.description ])
     ()
 ;;

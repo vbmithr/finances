@@ -15,6 +15,8 @@ let decode (profile : Mt940_profile.t) engine event =
     ~value_on:tx.value_on
     ~amount:tx.amount
     ?counterparty_iban:(Iban.of_string tx.counterparty |> Result.ok)
+    ~fields:[ "name", tx.name; "counterparty", tx.counterparty ]
+    ~main_description:1
     [ tx.name; tx.description ]
 ;;
 

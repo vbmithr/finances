@@ -29,6 +29,11 @@ let decode event =
     ~own_iban
     ~booked_on:tx.booked_on
     ~amount:tx.amount
+    ~fields:
+      (List.filter_opt
+         [ Option.map tx.name ~f:(fun name -> "name", name)
+         ; Option.map tx.memo ~f:(fun memo -> "memo", memo)
+         ])
     (List.filter_opt [ tx.name; tx.memo ])
 ;;
 

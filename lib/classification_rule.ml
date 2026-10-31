@@ -109,11 +109,19 @@ let create
   let%bind field =
     match field, action with
     | None, _ -> Ok None
-    | Some name, (Reported_type _ | Reported_other _) ->
+    | Some _, Type _
+      when match mode with
+           | Automatic | Disabled -> false
+           | Review -> true ->
+      Or_error.error_string
+        "a type rule that names a field must be automatic: reviewed rules work from \
+         stored transactions, which do not keep fields"
+    | Some name, (Reported_type _ | Reported_other _ | Type _) ->
       let%map name = Validation.text "field" name in
       Some name
     | Some _, _ ->
-      Or_error.error_string "only reported-type rules can name a field to match"
+      Or_error.error_string
+        "only automatic type rules and reported-type rules can name a field"
   in
   let%bind name = Validation.token "rule name" name in
   let%bind () =

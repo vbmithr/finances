@@ -331,9 +331,22 @@ Staging, each step usable alone:
    their cells. On the real Wise archives it types 187 fee lines and 29 cashback
    rows. The rule still has the reported-type action and applies to companion rows
    only; folding it into the single rule form is step 3.
-2. Primary fields. Capture all source fields at import, a generic view for CSV
-   first, then the tag-based formats; canonical fields (`description`, `direction`,
-   `amount`, `date`); and field rules on a primary's movements.
+2. Primary fields. Decided 2026-10-31: `description` is the main text the adapter
+   declares, not the first text; `text` is any description; every text and column
+   the source carries has its own name; and columns that a payload drops are kept in
+   a side table (`source_event_fields`), which leaves payloads and source identity
+   untouched.
+   - 2a, implemented 2026-10-31: named fields that the payload already holds (OFX
+     `name` and `memo`, Bunq `name` and `counterparty`, the Wise CAMT `reference`,
+     Revolut `type`), the `description` and `text` split, and `--field` on
+     automatic type rules, with `rule test` and `rule explain` showing the field
+     and value. No schema change.
+   - 2b: the side table, populated at import, for the columns the payload drops
+     (Revolut `Product`, `State`, `Balance`; every column of a generic CSV), then
+     the tag-based formats (CAMT, OFX, MT940) through a generic flattening. The
+     stored movement should also keep which text is the main one, so `rule gaps`
+     groups by it; today it groups by the first text.
+   - Canonical fields `direction`, `amount` and `date` come with 2b or later.
 3. One rule form: `--field` on type rules, the bundled reported-type rules
    converted to type rules on a field, the definition format bumped, and the role
    columns dropped from definitions.

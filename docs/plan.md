@@ -200,7 +200,9 @@ configurable yet.
   one rule form (field, expression, type or category), named fields, derived
   types. Every column of every source is a field named as the source names it.
   Decide the open questions there, then stage it: companion fields (step 1, done:
-  `add-reported-type --field`), primary fields, one rule form, derived types without the refresh
+  `add-reported-type --field`), primary fields (2a done: named fields from the
+  payload, `description` as the adapter's main text, `text` for any, `--field` on
+  automatic type rules; 2b: the `source_event_fields` side table), one rule form, derived types without the refresh
   commands, remove the old action kinds.
 - [x] Wise rules shipped in `wise.json` (2026-10-31), on the `TransferWise ID`
   column rather than the description: `FEE-` to `fee` (187 rows), `BALANCE_CASHBACK-`

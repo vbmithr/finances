@@ -42,6 +42,7 @@ let make ~profile ~csv_profile ?(aliases = []) ~csv ~policy ~metadata_prefix ()
         ~booked_on:tx.booked_on
         ?value_on:tx.value_on
         ~amount:tx.amount
+        ~fields:[ "reference", tx.reference ]
         [ tx.description ]
     ;;
 

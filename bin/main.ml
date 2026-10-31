@@ -2321,6 +2321,7 @@ let check_institution_definition path sample account_id =
           Some
             (let%map r =
                Source_typing.make_rule
+                 ?field:rule.field
                  (Option.value_exn rule.pattern)
                  rule.account_type
                  rule.case_sensitive
@@ -3230,6 +3231,7 @@ let rule_add
       automatic
       account_type
       priority
+      field
       replace
   =
   let%bind pattern =
@@ -3293,6 +3295,7 @@ let rule_add
       ~match_type
       ~case_sensitive
       ~action
+      ?field
       ()
   in
   with_database database (fun db ->
@@ -3339,6 +3342,18 @@ let rule_add
       (if automatic then "automatic on import" else "review")
       (Terminal.text name);
     Ok ())
+;;
+
+let field_doc =
+  "Match this field instead of the main description: text (any description), or a field \
+   the source carries such as name, memo, reference or type. Automatic type rules only."
+;;
+
+let field_arg ~settlement =
+  if settlement
+  then Term.const None
+  else
+    Arg.(value & opt (some string) None & info [ "field" ] ~docv:"FIELD" ~doc:field_doc)
 ;;
 
 let rule_add_cmd ~settlement =
@@ -3459,6 +3474,7 @@ let rule_add_cmd ~settlement =
           value
           & opt int 1000
           & info [ "priority" ] ~docv:"NUMBER" ~doc:"Rule order; lower numbers run first.")
+      $ field_arg ~settlement
       $ Arg.(
           value
           & flag
@@ -4005,6 +4021,7 @@ let rule_test
       description
       account_type
       priority
+      field
       limit
       json_output
   =
@@ -4046,6 +4063,7 @@ let rule_test
       ~match_type
       ~case_sensitive
       ~action:(Classification_rule.Type kind)
+      ?field
       ()
   in
   with_database database (fun db ->
@@ -4124,6 +4142,7 @@ let rule_test_cmd =
           value
           & opt int 1000
           & info [ "priority" ] ~docv:"NUMBER" ~doc:"Rule order; lower numbers run first.")
+      $ field_arg ~settlement:false
       $ Arg.(
           value
           & opt int 10
@@ -4139,17 +4158,19 @@ let print_explain_checks ~all (checks : Explanation.check list) =
     match c.verdict with
     | Decides kind ->
       printf
-        "       decides  %s  /%s/ -> %s\n"
+        "       decides  %s  /%s/ -> %s   [%s]\n"
         (Terminal.text c.name)
         (Terminal.text c.pattern)
         (match kind with
          | Some kind -> Terminal.text (Movement_type.to_string kind)
          | None -> "leaves it untyped")
+        (Terminal.text c.input)
     | Also_matches ->
       printf
-        "       matches too, but an earlier rule decides  %s  /%s/\n"
+        "       matches too, but an earlier rule decides  %s  /%s/   [%s]\n"
         (Terminal.text c.name)
         (Terminal.text c.pattern)
+        (Terminal.text c.input)
     | Does_not_match reason ->
       if all
       then
@@ -4189,9 +4210,7 @@ let print_explanation ~all (e : Explanation.t) =
    | Some code ->
      printf "  2. Bank code %S, reported-type rules:\n" (Terminal.text code);
      print_explain_checks ~all e.code_checks);
-  printf
-    "  3. First description %S, type rules:\n"
-    (Terminal.text (Option.value (List.hd e.descriptions) ~default:""));
+  printf "  3. Description rules, on the field each rule names (default: description):\n";
   print_explain_checks ~all e.description_checks;
   printf "     import rules give: %s\n" (type_name e.rules_type);
   (match e.companion with

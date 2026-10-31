@@ -283,7 +283,12 @@ let default_source_typing t =
       match r.action with
       | Type ->
         Some
-          (Source_typing.make_rule r.pattern r.account_type r.case_sensitive r.target
+          (Source_typing.make_rule
+             ?field:r.field
+             r.pattern
+             r.account_type
+             r.case_sensitive
+             r.target
            |> Or_error.ok_exn
            |> fun rule -> Source_typing.with_match_type rule r.match_type)
       | Card_reference | Withdrawal_reversal | Reported_type | Reported_other -> None)

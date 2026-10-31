@@ -7,6 +7,7 @@ type rule =
   ; kind : Movement_type.t
   ; match_type : string option
   ; compiled : Re.re
+  ; field : string option
   }
 
 (** A rule on the bank's own transaction code, such as a CSV type column. *)
@@ -44,9 +45,16 @@ let make_reported_rule pattern case_sensitive action =
   }
 ;;
 
-let make_rule description account_type case_sensitive kind =
+let make_rule ?field description account_type case_sensitive kind =
   let open Or_error.Let_syntax in
   let%bind _ = Validation.text "description expression" description in
+  let%bind () =
+    match field with
+    | None -> Ok ()
+    | Some name ->
+      let%map _ = Validation.text "field" name in
+      ()
+  in
   let%bind () =
     match account_type with
     | None -> Ok ()
@@ -72,6 +80,7 @@ let make_rule description account_type case_sensitive kind =
     ; kind = Movement_type.of_string kind
     ; match_type = None
     ; compiled
+    ; field
     }
 ;;
 
@@ -111,10 +120,9 @@ let empty institution =
     { institution; rules = []; reported = [] })
 ;;
 
+(* A rule tests the main description unless it names a field; it matches when any
+   value under that name does. *)
 let matches (r : rule) (movement : Movement.t) =
-  let description =
-    Option.value_map (List.hd movement.descriptions) ~default:"" ~f:String.strip
-  in
   Option.value_map
     r.account_type
     ~default:true
@@ -125,7 +133,9 @@ let matches (r : rule) (movement : Movement.t) =
     | "unknown", Some _ -> false
     | _, Some kind -> String.equal expected (Movement_type.to_string kind)
     | _, None -> false)
-  && Re.execp r.compiled description
+  && List.exists
+       (Movement.field_values movement (Option.value r.field ~default:"description"))
+       ~f:(Re.execp r.compiled)
 ;;
 
 let reported_type t code =

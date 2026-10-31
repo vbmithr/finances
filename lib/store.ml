@@ -695,27 +695,29 @@ let source_typing_profile db institution =
       Rel_sql.Stmt.(
         func
           "SELECT pattern,account_type,case_mode,CASE WHEN action_kind='type-category' \
-           THEN action_type ELSE target END,match_type FROM classification_rules WHERE \
-           mode='automatic' AND action_kind IN ('type','type-category') AND (institution \
-           IS NULL OR institution=?) ORDER BY priority,name"
+           THEN action_type ELSE target END,match_type,field FROM classification_rules \
+           WHERE mode='automatic' AND action_kind IN ('type','type-category') AND \
+           (institution IS NULL OR institution=?) ORDER BY priority,name"
           (text
            @-> ret
                  Row.(
-                   t5
-                     (option Rel.Type.text "pattern")
-                     (option Rel.Type.text "account_type")
-                     (text "case_mode")
-                     (text "target")
-                     (option Rel.Type.text "match_type"))))
+                   unit (fun a b c d e f -> a, b, c, d, e, f)
+                   * option Rel.Type.text "pattern"
+                   * option Rel.Type.text "account_type"
+                   * text "case_mode"
+                   * text "target"
+                   * option Rel.Type.text "match_type"
+                   * option Rel.Type.text "field")))
     in
     let* rows =
       db_result (Db.fold db.conn (query institution) (fun row acc -> row :: acc) [])
     in
     let* rules =
       List.rev rows
-      |> List.map ~f:(fun (pattern, account_type, case_mode, target, match_type) ->
+      |> List.map ~f:(fun (pattern, account_type, case_mode, target, match_type, field) ->
         Result.map
           (Source_typing.make_rule
+             ?field
              (Option.value pattern ~default:".*")
              account_type
              (String.equal case_mode "sensitive")
@@ -5811,6 +5813,7 @@ type type_rule_test =
 
 let typing_rule (rule : Classification_rule.t) kind =
   Source_typing.make_rule
+    ?field:rule.field
     (Option.value rule.pattern ~default:".*")
     rule.account_type
     rule.case_sensitive
@@ -6170,9 +6173,6 @@ let explain_movement db event_id =
   in
   (* Stage 2: type rules on the first description, which see the type above. *)
   first_hit := false;
-  let description =
-    Option.value_map (List.hd after_code.descriptions) ~default:"" ~f:String.strip
-  in
   let* description_entries =
     List.filter rules ~f:(fun r ->
       automatic r && Option.is_some (Classification_rule.action_type r.action))
@@ -6180,6 +6180,13 @@ let explain_movement db event_id =
       let kind = Option.value_exn (Classification_rule.action_type r.action) in
       let* typing = typing_rule r kind in
       let pattern = Option.value r.pattern ~default:"any description" in
+      let field = Option.value r.field ~default:"description" in
+      let values = Movement.field_values after_code field in
+      let input =
+        if List.is_empty values
+        then Printf.sprintf "%s: this movement has no such field" field
+        else Printf.sprintf "%s: %s" field (String.concat ~sep:" | " values)
+      in
       let reason =
         if
           not
@@ -6214,13 +6221,17 @@ let explain_movement db event_id =
                   ~default:"any"
                   ~f:Classification_rule.condition_name))
         else if not (Source_typing.matches typing after_code)
-        then Some "the description does not match"
+        then
+          Some
+            (if List.is_empty values
+             then Printf.sprintf "the movement has no field %s" field
+             else Printf.sprintf "field %s does not match" field)
         else None
       in
       Ok
         ( r.name
         , pattern
-        , description
+        , input
         , match reason with
           | Some reason -> Error reason
           | None -> Ok (Some kind) ))
