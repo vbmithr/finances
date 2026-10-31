@@ -8,7 +8,7 @@ let error result = Alcotest.(check bool) "rejected" true (Result.is_error result
 let fixture () = In_channel.read_all "fixtures/bank.ofx"
 let join = Stdlib.Filename.concat
 let database root = join root "bank.sqlite3"
-let inbox root = join root "inbox"
+let input_directory root = join root "statements"
 let journal root = join root "bank.journal"
 
 let rec remove path =
@@ -21,12 +21,12 @@ let rec remove path =
 
 let workspace f =
   let root =
-    Stdlib.Filename.temp_dir ~temp_dir:(Sys.getenv_exn "TMPDIR") "finances-inbox" ""
+    Stdlib.Filename.temp_dir ~temp_dir:(Sys.getenv_exn "TMPDIR") "finances-import" ""
   in
   Exn.protect
     ~finally:(fun () -> remove root)
     ~f:(fun () ->
-      Unix.mkdir (inbox root) 0o700;
+      Unix.mkdir (input_directory root) 0o700;
       f root)
 ;;
 
@@ -37,12 +37,12 @@ let with_store root f =
        Ok ()))
 ;;
 
-let sync root =
-  Finances_import.Sync.run
+let run_workflow root =
+  Finances_import.Workflow.run
     ~registry:Builtin.registry
     ~database:(database root)
     ~institution:"boursobank"
-    ~paths:[ inbox root ]
+    ~paths:[ input_directory root ]
     ~journal:(journal root)
     ()
 ;;
@@ -50,7 +50,7 @@ let sync root =
 let write path contents = Out_channel.write_all path ~data:contents
 
 let count outcome report =
-  List.count report.Finances_import.Inbox.files ~f:(fun file ->
+  List.count report.Finances_import.Files.files ~f:(fun file ->
     Poly.equal file.outcome outcome)
 ;;
 
@@ -93,27 +93,29 @@ let overlap () =
 
 let recursive_and_repeat () =
   workspace (fun root ->
-    write (join (inbox root) "a-renamed.txt") (fixture ());
-    write (join (inbox root) "m-broken.ofx") "not an OFX document";
-    write (join (inbox root) "categories.csv") "date;amount\n2026-01-03;-0.10\n";
-    let nested = join (inbox root) "nested" in
+    write (join (input_directory root) "a-renamed.txt") (fixture ());
+    write (join (input_directory root) "m-broken.ofx") "not an OFX document";
+    write (join (input_directory root) "categories.csv") "date;amount\n2026-01-03;-0.10\n";
+    let nested = join (input_directory root) "nested" in
     Unix.mkdir nested 0o755;
     write (join nested "z-overlap.ofx") (overlap ());
     write (join nested "copy.ofx.part") (fixture ());
-    write (join (inbox root) ".hidden.ofx") (fixture ());
-    Unix.symlink (join (inbox root) "a-renamed.txt") (join (inbox root) "link.ofx");
-    let first = ok (sync root) in
-    Alcotest.(check int) "accepted files" 2 (count Imported first.inbox);
-    Alcotest.(check int) "bad file isolated" 1 (count Rejected first.inbox);
-    Alcotest.(check int) "CSV pending" 1 (count Unsupported first.inbox);
-    Alcotest.(check int) "ignored paths" 3 (List.length first.inbox.ignored);
+    write (join (input_directory root) ".hidden.ofx") (fixture ());
+    Unix.symlink
+      (join (input_directory root) "a-renamed.txt")
+      (join (input_directory root) "link.ofx");
+    let first = ok (run_workflow root) in
+    Alcotest.(check int) "accepted files" 2 (count Imported first.inputs);
+    Alcotest.(check int) "bad file isolated" 1 (count Rejected first.inputs);
+    Alcotest.(check int) "CSV pending" 1 (count Unsupported first.inputs);
+    Alcotest.(check int) "ignored paths" 3 (List.length first.inputs.ignored);
     Alcotest.(check int)
       "legitimate same-date/amount transaction retained"
       4
       first.projection.inserted;
     let original_journal = In_channel.read_all (journal root) in
-    let second = ok (sync root) in
-    Alcotest.(check int) "identical files recognized" 2 (count Unchanged second.inbox);
+    let second = ok (run_workflow root) in
+    Alcotest.(check int) "identical files recognized" 2 (count Unchanged second.inputs);
     Alcotest.(check int) "no duplicate entries" 0 second.projection.inserted;
     Alcotest.(check string)
       "stable journal"
@@ -138,16 +140,16 @@ let recursive_and_repeat () =
     Alcotest.(check string)
       "input untouched"
       (fixture ())
-      (In_channel.read_all (join (inbox root) "a-renamed.txt")))
+      (In_channel.read_all (join (input_directory root) "a-renamed.txt")))
 ;;
 
 let renamed_duplicates () =
   workspace (fun root ->
-    write (join (inbox root) "first.bin") (fixture ());
-    write (join (inbox root) "second.bin") (fixture ());
-    let report = ok (sync root) in
-    Alcotest.(check int) "one accepted document" 1 (count Imported report.inbox);
-    Alcotest.(check int) "renamed duplicate" 1 (count Unchanged report.inbox);
+    write (join (input_directory root) "first.bin") (fixture ());
+    write (join (input_directory root) "second.bin") (fixture ());
+    let report = ok (run_workflow root) in
+    Alcotest.(check int) "one accepted document" 1 (count Imported report.inputs);
+    Alcotest.(check int) "renamed duplicate" 1 (count Unchanged report.inputs);
     source_count root 3;
     raw (database root) (fun db ->
       Alcotest.(check int)
@@ -158,7 +160,7 @@ let renamed_duplicates () =
 
 let conflict_then_valid () =
   workspace (fun root ->
-    write (join (inbox root) "a.ofx") (fixture ());
+    write (join (input_directory root) "a.ofx") (fixture ());
     let conflict =
       fixture ()
       |> fun s ->
@@ -173,11 +175,11 @@ let conflict_then_valid () =
         ~pattern:"<TRNAMT>-0.10</TRNAMT>"
         ~with_:"<TRNAMT>-0.11</TRNAMT>"
     in
-    write (join (inbox root) "b-conflict.ofx") conflict;
-    write (join (inbox root) "z.ofx") (overlap ());
-    let report = ok (sync root) in
-    Alcotest.(check int) "conflict is durable" 1 (count Rejected report.inbox);
-    Alcotest.(check int) "later valid file imported" 2 (count Imported report.inbox);
+    write (join (input_directory root) "b-conflict.ofx") conflict;
+    write (join (input_directory root) "z.ofx") (overlap ());
+    let report = ok (run_workflow root) in
+    Alcotest.(check int) "conflict is durable" 1 (count Rejected report.inputs);
+    Alcotest.(check int) "later valid file imported" 2 (count Imported report.inputs);
     source_count root 4;
     with_store root (fun db ->
       Alcotest.(check bool)
@@ -195,15 +197,15 @@ let conflict_then_valid () =
 
 let read_limit () =
   workspace (fun root ->
-    write (join (inbox root) "large.ofx") (fixture ());
+    write (join (input_directory root) "large.ofx") (fixture ());
     with_store root (fun db ->
       let report =
         ok
-          (Finances_import.Inbox.scan
+          (Finances_import.Files.scan
              ~max_file_bytes:32L
              db
              ~institution:"boursobank"
-             ~paths:[ inbox root ])
+             ~paths:[ input_directory root ])
       in
       Alcotest.(check int) "oversize file recorded" 1 (count Unreadable report);
       let row = List.hd_exn report.files in
@@ -246,8 +248,8 @@ let import_settings root contents =
 
 let mappings_after_projection () =
   workspace (fun root ->
-    write (join (inbox root) "bank.ofx") (fixture ());
-    ignore (ok (sync root));
+    write (join (input_directory root) "bank.ofx") (fixture ());
+    ignore (ok (run_workflow root));
     let initial =
       ok
         (Store.with_open
@@ -260,7 +262,7 @@ let mappings_after_projection () =
         remap (Printf.sprintf "account-%d" i) mapping)
     in
     let changes = ok (import_settings root (config_json mappings)) in
-    let result = ok (sync root) in
+    let result = ok (run_workflow root) in
     Alcotest.(check int) "mappings persisted" 2 changes.mapping_changes;
     Alcotest.(check int) "renamed entries replay" 0 result.projection.inserted;
     Alcotest.(check int) "all entries reused" 3 result.projection.existing;
@@ -310,8 +312,8 @@ let mappings_after_projection () =
 
 let mapping_errors () =
   workspace (fun root ->
-    write (join (inbox root) "bank.ofx") (fixture ());
-    ignore (ok (sync root));
+    write (join (input_directory root) "bank.ofx") (fixture ());
+    ignore (ok (run_workflow root));
     let mappings =
       ok
         (Store.with_open
@@ -348,8 +350,8 @@ let mapping_errors () =
 
 let mapping_conflict_preserves_journal () =
   workspace (fun root ->
-    write (join (inbox root) "bank.ofx") (fixture ());
-    ignore (ok (sync root));
+    write (join (input_directory root) "bank.ofx") (fixture ());
+    ignore (ok (run_workflow root));
     let before = In_channel.read_all (journal root) in
     let mappings =
       ok
@@ -388,9 +390,9 @@ let mapping_conflict_preserves_journal () =
 
 let path_protection () =
   workspace (fun root ->
-    write (join (inbox root) "bank.ofx") (fixture ());
+    write (join (input_directory root) "bank.ofx") (fixture ());
     let run database directory journal =
-      Finances_import.Sync.run
+      Finances_import.Workflow.run
         ~registry:Builtin.registry
         ~database
         ~institution:"boursobank"
@@ -398,44 +400,52 @@ let path_protection () =
         ~journal
         ()
     in
-    error (run (database root) (inbox root) (database root));
-    error (run (join (inbox root) "database.sqlite3") (inbox root) (journal root));
-    error (run (database root) (inbox root) (join (inbox root) "out.journal"));
-    ignore (ok (sync root));
+    error (run (database root) (input_directory root) (database root));
+    error
+      (run
+         (join (input_directory root) "database.sqlite3")
+         (input_directory root)
+         (journal root));
+    error
+      (run
+         (database root)
+         (input_directory root)
+         (join (input_directory root) "out.journal"));
+    ignore (ok (run_workflow root));
     let linked = join root "linked.journal" in
     Unix.link (database root) linked;
-    error (run (database root) (inbox root) linked);
-    let input_link = join (inbox root) "database-copy.bin" in
+    error (run (database root) (input_directory root) linked);
+    let input_link = join (input_directory root) "database-copy.bin" in
     Unix.link (database root) input_link;
-    let report = ok (sync root) in
+    let report = ok (run_workflow root) in
     Alcotest.(check bool)
       "database hard links are not ingested"
       true
-      (List.exists report.inbox.ignored ~f:(fun row ->
+      (List.exists report.inputs.ignored ~f:(fun row ->
          String.equal row.reason "control file alias"));
-    let symlink = join root "linked-inbox" in
-    Unix.symlink (inbox root) symlink;
+    let symlink = join root "linked-statements" in
+    Unix.symlink (input_directory root) symlink;
     error (run (database root) symlink (journal root));
     source_count root 3)
 ;;
 
 let output_failure () =
   workspace (fun root ->
-    write (join (inbox root) "bank.ofx") (fixture ());
+    write (join (input_directory root) "bank.ofx") (fixture ());
     write (journal root) "previous journal";
     let original = Sys.getenv_exn "TMPDIR" in
     Exn.protect
       ~finally:(fun () -> Unix.putenv "TMPDIR" original)
       ~f:(fun () ->
         Unix.putenv "TMPDIR" (join root "absent-staging");
-        error (sync root));
+        error (run_workflow root));
     Alcotest.(check string)
       "failed publication leaves old output"
       "previous journal"
       (In_channel.read_all (journal root));
     source_count root 3;
     entry_count root 3;
-    let retry = ok (sync root) in
+    let retry = ok (run_workflow root) in
     Alcotest.(check int) "publication retry reuses entries" 0 retry.projection.inserted;
     Alcotest.(check int)
       "eventual journal valid"
@@ -447,10 +457,10 @@ let output_failure () =
 
 let explicit_paths () =
   workspace (fun root ->
-    let file = join (inbox root) "bank.ofx" in
+    let file = join (input_directory root) "bank.ofx" in
     write file (fixture ());
     let run paths =
-      Finances_import.Sync.run
+      Finances_import.Workflow.run
         ~registry:Builtin.registry
         ~database:(database root)
         ~institution:"boursobank"
@@ -458,21 +468,21 @@ let explicit_paths () =
         ~journal:(journal root)
         ()
     in
-    let report = ok (run [ inbox root; file ]) in
-    Alcotest.(check int) "imported once" 1 (count Imported report.inbox);
+    let report = ok (run [ input_directory root; file ]) in
+    Alcotest.(check int) "imported once" 1 (count Imported report.inputs);
     Alcotest.(check (list string))
       "second visit reported"
       [ "already listed" ]
-      (List.map report.inbox.ignored ~f:(fun i -> i.reason));
+      (List.map report.inputs.ignored ~f:(fun i -> i.reason));
     let hidden = join root ".export.ofx" in
     write hidden (fixture ());
     let report = ok (run [ hidden ]) in
     Alcotest.(check (list string))
       "explicit hidden file processed"
       [ hidden ]
-      (List.map report.inbox.files ~f:(fun f -> f.path));
+      (List.map report.inputs.files ~f:(fun f -> f.path));
     let link = join root "link" in
-    Unix.symlink (inbox root) link;
+    Unix.symlink (input_directory root) link;
     error (run [ link ]);
     error (run [ join root "missing.ofx" ]);
     error (run [ database root ]);
@@ -481,7 +491,7 @@ let explicit_paths () =
 
 let () =
   Alcotest.run
-    "bank inbox"
+    "import workflow"
     [ ( "workflow"
       , List.map
           [ "nested files, failures and replay", recursive_and_repeat

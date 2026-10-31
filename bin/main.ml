@@ -1125,7 +1125,7 @@ let import_bank database institution paths journal max_mib account_id provider =
               () )
     in
     let%bind report =
-      Finances_import.Sync.run
+      Finances_import.Workflow.run
         ~registry
         ~configure_new_accounts
         ?account_id
@@ -1140,7 +1140,7 @@ let import_bank database institution paths journal max_mib account_id provider =
       if
         Registry.is_registered runtime_registry institution
         || not
-             (List.exists report.inbox.files ~f:(fun row ->
+             (List.exists report.inputs.files ~f:(fun row ->
                 Poly.equal row.outcome Imported || Poly.equal row.outcome Unchanged))
       then Ok ()
       else
@@ -1154,7 +1154,7 @@ let import_bank database institution paths journal max_mib account_id provider =
               Store.set_institution_profile_if_missing db institution profile)
           else Store.add_institution ?profile:!selected_profile db institution)
     in
-    List.iter report.inbox.files ~f:(fun row ->
+    List.iter report.inputs.files ~f:(fun row ->
       printf
         "%s\t%s\tinserted=%d existing=%d%s\n"
         (Bank_import.outcome_name row.outcome)
@@ -1162,10 +1162,10 @@ let import_bank database institution paths journal max_mib account_id provider =
         row.inserted
         row.existing
         (Option.value_map row.message ~default:"" ~f:(fun message -> "\t" ^ message)));
-    List.iter report.inbox.ignored ~f:(fun row ->
+    List.iter report.inputs.ignored ~f:(fun row ->
       printf "ignored\t%s\t%s\n" row.path row.reason);
     let count outcome =
-      List.count report.inbox.files ~f:(fun row -> Poly.equal row.outcome outcome)
+      List.count report.inputs.files ~f:(fun row -> Poly.equal row.outcome outcome)
     in
     printf
       "imported=%d unchanged=%d rejected=%d unsupported=%d unreadable=%d ignored=%d\n"
@@ -1174,7 +1174,7 @@ let import_bank database institution paths journal max_mib account_id provider =
       (count Rejected)
       (count Unsupported)
       (count Unreadable)
-      (List.length report.inbox.ignored);
+      (List.length report.inputs.ignored);
     printf
       "entries_inserted=%d entries_existing=%d\njournal=%s\n"
       report.projection.inserted
@@ -1192,7 +1192,7 @@ let import_bank database institution paths journal max_mib account_id provider =
     (* A file named on the command line that no adapter recognizes was not
        imported, unlike an unrelated file found inside a directory. *)
     let unsupported_explicit =
-      List.count report.inbox.files ~f:(fun row ->
+      List.count report.inputs.files ~f:(fun row ->
         Poly.equal row.outcome Unsupported
         && List.mem paths row.path ~equal:String.equal
         && Stdlib.Sys.file_exists row.path

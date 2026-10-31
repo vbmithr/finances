@@ -415,7 +415,7 @@ let folder_order () =
     Out_channel.write_all (Stdlib.Filename.concat inbox "z.ofx") ~data:(ofx ());
     let run () =
       ok
-        (Finances_import.Sync.run
+        (Finances_import.Workflow.run
            ~registry:Builtin.registry
            ~database:(database root)
            ~institution:"boursobank"

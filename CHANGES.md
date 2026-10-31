@@ -10,6 +10,11 @@ short line of their own.
 
 ### 2026-10-31
 
+- Rename the internal import workflow and file-scanning modules from `Sync` and
+  `Inbox` to `Workflow` and `Files`. **Action required:** OCaml consumers of
+  `finances.import` must update these module and report-field references; the CLI
+  and database are unchanged.
+
 - Rename the import workflow and institution directories and OCaml libraries to
   `import` and `institutions`; move shared statement sources under `formats/`.
   **Action required:** OCaml consumers must update references to

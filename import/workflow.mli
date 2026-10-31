@@ -1,7 +1,7 @@
 open Base
 
 type report =
-  { inbox : Inbox.report
+  { inputs : Files.report
   ; identity_changes : int
   ; projection : Finances.Store.projection_report
   ; companions : Finances.Store.companion_report

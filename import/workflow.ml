@@ -3,7 +3,7 @@ open Stdio
 open Finances
 
 type report =
-  { inbox : Inbox.report
+  { inputs : Files.report
   ; identity_changes : int
   ; projection : Store.projection_report
   ; companions : Store.companion_report
@@ -132,8 +132,8 @@ let run
               |> String.concat ~sep:", "))
     in
     let%bind before = Store.bank_accounts db in
-    let%bind inbox =
-      Inbox.scan
+    let%bind inputs =
+      Files.scan
         ?account_id
         ?max_file_bytes
         ~exclude:[ database; journal ]
@@ -158,5 +158,5 @@ let run
     let%bind projection = Store.project_bank db in
     let%bind contents = Finances_hledger.export db in
     let%map () = write_journal ~path:journal contents in
-    { inbox; identity_changes; projection; companions; journal })
+    { inputs; identity_changes; projection; companions; journal })
 ;;

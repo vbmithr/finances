@@ -11,9 +11,10 @@ Last updated: 2026-10-31.
 
 ### Code
 
-- Import orchestration lives in `import/`, institution definitions and adapters
-  in `institutions/`, and reusable statement source modules in `formats/statement/`.
-  The public OCaml libraries are `finances.import` and `finances.institutions`.
+- Import orchestration lives in `import/workflow.ml`, file and archive scanning
+  in `import/files.ml`, institution definitions and adapters in `institutions/`,
+  and reusable statement sources in `formats/statement/`. The public OCaml
+  libraries are `finances.import` and `finances.institutions`.
 - All four banks import: BoursoBank (OFX, CSV companion), Wise (CAMT.053, CSV
   companion), Bunq (MT940, CSV companion) and Revolut (CSV). All use bundled
   profiles and shared import components; none has a dedicated bank module.

@@ -83,7 +83,7 @@ serialization boundaries. The supplied local booking date remains separate from 
 
 Bos provides directory creation, file reads and atomic snapshot writes, path
 resolution, and temporary journal creation and atomic publication. Standard Unix
-file-descriptor and inode checks retain inbox race detection and control-file
+file-descriptor and inode checks retain input-file race detection and control-file
 protection. General collections and errors come from Base; no Core compatibility
 layer is maintained. Targeted sexp, comparison and binding PPXs replace ppx_jane.
 
@@ -110,7 +110,7 @@ not yet calculate average entry price from fills or model inverse contracts.
 
 `Finances_import.Bank_status` summarizes imported accounts and observed date ranges,
 unclassified movement counts, unreviewed compatible transfer candidate pairs and
-the most recent inbox import attempt through Store APIs. The CLI renders this
+the most recent import attempt through Store APIs. The CLI renders this
 progress without interpreting observed ranges as complete statement coverage or
 computing monetary balances. Account, movement and transfer inspection commands
 offer readable text and explicit `--json` output; their existing JSON layouts are
@@ -256,7 +256,7 @@ Available balance observations do not automatically supply ledger opening balanc
 Corrections to source evidence, splits and FX transfers need a future workflow;
 generated journals remain a rendering of SQLite accounting.
 
-## Inbox import and mapping decisions
+## Import and mapping decisions
 
 All four CSV formats share `Csv_reader` and `Csv_schema` for reading, header
 checks, typed cell decoding and row construction, and `Adapter_support` shares
@@ -383,7 +383,7 @@ The main libraries separate the kernel, institution handling and import workflow
 - `finances.institutions` (`institutions/` and `formats/statement/`): shared
   statement parsers and data-driven institution presets. Dune compiles the
   statement sources into this library; it cannot depend on Rel or SQLite.
-- `finances.import` (`import/`): inbox scanning, archive handling, import
+- `finances.import` (`import/`): file scanning, archive handling, import
   orchestration and status reporting.
 - `finances` (`lib/`): Store, projection, transfer review and account
   configuration.

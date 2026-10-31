@@ -41,8 +41,8 @@
   rel.sqlite3))
 
 (test
- (name inbox_test)
- (modules inbox_test)
+ (name import_workflow_test)
+ (modules import_workflow_test)
  (deps
   (glob_files fixtures/*))
  (flags
