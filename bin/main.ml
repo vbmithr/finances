@@ -1581,34 +1581,39 @@ let categorize_bank database path =
     Ok ())
 ;;
 
-let category_set database event_id account =
-  let%bind decision =
-    Bank_category.create ~event_id ~account ~reason:"Set with fin tx cat set"
-  in
-  with_database database (fun db ->
-    let%bind changed = Store.set_bank_categories db [ decision ] in
-    printf "category_changes=%d\n" changed;
-    Ok ())
+let category_set database account event_ids =
+  if List.is_empty event_ids
+  then Or_error.error_string "provide at least one transaction event ID"
+  else (
+    let%bind decisions =
+      List.map event_ids ~f:(fun event_id ->
+        Bank_category.create ~event_id ~account ~reason:"Set with fin tx cat set")
+      |> Or_error.combine_errors
+    in
+    with_database database (fun db ->
+      let%bind changed = Store.set_bank_categories db decisions in
+      printf "category_changes=%d\n" changed;
+      Ok ()))
 ;;
 
 let category_set_cmd =
   command
     "set"
-    "Assign or change a transaction's category."
+    "Assign or change the category of one or more transactions atomically."
     Term.(
       const category_set
       $ database
       $ Arg.(
           required
-          & pos 0 (some int64) None
-          & info [] ~docv:"EVENT-ID" ~doc:"Transaction event ID.")
-      $ Arg.(
-          required
-          & pos 1 (some string) None
+          & pos 0 (some string) None
           & info
               []
               ~docv:"ACCOUNT"
-              ~doc:"Income or expense account, or equity:unclassified to reset."))
+              ~doc:"Income or expense account, or equity:unclassified to reset.")
+      $ Arg.(
+          non_empty
+          & pos_right 0 int64 []
+          & info [] ~docv:"EVENT-ID" ~doc:"One or more transaction event IDs."))
 ;;
 
 let categorize_bank_cmd =

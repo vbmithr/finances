@@ -8,6 +8,10 @@ short line of their own.
 
 ## Unreleased
 
+- Change `fin tx cat set` to take the account first, followed by one or more
+  event IDs, and apply the batch atomically. **Action required:** update scripts
+  using the former `EVENT-ID ACCOUNT` argument order.
+
 - Add `fin cat delete ACCOUNT` to remove a catalog category that is not used by
   current transaction assignments or category rules.
 
@@ -52,7 +56,7 @@ short line of their own.
   categorized similar movements. Changes are confirmed together and applied only
   if every selected decision still matches the reviewed snapshot.
 
-- Add `fin tx cat set EVENT-ID ACCOUNT` to assign, change or reset one category
+- Add `fin tx cat set ACCOUNT EVENT-ID...` to assign, change or reset categories
   without preparing a JSON file or entering a reason.
 
 - Export confirmed transfers as one direct bank-to-bank transaction, retaining

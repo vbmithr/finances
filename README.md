@@ -607,8 +607,9 @@ transfers, other rule kinds, or history. Keep a full database backup as well.
 Use `fin rule from-category EVENT_ID NAME --contains TEXT` to preview a reusable
 review-mode rule from a categorized example; add `--save` to confirm and save it.
 
-Use `fin tx cat set EVENT_ID expenses:food` to assign or change one category;
-use `equity:unclassified` to return it to review.
+Use `fin tx cat set expenses:food EVENT_ID...` to assign or change categories;
+all provided transactions are updated atomically. Use `equity:unclassified`
+to return them to review.
 
 Use `fin transaction list` to find an event ID, then run
 `fin transaction category review EVENT_ID` to choose or change its category, select matching

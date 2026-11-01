@@ -748,14 +748,16 @@ ID in `fin transaction list`, then replace `123` below with that ID:
 fin transaction category review 123
 ```
 
-To assign or change one category without the interactive batch review, use:
+To assign or change categories without the interactive batch review, put the
+account first, followed by one or more transaction event IDs:
 
 ```sh
-fin tx cat set 123 expenses:food:restaurants
+fin tx cat set expenses:food:restaurants 123 456
 ```
 
 Use `equity:unclassified` as the account to return the movement to review. The
-command needs no reason or confirmation. Confirmed transfers, settlements and
+command needs no reason or confirmation and applies all IDs atomically: if one
+cannot be changed, none are changed. Confirmed transfers, settlements and
 reversals must be undone first. Regenerate the journal after changing a decision.
 
 Fin maintains a personal catalog of income and expense account names. Start with
