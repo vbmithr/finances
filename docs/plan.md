@@ -7,6 +7,22 @@ other documents, which this one links to rather than repeats.
 
 Last updated: 2026-11-01.
 
+## Direction
+
+Fin brings personal financial evidence together for two connected views:
+
+- **Accounting:** what is owned or owed and where money came from or went. Bank
+  movements, exchange balances, transfers, fees and realized results belong here.
+- **Positions:** current investment or derivatives exposure and its performance,
+  including instrument, size, direction, entry and mark prices, unrealized P&L,
+  funding, observation time and source.
+
+The views may use the same source events, but they answer different questions. A
+perpetual position is exposure, not necessarily ownership of the underlying asset.
+Do not count notional exposure as an asset balance or include unrealized P&L twice.
+Keep source evidence and uncertainty visible; reconcile derived results against
+provider observations before treating them as authoritative.
+
 ## Where we are
 
 ### Code
@@ -78,22 +94,28 @@ A prior database rebuilt from `personal/*/inbox` contained:
 | Revolut | current EUR (`main`) | 35 | 2026-04-13 to 2026-10-20 |
 | Wise | balance EUR | 538 | 2025-01-07 to 2025-12-29 |
 
-- 748 movements, all 748 unclassified. No categories or transfer decisions exist,
-  in the rebuilt database or in the live one.
+- That snapshot had 748 movements, all unclassified, and no category or transfer
+  decisions. Categorization has since begun; these figures do not describe the
+  current database.
 - 4 transfer candidate pairs, none confirmed.
 - The Wise 2025 and Bunq 2026 statements reconcile exactly (difference 0).
   BoursoBank and Revolut have no statement balances to reconcile against.
 - Companion rows: all matched except 8 BoursoBank CSV rows, ambiguous because the
   OFX has identical movements.
-- The live schema 13 database currently contains 4,427 movements across 12
-  accounts, all unclassified, and reports 123 transfer candidate pairs. The
-  57 card movements were reimported under their named provider.
+- An earlier live schema 13 database contained 4,427 movements across 12
+  accounts, all unclassified, with 123 transfer candidate pairs. Those figures are
+  historical, not current status.
 
 ## Next actions
 
-1. Record the card-balance transfer once its date and amount are known.
-2. Begin categorizing movements and reviewing transfer candidates.
-3. Push `main` when ready; it is public on GitHub.
+1. Continue importing the main spending accounts for a useful period, reviewing
+   categories and transfers, and backing up the resulting decisions. Verify a
+   representative hledger report and identify remaining coverage and balance gaps.
+2. Choose one crypto venue and a useful first read-only view of reported balances
+   and open positions. Inspect available source data and record its semantics before
+   implementing an importer or calculation.
+3. Record the card-balance transfer once its date and amount are known. Publish
+   `main` when ready.
 
 ## Workstreams
 
@@ -394,19 +416,39 @@ The import side is done; turning movements into accounting is not.
   other commands, which print text and take `--json`.
 - [ ] The 8 ambiguous BoursoBank CSV rows need a way to be resolved.
 
-### 4. Later scope (README "Current scope")
+### Positions and crypto
 
-Not started: fetching Paradex data, positions from fills, persisted position
-observations, funding, a background inbox watcher. Excel and QIF parsing are listed
-as later work in `docs/bank-workflow.md`; until then the manual tells users to export
-a supported format instead.
+Fin has a linear perpetual instrument and position observation model, including
+unrealized P&L in the quote commodity. It does not yet fetch Paradex data, persist
+position observations, derive positions from fills, or calculate funding.
+
+- [ ] Build a first read-only view for one venue using reported balances and open
+  positions. Include the instrument, size, direction, entry and mark prices,
+  unrealized P&L, observation time and source; distinguish missing data from zero.
+- [ ] Bring crypto deposits, withdrawals and fees into the accounting workflow and
+  review transfers between banks, wallets and exchanges.
+- [ ] Import fills, funding and other necessary events, derive positions, and
+  reconcile them against provider-reported observations. Surface discrepancies and
+  verify venue-specific contract and settlement semantics.
+- [ ] Build a consolidated view only when account coverage, balances and valuation
+  dates and sources are understood. Avoid counting collateral, notional exposure or
+  unrealized P&L more than once.
+
+### Later scope
+
+A background inbox watcher, Excel and QIF parsing remain later work; until those
+formats are supported, the manual tells users to export a supported format instead.
 
 ## Suggested order
 
-1. Install the current build and publish the change when ready (next actions
-   1 and 2).
-2. Categorization rules (workstream 2): the reason to keep books, and what makes the
-   748 movements mean anything.
-3. Decide the 4 transfer candidates, then opening balances and reconciliation.
-4. Adapter steps 6 and 7, when a new bank or format needs them. They are internal and
-   change no user-visible behaviour.
+1. Make the existing accounting workflow dependable for a representative period:
+   import main spending accounts, categorize useful groups, review transfers,
+   preserve decisions, and inspect a report and remaining reconciliation gaps.
+2. In parallel with that ongoing work, choose a venue and deliver the first
+   read-only balance and position view. Do not wait for all historical bank
+   transactions to be categorized.
+3. Connect crypto cash movements to the books, then derive and reconcile positions
+   from fills and funding against provider observations.
+4. Add a consolidated view with explicit coverage, price sources and valuation
+   times. Prioritize adapters and other infrastructure when an actual source needs
+   them; defer ML classification until review experience shows where it helps.
