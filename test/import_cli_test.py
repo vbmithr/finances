@@ -394,6 +394,32 @@ class ImportOnboarding(unittest.TestCase):
         self.terminal(['cat', 'init'], [('Select all', 'all'), ('Add these categories?', 'y')])
         self.assertIn('already exist', self.terminal(['cat', 'init'], []))
 
+    def test_category_delete(self):
+        self.run_fin('cat', 'add', 'expenses:mistake')
+        self.run_fin('cat', 'add', 'expenses:mistake:child')
+        self.run_fin('cat', 'delete', 'expenses:mistake')
+        self.assertEqual(json.loads(self.run_fin('cat', 'list', '--json').stdout), ['expenses:mistake:child'])
+        missing = self.run_fin('cat', 'delete', 'expenses:mistake', check=False)
+        self.assertNotEqual(missing.returncode, 0)
+        self.assertIn('unknown category', missing.stderr)
+        self.run_fin('import', 'revolut', self.csv, '--account-id', 'main')
+        event = json.loads(self.run_fin('tx', 'list', '--json').stdout)[0]['event_id']
+        self.run_fin('cat', 'add', 'expenses:used')
+        self.run_fin('tx', 'cat', 'set', event, 'expenses:used')
+        used = self.run_fin('cat', 'delete', 'expenses:used', check=False)
+        self.assertNotEqual(used.returncode, 0)
+        self.assertIn('assigned to transactions', used.stderr)
+        self.run_fin('tx', 'cat', 'set', event, 'equity:unclassified')
+        self.run_fin('cat', 'delete', 'expenses:used')
+        self.assertTrue(any(change['account'] == 'expenses:used' for change in json.loads(self.run_fin('tx', 'cat', 'history').stdout)))
+        self.run_fin('cat', 'add', 'expenses:rule')
+        self.run_fin('rule', 'add', 'test-rule', 'shop', 'expenses:rule')
+        in_rule = self.run_fin('cat', 'delete', 'expenses:rule', check=False)
+        self.assertNotEqual(in_rule.returncode, 0)
+        self.assertIn('used by a rule', in_rule.stderr)
+        self.run_fin('rule', 'delete', 'test-rule', '--yes')
+        self.run_fin('cat', 'delete', 'expenses:rule')
+
     def test_category_set_changes_and_resets(self):
         self.run_fin('import', 'revolut', self.csv, '--account-id', 'main')
         event = json.loads(self.run_fin('tx', 'list', '--json').stdout)[0]['event_id']

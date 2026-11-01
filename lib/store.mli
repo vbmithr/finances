@@ -230,6 +230,10 @@ val categories : t -> string list Or_error.t
 
 val add_categories : t -> string list -> unit Or_error.t
 
+(** Remove an unused catalog entry. Current transaction decisions and category
+    rules must be changed first; historical decisions are retained. *)
+val delete_category : t -> string -> unit Or_error.t
+
 type category_restore_preview =
   { categories_to_add : string list
   ; rules_to_add : Classification_rule.t list

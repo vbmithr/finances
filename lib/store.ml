@@ -60,6 +60,41 @@ let add_categories db names =
       db_result (Db.exec db.conn (insert name))))
 ;;
 
+let delete_category db name =
+  transaction db (fun db ->
+    let query =
+      Rel_sql.Stmt.(
+        func
+          "SELECT EXISTS(SELECT 1 FROM category_catalog WHERE account=?), EXISTS(SELECT \
+           1 FROM bank_categories WHERE account=?), EXISTS(SELECT 1 FROM \
+           classification_rules WHERE action_kind IN ('category','type-category') AND \
+           target=?)"
+          (text
+           @-> text
+           @-> text
+           @-> ret Row.(t3 (bool "exists") (bool "used") (bool "rule"))))
+    in
+    let* result = db_result (Db.first db.conn (query name name name)) in
+    let exists, used, rule = Option.value_exn result in
+    if not exists
+    then Or_error.errorf "unknown category: %s" name
+    else if used
+    then
+      Or_error.errorf
+        "category %s is assigned to transactions; change their categories first"
+        name
+    else if rule
+    then
+      Or_error.errorf
+        "category %s is used by a rule; change or delete the rule first"
+        name
+    else (
+      let delete =
+        Rel_sql.Stmt.(func "DELETE FROM category_catalog WHERE account=?" (text @-> unit))
+      in
+      db_result (Db.exec db.conn (delete name))))
+;;
+
 let institution_definitions db =
   db_result
     (Db.fold

@@ -4498,6 +4498,30 @@ let category_add_cmd =
       $ Arg.(required & pos 0 (some string) None & info [] ~docv:"ACCOUNT"))
 ;;
 
+let category_delete database name =
+  with_database database (fun db ->
+    let%bind () = Store.delete_category db name in
+    printf "Category deleted: %s\n" (Terminal.text name);
+    Ok ())
+;;
+
+let category_delete_cmd =
+  command
+    ~man:
+      [ `S Manpage.s_description
+      ; `P
+          "Remove one unused catalog entry. Change transaction assignments and rules \
+           that use the category first. Historical decisions and subcategories are \
+           retained."
+      ]
+    "delete"
+    "Delete an unused category from the catalog."
+    Term.(
+      const category_delete
+      $ database
+      $ Arg.(required & pos 0 (some string) None & info [] ~docv:"ACCOUNT"))
+;;
+
 let starter_categories =
   [ "expenses:home"
   ; "expenses:utilities"
@@ -5715,6 +5739,7 @@ let () =
               "Manage the personal income and expense category catalog."
               [ category_list_cmd
               ; category_add_cmd
+              ; category_delete_cmd
               ; category_init_cmd
               ; category_export_cmd
               ; category_restore_cmd

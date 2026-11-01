@@ -8,6 +8,9 @@ short line of their own.
 
 ## Unreleased
 
+- Add `fin cat delete ACCOUNT` to remove a catalog category that is not used by
+  current transaction assignments or category rules.
+
 - Add versioned `fin cat export` and preview-first `fin cat restore` for the
   category catalog, personal category rules and current category decisions. Restore
   matches stable source identity and verifies occurrence, payload and source-field

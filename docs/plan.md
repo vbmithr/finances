@@ -60,7 +60,7 @@ Last updated: 2026-11-01.
   `fin backup` saves one
   consistent SQLite snapshot; `fin restore BACKUP` validates and restores it,
   with overwrite confirmation and automatic removal of stale generated files.
-- OCaml test suites and 92 CLI cases, plus status performance and package
+- OCaml test suites and 93 CLI cases, plus status performance and package
   man-page checks. Selected import changes have also been compared by
   rebuilding a personal database and diffing reports and source payloads.
 - Issue #1 is implemented locally and awaits publication.
@@ -311,7 +311,8 @@ The import side is done; turning movements into accounting is not.
 - [x] Offer uncapped ranked fuzzy suggestions during category review; evaluate on real variations.
 - [x] Export and safely restore category decisions and rules across database rebuilds;
   preview literal category rules from reviewed examples.
-- [x] Maintain a personal category catalog with `fin cat add`, `list` and interactive `init`.
+- [x] Maintain a personal category catalog with `fin cat add`, `list`, `delete`
+  and interactive `init`.
 - [ ] [Classification and review](classification.md): rules (regular expressions
   with automatic, review and disabled modes, priorities, type and category
   actions), previews and interactive review exist. User tags, richer similarity,

@@ -762,8 +762,11 @@ Fin maintains a personal catalog of income and expense account names. Start with
 `fin cat init` to review suggested categories, select all or numbered entries,
 and confirm. Repeating the command skips existing names. Add your own with
 `fin cat add expenses:food:groceries`; `fin cat list` lists the catalog,
-including unused entries, and `--json` outputs an array. Category decisions also
-add their account to the catalog. The initializer requires a terminal.
+including unused entries, and `--json` outputs an array. Remove an unused name
+with `fin cat delete expenses:food:groceries`. Change any transaction assignments
+or rules using that exact category first. Deletion retains historical decisions
+and does not remove subcategories. Category decisions also add their account to
+the catalog. The initializer requires a terminal.
 
 Choose a catalog category by number or enter an `expenses:...` or `income:...`
 account. Fin shows exact matches followed by all ranked fuzzy suggestions above the similarity cutoff
