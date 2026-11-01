@@ -73,6 +73,25 @@ let rereview_atomic () =
       (category second))
 ;;
 
+let portable_restore_stale_preview () =
+  memory (fun db ->
+    let event_id = id db in
+    ignore (classify db [ decision event_id "expenses:food" ]);
+    let snapshot = ok (Store.category_snapshot db) in
+    let snapshot =
+      { snapshot with
+        Category_portable.categories = "expenses:new" :: snapshot.categories
+      }
+    in
+    let preview = ok (Store.preview_category_restore db snapshot) in
+    ignore (classify db [ decision ~reason:"changed" event_id "expenses:other" ]);
+    error (Store.restore_categories db ~expected:preview snapshot);
+    Alcotest.(check bool)
+      "no catalog change on stale preview"
+      false
+      (List.mem (ok (Store.categories db)) "expenses:new" ~equal:String.equal))
+;;
+
 let replay () =
   memory (fun db ->
     let event_id = id db in
@@ -448,7 +467,9 @@ let () =
     "Bank categories"
     [ ( "review"
       , List.map
-          [ "rereview checks all previous decisions atomically", rereview_atomic
+          [ ( "portable restore rejects stale previews atomically"
+            , portable_restore_stale_preview )
+          ; "rereview checks all previous decisions atomically", rereview_atomic
           ; "unclassified batch is atomic", unclassified_batch_is_atomic
           ; "rule batches reject stale previews atomically", rule_batch_is_atomic
           ; "similarity preview", similarity

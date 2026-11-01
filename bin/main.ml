@@ -3607,6 +3607,104 @@ let print_rule_preview (rule : Classification_rule.t) matches =
         (Terminal.text (Option.value m.explanation ~default:"ineligible"))))
 ;;
 
+let rule_from_category database event_id name contains institution save yes =
+  with_database database (fun db ->
+    let%bind rows = Store.bank_review db in
+    let%bind seed =
+      List.find rows ~f:(fun (r : Store.bank_review) -> Int64.equal r.event_id event_id)
+      |> Or_error.of_option ~error:(Error.of_string "unknown transaction event ID")
+    in
+    let%bind () =
+      if Poly.equal seed.classification Store.Category
+      then Ok ()
+      else Or_error.error_string "choose a categorized transaction"
+    in
+    let text = Option.value contains ~default:seed.description |> String.strip in
+    let%bind () =
+      if
+        String.is_empty text
+        || not (String.Caseless.is_substring seed.description ~substring:text)
+      then
+        Or_error.error_string
+          "--contains must be nonempty text in the transaction description"
+      else Ok ()
+    in
+    let pattern =
+      String.to_list text
+      |> List.map ~f:(fun c ->
+        let s = String.of_char c in
+        if
+          List.mem
+            [ '.'; '^'; '$'; '*'; '+'; '?'; '('; ')'; '['; ']'; '{'; '}'; '|'; '\\' ]
+            c
+            ~equal:Char.equal
+        then "\\" ^ s
+        else s)
+      |> String.concat
+    in
+    let%bind rule =
+      Classification_rule.create
+        ~mode:Review
+        ~account_type:None
+        ~priority:1000
+        ~name
+        ~pattern:(Some pattern)
+        ~institution
+        ~match_type:None
+        ~case_sensitive:false
+        ~action:(Category seed.counter_account)
+        ()
+    in
+    let%bind matches = Store.preview_classification_rule db rule in
+    print_rule_preview rule matches;
+    if not save
+    then (
+      print_endline "Draft only; pass --save to add this review-mode rule.";
+      Ok ())
+    else (
+      let confirmed =
+        yes
+        || Option.value_map
+             (prompt "Save this review-mode rule? [y/N]: ")
+             ~default:false
+             ~f:confirm_default_no
+      in
+      if not confirmed
+      then (
+        print_endline "Rule not saved.";
+        Ok ())
+      else (
+        let%bind () = Store.add_classification_rule db rule in
+        printf "Saved review rule %s.\n" (Terminal.text name);
+        Ok ())))
+;;
+
+let rule_from_category_cmd =
+  command
+    "from-category"
+    "Preview a literal description rule from a categorized transaction."
+    Term.(
+      const rule_from_category
+      $ database
+      $ Arg.(required & pos 0 (some int64) None & info [] ~docv:"EVENT-ID")
+      $ Arg.(required & pos 1 (some string) None & info [] ~docv:"NAME")
+      $ Arg.(
+          value
+          & opt (some string) None
+          & info
+              [ "contains" ]
+              ~docv:"TEXT"
+              ~doc:
+                "Literal text from the example description; defaults to its full \
+                 description.")
+      $ institution_filter
+      $ Arg.(
+          value
+          & flag
+          & info [ "save" ] ~doc:"Save the previewed review-mode rule after confirmation.")
+      $ Arg.(value & flag & info [ "yes" ] ~doc:"With --save, skip confirmation."))
+;;
+
 let rule_preview database name json_output =
   with_database database (fun db ->
     let%bind rule = find_rule db name in
@@ -4287,6 +4385,84 @@ let category_similar_cmd =
               ~docv:"EVENT-ID"
               ~doc:"Reviewed transaction event ID from fin transaction list.")
       $ json_output)
+;;
+
+let category_export database =
+  with_database database (fun db ->
+    let%bind snapshot = Store.category_snapshot db in
+    Report_json.print Category_portable.codec snapshot;
+    Ok ())
+;;
+
+let category_export_cmd =
+  command
+    "export"
+    "Export the category catalog, personal category rules and decisions as portable JSON."
+    Term.(const category_export $ database)
+;;
+
+let category_restore database path apply yes =
+  let%bind contents = read_file path in
+  let%bind snapshot = Json.decode Category_portable.codec contents in
+  with_database database (fun db ->
+    let%bind preview = Store.preview_category_restore db snapshot in
+    printf "Categories to add: %d\n" (List.length preview.categories_to_add);
+    List.iter preview.categories_to_add ~f:(fun c -> printf "  %s\n" (Terminal.text c));
+    printf "Rules to add: %d\n" (List.length preview.rules_to_add);
+    List.iter preview.rules_to_add ~f:(fun r ->
+      printf "  %s\n" (Terminal.text r.Classification_rule.name));
+    printf
+      "Decisions to restore: %d; already matching: %d\n"
+      (List.length preview.decisions_to_apply)
+      preview.unchanged;
+    List.iter preview.decisions_to_apply ~f:(fun (d : Bank_category.t) ->
+      printf "  #%Ld -> %s\n" d.event_id (Terminal.text d.account));
+    if not (List.is_empty preview.problems)
+    then (
+      print_endline "Problems (restore is blocked):";
+      List.iter preview.problems ~f:(fun p -> printf "  %s\n" (Terminal.text p)));
+    if not apply
+    then (
+      print_endline "Preview only; pass --apply to restore.";
+      Ok ())
+    else if not (List.is_empty preview.problems)
+    then Or_error.error_string "resolve restore problems before applying"
+    else (
+      let confirmed =
+        yes
+        || Option.value_map
+             (prompt "Restore these categories and decisions? [y/N]: ")
+             ~default:false
+             ~f:confirm_default_no
+      in
+      if not confirmed
+      then (
+        print_endline "Nothing restored.";
+        Ok ())
+      else (
+        let%bind changed = Store.restore_categories db ~expected:preview snapshot in
+        printf "category_changes=%d\n" changed;
+        Ok ())))
+;;
+
+let category_restore_cmd =
+  command
+    "restore"
+    "Preview or restore a portable category export."
+    Term.(
+      const category_restore
+      $ database
+      $ Arg.(
+          required
+          & pos 0 (some string) None
+          & info [] ~docv:"FILE" ~doc:"Portable category JSON export.")
+      $ Arg.(
+          value
+          & flag
+          & info
+              [ "apply" ]
+              ~doc:"Apply the preview after confirmation; otherwise only preview.")
+      $ Arg.(value & flag & info [ "yes" ] ~doc:"With --apply, skip confirmation."))
 ;;
 
 let category_list database json_output =
@@ -5537,7 +5713,12 @@ let () =
           ; group
               "category"
               "Manage the personal income and expense category catalog."
-              [ category_list_cmd; category_add_cmd; category_init_cmd ]
+              [ category_list_cmd
+              ; category_add_cmd
+              ; category_init_cmd
+              ; category_export_cmd
+              ; category_restore_cmd
+              ]
           ; group
               "institution"
               "Manage institutions and their importers."
@@ -5581,6 +5762,7 @@ let () =
               "rule"
               "Manage automatic and reviewed transaction rules."
               [ rule_list_cmd
+              ; rule_from_category_cmd
               ; rule_mode_cmd
               ; rule_add_cmd ~settlement:false
               ; rule_add_cmd ~settlement:true

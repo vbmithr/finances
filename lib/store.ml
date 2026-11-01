@@ -2837,6 +2837,8 @@ let retype_after db ?institution reason =
   transaction db (fun db -> retype ?institution ~reason db) |> Result.map ~f:ignore
 ;;
 
+let add_classification_rule_in_transaction = add_classification_rule
+
 let add_classification_rule db (rule : Classification_rule.t) =
   let* () = add_classification_rule db rule in
   retype_after db ?institution:rule.institution (Printf.sprintf "rule %s added" rule.name)
@@ -3459,6 +3461,240 @@ let bank_review db =
         ; withdrawal_reversal = String.equal reversal "yes"
         });
   bank_review_from db source table metadata details overrides evidence
+;;
+
+type category_restore_preview =
+  { categories_to_add : string list
+  ; rules_to_add : Classification_rule.t list
+  ; decisions_to_apply : Bank_category.t list
+  ; unchanged : int
+  ; problems : string list
+  }
+
+let category_fields_hash (e : Source_event.t) =
+  List.map e.fields ~f:(fun (name, value) ->
+    Printf.sprintf "%d:%s%d:%s" (String.length name) name (String.length value) value)
+  |> String.concat
+  |> Digestif.SHA256.digest_string
+  |> Digestif.SHA256.to_hex
+;;
+
+let category_snapshot db =
+  transaction db (fun db ->
+    let* categories = categories db in
+    let* rules = classification_rules db in
+    let rules =
+      List.filter rules ~f:(fun r ->
+        match r.Classification_rule.action with
+        | Category _ | Type_and_category _ -> true
+        | _ -> false)
+    in
+    let* events = events db in
+    let events_by_id = Hashtbl.of_alist_exn (module Int64) events in
+    let* review = bank_review db in
+    let* decisions =
+      List.filter_map review ~f:(fun r ->
+        if
+          Poly.equal r.classification Unclassified || Poly.equal r.classification Category
+        then Option.map r.reason ~f:(fun reason -> r, reason)
+        else None)
+      |> traverse (fun (r, reason) ->
+        let* event =
+          Hashtbl.find events_by_id r.event_id
+          |> Or_error.of_option
+               ~error:(Error.of_string "category references missing event")
+        in
+        Ok
+          Category_portable.
+            { institution = event.venue
+            ; source_account = event.account
+            ; kind = event.kind
+            ; source_id = event.source_id
+            ; occurred = Temporal.to_string event.occurred
+            ; payload_sha256 = Digestif.SHA256.(to_hex (digest_string event.payload))
+            ; fields_sha256 = category_fields_hash event
+            ; account = r.counter_account
+            ; reason
+            })
+    in
+    Ok Category_portable.{ categories; rules; decisions })
+;;
+
+let preview_category_restore db (snapshot : Category_portable.t) =
+  let* existing_categories = categories db in
+  let* existing_rules = classification_rules db in
+  let* source = events db in
+  let* review = bank_review db in
+  let by_identity = Hashtbl.Poly.create () in
+  let by_evidence = Hashtbl.Poly.create () in
+  let review_by_id = Hashtbl.create (module Int64) in
+  List.iter review ~f:(fun (r : bank_review) ->
+    Hashtbl.set review_by_id ~key:r.event_id ~data:r);
+  List.iter source ~f:(fun (id, (e : Source_event.t)) ->
+    let digest = Digestif.SHA256.(to_hex (digest_string e.payload)) in
+    Hashtbl.add_multi
+      by_identity
+      ~key:(e.venue, e.account, e.kind, e.source_id)
+      ~data:(id, e, digest);
+    Hashtbl.add_multi
+      by_evidence
+      ~key:
+        ( e.venue
+        , e.account
+        , e.kind
+        , Temporal.to_string e.occurred
+        , if List.is_empty e.fields
+          then "payload:" ^ digest
+          else "fields:" ^ category_fields_hash e )
+      ~data:id);
+  let problems = ref [] in
+  let problem s = problems := s :: !problems in
+  if List.contains_dup snapshot.categories ~compare:String.compare
+  then problem "duplicate category names";
+  List.iter snapshot.categories ~f:(fun account ->
+    match Bank_category.create ~event_id:1L ~account ~reason:"portable category" with
+    | Error e -> problem (Error.to_string_hum e)
+    | Ok _ when String.equal account "equity:unclassified" ->
+      problem "unclassified is not a category"
+    | Ok _ -> ());
+  let categories_to_add =
+    List.filter snapshot.categories ~f:(fun c ->
+      not (List.mem existing_categories c ~equal:String.equal))
+  in
+  if
+    List.contains_dup
+      (List.map snapshot.rules ~f:(fun r -> r.Classification_rule.name))
+      ~compare:String.compare
+  then problem "duplicate rule names";
+  let rules_to_add =
+    List.filter snapshot.rules ~f:(fun r ->
+      match
+        List.find existing_rules ~f:(fun current ->
+          String.equal current.Classification_rule.name r.name)
+      with
+      | None -> true
+      | Some current when Poly.equal current r -> false
+      | Some _ ->
+        problem ("rule already exists with different definition: " ^ r.name);
+        false)
+  in
+  let ids =
+    List.map snapshot.decisions ~f:(fun d ->
+      d.Category_portable.institution, d.source_account, d.kind, d.source_id)
+  in
+  if List.contains_dup ids ~compare:[%compare: string * string * string * string]
+  then problem "duplicate transaction identities";
+  let unchanged = ref 0 in
+  let decisions_to_apply =
+    List.filter_map snapshot.decisions ~f:(fun d ->
+      let label = d.institution ^ "/" ^ d.source_id in
+      let matches =
+        Option.value
+          (Hashtbl.find
+             by_identity
+             (d.institution, d.source_account, d.kind, d.source_id))
+          ~default:[]
+      in
+      match matches with
+      | [ (id, e, digest) ] ->
+        if
+          not
+            (String.equal (Temporal.to_string e.occurred) d.occurred
+             && String.equal digest d.payload_sha256
+             && String.equal (category_fields_hash e) d.fields_sha256)
+        then (
+          problem ("source evidence differs: " ^ label);
+          None)
+        else if
+          List.length
+            (Option.value
+               (Hashtbl.find
+                  by_evidence
+                  ( d.institution
+                  , d.source_account
+                  , d.kind
+                  , d.occurred
+                  , if List.is_empty e.fields
+                    then "payload:" ^ d.payload_sha256
+                    else "fields:" ^ d.fields_sha256 ))
+               ~default:[])
+          > 1
+        then (
+          problem ("ambiguous duplicate source evidence: " ^ label);
+          None)
+        else (
+          match Hashtbl.find review_by_id id with
+          | None ->
+            problem ("not a bank movement: " ^ label);
+            None
+          | Some row ->
+            (match
+               Bank_category.create ~event_id:id ~account:d.account ~reason:d.reason
+             with
+             | Error e ->
+               problem (label ^ ": " ^ Error.to_string_hum e);
+               None
+             | Ok decision ->
+               if
+                 not
+                   (Poly.equal row.classification Unclassified
+                    || Poly.equal row.classification Category)
+               then (
+                 problem ("linked transfer, settlement or reversal: " ^ label);
+                 None)
+               else if Option.is_some row.reason
+               then
+                 if String.equal row.counter_account d.account
+                 then (
+                   Int.incr unchanged;
+                   None)
+                 else (
+                   problem ("existing decision differs: " ^ label);
+                   None)
+               else Some decision))
+      | [] ->
+        problem ("transaction not found: " ^ label);
+        None
+      | _ ->
+        problem ("ambiguous transaction identity: " ^ label);
+        None)
+  in
+  Ok
+    { categories_to_add
+    ; rules_to_add
+    ; decisions_to_apply
+    ; unchanged = !unchanged
+    ; problems = List.rev !problems
+    }
+;;
+
+let restore_categories db ~expected snapshot =
+  transaction db (fun db ->
+    let* current = preview_category_restore db snapshot in
+    if not (Poly.equal current expected)
+    then Or_error.error_string "restore preview changed; review it again"
+    else if not (List.is_empty current.problems)
+    then Or_error.error_string "resolve restore problems before applying"
+    else (
+      let insert =
+        Rel_sql.Stmt.(
+          func "INSERT OR IGNORE INTO category_catalog(account) VALUES (?)" (text @-> unit))
+      in
+      let* () =
+        List.fold_result current.categories_to_add ~init:() ~f:(fun () account ->
+          db_result (Db.exec db.conn (insert account)))
+      in
+      let* () =
+        List.fold_result current.rules_to_add ~init:() ~f:(fun () rule ->
+          add_classification_rule_in_transaction db rule)
+      in
+      let* _ =
+        if List.is_empty current.rules_to_add
+        then Ok 0
+        else retype db ~reason:"restore category rules"
+      in
+      let* changed = set_bank_categories_in_transaction db current.decisions_to_apply in
+      Ok changed))
 ;;
 
 let observed_provider_movement_types db =

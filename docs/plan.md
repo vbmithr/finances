@@ -5,7 +5,7 @@ its status: tick off finished work, add discovered work, and refresh the "Where 
 are" figures when they move. History belongs in `CHANGES.md`; designs stay in the
 other documents, which this one links to rather than repeats.
 
-Last updated: 2026-10-31.
+Last updated: 2026-11-01.
 
 ## Where we are
 
@@ -60,7 +60,7 @@ Last updated: 2026-10-31.
   `fin backup` saves one
   consistent SQLite snapshot; `fin restore BACKUP` validates and restores it,
   with overwrite confirmation and automatic removal of stale generated files.
-- OCaml test suites and 87 CLI cases, plus status performance and package
+- OCaml test suites and 92 CLI cases, plus status performance and package
   man-page checks. Selected import changes have also been compared by
   rebuilding a personal database and diffing reports and source payloads.
 - Issue #1 is implemented locally and awaits publication.
@@ -309,6 +309,8 @@ The import side is done; turning movements into accounting is not.
 - [x] Search descriptions and select transactions across searches during category review.
 - [x] Set or correct an individual category directly; re-review categorized batches.
 - [x] Offer uncapped ranked fuzzy suggestions during category review; evaluate on real variations.
+- [x] Export and safely restore category decisions and rules across database rebuilds;
+  preview literal category rules from reviewed examples.
 - [x] Maintain a personal category catalog with `fin cat add`, `list` and interactive `init`.
 - [ ] [Classification and review](classification.md): rules (regular expressions
   with automatic, review and disabled modes, priorities, type and category

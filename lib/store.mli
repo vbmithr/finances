@@ -229,6 +229,28 @@ type category_change =
 val categories : t -> string list Or_error.t
 
 val add_categories : t -> string list -> unit Or_error.t
+
+type category_restore_preview =
+  { categories_to_add : string list
+  ; rules_to_add : Classification_rule.t list
+  ; decisions_to_apply : Bank_category.t list
+  ; unchanged : int
+  ; problems : string list
+  }
+
+val category_snapshot : t -> Category_portable.t Or_error.t
+
+val preview_category_restore
+  :  t
+  -> Category_portable.t
+  -> category_restore_preview Or_error.t
+
+val restore_categories
+  :  t
+  -> expected:category_restore_preview
+  -> Category_portable.t
+  -> int Or_error.t
+
 val bank_category_history : t -> category_change list Or_error.t
 
 type review_classification =

@@ -8,6 +8,15 @@ short line of their own.
 
 ## Unreleased
 
+- Add versioned `fin cat export` and preview-first `fin cat restore` for the
+  category catalog, personal category rules and current category decisions. Restore
+  matches stable source identity and verifies occurrence, payload and source-field
+  hashes; missing, conflicting or ambiguous records block the atomic batch. The
+  export does not include transfer decisions, other rule kinds or review history.
+  `make run` no longer echoes its command into redirected JSON output.
+- Add `fin rule from-category` to preview a literal description rule based on a
+  categorized example and optionally save it as a review-mode rule.
+
 - Remove the 20-result cap from fuzzy category review, showing every match above
   the existing similarity threshold.
 

@@ -160,7 +160,7 @@ skips the question; without a terminal and without `--yes` it refuses.
 
 ### Rebuilding after a schema change
 
-This experimental release accepts schema version 24; it does not migrate older
+This experimental release accepts schema version 31; it does not migrate older
 databases and refuses them without changing the file. If upgrading from schema 21
 with customized institution typing profiles, use the old executable to save each
 profile with `fin institution typing show INSTITUTION > profile.json` before
@@ -171,11 +171,16 @@ you have decisions to recreate:
 
 ```sh
 fin account export -o ~/fin-accounts.json
+fin cat export > ~/fin-categories-portable.json
 fin backup ~/fin-backups
 fin transaction list --json > ~/fin-transactions-before-rebuild.json
 fin transaction category history > ~/fin-categories-before-rebuild.json
 fin transfer history > ~/fin-transfers-before-rebuild.json
 ```
+
+Run `fin cat export` with a version that supports it; older releases do not have
+this command. The file contains personal source identifiers, category decisions,
+and category rules, so keep it private alongside your backups.
 
 Also save `fin settlement history`, `fin rule list --json`,
 `fin tx type history --json` and `fin reversal history` when those commands are
@@ -203,11 +208,31 @@ restoring a database of the same schema version; an account snapshot is for
 restoring settings into a rebuilt database.
 Generic CSV institutions must be added again and files reimported with their
 original institution and account labels; configure their CSV profiles again.
-Rules, type overrides and review decisions are not included in the account
-snapshot and must be recreated. Their event IDs are database-specific, so
-use the saved transaction list and histories to identify the new transactions
-and recreate decisions; do not blindly reuse old IDs. A backup preserves the old
-decisions, but cannot transfer them to the new schema.
+Account snapshots do not include rules or review decisions. To restore an export
+made by `fin cat export`, after reimporting statements run:
+
+```sh
+fin cat restore ~/fin-categories-portable.json
+fin cat restore ~/fin-categories-portable.json --apply
+```
+
+The first command previews changes. The second previews again and asks for
+confirmation; `--yes` skips that prompt. The export covers the category catalog,
+personal category rules, and current category decisions (including explicit resets),
+not transfer, settlement, reversal or type decisions, other rules, or audit history.
+An identical current category is left unchanged. Different existing decisions or
+rules, missing or ambiguous identities, and changed source evidence block the entire
+restore. It identifies movements by institution, source account, kind and source ID,
+then verifies occurrence and SHA-256 hashes of the original payload and source fields;
+it does not reuse database event IDs or guess a match. If source identities or
+encoding changed, keep the original export, remove the affected decisions from a
+copy, preview that copy again, and recreate those decisions manually. Duplicate
+indistinguishable source rows are also reported as ambiguous. The snapshot does
+not replace a database backup. After restoring decisions, project
+and export the journal again.
+
+Other review histories must still be recreated using saved reference exports. Their
+event IDs are database-specific; do not blindly reuse old IDs.
 
 ## Importing statements
 
@@ -1145,6 +1170,24 @@ fin rule apply cafes
 fin rule list
 ```
 
+To draft a reusable personal rule from an already categorized transaction:
+
+```sh
+fin rule from-category 123 cafes --contains 'Coffee Shop'
+fin rule from-category 123 cafes --contains 'Coffee Shop' --save
+fin rule preview cafes
+fin rule apply cafes
+```
+
+Replace the ID, name and text with your own. The text must appear in the example's
+effective description and is treated literally, not as a regular expression. Omit
+`--contains` to use the whole description, or use `--institution NAME` to restrict
+scope. The draft displays matches without changing anything; `--save` asks before
+saving a review-mode rule, and `--yes` skips that confirmation. Saving a rule does
+not classify transactions or enable automatic application. Use `fin rule mode`
+to opt into automatic behavior, noting import-time rules see the primary source
+description. Export personal category rules with `fin cat export`.
+
 For Wise balance cashback, propose a type and an income account together:
 
 ```sh
@@ -1199,8 +1242,9 @@ linked account in the card's currency, with a configured card liability; possibl
 matching card-side payments are skipped to avoid recording a settlement twice.
 Application previews all eligible matches, asks for confirmation, and records
 the batch atomically. If the rule or eligibility changes while you review it,
-the batch is refused. Rules do not run automatically on import: preview and apply
-them again for new transactions. The decision history records the rule and
+the batch is refused. Review-mode rules do not run automatically on import:
+preview and apply them again for new transactions. Automatic category rules apply
+on import. The decision history records the rule and
 expression in accounting and type history. Use `fin rule rename OLD-NAME NEW-NAME` to rename a rule; existing
 decisions retain the name recorded when they were made. Use `fin rule delete NAME` to remove a rule without undoing its
 decisions. `fin rule list --json` and `fin rule preview NAME --json` provide

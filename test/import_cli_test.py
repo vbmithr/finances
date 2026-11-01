@@ -291,6 +291,98 @@ class ImportOnboarding(unittest.TestCase):
         self.assertIn('shared documents', result.stderr)
         self.assertEqual(json.loads(self.run_fin('status', '--json').stdout)['movements'], before)
 
+    def test_portable_categories_roundtrip_with_different_event_ids(self):
+        self.run_fin('import', 'revolut', self.csv, '--account-id', 'main')
+        first = json.loads(self.run_fin('tx', 'list', '--search', 'Initial deposit', '--json').stdout)[0]['event_id']
+        self.run_fin('cat', 'add', 'expenses:unused')
+        self.run_fin('tx', 'cat', 'set', first, 'income:salary')
+        draft = self.run_fin('rule', 'from-category', first, 'deposit-rule', '--contains', 'Initial').stdout
+        self.assertIn('Draft only', draft)
+        self.assertNotIn('deposit-rule', self.run_fin('rule', 'list').stdout)
+        self.run_fin('rule', 'from-category', first, 'deposit-rule', '--contains', 'Initial', '--save', '--yes')
+        snapshot = self.root / 'categories-portable.json'
+        snapshot.write_text(self.run_fin('cat', 'export').stdout)
+        exported = json.loads(snapshot.read_text())
+        self.assertIn('expenses:unused', exported['categories'])
+        self.assertTrue(any(rule['name'] == 'deposit-rule' for rule in exported['rules']))
+        self.assertEqual(len(exported['decisions']), 1)
+        other = self.root / 'rebuilt.sqlite3'
+        self.run_fin('init', '--database', other)
+        self.run_fin('import', 'boursobank', 'fixtures/bank.ofx', '--database', other)
+        self.run_fin('import', 'revolut', self.csv, '--account-id', 'main', '--database', other)
+        current = json.loads(self.run_fin('tx', 'list', '--database', other, '--search', 'Initial deposit', '--json').stdout)[0]
+        self.assertNotEqual(current['event_id'], first)
+        preview = self.run_fin('cat', 'restore', snapshot, '--database', other).stdout
+        self.assertIn('Decisions to restore: 1', preview)
+        self.assertIn('Preview only', preview)
+        self.assertEqual(json.loads(self.run_fin('cat', 'list', '--database', other, '--json').stdout), [])
+        self.assertIn('category_changes=1', self.run_fin('cat', 'restore', snapshot, '--database', other, '--apply', '--yes').stdout)
+        current = json.loads(self.run_fin('tx', 'list', '--database', other, '--search', 'Initial deposit', '--json').stdout)[0]
+        self.assertEqual(current['counter_account'], 'income:salary')
+        self.assertIn('expenses:unused', json.loads(self.run_fin('cat', 'list', '--database', other, '--json').stdout))
+        self.assertIn('deposit-rule', self.run_fin('rule', 'list', '--database', other).stdout)
+        self.assertIn('category_changes=0', self.run_fin('cat', 'restore', snapshot, '--database', other, '--apply', '--yes').stdout)
+
+    def test_portable_restore_rejects_indistinguishable_duplicates(self):
+        csv = self.csv.read_text().replace('Repeated transfer,10.00,0.00,EUR,COMPLETED,160.00', 'Repeated transfer,0.00,0.00,EUR,COMPLETED,150.00')
+        csv = csv.replace('Repeated transfer,10.00,0.00,EUR,COMPLETED,170.00', 'Repeated transfer,0.00,0.00,EUR,COMPLETED,150.00').replace(',69.50', ',49.50')
+        self.csv.write_text(csv)
+        self.run_fin('import', 'revolut', self.csv, '--account-id', 'main')
+        rows = json.loads(self.run_fin('tx', 'list', '--search', 'Repeated transfer', '--json').stdout)
+        self.assertEqual(len(rows), 2)
+        self.run_fin('tx', 'cat', 'set', rows[0]['event_id'], 'income:other')
+        snapshot = self.root / 'duplicates.json'
+        snapshot.write_text(self.run_fin('cat', 'export').stdout)
+        result = self.run_fin('cat', 'restore', snapshot, '--apply', '--yes', check=False)
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn('ambiguous duplicate source evidence', result.stdout)
+
+    def test_rule_from_category_can_be_applied_to_other_transactions(self):
+        self.run_fin('import', 'revolut', self.csv, '--account-id', 'main')
+        rows = json.loads(self.run_fin('tx', 'list', '--search', 'Repeated', '--json').stdout)
+        first, second = (r['event_id'] for r in rows)
+        self.run_fin('tx', 'cat', 'set', first, 'income:other')
+        self.run_fin('rule', 'from-category', first, 'repeated', '--contains', 'Repeated', '--save', '--yes')
+        self.run_fin('rule', 'apply', 'repeated', '--yes')
+        rows = json.loads(self.run_fin('tx', 'list', '--search', 'Repeated', '--json').stdout)
+        self.assertEqual({r['counter_account'] for r in rows}, {'income:other'})
+        self.assertEqual({r['event_id'] for r in rows}, {first, second})
+
+    def test_rule_from_category_escapes_literal_metacharacters(self):
+        csv = self.csv.read_text().replace('Repeated transfer,10.00,0.00,EUR,COMPLETED,160.00',
+                                           'Shop*One,10.00,0.00,EUR,COMPLETED,160.00')
+        csv = csv.replace('Repeated transfer,10.00,0.00,EUR,COMPLETED,170.00',
+                          'ShopXOne,10.00,0.00,EUR,COMPLETED,170.00')
+        self.csv.write_text(csv)
+        self.run_fin('import', 'revolut', self.csv, '--account-id', 'main')
+        seed = json.loads(self.run_fin('tx', 'list', '--search', 'Shop*One', '--json').stdout)[0]['event_id']
+        self.run_fin('tx', 'cat', 'set', seed, 'expenses:shopping')
+        self.run_fin('rule', 'from-category', seed, 'literal-shop', '--contains', 'Shop*One', '--save', '--yes')
+        matches = json.loads(self.run_fin('rule', 'preview', 'literal-shop', '--json').stdout)
+        self.assertEqual(len(matches), 1)
+        self.assertEqual(matches[0]['transaction']['event_id'], seed)
+
+    def test_portable_restore_blocks_conflicts_and_missing_evidence(self):
+        self.run_fin('import', 'revolut', self.csv, '--account-id', 'main')
+        first = json.loads(self.run_fin('tx', 'list', '--search', 'Initial deposit', '--json').stdout)[0]['event_id']
+        self.run_fin('tx', 'cat', 'set', first, 'income:salary')
+        snapshot = self.root / 'categories-portable.json'
+        exported = json.loads(self.run_fin('cat', 'export').stdout)
+        exported['categories'].append('expenses:should-not-appear')
+        exported['decisions'][0]['payload_sha256'] = '0' * 64
+        snapshot.write_text(json.dumps(exported))
+        result = self.run_fin('cat', 'restore', snapshot, '--apply', '--yes', check=False)
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn('source evidence differs', result.stdout)
+        self.assertNotIn('expenses:should-not-appear', self.run_fin('cat', 'list').stdout)
+        exported['decisions'][0]['payload_sha256'] = json.loads(self.run_fin('cat', 'export').stdout)['decisions'][0]['payload_sha256']
+        exported['decisions'].append(dict(exported['decisions'][0]))
+        snapshot.write_text(json.dumps(exported))
+        result = self.run_fin('cat', 'restore', snapshot, '--apply', '--yes', check=False)
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn('duplicate transaction identities', result.stdout)
+        self.assertNotIn('expenses:should-not-appear', self.run_fin('cat', 'list').stdout)
+
     def test_category_catalog_and_init(self):
         self.run_fin('cat', 'add', 'expenses:custom')
         self.assertNotEqual(self.run_fin('cat', 'add', 'assets:bank', check=False).returncode, 0)

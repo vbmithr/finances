@@ -321,12 +321,12 @@ or `Date of Date.t`.
 The `events` command prints an RFC 3339 `occurred_at` for instants, or
 `occurred_at: null` and a populated `occurred_on` for date-only OFX records.
 Wise records retain an instant and project using the local booking date.
-This experimental build supports only the current schema baseline (24). Fresh
-files initialize it atomically; other schema versions are rejected without changes.
-There are no historical migrations or schema fixtures. Reimport original statements
-and import exported account settings when resetting an experiment. Category and
-transfer review files use internal event IDs: inspect the new records before
-recreating those decisions instead of blindly reusing old numeric IDs.
+This experimental build supports schema 31. Fresh files initialize it atomically;
+other schema versions are rejected without changes. There are no historical
+migrations. For a rebuild, export category decisions and rules with `fin cat
+export`, reimport original statements, and preview restoration with `fin cat
+restore`. Account settings have a separate export. Transfer review files use
+internal event IDs: inspect the new records before recreating those decisions.
 Follow the [schema rebuild recipe](docs/manual.md#rebuilding-after-a-schema-change)
 before upgrading, while the old executable can still read its database.
 Banks have no tables of their own: statements, companion observations, daily
@@ -585,6 +585,22 @@ fin transaction review --all
 Use `fin cat init` to choose suggested starter categories, `fin cat add
 expenses:food` to add your own, and `fin cat list` (or `--json`) to see your
 personal catalog, including unused categories.
+
+Save a portable snapshot of your category catalog, category rules, and current
+category decisions before rebuilding:
+
+```sh
+fin cat export > categories-portable.json
+fin cat restore categories-portable.json           # preview after reimport
+fin cat restore categories-portable.json --apply   # confirm before applying
+```
+
+The file contains personal source identities; set a restrictive umask or store it
+in a private directory. Restore requires matching source
+identity and evidence and refuses conflicts or ambiguity; it does not restore
+transfers, other rule kinds, or history. Keep a full database backup as well.
+Use `fin rule from-category EVENT_ID NAME --contains TEXT` to preview a reusable
+review-mode rule from a categorized example; add `--save` to confirm and save it.
 
 Use `fin tx cat set EVENT_ID expenses:food` to assign or change one category;
 use `equity:unclassified` to return it to review.

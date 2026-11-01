@@ -2,9 +2,8 @@
 
 Status: updated 2026-10-31. Fin stores explicit reviewed category decisions,
 lists transactions, previews similar movements and applies reusable regular-
-expression rules to imports and existing transactions (see "Rules today"). Rule
-provenance, bundled institutions as shareable definitions, a rule-authoring workflow, user-managed tags and
-the full-screen interface are not implemented.
+expression rules to imports and existing transactions (see "Rules today"). Rule provenance, a full rule editor, user-managed tags and the full-screen
+interface are not implemented.
 
 ## Purpose
 
@@ -63,9 +62,9 @@ that might share its category. Separate these operations:
   batch, preview the effects and apply them atomically. Do not overwrite an
   existing reviewed decision without an explicit correction.
 - **Create a rule.** Offer to save a reusable, inspectable condition for future
-  imports. The user controls its scope, can edit it and disable it. Automatic
-  application is a deliberate choice, not a side effect of accepting a batch.
-  Rules exist (below); creating one from a reviewed batch does not yet.
+  imports. The user controls its scope and mode. `fin rule from-category` previews
+  a literal description rule from a categorized example and can save it in review
+  mode; accepting a batch does not automatically create a rule.
 
 The first implemented preview is `fin transaction category similar EVENT_ID`. The
 example must have a reviewed income or expense category. It searches across

@@ -37,7 +37,7 @@ fmt:
 
 run:
 	@mkdir -p "$(SCRATCH_ROOT)"
-	TMPDIR="$(SCRATCH_ROOT)" $(OPAM_EXEC) dune exec fin -- $(ARGS)
+	@TMPDIR="$(SCRATCH_ROOT)" $(OPAM_EXEC) dune exec fin -- $(ARGS)
 
 pkgbuild:
 	$(ARCH_BUILD) --prepare-only
