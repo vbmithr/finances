@@ -570,10 +570,15 @@ definition or a matched companion file changes, without changing accounting
 decisions.
 Filter by `--account ID`, `--institution NAME`, inclusive `--from` and `--to`
 dates, `--search TEXT`, or `--limit COUNT`; add `--json` for scripts. See the
-[manual](docs/manual.md#list-transactions) for examples. Use hledger for
-accounting reports and running balances.
+[manual](docs/manual.md#list-transactions) for examples. Use `fin ledger balance expenses -Y` to run an hledger report against a fresh
+journal; hledger is installed separately. See the [manual](docs/manual.md#exporting-and-querying-accounting) for more examples.
 
 ## Review and categorize bank movements
+
+Use `fin tx status` (or `--json`) for category and movement-type counts,
+transaction decision counts and the
+percentage classified. Confirmed transfers, settlements and reversals count as
+classified; categorized income and expenses are shown separately.
 
 List movements that still use `equity:unclassified`:
 

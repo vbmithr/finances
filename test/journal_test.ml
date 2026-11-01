@@ -32,6 +32,25 @@ let import path contents =
 let journal_replay () =
   with_database (fun path ->
     ignore (import path (fixture ()));
+    with_store path (fun db ->
+      let all = ok (Store.movements db) in
+      let journal_movements = ok (Store.journal_movements db) in
+      Alcotest.(check int)
+        "same movement count"
+        (List.length all)
+        (List.length journal_movements);
+      List.iter journal_movements ~f:(fun (movement : Store.journal_movement) ->
+        let _, _, original =
+          List.find_exn all ~f:(fun (id, _, _) -> Int64.equal id movement.event_id)
+        in
+        Alcotest.(check string)
+          "same primary description"
+          (List.nth_exn original.descriptions original.main_description)
+          movement.description;
+        Alcotest.(check bool)
+          "same value date"
+          true
+          (Option.equal Date.equal original.value_on movement.value_on)));
     let first =
       ok (Store.with_open ~registry:Test_support.registry path Store.project_bank)
     in

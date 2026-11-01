@@ -2097,8 +2097,7 @@ let select_postings =
       (int64 @-> ret posting_row))
 ;;
 
-let read_entry db id date description =
-  let* rows = collect db (select_postings id) in
+let decode_entry date description rows =
   let* postings =
     traverse
       (fun (account, commodity, text) ->
@@ -2108,6 +2107,11 @@ let read_entry db id date description =
   in
   let* date = Or_error.try_with (fun () -> Date.of_string date) in
   Accounting.entry ~date ~description postings
+;;
+
+let read_entry db id date description =
+  let* rows = collect db (select_postings id) in
+  decode_entry date description rows
 ;;
 
 let find_entry =
@@ -2323,9 +2327,21 @@ let entries db =
           BY date,event_id,projection_key"
          row)
   in
+  let* postings =
+    collect
+      db
+      (statement
+         "SELECT entry_id,account,commodity,quantity FROM postings ORDER BY \
+          entry_id,ordinal"
+         Row.(t4 (int64 "entry_id") (text "account") (text "commodity") (text "quantity")))
+  in
+  let by_entry = Hashtbl.create (module Int64) in
+  List.iter postings ~f:(fun (id, account, commodity, quantity) ->
+    Hashtbl.add_multi by_entry ~key:id ~data:(account, commodity, quantity));
   traverse
     (fun (id, event_id, key, date, description) ->
-       let* entry = read_entry db id date description in
+       let rows = Option.value (Hashtbl.find by_entry id) ~default:[] |> List.rev in
+       let* entry = decode_entry date description rows in
        Ok (event_id, key, entry))
     rows
 ;;
@@ -2338,6 +2354,39 @@ let movements db =
        let* movement = stored table id in
        Ok (id, event, movement))
     (List.filter source ~f:(fun (_, e) -> Registry.is_movement db.registry e))
+;;
+
+type journal_movement =
+  { event_id : int64
+  ; value_on : Date.t option
+  ; description : string
+  }
+
+let journal_movements db =
+  let* rows =
+    collect
+      db
+      (statement
+         "SELECT e.kind,m.event_id,m.value_on,m.descriptions,m.main_description FROM \
+          movements m JOIN source_events e ON e.id=m.event_id"
+         Row.(
+           t5
+             (text "kind")
+             (int64 "event_id")
+             (option Rel.Type.text "value_on")
+             (text "descriptions")
+             (int "main_description")))
+  in
+  List.filter rows ~f:(fun (kind, _, _, _, _) ->
+    Registry.is_movement_kind db.registry kind)
+  |> traverse (fun (_, event_id, value_on, descriptions, main_description) ->
+    let* descriptions = Json.decode (Jsont.list Jsont.string) descriptions in
+    let* value_on = Or_error.try_with (fun () -> Option.map value_on ~f:Date.of_string) in
+    Ok
+      { event_id
+      ; value_on
+      ; description = Option.value (List.nth descriptions main_description) ~default:""
+      })
 ;;
 
 type projection_report =
@@ -2948,6 +2997,91 @@ let companion_observations ?institution db =
   Ok (List.concat lists)
 ;;
 
+type journal_companions =
+  { rows : (int64 * Companion.row) list
+  ; total : int
+  ; review : int
+  }
+
+let journal_companions db =
+  let context_cache = Hashtbl.create (module Int64) in
+  let* groups =
+    traverse
+      (fun (institution, (companion : Companion.t)) ->
+         let counts =
+           Rel_sql.Stmt.(
+             func
+               "SELECT count(*),coalesce(sum(CASE WHEN m.state IS NULL OR m.state <> \
+                'matched' THEN 1 ELSE 0 END),0) FROM companion_rows r LEFT JOIN \
+                companion_matches m ON m.row_id=r.id WHERE r.institution=? AND \
+                r.format=?"
+               (text @-> text @-> ret Row.(t2 (int "total") (int "review"))))
+         in
+         let* total, review =
+           db_result (Db.first db.conn (counts institution companion.format))
+           |> Result.map ~f:(fun value -> Option.value_exn value)
+         in
+         let row =
+           Row.(
+             unit (fun event_id row_id document_id row_number fields context ->
+               event_id, row_id, document_id, row_number, fields, context)
+             * int64 "event_id"
+             * int64 "row_id"
+             * int64 "document_id"
+             * int "row_number"
+             * text "fields_json"
+             * option Rel.Type.text "context_json")
+         in
+         let query =
+           Rel_sql.Stmt.(
+             func
+               "SELECT \
+                m.event_id,r.id,r.document_id,r.row_number,r.fields_json,c.context_json \
+                FROM companion_rows r JOIN companion_matches m ON m.row_id=r.id LEFT \
+                JOIN document_contexts c ON c.document_id=r.document_id WHERE \
+                r.institution=? AND r.format=? AND m.state='matched' AND m.event_id IS \
+                NOT NULL ORDER BY r.document_id,r.row_number"
+               (text @-> text @-> ret row))
+         in
+         let* rows = collect db (query institution companion.format) in
+         let* rows =
+           traverse
+             (fun (event_id, row_id, document_id, row_number, fields, context) ->
+                let* fields = decode_fields fields in
+                let* context =
+                  match Hashtbl.find context_cache document_id with
+                  | Some value -> Ok value
+                  | None ->
+                    let* value =
+                      match context with
+                      | None -> Ok []
+                      | Some json -> Json.decode Json.string_map json
+                    in
+                    Hashtbl.set context_cache ~key:document_id ~data:value;
+                    Ok value
+                in
+                Ok
+                  ( event_id
+                  , { Companion.row_id
+                    ; document_id
+                    ; institution
+                    ; format = companion.format
+                    ; row_number
+                    ; fields
+                    ; context
+                    } ))
+             rows
+         in
+         Ok (rows, total, review))
+      (registered_companions db)
+  in
+  Ok
+    { rows = List.concat_map groups ~f:(fun (rows, _, _) -> rows)
+    ; total = List.sum (module Int) groups ~f:(fun (_, total, _) -> total)
+    ; review = List.sum (module Int) groups ~f:(fun (_, _, review) -> review)
+    }
+;;
+
 type statement_reconciliation =
   { statement_id : int64
   ; document_id : int64
@@ -3245,6 +3379,69 @@ type review_classification =
   | Settlement
   | Reversal
 
+type transaction_status =
+  { total : int
+  ; categorized : int
+  ; transfers : int
+  ; settlements : int
+  ; reversals : int
+  ; unclassified : int
+  ; by_category : (string * int) list
+  ; by_type : (string * int) list
+  }
+
+let transaction_status db =
+  let sql =
+    "SELECT e.kind, CASE WHEN EXISTS (SELECT 1 FROM reversal_pairs r WHERE \
+     r.original=m.event_id OR r.reversal=m.event_id) THEN 'reversal' WHEN EXISTS (SELECT \
+     1 FROM bank_transfer_memberships t JOIN bank_transfer_decisions d ON \
+     d.first_event_id=t.first_event_id AND d.second_event_id=t.second_event_id WHERE \
+     t.event_id=m.event_id AND d.state='confirmed') THEN 'transfer' WHEN EXISTS (SELECT \
+     1 FROM card_settlement_decisions s WHERE s.event_id=m.event_id) THEN 'settlement' \
+     WHEN c.account IS NOT NULL AND c.account <> 'equity:unclassified' THEN 'category' \
+     ELSE 'unclassified' END AS decision, coalesce(c.account,''), \
+     coalesce(o.movement_type,m.movement_type,'unknown'), count(*) FROM movements m JOIN \
+     source_events e ON e.id=m.event_id LEFT JOIN bank_categories c ON \
+     c.event_id=m.event_id LEFT JOIN movement_type_overrides o ON o.event_id=m.event_id \
+     GROUP BY 1,2,3,4"
+  in
+  let row =
+    Row.(t5 (text "kind") (text "decision") (text "category") (text "type") (int "count"))
+  in
+  let* groups = collect db (statement sql row) in
+  let totals = Hashtbl.create (module String) in
+  let categories = Hashtbl.create (module String) in
+  let types = Hashtbl.create (module String) in
+  let add table name count =
+    Hashtbl.update table name ~f:(fun current -> Option.value current ~default:0 + count)
+  in
+  List.iter groups ~f:(fun (kind, decision, category, movement_type, count) ->
+    if Registry.is_movement_kind db.registry kind
+    then (
+      add totals decision count;
+      add types movement_type count;
+      if String.equal decision "category" then add categories category count));
+  let get name = Option.value (Hashtbl.find totals name) ~default:0 in
+  let by_name table =
+    Hashtbl.to_alist table |> List.sort ~compare:(fun (a, _) (b, _) -> String.compare a b)
+  in
+  let categorized = get "category"
+  and transfers = get "transfer"
+  and settlements = get "settlement"
+  and reversals = get "reversal"
+  and unclassified = get "unclassified" in
+  Ok
+    { total = categorized + transfers + settlements + reversals + unclassified
+    ; categorized
+    ; transfers
+    ; settlements
+    ; reversals
+    ; unclassified
+    ; by_category = by_name categories
+    ; by_type = by_name types
+    }
+;;
+
 type bank_review =
   { event_id : int64
   ; institution : string
@@ -3325,6 +3522,18 @@ let review_metadata db =
     , reversal_map )
 ;;
 
+let effective_description fallback annotations =
+  let preferred =
+    List.filter_map annotations ~f:(fun (a : Companion.annotation) ->
+      Option.bind a.display_name ~f:(fun name ->
+        Option.some_if (not (String.is_empty (String.strip name))) name))
+    |> List.dedup_and_sort ~compare:String.compare
+  in
+  match preferred with
+  | [ name ] -> name
+  | _ -> fallback
+;;
+
 let bank_review_from
       db
       source
@@ -3342,26 +3551,12 @@ let bank_review_from
        let settlement = Hashtbl.find settlements event_id in
        let reversal = Hashtbl.find reversals event_id in
        let observations = Option.value (Hashtbl.find details event_id) ~default:[] in
-       let consensus ~compare f =
-         match
-           List.filter_map observations ~f:(fun (_, a) -> f a)
-           |> List.dedup_and_sort ~compare
-         with
-         | [ value ] -> Some value
-         | _ -> None
-       in
-       let preferred =
-         consensus ~compare:String.compare (fun (a : Companion.annotation) ->
-           Option.bind a.display_name ~f:(fun name ->
-             Option.some_if (not (String.is_empty (String.strip name))) name))
-       in
        let description =
-         Option.value
-           preferred
-           ~default:
-             (Option.value
-                (List.nth transaction.descriptions transaction.main_description)
-                ~default:"")
+         effective_description
+           (Option.value
+              (List.nth transaction.descriptions transaction.main_description)
+              ~default:"")
+           (List.map observations ~f:snd)
        in
        let* transfer_destination =
          match transfer with

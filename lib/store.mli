@@ -144,6 +144,14 @@ val companion_observations
   -> t
   -> companion_observation list Or_error.t
 
+(** Matched companion rows and review counts needed for journal export. *)
+type journal_companions =
+  { rows : (int64 * Companion.row) list
+  ; total : int
+  ; review : int
+  }
+
+val journal_companions : t -> journal_companions Or_error.t
 val bank_accounts : t -> Bank_account_mapping.t list Or_error.t
 
 (** Store mappings and audit changes, renaming only verified existing bank
@@ -162,6 +170,15 @@ val record_entry
   -> ingest Or_error.t
 
 val entries : t -> (int64 * string * Accounting.entry) list Or_error.t
+
+(** Movement fields needed for journal export, without decoding source payloads. *)
+type journal_movement =
+  { event_id : int64
+  ; value_on : Date.t option
+  ; description : string
+  }
+
+val journal_movements : t -> journal_movement list Or_error.t
 
 type projection_report =
   { inserted : int
@@ -264,6 +281,21 @@ type review_classification =
   | Settlement
   | Reversal
 
+type transaction_status =
+  { total : int
+  ; categorized : int
+  ; transfers : int
+  ; settlements : int
+  ; reversals : int
+  ; unclassified : int
+  ; by_category : (string * int) list
+  ; by_type : (string * int) list
+  }
+
+(** Summarize stored bank movements with SQL aggregation, including effective
+    movement types and accounting decision precedence. *)
+val transaction_status : t -> transaction_status Or_error.t
+
 type bank_review =
   { event_id : int64
   ; institution : string
@@ -279,6 +311,10 @@ type bank_review =
   ; counter_account : string
   ; reason : string option
   }
+
+(** Choose a consistent nonempty companion display name, or the movement's
+    primary description when companion names are absent or disagree. *)
+val effective_description : string -> Companion.annotation list -> string
 
 val bank_review : t -> bank_review list Or_error.t
 val observed_provider_movement_types : t -> string list Or_error.t

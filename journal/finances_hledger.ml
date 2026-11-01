@@ -96,13 +96,9 @@ let transaction
 let export db =
   let open Or_error.Let_syntax in
   let%bind entries = Store.entries db in
-  let%bind observations = Store.companion_observations db in
+  let%bind observations = Store.journal_companions db in
   let%bind category_history = Store.bank_category_history db in
-  let%bind movements = Store.movements db in
-  let%bind review_rows = Store.bank_review db in
-  let descriptions = Hashtbl.create (module Int64) in
-  List.iter review_rows ~f:(fun (row : Store.bank_review) ->
-    Hashtbl.set descriptions ~key:row.event_id ~data:row.description);
+  let%bind movements = Store.journal_movements db in
   let%bind transfer_decisions = Store.bank_transfer_decisions db in
   let posting_dates = Hashtbl.create (module Int64) in
   let pairs = Hashtbl.create (module Int64) in
@@ -164,10 +160,7 @@ let export db =
       ~f:(fun (owner, c) -> (owner, c.Companion.format), c)
   in
   let%map annotated =
-    List.filter_map observations ~f:(fun (o : Store.companion_observation) ->
-      match o.matching with
-      | Some { state = Matched; event_id = Some event_id; _ } -> Some (event_id, o.row)
-      | _ -> None)
+    observations.rows
     |> List.map ~f:(fun (event_id, (row : Companion.row)) ->
       let%bind (companion : Companion.t) =
         Or_error.of_option
@@ -182,9 +175,9 @@ let export db =
     |> Or_error.combine_errors
   in
   let secondary_dates = Hashtbl.create (module Int64) in
-  List.iter movements ~f:(fun (id, _, movement) ->
-    Option.iter movement.Movement.value_on ~f:(fun date ->
-      Hashtbl.set secondary_dates ~key:id ~data:date));
+  List.iter movements ~f:(fun (movement : Store.journal_movement) ->
+    Option.iter movement.value_on ~f:(fun date ->
+      Hashtbl.set secondary_dates ~key:movement.event_id ~data:date));
   let extra_metadata = Hashtbl.create (module Int64) in
   List.iter transfer_decisions ~f:(fun (decision : Bank_transfer.decision) ->
     if Poly.equal decision.state Confirmed
@@ -218,6 +211,16 @@ let export db =
   let metadata = Hashtbl.create (module Int64) in
   List.iter annotated ~f:(fun (event_id, annotation) ->
     Hashtbl.add_multi metadata ~key:event_id ~data:annotation);
+  let descriptions = Hashtbl.create (module Int64) in
+  List.iter movements ~f:(fun (movement : Store.journal_movement) ->
+    let annotations =
+      Option.value (Hashtbl.find metadata movement.event_id) ~default:[]
+      |> List.map ~f:snd
+    in
+    Hashtbl.set
+      descriptions
+      ~key:movement.event_id
+      ~data:(Store.effective_description movement.description annotations));
   List.iter transfer_decisions ~f:(fun (d : Bank_transfer.decision) ->
     if Poly.equal d.state Confirmed && Hashtbl.mem pairs d.first_event_id
     then (
@@ -229,12 +232,7 @@ let export db =
       then Hashtbl.set metadata ~key:d.first_event_id ~data:combined));
   Hashtbl.map_inplace metadata ~f:(fun rows ->
     List.sort rows ~compare:(fun (a, _) (b, _) -> Int64.compare a b));
-  let review_rows =
-    List.count observations ~f:(fun row ->
-      not
-        (Option.exists row.Store.matching ~f:(fun result ->
-           Poly.equal result.state Bank_match.Matched)))
-  in
+  let review_rows = observations.review in
   let postings = List.concat_map entries ~f:(fun (_, _, entry) -> entry.postings) in
   let accounts =
     List.map postings ~f:(fun p -> p.account)
@@ -271,7 +269,7 @@ let export db =
   in
   let items =
     declarations
-    @ (if List.is_empty observations
+    @ (if observations.total = 0
        then []
        else
          [ Hledger.Journal.Comment_line

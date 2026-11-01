@@ -380,8 +380,51 @@ let review_enrichment () =
   memory (fun db ->
     accepted (import db "wise.xml" (xml ()));
     accepted (import db "wise.csv" (csv ()));
+    let check_companions () =
+      let all = ok (Store.companion_observations db) in
+      let journal = ok (Store.journal_companions db) in
+      let matched =
+        List.filter_map all ~f:(fun (observation : Store.companion_observation) ->
+          match observation.matching with
+          | Some { state = Matched; event_id = Some event_id; _ } ->
+            Some (event_id, observation.row)
+          | _ -> None)
+      in
+      let review =
+        List.count all ~f:(fun observation ->
+          not
+            (Option.exists observation.Store.matching ~f:(fun result ->
+               Poly.equal result.state Bank_match.Matched)))
+      in
+      check "all companion rows" (List.length all) journal.total;
+      check "companion rows needing review" review journal.review;
+      Alcotest.(check bool)
+        "matched companion rows"
+        true
+        (Poly.equal matched journal.rows)
+    in
+    check_companions ();
     ignore (ok (Store.match_companions ~institution:"wise" db) : Store.companion_report);
+    ignore (ok (Store.project_bank db));
+    let check_journal_descriptions rows =
+      let journal = ok (Finances_hledger.export db) in
+      let transactions =
+        Hledger.Parse.journal_exn journal |> Hledger.Journal.transactions
+      in
+      List.iter rows ~f:(fun (row : Store.bank_review) ->
+        let code = Printf.sprintf "event-%Ld" row.event_id in
+        let tx =
+          List.find_exn transactions ~f:(fun tx ->
+            Option.equal String.equal tx.code (Some code))
+        in
+        Alcotest.(check string)
+          "journal uses reviewed description"
+          row.description
+          tx.description)
+    in
+    check_companions ();
     let rows = ok (Store.bank_review db) in
+    check_journal_descriptions rows;
     List.iter rows ~f:(fun row ->
       Alcotest.(check string) "effective description" "Synthetic shop" row.description;
       Alcotest.(check (option string))
@@ -391,17 +434,18 @@ let review_enrichment () =
       check "source row recorded" 1 (List.length row.detail_sources));
     accepted (import db "other.csv" (replace (csv ()) "Synthetic shop" "Other shop"));
     ignore (ok (Store.match_companions ~institution:"wise" db) : Store.companion_report);
-    List.iter
-      (ok (Store.bank_review db))
-      ~f:(fun row ->
-        Alcotest.(check string)
-          "disagreeing companion descriptions fall back to primary"
-          (List.nth_exn row.transaction.descriptions row.transaction.main_description)
-          row.description;
-        Alcotest.(check (option string))
-          "agreeing type retained"
-          (Some "card")
-          (Option.map row.movement_type ~f:Movement_type.to_string)))
+    check_companions ();
+    let rows = ok (Store.bank_review db) in
+    check_journal_descriptions rows;
+    List.iter rows ~f:(fun row ->
+      Alcotest.(check string)
+        "disagreeing companion descriptions fall back to primary"
+        (List.nth_exn row.transaction.descriptions row.transaction.main_description)
+        row.description;
+      Alcotest.(check (option string))
+        "agreeing type retained"
+        (Some "card")
+        (Option.map row.movement_type ~f:Movement_type.to_string)))
 ;;
 
 let reported_type_rules () =

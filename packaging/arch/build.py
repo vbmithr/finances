@@ -15,7 +15,7 @@ import tempfile
 
 
 MANPAGE_COMMANDS = (None, 'init', 'status', 'backup', 'restore', 'delete',
-                    'import', 'account', 'category', 'institution', 'statement', 'transfer', 'transaction', 'settlement', 'reversal', 'rule', 'journal', 'db', 'paths')
+                    'import', 'account', 'category', 'institution', 'statement', 'transfer', 'transaction', 'settlement', 'reversal', 'rule', 'journal', 'ledger', 'db', 'paths')
 
 
 def main():

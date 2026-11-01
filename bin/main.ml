@@ -381,7 +381,8 @@ let welcome () =
      \032 fin reversal candidates  Find possible reversals\n\
      \032 fin rule --help          Manage classification rules\n\
      \032 fin transfer candidates  Find possible transfers\n\
-     \032 fin journal export       Produce an hledger journal\n\n\
+     \032 fin journal export       Produce an hledger journal\n\
+     \032 fin ledger               Run hledger reports\n\n\
      More:\n\
      \032 fin paths               Show database and data locations\n\
      \032 fin db --help           Inspect source evidence commands\n\
@@ -488,6 +489,76 @@ let export_hledger_cmd =
     "export"
     "Write a reproducible hledger journal to standard output."
     Term.(const export_hledger $ database)
+;;
+
+let ledger database args =
+  let%bind journal = with_database database Finances_hledger.export in
+  let run () =
+    let read_fd, write_fd = Unix.pipe () in
+    Unix.set_close_on_exec write_fd;
+    let pid =
+      try
+        Unix.create_process
+          "hledger"
+          (Array.of_list ("hledger" :: "-f" :: "-" :: args))
+          read_fd
+          Unix.stdout
+          Unix.stderr
+      with
+      | exn ->
+        Unix.close read_fd;
+        Unix.close write_fd;
+        raise exn
+    in
+    Unix.close read_fd;
+    let previous = Stdlib.Sys.signal Stdlib.Sys.sigpipe Stdlib.Sys.Signal_ignore in
+    let write_error =
+      try
+        let rec write offset =
+          if offset < String.length journal
+          then (
+            let count =
+              Unix.write_substring write_fd journal offset (String.length journal - offset)
+            in
+            write (offset + count))
+        in
+        write 0;
+        None
+      with
+      | Unix.Unix_error (Unix.EPIPE, _, _) -> None
+      | exn -> Some exn
+    in
+    Unix.close write_fd;
+    ignore (Stdlib.Sys.signal Stdlib.Sys.sigpipe previous : Stdlib.Sys.signal_behavior);
+    let _, status = Unix.waitpid [] pid in
+    match write_error, status with
+    | Some exn, Unix.WEXITED 0 -> raise exn
+    | _, Unix.WEXITED code -> code
+    | _, (Unix.WSIGNALED _ | Unix.WSTOPPED _) -> 128
+  in
+  match Or_error.try_with run with
+  | Error error ->
+    Or_error.errorf
+      "could not run hledger (is it installed?): %s"
+      (Error.to_string_hum error)
+  | Ok code -> Stdlib.exit code
+;;
+
+let ledger_cmd =
+  command
+    ~man:
+      [ `S Manpage.s_description
+      ; `P
+          "Generate a fresh journal and pass arguments to hledger. Place Fin's \
+           --database option before the hledger command. The journal uses standard \
+           input; use this command for reports, not edits."
+      ]
+    "ledger"
+    "Run an hledger report using the current Fin journal."
+    Term.(
+      const ledger
+      $ database
+      $ Arg.(value & pos_all string [] & info [] ~docv:"HLEDGER-ARGS"))
 ;;
 
 let list_bank_accounts database json_output =
@@ -4323,6 +4394,49 @@ let rule_gaps_cmd =
       $ json_output)
 ;;
 
+let transaction_status database json_output =
+  with_database database (fun db ->
+    let%bind report = Store.transaction_status db in
+    if json_output
+    then Report_json.print Report_json.transaction_status report
+    else (
+      let percent n =
+        match Report_json.percentage n report.total with
+        | None -> "n/a"
+        | Some value -> Printf.sprintf "%.1f%%" value
+      in
+      printf "Transactions: %d\n" report.total;
+      printf
+        "Classified: %d (%s)\n"
+        (report.total - report.unclassified)
+        (percent (report.total - report.unclassified));
+      printf "  Categorized: %d (%s)\n" report.categorized (percent report.categorized);
+      printf
+        "  Transfers: %d\n  Settlements: %d\n  Reversals: %d\n"
+        report.transfers
+        report.settlements
+        report.reversals;
+      printf "Unclassified: %d\n" report.unclassified;
+      let show_groups title groups =
+        printf "\n%s:\n" title;
+        if List.is_empty groups
+        then print_endline "  (none)"
+        else
+          List.iter groups ~f:(fun (name, count) ->
+            printf "  %s: %d\n" (Terminal.text name) count)
+      in
+      show_groups "By category" report.by_category;
+      show_groups "By movement type" report.by_type);
+    Ok ())
+;;
+
+let transaction_status_cmd =
+  command
+    "status"
+    "Summarize transaction accounting decisions and classification progress."
+    Term.(const transaction_status $ database $ json_output)
+;;
+
 let bank_review database all json_output =
   with_database database (fun db ->
     let%bind rows = Store.bank_review db in
@@ -4691,8 +4805,17 @@ let category_review database event_id =
                  :: List.filter rows ~f:(fun r ->
                    not (Int64.equal r.Store.event_id event_id)))
           in
-          let fuzzy = Category_similarity.fuzzy ~seed rows in
-          let initial = matches.candidates @ matches.conflicts @ List.map fuzzy ~f:fst in
+          let needs_category (r : Store.bank_review) =
+            not
+              (Poly.equal r.classification Store.Category
+               && String.equal r.counter_account category)
+          in
+          let fuzzy =
+            Category_similarity.fuzzy ~seed rows
+            |> List.filter ~f:(fun ((r : Store.bank_review), _) ->
+              Poly.equal r.classification Store.Unclassified)
+          in
+          let initial = matches.candidates @ List.map fuzzy ~f:fst in
           let eligible (r : Store.bank_review) =
             Poly.equal r.classification Store.Unclassified
             || Poly.equal r.classification Store.Category
@@ -4777,6 +4900,7 @@ let category_review database event_id =
                     let results =
                       List.filter rows ~f:(fun (r : Store.bank_review) ->
                         (not (Int64.equal r.event_id event_id))
+                        && needs_category r
                         && String.Caseless.is_substring r.description ~substring:query)
                     in
                     select results selected false))
@@ -4839,46 +4963,51 @@ let category_review database event_id =
              print_endline "Nothing classified.";
              Ok ()
            | Some selected ->
-             let chosen = seed :: selected in
-             printf "Proposed category: %s\n" (Terminal.text category);
-             Terminal.review
-               (List.map chosen ~f:(fun r ->
-                  { r with Store.counter_account = category; reason = None }));
-             printf "Apply to %d transaction(s)? [Y/n]: " (List.length chosen);
-             Out_channel.flush stdout;
-             let confirmed =
-               Option.value_map
-                 (In_channel.input_line In_channel.stdin)
-                 ~default:false
-                 ~f:confirm_default_yes
-             in
-             if not confirmed
+             let chosen = if needs_category seed then seed :: selected else selected in
+             if List.is_empty chosen
              then (
-               print_endline "Nothing classified.";
+               print_endline "No category changes.";
                Ok ())
              else (
-               let%bind decisions =
-                 List.map chosen ~f:(fun (r : Store.bank_review) ->
-                   Bank_category.create
-                     ~event_id:r.event_id
-                     ~account:category
-                     ~reason:
-                       (if Int64.equal r.event_id event_id
-                        then "Reviewed interactively"
-                        else
-                          Printf.sprintf
-                            "Selected during category review of event %Ld"
-                            event_id))
-                 |> Or_error.combine_errors
+               printf "Proposed category: %s\n" (Terminal.text category);
+               Terminal.review
+                 (List.map chosen ~f:(fun r ->
+                    { r with Store.counter_account = category; reason = None }));
+               printf "Apply to %d transaction(s)? [Y/n]: " (List.length chosen);
+               Out_channel.flush stdout;
+               let confirmed =
+                 Option.value_map
+                   (In_channel.input_line In_channel.stdin)
+                   ~default:false
+                   ~f:confirm_default_yes
                in
-               let expected =
-                 List.map chosen ~f:(fun (r : Store.bank_review) ->
-                   ( r.event_id
-                   , Option.map r.reason ~f:(fun reason -> r.counter_account, reason) ))
-               in
-               let%bind changed = Store.review_bank_categories db ~expected decisions in
-               printf "category_changes=%d\n" changed;
-               Ok ()))))
+               if not confirmed
+               then (
+                 print_endline "Nothing classified.";
+                 Ok ())
+               else (
+                 let%bind decisions =
+                   List.map chosen ~f:(fun (r : Store.bank_review) ->
+                     Bank_category.create
+                       ~event_id:r.event_id
+                       ~account:category
+                       ~reason:
+                         (if Int64.equal r.event_id event_id
+                          then "Reviewed interactively"
+                          else
+                            Printf.sprintf
+                              "Selected during category review of event %Ld"
+                              event_id))
+                   |> Or_error.combine_errors
+                 in
+                 let expected =
+                   List.map chosen ~f:(fun (r : Store.bank_review) ->
+                     ( r.event_id
+                     , Option.map r.reason ~f:(fun reason -> r.counter_account, reason) ))
+                 in
+                 let%bind changed = Store.review_bank_categories db ~expected decisions in
+                 printf "category_changes=%d\n" changed;
+                 Ok ())))))
 ;;
 
 let category_review_cmd =
@@ -5685,7 +5814,24 @@ let command_argv () =
     && String.equal argv.(1) "transaction"
     && String.equal argv.(2) "cat"
   then argv.(2) <- "category";
-  argv
+  if Stdlib.Array.length argv > 1 && String.equal argv.(1) "ledger"
+  then (
+    let args = Array.to_list argv in
+    let rec split prefix = function
+      | (("--database" | "-d") as option) :: value :: rest ->
+        split (value :: option :: prefix) rest
+      | option :: rest when String.is_prefix option ~prefix:"--database=" ->
+        split (option :: prefix) rest
+      | [ option ]
+        when String.equal option "-h" || String.is_prefix option ~prefix:"--help" ->
+        List.rev (option :: prefix)
+      | "--" :: rest -> List.rev prefix @ ("--" :: rest)
+      | rest -> List.rev prefix @ ("--" :: rest)
+    in
+    match args with
+    | program :: name :: rest -> Array.of_list (program :: name :: split [] rest)
+    | _ -> argv)
+  else argv
 ;;
 
 let () =
@@ -5729,6 +5875,7 @@ let () =
           [ setup_cmd
           ; status_cmd
           ; paths_cmd
+          ; ledger_cmd
           ; backup_cmd
           ; restore_cmd
           ; delete_cmd
@@ -5820,6 +5967,7 @@ let () =
               "transaction"
               "Inspect and classify imported transactions."
               [ transaction_list_cmd
+              ; transaction_status_cmd
               ; transaction_show_cmd
               ; refresh_transaction_evidence_cmd
               ; group

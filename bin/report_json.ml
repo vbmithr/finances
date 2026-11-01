@@ -68,6 +68,38 @@ let account =
   |> Jsont.Object.finish
 ;;
 
+let percentage count total =
+  if total = 0 then None else Some (100. *. Float.of_int count /. Float.of_int total)
+;;
+
+let named_count field_name =
+  Jsont.Object.enc_only ()
+  |> Jsont.Object.mem field_name Jsont.string ~enc:fst
+  |> Jsont.Object.mem "count" Json.integer ~enc:snd
+  |> Jsont.Object.finish
+;;
+
+let transaction_status =
+  let field name codec (enc : Store.transaction_status -> _) map =
+    Jsont.Object.mem name codec ~enc map
+  in
+  Jsont.Object.enc_only ()
+  |> field "total" Json.integer (fun r -> r.total)
+  |> field "classified" Json.integer (fun r -> r.total - r.unclassified)
+  |> field "classified_percent" (Jsont.option Jsont.number) (fun r ->
+    percentage (r.total - r.unclassified) r.total)
+  |> field "categorized" Json.integer (fun r -> r.categorized)
+  |> field "categorized_percent" (Jsont.option Jsont.number) (fun r ->
+    percentage r.categorized r.total)
+  |> field "transfers" Json.integer (fun r -> r.transfers)
+  |> field "settlements" Json.integer (fun r -> r.settlements)
+  |> field "reversals" Json.integer (fun r -> r.reversals)
+  |> field "unclassified" Json.integer (fun r -> r.unclassified)
+  |> field "by_category" (Jsont.list (named_count "account")) (fun r -> r.by_category)
+  |> field "by_type" (Jsont.list (named_count "type")) (fun r -> r.by_type)
+  |> Jsont.Object.finish
+;;
+
 let latest_import =
   let field name codec (enc : Bank_import.file_report -> _) map =
     Jsont.Object.mem name codec ~enc map

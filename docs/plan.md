@@ -71,12 +71,17 @@ provider observations before treating them as authoritative.
   projections for review and undo.
 - Movements project to balanced entries against `equity:unclassified`, unless a
   reviewed category or confirmed transfer says otherwise. `fin journal export`
-  writes a reproducible hledger journal.
+  writes a reproducible hledger journal; `fin ledger` streams it to hledger for
+  reports. Export reuses loaded movements and companion observations to select
+  descriptions without building a second transaction review. It reads postings
+  in a batch and selects only the movement fields needed for export. On 3,392
+  movements, warm journal export measured about 84 ms, down from about 187 ms.
+  Companion export loads matched rows and aggregate review counts directly.
 - Statement ingestion is `fin import BANK PATH...` or a configured generic CSV.
   `fin backup` saves one
   consistent SQLite snapshot; `fin restore BACKUP` validates and restores it,
   with overwrite confirmation and automatic removal of stale generated files.
-- OCaml test suites and 93 CLI cases, plus status performance and package
+- OCaml test suites and 97 CLI cases, plus status performance and package
   man-page checks. Selected import changes have also been compared by
   rebuilding a personal database and diffing reports and source payloads.
 - Issue #1 is implemented locally and awaits publication.
@@ -327,6 +332,8 @@ The import side is done; turning movements into accounting is not.
 - [x] Transaction listings show accounting classification and use a terminal pager;
   settlement rule batches reuse loaded data across decisions.
 - [x] CSV enrichment, with ambiguous matches visible.
+- [x] Summarize transaction classification progress and category and movement-type counts
+  with `fin tx status` using SQLite aggregation.
 - [x] Find similar transactions across institutions during category review.
 - [x] Search descriptions and select transactions across searches during category review.
 - [x] Set or correct an individual category directly; re-review categorized batches.

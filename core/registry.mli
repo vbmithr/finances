@@ -28,6 +28,8 @@ val aliases : t -> string -> string list
 
 (** Whether some adapter claims the event's kind. Other events (trading venues,
     future sources) are not bank movements. *)
+val is_movement_kind : t -> string -> bool
+
 val is_movement : t -> Source_event.t -> bool
 
 (** Look up a bundled automatic source-typing profile. *)

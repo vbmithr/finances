@@ -11,6 +11,23 @@ short line of their own.
 - Add `fin cat delete ACCOUNT` to remove a catalog category that is not used by
   current transaction assignments or category rules.
 
+- Speed up journal export by batching posting reads, selecting only the movement
+  fields and matched companion data needed for export, and reusing that data
+  for descriptions.
+
+- Add `fin ledger` to run hledger reports against a freshly generated journal.
+
+- Add `fin tx status` to summarize transaction decisions and show classified and
+  categorized percentages and category and movement-type breakdowns, with JSON
+  output for scripts.
+
+- Exclude previously categorized transactions from automatic category-review
+  suggestions; explicit search can still find categories that need correction.
+
+- Hide transactions already assigned to the chosen category in interactive
+  category-review matches and search. A seed already in that category is left
+  untouched rather than creating a redundant decision.
+
 - Add versioned `fin cat export` and preview-first `fin cat restore` for the
   category catalog, personal category rules and current category decisions. Restore
   matches stable source identity and verifies occurrence, payload and source-field

@@ -97,7 +97,8 @@ let aliases t institution =
   | Some (module A) -> institution :: A.aliases
 ;;
 
-let is_movement t (event : Source_event.t) = Set.mem t.kinds event.kind
+let is_movement_kind t kind = Set.mem t.kinds kind
+let is_movement t (event : Source_event.t) = is_movement_kind t event.kind
 let default_source_typing t institution = Map.find t.source_typing institution
 let default_source_evidence t = t.source_evidence
 let default_type_rules t = t.type_rules
