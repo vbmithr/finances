@@ -8,9 +8,64 @@ short line of their own.
 
 ## Unreleased
 
+- Replace `fin tx cat export/restore` with `fin tx export/restore` and include
+  manual type overrides alongside category decisions. Restore previews conflicts
+  and applies all decisions atomically; older category snapshots remain readable.
+  **Action required:** update scripts to use the new command names.
+
+- Change `fin tx type set` to accept the type first and one or more event IDs,
+  applying the batch atomically. **Action required:** update scripts using the
+  former `EVENT-ID TYPE` order or parsing the former success message.
+
+- Add `--force` to rule preview and application to replace existing categories
+  on matches, retaining protections for other accounting decisions.
+
+- Add `fin tx list --category ACCOUNT` (also `--counter-account`) to filter
+  transactions by their exact counter-account.
+
+- Let `fin tx cat set ACCOUNT -` read a filtered `fin tx list --json` from
+  standard input, and apply the selected transaction IDs atomically.
+
+- Show transfer candidates and interactive review in descending score order,
+  with event IDs breaking ties.
+
+- Exclude categorized transactions from unreviewed transfer candidates and
+  transfer review; resetting a category makes a movement eligible again.
+
+- Add `fin tx list --order-by COLUMN,...` and `--asc` / `--desc` for
+  multi-column sorting, with exact amount comparisons. **Action required:**
+  replace `--order asc` and `--order desc` with `--asc` and `--desc`.
+
 - Change `fin tx cat set` to take the account first, followed by one or more
   event IDs, and apply the batch atomically. **Action required:** update scripts
   using the former `EVENT-ID ACCOUNT` argument order.
+
+- Stage category queue assignments and new categories until `q` saves them
+  atomically; Ctrl-C discards the staged changes.
+
+- Classify unclassified exact-description matches in the current category queue
+  together, with a visible count, a toggle and whole-batch undo.
+
+- Allow `fin tx cat queue --type TYPE` to restrict the queue to one or more
+  effective movement types, including `unknown`.
+
+- Show incoming queue amounts in green and outgoing amounts in red, with more
+  space between transaction details and category controls. `NO_COLOR` disables
+  the amount colors.
+
+- Type Wise `BALANCE_CASHBACK-` movements as `interest` instead of `bonus`.
+  **Action required:** existing databases retain their stored rule; replace
+  `wise-id-cashback` as described in the manual to retype those movements.
+
+- Separate portable snapshots into `fin cat export/restore` for the catalog,
+  `fin tx export/restore` for transaction decisions, and `fin rule export/restore`
+  for stored rules. Assignment and rule restore create missing categories
+  atomically. Older combined exports can be restored section by section.
+  **Action required:** update backup scripts to save all three new exports;
+  `fin cat export` now contains only category names.
+
+- Add `fin tx cat queue` for keyboard-driven classification with shortcuts,
+  hierarchical category browsing, search, category creation, skip and undo.
 
 - Add `fin cat delete ACCOUNT` to remove a catalog category that is not used by
   current transaction assignments or category rules.
@@ -32,11 +87,9 @@ short line of their own.
   category-review matches and search. A seed already in that category is left
   untouched rather than creating a redundant decision.
 
-- Add versioned `fin cat export` and preview-first `fin cat restore` for the
-  category catalog, personal category rules and current category decisions. Restore
-  matches stable source identity and verifies occurrence, payload and source-field
-  hashes; missing, conflicting or ambiguous records block the atomic batch. The
-  export does not include transfer decisions, other rule kinds or review history.
+- Match portable category decisions by stable source identity, occurrence, payload
+  and source-field hashes; missing, conflicting or ambiguous records block the
+  atomic batch. Portable exports omit transfer decisions and review history.
   `make run` no longer echoes its command into redirected JSON output.
 - Add `fin rule from-category` to preview a literal description rule based on a
   categorized example and optionally save it as a review-mode rule.

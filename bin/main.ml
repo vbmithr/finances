@@ -1581,10 +1581,37 @@ let categorize_bank database path =
     Ok ())
 ;;
 
-let category_set database account event_ids =
-  if List.is_empty event_ids
-  then Or_error.error_string "provide at least one transaction event ID"
+let category_set database account inputs =
+  let stdin_count = List.count inputs ~f:(String.equal "-") in
+  if stdin_count > 1
+  then Or_error.error_string "standard input can only be specified once"
   else (
+    let transaction_id =
+      Jsont.Object.map Fn.id
+      |> Jsont.Object.mem "event_id" Json.int64_codec
+      |> Jsont.Object.finish
+    in
+    let%bind id_lists =
+      List.map inputs ~f:(fun input ->
+        if String.equal input "-"
+        then
+          if Unix.isatty Unix.stdin
+          then Or_error.error_string "pipe fin tx list --json output into standard input"
+          else (
+            let%bind contents =
+              Or_error.try_with (fun () -> In_channel.input_all In_channel.stdin)
+            in
+            Json.decode (Jsont.list transaction_id) contents
+            |> Or_error.tag ~tag:"invalid transaction list on standard input")
+        else
+          Or_error.try_with (fun () -> [ Int64.of_string input ])
+          |> Or_error.tag ~tag:("invalid transaction event ID: " ^ input))
+      |> Or_error.combine_errors
+    in
+    let event_ids = List.concat id_lists in
+    let%bind _ =
+      Bank_category.create ~event_id:1L ~account ~reason:"Set with fin tx cat set"
+    in
     let%bind decisions =
       List.map event_ids ~f:(fun event_id ->
         Bank_category.create ~event_id ~account ~reason:"Set with fin tx cat set")
@@ -1612,8 +1639,13 @@ let category_set_cmd =
               ~doc:"Income or expense account, or equity:unclassified to reset.")
       $ Arg.(
           non_empty
-          & pos_right 0 int64 []
-          & info [] ~docv:"EVENT-ID" ~doc:"One or more transaction event IDs."))
+          & pos_right 0 string []
+          & info
+              []
+              ~docv:"EVENT-ID|-"
+              ~doc:
+                "Transaction event IDs, or - to read fin tx list --json from standard \
+                 input."))
 ;;
 
 let categorize_bank_cmd =
@@ -1638,6 +1670,111 @@ type movement_type_filter =
   | Unknown_type
   | Known_type of Movement_type.t
 
+let parse_movement_type_filter = function
+  | "unknown" -> Ok Unknown_type
+  | value when String.is_empty (String.strip value) ->
+    Or_error.error_string "--type must not be empty"
+  | value -> Ok (Known_type (Movement_type.of_string value))
+;;
+
+let matches_movement_type_filter filter movement_type =
+  match filter with
+  | Unknown_type -> Option.is_none movement_type
+  | Known_type kind -> Option.value_map movement_type ~default:false ~f:(Poly.equal kind)
+;;
+
+type transaction_sort_column =
+  | Sort_occurrence
+  | Sort_date
+  | Sort_amount
+  | Sort_currency
+  | Sort_institution
+  | Sort_account
+  | Sort_type
+  | Sort_counter_account
+  | Sort_description
+  | Sort_event
+
+let transaction_sort_columns =
+  [ "date", Sort_date
+  ; "booked_on", Sort_date
+  ; "amount", Sort_amount
+  ; "currency", Sort_currency
+  ; "institution", Sort_institution
+  ; "account", Sort_account
+  ; "account-id", Sort_account
+  ; "account_id", Sort_account
+  ; "type", Sort_type
+  ; "movement_type", Sort_type
+  ; "counter-account", Sort_counter_account
+  ; "counter_account", Sort_counter_account
+  ; "description", Sort_description
+  ; "event", Sort_event
+  ; "event-id", Sort_event
+  ; "event_id", Sort_event
+  ]
+;;
+
+let parse_transaction_sort = function
+  | None -> Ok [ Sort_occurrence ]
+  | Some value ->
+    let%bind columns =
+      String.split value ~on:','
+      |> List.map ~f:(fun name ->
+        let name = String.strip name in
+        List.Assoc.find transaction_sort_columns name ~equal:String.equal
+        |> Or_error.of_option ~error:(Error.createf "unknown --order-by column: %s" name))
+      |> Or_error.combine_errors
+    in
+    if List.contains_dup columns ~compare:Poly.compare
+    then Or_error.error_string "--order-by columns must not be repeated"
+    else Ok columns
+;;
+
+let compare_transaction_column
+      column
+      (a : Report_json.transaction)
+      (b : Report_json.transaction)
+  =
+  let ar = a.review
+  and br = b.review in
+  match column with
+  | Sort_occurrence ->
+    String.compare (Temporal.to_string ar.occurred) (Temporal.to_string br.occurred)
+  | Sort_date -> Date.compare ar.transaction.booked_on br.transaction.booked_on
+  | Sort_amount -> Quantity.compare ar.transaction.amount br.transaction.amount
+  | Sort_currency ->
+    String.compare
+      (Iso4217.to_alpha_code ar.transaction.account.currency)
+      (Iso4217.to_alpha_code br.transaction.account.currency)
+  | Sort_institution -> String.compare ar.institution br.institution
+  | Sort_account -> String.compare a.account_id b.account_id
+  | Sort_type ->
+    let name (row : Store.bank_review) =
+      Option.value_map row.Store.movement_type ~default:"-" ~f:Movement_type.to_string
+    in
+    String.compare (name ar) (name br)
+  | Sort_counter_account ->
+    let name (row : Store.bank_review) =
+      if String.equal row.Store.counter_account "equity:unclassified"
+      then "-"
+      else row.counter_account
+    in
+    String.compare (name ar) (name br)
+  | Sort_description -> String.compare ar.description br.description
+  | Sort_event -> Int64.compare ar.event_id br.event_id
+;;
+
+let sql_sort_column = function
+  | Sort_date -> Some Store.Review_date
+  | Sort_currency -> Some Store.Review_currency
+  | Sort_institution -> Some Store.Review_institution
+  | Sort_type -> Some Store.Review_type
+  | Sort_event -> Some Store.Review_event
+  | Sort_occurrence | Sort_amount | Sort_account | Sort_counter_account | Sort_description
+    -> None
+;;
+
 let list_transactions
       database
       account_id
@@ -1647,7 +1784,9 @@ let list_transactions
       search
       movement_type
       classification
+      counter_account
       limit
+      order_by
       order
       json_output
   =
@@ -1661,15 +1800,13 @@ let list_transactions
         Some date)
       |> Or_error.tag ~tag:label
   in
+  let%bind sort_columns = parse_transaction_sort order_by in
   let%bind from_date = parse_date "--from" from_date in
   let%bind to_date = parse_date "--to" to_date in
   let%bind movement_type =
     match movement_type with
     | None -> Ok None
-    | Some "unknown" -> Ok (Some Unknown_type)
-    | Some value when String.is_empty (String.strip value) ->
-      Or_error.error_string "--type must not be empty"
-    | Some value -> Ok (Some (Known_type (Movement_type.of_string value)))
+    | Some value -> Result.map (parse_movement_type_filter value) ~f:Option.some
   in
   let%bind () =
     match from_date, to_date, limit with
@@ -1698,7 +1835,13 @@ let list_transactions
         ids
         ~key:(a.Store.mapping.institution, Bank_account_mapping.source_account a.mapping)
         ~data:(Bank_account_mapping.id a.mapping));
-    let%bind reviews = Store.bank_review db in
+    let sql_columns = List.filter_map sort_columns ~f:sql_sort_column in
+    let use_sql = List.length sql_columns = List.length sort_columns in
+    let%bind reviews =
+      if use_sql
+      then Store.bank_review_ordered db ~columns:sql_columns ~ascending:order
+      else Store.bank_review db
+    in
     let%bind rows =
       List.map reviews ~f:(fun (review : Store.bank_review) ->
         let account = review.transaction.account in
@@ -1717,29 +1860,35 @@ let list_transactions
         let r = row.review in
         Option.value_map account_id ~default:true ~f:(String.equal row.account_id)
         && Option.value_map institution ~default:true ~f:(String.equal r.institution)
-        && Option.value_map movement_type ~default:true ~f:(function
-          | Unknown_type -> Option.is_none r.movement_type
-          | Known_type kind ->
-            Option.value_map r.movement_type ~default:false ~f:(Poly.equal kind))
+        && Option.value_map movement_type ~default:true ~f:(fun filter ->
+          matches_movement_type_filter filter r.movement_type)
         && Option.value_map classification ~default:true ~f:(Poly.equal r.classification)
+        && Option.value_map
+             counter_account
+             ~default:true
+             ~f:(String.equal r.counter_account)
         && Option.value_map from_date ~default:true ~f:(fun date ->
           Date.compare r.transaction.booked_on date >= 0)
         && Option.value_map to_date ~default:true ~f:(fun date ->
           Date.compare r.transaction.booked_on date <= 0)
         && Option.value_map search ~default:true ~f:(fun text ->
           String.Caseless.is_substring r.description ~substring:text))
-      |> List.sort
-           ~compare:(fun (a : Report_json.transaction) (b : Report_json.transaction) ->
-             let compare (a : Report_json.transaction) (b : Report_json.transaction) =
-               match
-                 String.compare
-                   (Temporal.to_string a.review.occurred)
-                   (Temporal.to_string b.review.occurred)
-               with
-               | 0 -> Int64.compare a.review.event_id b.review.event_id
-               | n -> n
-             in
-             if order then compare a b else compare b a)
+      |> fun filtered ->
+      if use_sql
+      then filtered
+      else if Poly.equal sort_columns [ Sort_occurrence ]
+      then if order then filtered else List.rev filtered
+      else
+        List.sort filtered ~compare:(fun a b ->
+          let rec compare = function
+            | [] ->
+              Int64.compare a.Report_json.review.event_id b.Report_json.review.event_id
+            | column :: rest ->
+              (match compare_transaction_column column a b with
+               | 0 -> compare rest
+               | result -> result)
+          in
+          if order then compare sort_columns else -compare sort_columns)
     in
     let rows = Option.value_map limit ~default:rows ~f:(List.take rows) in
     if json_output
@@ -1831,15 +1980,33 @@ let transaction_list_cmd =
                  or reversal.")
       $ Arg.(
           value
+          & opt (some string) None
+          & info
+              [ "category"; "counter-account" ]
+              ~docv:"ACCOUNT"
+              ~doc:
+                "Only transactions with this exact counter-account, including categories.")
+      $ Arg.(
+          value
           & opt (some int) None
           & info [ "limit" ] ~docv:"COUNT" ~doc:"Maximum number of transactions.")
       $ Arg.(
           value
-          & opt (enum [ "asc", true; "desc", false ]) false
+          & opt (some string) None
           & info
-              [ "order" ]
-              ~docv:"ORDER"
-              ~doc:"Order by source event date or timestamp: asc or desc (default: desc).")
+              [ "order-by" ]
+              ~docv:"COLUMNS"
+              ~doc:
+                "Comma-separated sort columns: date, amount, currency, institution, \
+                 account, type, counter-account, description, event. Default: source \
+                 event date/time.")
+      $ Arg.(
+          value
+          & vflag
+              false
+              [ true, info [ "asc" ] ~doc:"Sort in ascending order."
+              ; false, info [ "desc" ] ~doc:"Sort in descending order (default)."
+              ])
       $ json_output)
 ;;
 
@@ -1919,7 +2086,7 @@ let transaction_type_list_cmd =
     Term.(const transaction_type_list $ database)
 ;;
 
-let transaction_type_set database event_id value =
+let transaction_type_set database value event_ids =
   let%bind kind =
     if String.is_empty (String.strip value) || String.equal value "unknown"
     then
@@ -1929,29 +2096,26 @@ let transaction_type_set database event_id value =
   in
   with_database database (fun db ->
     let%map changed =
-      Store.set_movement_type_override db ~event_id ~movement_type:(Some kind)
+      Store.set_movement_type_overrides db ~event_ids ~movement_type:(Some kind)
     in
-    print_endline
-      (if changed
-       then "Movement type override saved."
-       else "Movement type override already set."))
+    printf "type_changes=%d\n" changed)
 ;;
 
 let transaction_type_set_cmd =
   command
     "set"
-    "Set a manual movement type; see fin tx type list."
+    "Set a manual movement type on one or more transactions atomically."
     Term.(
       const transaction_type_set
       $ database
       $ Arg.(
           required
-          & pos 0 (some int64) None
-          & info [] ~docv:"EVENT-ID" ~doc:"Transaction event ID.")
+          & pos 0 (some string) None
+          & info [] ~docv:"TYPE" ~doc:"Type from fin tx type list.")
       $ Arg.(
-          required
-          & pos 1 (some string) None
-          & info [] ~docv:"TYPE" ~doc:"Type from fin tx type list."))
+          non_empty
+          & pos_right 0 int64 []
+          & info [] ~docv:"EVENT-ID" ~doc:"One or more transaction event IDs."))
 ;;
 
 let transaction_type_reset database event_id =
@@ -3781,7 +3945,7 @@ let rule_from_category_cmd =
       $ Arg.(value & flag & info [ "yes" ] ~doc:"With --save, skip confirmation."))
 ;;
 
-let rule_preview database name json_output =
+let rule_preview database name force json_output =
   with_database database (fun db ->
     let%bind rule = find_rule db name in
     let%bind () =
@@ -3795,7 +3959,7 @@ let rule_preview database name json_output =
            preview it"
       | _ -> Ok ()
     in
-    let%map matches = Store.preview_classification_rule db rule in
+    let%map matches = Store.preview_classification_rule ~force db rule in
     if json_output
     then Report_json.print (Jsont.list Report_json.classification_rule_match) matches
     else print_rule_preview rule matches)
@@ -3812,10 +3976,14 @@ let rule_preview_cmd =
           required
           & pos 0 (some string) None
           & info [] ~docv:"NAME" ~doc:"Rule name from fin rule list.")
+      $ Arg.(
+          value
+          & flag
+          & info [ "force" ] ~doc:"Include existing categories that would change.")
       $ json_output)
 ;;
 
-let rule_apply database name yes =
+let rule_apply database name force yes =
   with_database database (fun db ->
     let%bind rule = find_rule db name in
     let%bind () =
@@ -3829,7 +3997,7 @@ let rule_apply database name yes =
            preview it"
       | _ -> Ok ()
     in
-    let%bind matches = Store.preview_classification_rule db rule in
+    let%bind matches = Store.preview_classification_rule ~force db rule in
     print_rule_preview rule matches;
     let selected = List.filter matches ~f:(fun m -> m.Store.eligible) in
     if List.is_empty selected
@@ -3854,7 +4022,9 @@ let rule_apply database name yes =
         print_endline "Nothing changed.";
         Ok ())
       else (
-        let%bind changed = Store.apply_classification_rule db ~expected:rule ~selected in
+        let%bind changed =
+          Store.apply_classification_rule ~force db ~expected:rule ~selected
+        in
         printf "rule_changes=%d\n" changed;
         Ok ())))
 ;;
@@ -3870,6 +4040,10 @@ let rule_apply_cmd =
           required
           & pos 0 (some string) None
           & info [] ~docv:"NAME" ~doc:"Rule name from fin rule list.")
+      $ Arg.(
+          value
+          & flag
+          & info [ "force" ] ~doc:"Replace existing categories on matching transactions.")
       $ Arg.(value & flag & info [ "yes" ] ~doc:"Apply without prompting."))
 ;;
 
@@ -4506,36 +4680,91 @@ let category_similar_cmd =
       $ json_output)
 ;;
 
-let category_export database =
+type portable_scope =
+  | Catalog
+  | Category_decisions
+  | Rules
+
+let portable_codec = function
+  | Catalog -> Category_portable.categories_codec
+  | Category_decisions -> Category_portable.decisions_codec
+  | Rules -> Category_portable.rules_codec
+;;
+
+let select_portable scope (snapshot : Category_portable.t) =
+  match scope with
+  | Catalog -> { snapshot with rules = []; decisions = [] }
+  | Category_decisions -> { snapshot with categories = []; rules = [] }
+  | Rules -> { snapshot with categories = []; decisions = [] }
+;;
+
+let portable_export scope database =
   with_database database (fun db ->
-    let%bind snapshot = Store.category_snapshot db in
-    Report_json.print Category_portable.codec snapshot;
+    let%bind snapshot =
+      match scope with
+      | Catalog ->
+        let%map categories = Store.categories db in
+        Category_portable.{ categories; rules = []; decisions = [] }
+      | Rules ->
+        let%map rules = Store.classification_rules db in
+        Category_portable.{ categories = []; rules; decisions = [] }
+      | Category_decisions ->
+        let%map snapshot = Store.category_snapshot db in
+        select_portable scope snapshot
+    in
+    Report_json.print (portable_codec scope) snapshot;
     Ok ())
 ;;
 
-let category_export_cmd =
-  command
-    "export"
-    "Export the category catalog, personal category rules and decisions as portable JSON."
-    Term.(const category_export $ database)
+let portable_export_cmd scope doc =
+  command "export" doc Term.(const (portable_export scope) $ database)
 ;;
 
-let category_restore database path apply yes =
+let category_export_cmd =
+  portable_export_cmd Catalog "Export the category catalog as portable JSON."
+;;
+
+let category_decisions_export_cmd =
+  portable_export_cmd
+    Category_decisions
+    "Export transaction categories and manual type overrides as portable JSON."
+;;
+
+let rules_export_cmd = portable_export_cmd Rules "Export stored rules as portable JSON."
+
+let portable_restore scope database path apply yes =
   let%bind contents = read_file path in
-  let%bind snapshot = Json.decode Category_portable.codec contents in
+  let%bind snapshot =
+    match Json.decode (portable_codec scope) contents with
+    | Ok snapshot -> Ok snapshot
+    | Error scoped_error ->
+      (match scope, Json.decode Category_portable.legacy_decisions_codec contents with
+       | Category_decisions, Ok legacy -> Ok legacy
+       | _ ->
+         (match Json.decode Category_portable.codec contents with
+          | Ok legacy -> Ok (select_portable scope legacy)
+          | Error _ -> Error scoped_error))
+  in
   with_database database (fun db ->
     let%bind preview = Store.preview_category_restore db snapshot in
     printf "Categories to add: %d\n" (List.length preview.categories_to_add);
     List.iter preview.categories_to_add ~f:(fun c -> printf "  %s\n" (Terminal.text c));
-    printf "Rules to add: %d\n" (List.length preview.rules_to_add);
-    List.iter preview.rules_to_add ~f:(fun r ->
-      printf "  %s\n" (Terminal.text r.Classification_rule.name));
-    printf
-      "Decisions to restore: %d; already matching: %d\n"
-      (List.length preview.decisions_to_apply)
-      preview.unchanged;
-    List.iter preview.decisions_to_apply ~f:(fun (d : Bank_category.t) ->
-      printf "  #%Ld -> %s\n" d.event_id (Terminal.text d.account));
+    (match scope with
+     | Rules ->
+       printf "Rules to add: %d\n" (List.length preview.rules_to_add);
+       List.iter preview.rules_to_add ~f:(fun r ->
+         printf "  %s\n" (Terminal.text r.Classification_rule.name))
+     | Category_decisions ->
+       printf
+         "Decisions to restore: %d; already matching: %d\n"
+         (List.length preview.decisions_to_apply)
+         preview.unchanged;
+       List.iter preview.decisions_to_apply ~f:(fun (d : Bank_category.t) ->
+         printf "  #%Ld -> %s\n" d.event_id (Terminal.text d.account));
+       printf "Type overrides to restore: %d\n" (List.length preview.types_to_apply);
+       List.iter preview.types_to_apply ~f:(fun (id, kind) ->
+         printf "  #%Ld -> %s\n" id (Terminal.text (Movement_type.to_string kind)))
+     | Catalog -> ());
     if not (List.is_empty preview.problems)
     then (
       print_endline "Problems (restore is blocked):";
@@ -4550,7 +4779,7 @@ let category_restore database path apply yes =
       let confirmed =
         yes
         || Option.value_map
-             (prompt "Restore these categories and decisions? [y/N]: ")
+             (prompt "Restore this snapshot? [y/N]: ")
              ~default:false
              ~f:confirm_default_no
       in
@@ -4560,21 +4789,26 @@ let category_restore database path apply yes =
         Ok ())
       else (
         let%bind changed = Store.restore_categories db ~expected:preview snapshot in
-        printf "category_changes=%d\n" changed;
+        printf
+          "categories_added=%d rules_added=%d category_changes=%d type_changes=%d\n"
+          (List.length preview.categories_to_add)
+          (List.length preview.rules_to_add)
+          changed
+          (List.length preview.types_to_apply);
         Ok ())))
 ;;
 
-let category_restore_cmd =
+let portable_restore_cmd scope doc =
   command
     "restore"
-    "Preview or restore a portable category export."
+    doc
     Term.(
-      const category_restore
+      const (portable_restore scope)
       $ database
       $ Arg.(
           required
           & pos 0 (some string) None
-          & info [] ~docv:"FILE" ~doc:"Portable category JSON export.")
+          & info [] ~docv:"FILE" ~doc:"Portable JSON export.")
       $ Arg.(
           value
           & flag
@@ -4583,6 +4817,18 @@ let category_restore_cmd =
               ~doc:"Apply the preview after confirmation; otherwise only preview.")
       $ Arg.(value & flag & info [ "yes" ] ~doc:"With --apply, skip confirmation."))
 ;;
+
+let category_restore_cmd =
+  portable_restore_cmd Catalog "Preview or restore a category catalog export."
+;;
+
+let category_decisions_restore_cmd =
+  portable_restore_cmd
+    Category_decisions
+    "Preview or restore transaction categories and manual type overrides."
+;;
+
+let rules_restore_cmd = portable_restore_cmd Rules "Preview or restore stored rules."
 
 let category_list database json_output =
   with_database database (fun db ->
@@ -5015,6 +5261,64 @@ let category_review database event_id =
                  Ok ())))))
 ;;
 
+let category_queue database shortcuts types =
+  if not (Unix.isatty Unix.stdin && Unix.isatty Unix.stdout)
+  then Or_error.error_string "the category queue requires a terminal"
+  else (
+    let%bind types =
+      List.map types ~f:parse_movement_type_filter |> Or_error.combine_errors
+    in
+    with_database database (fun db ->
+      let%bind rows = Store.bank_review db in
+      let rows =
+        List.filter rows ~f:(fun (row : Store.bank_review) ->
+          Poly.equal row.classification Store.Unclassified
+          && (List.is_empty types
+              || List.exists types ~f:(fun filter ->
+                matches_movement_type_filter filter row.movement_type)))
+      in
+      let%bind categories = Store.categories db in
+      Category_tui.run db rows categories shortcuts))
+;;
+
+let category_queue_cmd =
+  command
+    ~man:
+      [ `S Manpage.s_description
+      ; `P
+          "Review unclassified transactions one at a time. Assign with a displayed \
+           letter, skip with s, search with /, browse with b, add a category with a, \
+           undo with u, and quit with q. Assignments include other unclassified exact \
+           descriptions in the queue; x toggles this. Undo reverses the whole batch. q \
+           saves all staged changes atomically; Ctrl-C discards them."
+      ; `P
+          "Shortcuts are stable for the session; use --key LETTER=ACCOUNT to choose a \
+           letter for an existing category. The letters a, b, q, s, u and x are \
+           reserved."
+      ]
+    "queue"
+    "Classify unreviewed transactions in a full-screen keyboard queue."
+    Term.(
+      const category_queue
+      $ database
+      $ Arg.(
+          value
+          & opt_all string []
+          & info
+              [ "key" ]
+              ~docv:"LETTER=ACCOUNT"
+              ~doc:"Assign a category shortcut; repeat for additional shortcuts.")
+      $ Arg.(
+          value
+          & opt_all string []
+          & info
+              [ "type" ]
+              ~docv:"TYPE"
+              ~doc:
+                "Only movements of this effective type, or unknown for no type; repeat \
+                 to include multiple types."))
+;;
+
 let category_review_cmd =
   command
     "review"
@@ -5102,7 +5406,7 @@ let transfer_candidates database all json_output =
 let transfer_candidates_cmd =
   command
     "candidates"
-    "Show possible transfers with evidence and ranking; nothing is confirmed."
+    "Show possible transfers between unclassified movements, highest score first."
     Term.(
       const transfer_candidates
       $ database
@@ -5111,7 +5415,9 @@ let transfer_candidates_cmd =
           & flag
           & info
               [ "all" ]
-              ~doc:"Include reviewed pairs and movements already assigned to transfers.")
+              ~doc:
+                "Include reviewed pairs and movements already assigned to transfers; \
+                 unreviewed categorized movements remain excluded.")
       $ json_output)
 ;;
 
@@ -5278,7 +5584,7 @@ let review_transfers database path =
 let review_transfers_cmd =
   command
     "review"
-    "Review a candidate interactively, or apply JSON confirm/reject decisions."
+    "Review candidates by descending score, or apply JSON confirm/reject decisions."
     Term.(
       const review_transfers
       $ database
@@ -5939,6 +6245,8 @@ let () =
               "rule"
               "Manage automatic and reviewed transaction rules."
               [ rule_list_cmd
+              ; rules_export_cmd
+              ; rules_restore_cmd
               ; rule_from_category_cmd
               ; rule_mode_cmd
               ; rule_add_cmd ~settlement:false
@@ -5974,6 +6282,8 @@ let () =
               [ transaction_list_cmd
               ; transaction_status_cmd
               ; transaction_show_cmd
+              ; category_decisions_export_cmd
+              ; category_decisions_restore_cmd
               ; refresh_transaction_evidence_cmd
               ; group
                   "type"
@@ -5993,6 +6303,7 @@ let () =
                   ; category_history_cmd
                   ; category_similar_cmd
                   ; category_review_cmd
+                  ; category_queue_cmd
                   ]
               ]
           ; group

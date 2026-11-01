@@ -563,13 +563,14 @@ also record card references and withdrawal reversals at import. See the
 [manual](docs/manual.md#automatic-rules-at-import).
 
 Use `fin tx type list` to see available movement types, then run
-`fin tx type set EVENT-ID TYPE` to record a manual override. The imported type
+`fin tx type set TYPE EVENT-ID...` to record manual overrides atomically. The imported type
 remains available, and `fin tx type reset EVENT-ID` removes the override.
 Types are derived from the type rules and recomputed whenever a rule, an institution
 definition or a matched companion file changes, without changing accounting
 decisions.
 Filter by `--account ID`, `--institution NAME`, inclusive `--from` and `--to`
-dates, `--search TEXT`, or `--limit COUNT`; add `--json` for scripts. See the
+dates, `--search TEXT`, or `--limit COUNT`; sort with `--order-by currency,amount`
+and `--asc` / `--desc`, and add `--json` for scripts. See the
 [manual](docs/manual.md#list-transactions) for examples. Use `fin ledger balance expenses -Y` to run an hledger report against a fresh
 journal; hledger is installed separately. See the [manual](docs/manual.md#exporting-and-querying-accounting) for more examples.
 
@@ -579,6 +580,13 @@ Use `fin tx status` (or `--json`) for category and movement-type counts,
 transaction decision counts and the
 percentage classified. Confirmed transfers, settlements and reversals count as
 classified; categorized income and expenses are shown separately.
+
+Use `fin tx cat queue` for a keyboard-driven queue of unclassified movements.
+Assign with displayed shortcuts, search, or browse categories level by level;
+matching unclassified descriptions in the queue are assigned together by default.
+Skip, undo, and add categories without leaving the queue; `q` saves the staged
+changes and Ctrl-C discards them. See the
+[manual](docs/manual.md#reviewing-transactions-and-transfers) for controls.
 
 List movements that still use `equity:unclassified`:
 
@@ -591,25 +599,42 @@ Use `fin cat init` to choose suggested starter categories, `fin cat add
 expenses:food` to add your own, and `fin cat list` (or `--json`) to see your
 personal catalog, including unused categories.
 
-Save a portable snapshot of your category catalog, category rules, and current
-category decisions before rebuilding:
+Save separate portable snapshots before rebuilding:
 
 ```sh
 fin cat export > categories-portable.json
-fin cat restore categories-portable.json           # preview after reimport
-fin cat restore categories-portable.json --apply   # confirm before applying
+fin tx export > transaction-decisions.json
+fin rule export > rules-portable.json
+fin cat restore categories-portable.json                # preview
+fin tx restore transaction-decisions.json --apply        # confirm
+fin rule restore rules-portable.json --apply             # confirm
 ```
 
-The file contains personal source identities; set a restrictive umask or store it
-in a private directory. Restore requires matching source
-identity and evidence and refuses conflicts or ambiguity; it does not restore
-transfers, other rule kinds, or history. Keep a full database backup as well.
+The transaction file contains current category decisions and manual type overrides,
+as well as personal source identities; store backups privately.
+Restoring assignments or rules creates missing target categories. Assignment
+restore requires matching source identity and evidence and refuses conflicts or
+ambiguity. See the [manual](docs/manual.md#rebuilding-after-a-schema-change) for
+the full restore workflow and limitations. Keep a full database backup as well.
 Use `fin rule from-category EVENT_ID NAME --contains TEXT` to preview a reusable
 review-mode rule from a categorized example; add `--save` to confirm and save it.
+
+Transfer candidates are shown by descending score and exclude movements already
+assigned an income or expense category. Reset a category to `equity:unclassified` before reviewing it as a
+transfer.
 
 Use `fin tx cat set expenses:food EVENT_ID...` to assign or change categories;
 all provided transactions are updated atomically. Use `equity:unclassified`
 to return them to review.
+
+To categorize a filtered transaction list, pipe its JSON output into `set`:
+
+```sh
+fin tx list --type withdrawal --decision unclassified --json |
+  fin tx cat set expenses:cash-withdrawals -
+```
+
+Without `--decision unclassified`, this also replaces existing categories.
 
 Use `fin transaction list` to find an event ID, then run
 `fin transaction category review EVENT_ID` to choose or change its category, select matching
@@ -662,7 +687,8 @@ Saved rules also support explicit preview and batch classification:
 and `fin rule apply cafes`. Rules can also match effective movement types and
 propose type overrides, categories or linked-card settlements; see the
 [manual](docs/manual.md#transaction-rules). Rules never run automatically
-on import. Bank CSV categories remain suggestions; split allocations are future work. Explicit
+on import. Use `fin rule preview cafes --force` and `fin rule apply cafes --force`
+to replace existing categories on matching movements. Bank CSV categories remain suggestions; split allocations are future work. Explicit
 owned-account transfer review is available below. Do not classify transfers as income or spending
 merely to remove them from the review queue.
 

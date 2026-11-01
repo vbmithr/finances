@@ -116,6 +116,25 @@ let decision c =
        ~reason:"Checked owned accounts")
 ;;
 
+let ranked_order () =
+  memory (fun db ->
+    let candidates = ok (Store.transfer_candidates db) in
+    let rank rows = ok (Transfer_ranking.analyze Builtin.registry rows) in
+    let ordered = rank candidates in
+    let key (r : Transfer_ranking.ranked) =
+      -r.score, r.candidate.first_event_id, r.candidate.second_event_id
+    in
+    let keys = List.map ordered ~f:key in
+    Alcotest.(check bool)
+      "descending score and ascending IDs"
+      true
+      (List.is_sorted keys ~compare:Poly.compare);
+    Alcotest.(check bool)
+      "input order does not affect ranking"
+      true
+      (Poly.equal keys (List.map (rank (List.rev candidates)) ~f:key)))
+;;
+
 let iban_validation () =
   Alcotest.(check string)
     "normalize spaces/case"
@@ -306,6 +325,7 @@ let () =
           [ "global matching and unmatched vertices", global_matching
           ; "equal optima remain ambiguous", ties
           ; "bounded exact solver", bounds
+          ; "ranked candidates ordered by score", ranked_order
           ; "IBAN validation", iban_validation
           ; "identity registration and confirmed transfer guard", registration
           ; "known account contradictions", known_contradiction

@@ -274,4 +274,11 @@ let analyze registry candidates =
         else "medium")
     in
     { candidate; score; evidence; assignment; confidence })
+  |> List.sort ~compare:(fun a b ->
+    match Int.compare b.score a.score with
+    | 0 ->
+      [%compare: int64 * int64]
+        (a.candidate.first_event_id, a.candidate.second_event_id)
+        (b.candidate.first_event_id, b.candidate.second_event_id)
+    | result -> result)
 ;;

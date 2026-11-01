@@ -225,10 +225,11 @@ val set_bank_categories
   -> Bank_category.t list
   -> int Or_error.t
 
-(** Atomically apply reviewed decisions only if each prior account and reason
-    still matches the snapshot. *)
+(** Atomically add catalog entries and apply reviewed decisions only if each
+    prior account and reason still matches the snapshot. *)
 val review_bank_categories
-  :  t
+  :  ?categories:string list
+  -> t
   -> expected:(int64 * (string * string) option) list
   -> Bank_category.t list
   -> int Or_error.t
@@ -255,6 +256,7 @@ type category_restore_preview =
   { categories_to_add : string list
   ; rules_to_add : Classification_rule.t list
   ; decisions_to_apply : Bank_category.t list
+  ; types_to_apply : (int64 * Movement_type.t) list
   ; unchanged : int
   ; problems : string list
   }
@@ -317,7 +319,29 @@ type bank_review =
 val effective_description : string -> Companion.annotation list -> string
 
 val bank_review : t -> bank_review list Or_error.t
+
+(** Columns whose effective values can be ordered in SQLite without decoding
+    companion data. Event ID is appended as a deterministic tie-breaker. *)
+type bank_review_order_column =
+  | Review_date
+  | Review_currency
+  | Review_institution
+  | Review_type
+  | Review_event
+
+val bank_review_ordered
+  :  t
+  -> columns:bank_review_order_column list
+  -> ascending:bool
+  -> bank_review list Or_error.t
+
 val observed_provider_movement_types : t -> string list Or_error.t
+
+val set_movement_type_overrides
+  :  t
+  -> event_ids:int64 list
+  -> movement_type:Movement_type.t option
+  -> int Or_error.t
 
 val set_movement_type_override
   :  t
@@ -495,13 +519,15 @@ type classification_rule_match =
   }
 
 val preview_classification_rule
-  :  t
+  :  ?force:bool
+  -> t
   -> Classification_rule.t
   -> classification_rule_match list Or_error.t
 
 (** Recheck the saved rule and every selected match, then apply atomically. *)
 val apply_classification_rule
-  :  t
+  :  ?force:bool
+  -> t
   -> expected:Classification_rule.t
   -> selected:classification_rule_match list
   -> int Or_error.t

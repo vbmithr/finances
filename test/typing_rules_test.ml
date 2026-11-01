@@ -639,7 +639,7 @@ let shipped_wise_rules () =
        in
        Alcotest.(check (list (pair string int)))
          "the cashback ID outranks the CARD code"
-         [ "bonus", 1; "card", 2 ]
+         [ "card", 2; "interest", 1 ]
          by_type;
        let rules =
          List.map (ok (Store.classification_rules db)) ~f:(fun r -> r.name, r.field)

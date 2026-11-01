@@ -78,7 +78,8 @@ fin transfer candidates --json > transfer-candidates.json
 ```
 
 Transfer candidates JSON includes ranking and evidence; `--all` also includes
-reviewed and excluded pairs. Institution import
+reviewed and other unavailable pairs. Unreviewed pairs involving a categorized
+movement are excluded. Institution import
 history is readable too, with `--json` retaining its existing JSON layout. Other
 history and provider reconciliation commands still output JSON. Account snapshot export remains
 JSON, and journal export remains hledger text.
@@ -172,15 +173,21 @@ you have decisions to recreate:
 ```sh
 fin account export -o ~/fin-accounts.json
 fin cat export > ~/fin-categories-portable.json
+fin tx export > ~/fin-transaction-decisions.json
+fin rule export > ~/fin-rules-portable.json
 fin backup ~/fin-backups
 fin transaction list --json > ~/fin-transactions-before-rebuild.json
 fin transaction category history > ~/fin-categories-before-rebuild.json
 fin transfer history > ~/fin-transfers-before-rebuild.json
 ```
 
-Run `fin cat export` with a version that supports it; older releases do not have
-this command. The file contains personal source identifiers, category decisions,
-and category rules, so keep it private alongside your backups.
+Use an executable that supports the three export commands. Older executables may
+use `fin tx cat export` for category decisions; `fin tx restore` accepts those
+files, but they do not contain type overrides. If the old executable only supports
+the combined `fin cat export`, save that file and pass it to each restore command
+below. Those older files do not contain non-category rules; save
+`fin rule list --json` as a reference for recreating those rules. Assignment
+exports contain personal source identifiers; keep all backups private.
 
 Also save `fin settlement history`, `fin rule list --json`,
 `fin tx type history --json` and `fin reversal history` when those commands are
@@ -208,28 +215,45 @@ restoring a database of the same schema version; an account snapshot is for
 restoring settings into a rebuilt database.
 Generic CSV institutions must be added again and files reimported with their
 original institution and account labels; configure their CSV profiles again.
-Account snapshots do not include rules or review decisions. To restore an export
-made by `fin cat export`, after reimporting statements run:
+Account snapshots do not include rules or review decisions. After reimporting,
+preview and restore the three independent snapshots:
 
 ```sh
 fin cat restore ~/fin-categories-portable.json
 fin cat restore ~/fin-categories-portable.json --apply
+fin tx restore ~/fin-transaction-decisions.json
+fin tx restore ~/fin-transaction-decisions.json --apply
+fin rule restore ~/fin-rules-portable.json
+fin rule restore ~/fin-rules-portable.json --apply
 ```
 
-The first command previews changes. The second previews again and asks for
-confirmation; `--yes` skips that prompt. The export covers the category catalog,
-personal category rules, and current category decisions (including explicit resets),
-not transfer, settlement, reversal or type decisions, other rules, or audit history.
-An identical current category is left unchanged. Different existing decisions or
-rules, missing or ambiguous identities, and changed source evidence block the entire
-restore. It identifies movements by institution, source account, kind and source ID,
-then verifies occurrence and SHA-256 hashes of the original payload and source fields;
-it does not reuse database event IDs or guess a match. If source identities or
-encoding changed, keep the original export, remove the affected decisions from a
-copy, preview that copy again, and recreate those decisions manually. Duplicate
-indistinguishable source rows are also reported as ambiguous. The snapshot does
-not replace a database backup. After restoring decisions, project
-and export the journal again.
+Each command previews first. `--apply` previews again and asks for confirmation;
+`--yes` skips the prompt. The catalog export contains category names only. The
+transaction export contains current category decisions, including explicit
+resets, and current manual type overrides. The rule export contains all stored rules, including institution-installed rules
+and category, type, settlement and evidence actions. Restoring rules retypes
+existing movements where applicable; category rules do not retroactively classify
+transactions. Settlement rules require their target card to exist. Automatic rules
+may affect subsequent imports. The exports do not contain transfer, settlement,
+reversal decisions or audit history. Type resets are not exported: they leave no
+manual override. Restore writes new type-history entries for restored overrides.
+
+Transaction and rule restore previews list missing target categories, which are
+created atomically with the restored data. Different existing decisions or rules,
+missing or ambiguous identities, changed source evidence and missing settlement
+cards block that restore. A different manual type override also blocks the entire
+transaction restore; an already matching override is left unchanged. Category and
+type decisions are restored atomically. Transaction restore identifies movements by institution,
+source account, kind and source ID, then verifies occurrence and SHA-256 hashes of
+the original payload and source fields. It does not reuse database event IDs or
+guess a match. Duplicate indistinguishable source rows are reported as ambiguous.
+If identities or encoding changed, keep the original export, remove affected
+decisions from a copy, preview it again, and recreate those decisions manually.
+
+Version 1 combined exports remain usable: pass the same file to each restore
+command to restore its respective section. Each is a separate, previewed operation. New exports are version 2 and
+must be restored with the matching command. These snapshots do not replace a full
+database backup. After restoring decisions, project and export the journal again.
 
 Other review histories must still be recreated using saved reference exports. Their
 event IDs are database-specific; do not blindly reuse old IDs.
@@ -755,6 +779,20 @@ account first, followed by one or more transaction event IDs:
 fin tx cat set expenses:food:restaurants 123 456
 ```
 
+To assign the transactions selected by any `fin tx list` filters, pipe its JSON
+output into `set` using `-` in place of an event ID:
+
+```sh
+fin tx list --type withdrawal --decision unclassified --json |
+  fin tx cat set expenses:cash-withdrawals -
+```
+
+Both commands must use the same database. You can combine `-` with explicit
+event IDs. An empty list makes no changes. Like `set` with explicit IDs, this
+replaces existing categories; include `--decision unclassified` if you only
+want to assign unclassified transactions. Invalid input or any invalid ID
+rejects the whole batch.
+
 Use `equity:unclassified` as the account to return the movement to review. The
 command needs no reason or confirmation and applies all IDs atomically: if one
 cannot be changed, none are changed. Confirmed transfers, settlements and
@@ -769,6 +807,48 @@ with `fin cat delete expenses:food:groceries`. Change any transaction assignment
 or rules using that exact category first. Deletion retains historical decisions
 and does not remove subcategories. Category decisions also add their account to
 the catalog. The initializer requires a terminal.
+
+For a fast, one-at-a-time workflow, run:
+
+```sh
+fin tx cat queue
+fin tx cat queue --type card
+fin tx cat queue --type card --type withdrawal
+fin tx cat queue --key f=expenses:food:restaurants --key r=expenses:home:rent
+```
+
+Use `--type` to include only movements of a given effective type; repeat it to
+include multiple types. This includes manual type overrides and provider-specific
+types, and `--type unknown` selects movements without a type. The count in the
+queue covers the filtered selection.
+
+The full-screen queue shows unclassified transactions, with incoming amounts in
+green and outgoing amounts in red (zero is uncolored). Set `NO_COLOR` to a
+nonempty value to disable these colors. A displayed letter assigns
+a category and advances. By default it also selects all other
+unclassified transactions with the same effective description in the current
+queue, across institutions. Matching ignores ASCII case and repeated whitespace;
+empty descriptions are never matched. The screen shows the number of other exact
+matches. Press `x` to toggle this batching for the session; `u` undoes the entire
+last batch. A `--type` filter limits the batch to the filtered queue, and skipped
+transactions are not included. `s` skips a transaction until the next session. `/` searches all categories: type a substring, use Up and Down, and
+press Enter to assign the highlighted category. `b` browses the hierarchy from
+`expenses` and `income`: use Up and Down to select, Enter or Right to open a
+branch or assign a leaf, and Left or Backspace to go up. Space assigns a selected
+category even when it has children. A `+` marks a branch; intermediate groups
+that are not catalog categories cannot be assigned. `a` adds a category and
+returns to the same transaction, and `u` undoes the last staged assignment.
+Assignments and newly added categories remain in memory until `q` saves them
+atomically and quits. Ctrl-C or terminal disconnection discards staged changes.
+If a transaction changes elsewhere during the session, saving is refused and the
+queue remains open; no staged changes are applied. Undo the affected batch or
+press Ctrl-C to discard and start again.
+
+Fin assigns available letters automatically for the session. Repeat `--key LETTER=ACCOUNT` to choose shortcuts for existing categories; lowercase `a`, `b`,
+`q`, `s`, `u`, and `x` are reserved. Bindings are stable during the session, and
+explicit `--key` options can be reused on later invocations. Categories without
+a displayed shortcut remain available through search or the hierarchy. A terminal
+large enough to show the full transaction and selected category is required.
 
 Choose a catalog category by number or enter an `expenses:...` or `income:...`
 account. Fin suggests unclassified exact matches followed by unclassified fuzzy
@@ -806,8 +886,13 @@ reflect the two bank balances without a separate in-transit asset; the books may
 therefore appear temporarily unbalanced by date. Fin keeps both source movements
 and review history in SQLite. Regenerate the journal after confirming or undoing.
 
-`fin transfer candidates` shows possible pairs, their evidence and ranking;
-scores are not calibrated probabilities. Run `fin transfer review` to inspect
+`fin transfer candidates` shows possible pairs of unclassified movements, their
+evidence and ranking. Categorized movements are excluded until returned to
+`equity:unclassified`; previously reviewed pairs remain visible with `--all` and
+in transfer history. Candidates are shown by descending score, with event IDs
+breaking ties; interactive review follows the same order. Scores are not calibrated
+probabilities, and a higher score does not guarantee that a pair is a transfer.
+The `--all` output appends unranked unavailable or reviewed pairs. Run `fin transfer review` to inspect
 each pair and choose `c` to confirm, `r` to reject, or `s` to skip that pair. `a` stages
 all supported pairs and finishes selection, leaving other candidates for later review;
 `d` finishes selection. Fin shows the pending pairs and asks once before applying
@@ -914,24 +999,43 @@ fin transaction list
 fin transaction list --from 2026-01-01 --to 2026-01-31
 fin transaction list --search coffee --limit 20
 fin tx list --type interest
+fin tx list --category expenses:food:restaurants
 fin tx list --type card-settlement --decision settlement
 fin tx list --type unknown --decision unclassified
-fin transaction list --order asc
+fin transaction list --asc
+fin tx list --order-by currency,amount --asc
+fin tx list --order-by institution,date --desc
 fin transaction list --json
 ```
 
 Dates are inclusive booking dates. Use `--account ID` for one account or
 `--institution NAME` for a provider; `--search` matches the effective description
-using ASCII case-insensitive comparison. `--order asc`
-lists oldest first; `--order desc` is the default.
-`--type` matches the displayed movement type, including provider-specific values;
-`--type unknown` selects movements without a type. `--decision` filters by the
-kind of accounting decision: `unclassified`, `category`, `transfer`, `settlement`
-or `reversal`. It does not filter by counter-account. Filters combine, and
-are applied before sorting and `--limit`.
-Sorting uses the source event's date or timestamp in UTC; date-only events sort
-before timed events on the same date, with event IDs breaking ties. Sorting
-precedes `--limit`, which must be positive. A matched Wise CSV can provide the
+using ASCII case-insensitive comparison. `--type` matches the displayed movement
+type, including provider-specific values; `--type unknown` selects movements
+without a type. `--decision` filters by accounting decision kind, not by
+counter-account. `--category ACCOUNT` (also spelled `--counter-account`) matches
+the exact counter-account, including `equity:unclassified` or a transfer account;
+it does not include subcategories. Filters combine and are applied before sorting
+and `--limit`.
+
+Without `--order-by`, sorting uses the source event date or timestamp in UTC,
+newest first. Date-only events sort before timed events on the same date. Use
+`--asc` or `--desc` to choose a direction; descending is the default. To sort by
+one or more table columns, pass a comma-separated list to `--order-by`. Supported
+names are `date` (booking date), `amount`, `currency`, `institution`, `account`,
+`type`, `counter-account`, `description`, and `event`. The aliases `booked_on`,
+`account-id` / `account_id`, `movement_type`, `counter_account`, and `event-id` /
+`event_id` are also accepted. Text sorting is case-sensitive; missing types and
+unclassified counter-accounts sort as `-`. The selected direction applies to all
+columns, with event ID as the final tie-breaker. Sorting precedes `--limit`.
+Amounts are compared exactly, but not converted between currencies; use
+`--order-by currency,amount` to group them by currency.
+
+SQLite orders combinations of date, currency, institution, type and event ID.
+Other combinations are ordered in OCaml after computing the displayed values;
+Fin's SQLite connection does not currently load the optional decimal extension.
+The report still loads review data before applying filters and the limit.
+A matched Wise CSV can provide the
 effective description; missing or conflicting values fall back to the primary
 description. JSON contains one effective `description`, `movement_type`, and
 `detail_sources` companion row IDs, which can be inspected with
@@ -943,15 +1047,16 @@ To list types and correct an individual movement's type:
 ```sh
 fin tx type list
 fin tx type show EVENT-ID
-fin tx type set EVENT-ID fee
-fin tx type set EVENT-ID bonus
+fin tx type set fee EVENT-ID
+fin tx type set bonus EVENT-ID OTHER-EVENT-ID
 fin tx type history
 fin tx type reset EVENT-ID
 ```
 
 `type list` shows common types and provider-specific types observed in imported
 data; use one of those values with `type set`. `unknown` is a list filter, not a
-type. Manual types are overrides: they do not change the source movement or its
+type. `type set` applies all provided IDs atomically; if an ID is invalid, none
+are changed. Manual types are overrides: they do not change the source movement or its
 accounting classification, survive reimports and rule changes, and take
 precedence over derived types. `type show` and transaction-list
 JSON expose the imported type and any override. `type reset` removes the override
@@ -1015,7 +1120,7 @@ movements are imported by type. It also works for installed definitions.
 
 There is one kind of type rule. A bank's own type code is just a column: Wise's
 definition maps its `Transaction Details Type` column and, ahead of it, the prefix
-of the `TransferWise ID` column (`FEE-` to `fee`, `BALANCE_CASHBACK-` to `bonus`);
+of the `TransferWise ID` column (`FEE-` to `fee`, `BALANCE_CASHBACK-` to `interest`);
 Revolut's maps its `Type` column (Card Payment and Card Refund to `card`, Deposit to
 `deposit`, Transfer to `transfer`, ATM to `withdrawal`, Charge to `fee`). Both end
 with a catch-all that keeps any other code as a provider-specific type
@@ -1123,7 +1228,19 @@ fin rule add wise-card --institution wise --field 'Transaction Details Type' \
 Name the column as it appears in the file's header; the rule matches when any cell
 under that header matches. For Wise the `TransferWise ID` prefix separates fee lines
 and cashback from the bank code `CARD`. Wise ships those rules as `wise-id-fee` and
-`wise-id-cashback`; add your own the same way, for example to type card orders:
+`wise-id-cashback`. The bundled cashback rule assigns `interest` to balance
+cashback. An existing database retains its installed rules; to update the old
+`bonus` rule, run:
+
+```sh
+fin rule add wise-id-cashback --institution wise --field 'TransferWise ID' \
+  --description '^BALANCE_CASHBACK-' --set-type interest --case-sensitive \
+  --automatic --priority=-99 --replace
+```
+
+Fin recomputes imported types after the replacement; manual type overrides and
+accounting categories remain unchanged. Add your own rules in the same way, for
+example to type card orders:
 
 ```sh
 fin rule add wise-id-card-order --institution wise --field 'TransferWise ID' \
@@ -1208,7 +1325,7 @@ scope. The draft displays matches without changing anything; `--save` asks befor
 saving a review-mode rule, and `--yes` skips that confirmation. Saving a rule does
 not classify transactions or enable automatic application. Use `fin rule mode`
 to opt into automatic behavior, noting import-time rules see the primary source
-description. Export personal category rules with `fin cat export`.
+description. Export stored rules with `fin rule export`.
 
 For Wise balance cashback, propose a type and an income account together:
 
@@ -1272,6 +1389,19 @@ decisions retain the name recorded when they were made. Use `fin rule delete NAM
 decisions. `fin rule list --json` and `fin rule preview NAME --json` provide
 machine-readable output; `--yes` skips the confirmation for apply and delete.
 Regenerate the journal after applying decisions.
+
+To replace existing categories on matching transactions, first inspect the same
+selection that `--force` will apply, then run:
+
+```sh
+fin rule preview cafes --force
+fin rule apply cafes --force
+```
+
+This replaces different categories, including manual ones. Transactions already
+in the target category are skipped. Confirmed transfers, settlements and
+reversals remain protected, and `--force` does not replace manual type overrides.
+Confirmation is still required unless `--yes` is also given.
 
 ## Exporting and querying accounting
 

@@ -242,6 +242,62 @@ let candidates () =
       (List.length (ok (Store.transfer_candidates ~include_reviewed:true db))))
 ;;
 
+let categorized_candidates () =
+  memory (fun db ->
+    let c = candidate db in
+    let same_pair pair =
+      Int64.equal pair.Store.first_event_id c.first_event_id
+      && Int64.equal pair.second_event_id c.second_event_id
+    in
+    let classify id account =
+      ignore
+        (ok
+           (Store.set_bank_categories
+              db
+              [ ok (Bank_category.create ~event_id:id ~account ~reason:"Test review") ]))
+    in
+    classify c.first_event_id "expenses:food";
+    Alcotest.(check bool)
+      "categorized leg excluded"
+      false
+      (List.exists
+         (ok (Store.transfer_candidates db))
+         ~f:(fun pair ->
+           Int64.equal pair.first_event_id c.first_event_id
+           || Int64.equal pair.second_event_id c.first_event_id));
+    Alcotest.(check bool)
+      "unreviewed classified pair absent from all"
+      false
+      (List.exists
+         (ok (Store.transfer_candidates ~include_reviewed:true db))
+         ~f:same_pair);
+    let _, _, _, count = ok (Store.bank_overview db) in
+    check
+      "status count matches eligible candidates"
+      (List.length (ok (Store.transfer_candidates db)))
+      count;
+    classify c.first_event_id "equity:unclassified";
+    Alcotest.(check bool)
+      "reset restores candidacy"
+      true
+      (List.exists (ok (Store.transfer_candidates db)) ~f:same_pair);
+    classify c.second_event_id "income:other";
+    Alcotest.(check bool)
+      "second categorized leg excluded"
+      false
+      (List.exists (ok (Store.transfer_candidates db)) ~f:same_pair);
+    classify c.second_event_id "equity:unclassified";
+    ignore (ok (Store.set_bank_transfers db [ decision ~state:Rejected c ]));
+    classify c.first_event_id "expenses:food";
+    Alcotest.(check bool)
+      "reviewed rejection remains in all"
+      true
+      (List.exists
+         (ok (Store.transfer_candidates ~include_reviewed:true db))
+         ~f:(fun pair ->
+           same_pair pair && Poly.equal pair.state (Some Bank_transfer.Rejected))))
+;;
+
 let confirm_and_reject () =
   memory (fun db ->
     project db;
@@ -565,6 +621,7 @@ let () =
           ; "UTC clock interpretation and replay", utc_clocks
           ; "import replay and fee accounting", import_and_fees
           ; "candidate ambiguity and rejections", candidates
+          ; "categorized movements are excluded", categorized_candidates
           ; "confirm, reject, remap and reimport", confirm_and_reject
           ; "review before projection", before_projection
           ; "category, batch and one-to-one safeguards", safeguards

@@ -7,6 +7,9 @@ type t =
   ; conflicts : Store.bank_review list
   }
 
+(** Compare effective descriptions after folding ASCII case and whitespace. *)
+val exact_match : Store.bank_review -> Store.bank_review -> bool
+
 (** Match effective descriptions across institutions, ignoring ASCII case and
     whitespace. Reviewed transactions with another category are conflicts;
     confirmed transfers are excluded. *)

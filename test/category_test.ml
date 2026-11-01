@@ -73,6 +73,21 @@ let rereview_atomic () =
       (category second))
 ;;
 
+let staged_catalog_rollback () =
+  memory (fun db ->
+    let missing = 999999L in
+    error
+      (Store.review_bank_categories
+         ~categories:[ "expenses:staged" ]
+         db
+         ~expected:[ missing, None ]
+         [ decision missing "expenses:staged" ]);
+    Alcotest.(check bool)
+      "catalog insert rolls back when a decision fails"
+      false
+      (List.mem (ok (Store.categories db)) "expenses:staged" ~equal:String.equal))
+;;
+
 let portable_restore_stale_preview () =
   memory (fun db ->
     let event_id = id db in
@@ -89,7 +104,23 @@ let portable_restore_stale_preview () =
     Alcotest.(check bool)
       "no catalog change on stale preview"
       false
-      (List.mem (ok (Store.categories db)) "expenses:new" ~equal:String.equal))
+      (List.mem (ok (Store.categories db)) "expenses:new" ~equal:String.equal);
+    ignore (ok (Store.set_movement_type_override db ~event_id ~movement_type:(Some Fee)));
+    let snapshot = ok (Store.category_snapshot db) in
+    ignore (ok (Store.set_movement_type_override db ~event_id ~movement_type:None));
+    let preview = ok (Store.preview_category_restore db snapshot) in
+    ignore
+      (ok (Store.set_movement_type_override db ~event_id ~movement_type:(Some Bonus)));
+    error (Store.restore_categories db ~expected:preview snapshot);
+    let row =
+      List.find_exn
+        (ok (Store.bank_review db))
+        ~f:(fun r -> Int64.equal r.event_id event_id)
+    in
+    Alcotest.(check bool)
+      "new type preserved after stale preview"
+      true
+      (Poly.equal row.movement_type_override (Some Bonus)))
 ;;
 
 let replay () =
@@ -308,6 +339,18 @@ let rule_batch_is_atomic () =
       (account db first);
     check "no partial audit" 1 (List.length (ok (Store.bank_category_history db)));
     check "no partial type changes" 0 (List.length (ok (Store.movement_type_history db)));
+    let forced = ok (Store.preview_classification_rule ~force:true db rule) in
+    ignore (classify db [ decision last "expenses:changed-again" ]);
+    error
+      (Store.apply_classification_rule
+         ~force:true
+         db
+         ~expected:rule
+         ~selected:(List.filter forced ~f:(fun m -> m.Store.eligible)));
+    Alcotest.(check string)
+      "forced batch rejects stale preview"
+      "equity:unclassified"
+      (account db first);
     ok (Store.delete_classification_rule db rule.name);
     let replacement =
       ok
@@ -469,6 +512,7 @@ let () =
       , List.map
           [ ( "portable restore rejects stale previews atomically"
             , portable_restore_stale_preview )
+          ; "staged category and decisions roll back together", staged_catalog_rollback
           ; "rereview checks all previous decisions atomically", rereview_atomic
           ; "unclassified batch is atomic", unclassified_batch_is_atomic
           ; "rule batches reject stale previews atomically", rule_batch_is_atomic

@@ -1948,17 +1948,40 @@ let event_of_row
   Ok (id, e)
 ;;
 
-let events db =
-  let* rows =
-    collect
-      db
-      (statement
-         "SELECT \
-          id,venue,account,kind,source_id,occurred_at,occurred_on,retrieved_at,payload \
-          FROM source_events ORDER BY coalesce(occurred_on, substr(occurred_at, 1, \
-          10)),occurred_at,id"
-         source_row)
+type bank_review_order_column =
+  | Review_date
+  | Review_currency
+  | Review_institution
+  | Review_type
+  | Review_event
+
+let events_with_order ?order db =
+  let sql =
+    match order with
+    | None ->
+      "SELECT \
+       id,venue,account,kind,source_id,occurred_at,occurred_on,retrieved_at,payload FROM \
+       source_events ORDER BY coalesce(occurred_on, substr(occurred_at, 1, \
+       10)),occurred_at,id"
+    | Some (columns, ascending) ->
+      let direction = if ascending then " ASC" else " DESC" in
+      let column = function
+        | Review_date -> "m.booked_on"
+        | Review_currency -> "m.currency"
+        | Review_institution -> "e.venue"
+        | Review_type -> "coalesce(o.movement_type,m.movement_type,'-')"
+        | Review_event -> "e.id"
+      in
+      let ordering =
+        List.map (columns @ [ Review_event ]) ~f:(fun col -> column col ^ direction)
+      in
+      "SELECT \
+       e.id,e.venue,e.account,e.kind,e.source_id,e.occurred_at,e.occurred_on,e.retrieved_at,e.payload \
+       FROM source_events e LEFT JOIN movements m ON m.event_id=e.id LEFT JOIN \
+       movement_type_overrides o ON o.event_id=e.id ORDER BY "
+      ^ String.concat ~sep:"," ordering
   in
+  let* rows = collect db (statement sql source_row) in
   let* decoded = traverse event_of_row rows in
   let* stored =
     collect
@@ -1977,6 +2000,8 @@ let events db =
        | None -> id, event
        | Some reversed -> id, Source_event.with_fields event (List.rev reversed)))
 ;;
+
+let events db = events_with_order db
 
 (* One source event, without decoding the others. *)
 let event_by_id db event_id =
@@ -3322,7 +3347,7 @@ let set_bank_categories ?(only_unclassified = false) db decisions =
     set_bank_categories_in_transaction ~only_unclassified db decisions)
 ;;
 
-let review_bank_categories db ~expected decisions =
+let review_bank_categories ?(categories = []) db ~expected decisions =
   transaction db (fun db ->
     let* () =
       List.fold_result expected ~init:() ~f:(fun () (event_id, before) ->
@@ -3340,7 +3365,21 @@ let review_bank_categories db ~expected decisions =
            (List.for_all decisions ~f:(fun (d : Bank_category.t) ->
               List.Assoc.mem expected d.event_id ~equal:Int64.equal))
     then Or_error.error_string "category review expectations do not match decisions"
-    else set_bank_categories_in_transaction db decisions)
+    else (
+      let insert =
+        Rel_sql.Stmt.(
+          func "INSERT OR IGNORE INTO category_catalog(account) VALUES (?)" (text @-> unit))
+      in
+      let* () =
+        List.fold_result categories ~init:() ~f:(fun () name ->
+          let* category =
+            Bank_category.create ~event_id:1L ~account:name ~reason:"category queue"
+          in
+          if String.equal category.account "equity:unclassified"
+          then Or_error.error_string "unclassified is not a category"
+          else db_result (Db.exec db.conn (insert category.account)))
+      in
+      set_bank_categories_in_transaction db decisions))
 ;;
 
 type category_change =
@@ -3631,8 +3670,9 @@ let movement_source db =
   Ok (List.filter source ~f:(fun (_, e) -> Registry.is_movement db.registry e))
 ;;
 
-let bank_review db =
-  let* source = movement_source db in
+let bank_review_with_order ?order db =
+  let* source = events_with_order ?order db in
+  let source = List.filter source ~f:(fun (_, e) -> Registry.is_movement db.registry e) in
   let* table = movement_table db in
   let* metadata = review_metadata db in
   let* override_rows =
@@ -3693,10 +3733,17 @@ let bank_review db =
   bank_review_from db source table metadata details overrides evidence
 ;;
 
+let bank_review db = bank_review_with_order db
+
+let bank_review_ordered db ~columns ~ascending =
+  bank_review_with_order ~order:(columns, ascending) db
+;;
+
 type category_restore_preview =
   { categories_to_add : string list
   ; rules_to_add : Classification_rule.t list
   ; decisions_to_apply : Bank_category.t list
+  ; types_to_apply : (int64 * Movement_type.t) list
   ; unchanged : int
   ; problems : string list
   }
@@ -3723,12 +3770,12 @@ let category_snapshot db =
     let events_by_id = Hashtbl.of_alist_exn (module Int64) events in
     let* review = bank_review db in
     let* decisions =
-      List.filter_map review ~f:(fun r ->
-        if
-          Poly.equal r.classification Unclassified || Poly.equal r.classification Category
-        then Option.map r.reason ~f:(fun reason -> r, reason)
-        else None)
-      |> traverse (fun (r, reason) ->
+      List.filter review ~f:(fun r ->
+        Option.is_some r.movement_type_override
+        || ((Poly.equal r.classification Unclassified
+             || Poly.equal r.classification Category)
+            && Option.is_some r.reason))
+      |> traverse (fun r ->
         let* event =
           Hashtbl.find events_by_id r.event_id
           |> Or_error.of_option
@@ -3743,8 +3790,20 @@ let category_snapshot db =
             ; occurred = Temporal.to_string event.occurred
             ; payload_sha256 = Digestif.SHA256.(to_hex (digest_string event.payload))
             ; fields_sha256 = category_fields_hash event
-            ; account = r.counter_account
-            ; reason
+            ; account =
+                Option.some_if
+                  ((Poly.equal r.classification Unclassified
+                    || Poly.equal r.classification Category)
+                   && Option.is_some r.reason)
+                  r.counter_account
+            ; reason =
+                (if
+                   Poly.equal r.classification Unclassified
+                   || Poly.equal r.classification Category
+                 then r.reason
+                 else None)
+            ; type_override =
+                Option.map r.movement_type_override ~f:Movement_type.to_string
             })
     in
     Ok Category_portable.{ categories; rules; decisions })
@@ -3787,15 +3846,57 @@ let preview_category_restore db (snapshot : Category_portable.t) =
     | Ok _ when String.equal account "equity:unclassified" ->
       problem "unclassified is not a category"
     | Ok _ -> ());
+  let referenced_categories =
+    List.filter_map snapshot.rules ~f:(fun (rule : Classification_rule.t) ->
+      match rule.action with
+      | Category account | Type_and_category (_, account) -> Some account
+      | _ -> None)
+    @ List.filter_map
+        snapshot.decisions
+        ~f:(fun (decision : Category_portable.decision) ->
+          Option.filter decision.account ~f:(fun account ->
+            not (String.equal account "equity:unclassified")))
+  in
+  List.iter referenced_categories ~f:(fun account ->
+    match Bank_category.create ~event_id:1L ~account ~reason:"portable category" with
+    | Error e -> problem (Error.to_string_hum e)
+    | Ok _ -> ());
   let categories_to_add =
-    List.filter snapshot.categories ~f:(fun c ->
-      not (List.mem existing_categories c ~equal:String.equal))
+    List.dedup_and_sort
+      (snapshot.categories @ referenced_categories)
+      ~compare:String.compare
+    |> List.filter ~f:(fun c -> not (List.mem existing_categories c ~equal:String.equal))
   in
   if
     List.contains_dup
       (List.map snapshot.rules ~f:(fun r -> r.Classification_rule.name))
       ~compare:String.compare
   then problem "duplicate rule names";
+  let* accounts =
+    if
+      List.exists snapshot.rules ~f:(fun (rule : Classification_rule.t) ->
+        match rule.action with
+        | Settlement _ -> true
+        | _ -> false)
+    then bank_accounts db
+    else Ok []
+  in
+  List.iter snapshot.rules ~f:(fun (rule : Classification_rule.t) ->
+    match rule.action with
+    | Settlement card_id ->
+      (match
+         List.filter accounts ~f:(fun account ->
+           String.equal (Bank_account_mapping.id account) card_id)
+       with
+       | [ card ]
+         when List.mem
+                [ "CREDITCRD"; "credit-card" ]
+                card.account_type
+                ~equal:String.equal -> ()
+       | [ _ ] -> problem ("settlement rule target is not a credit card: " ^ rule.name)
+       | [] -> problem ("settlement rule references a missing card: " ^ rule.name)
+       | _ -> problem ("settlement rule card ID is ambiguous: " ^ rule.name))
+    | _ -> ());
   let rules_to_add =
     List.filter snapshot.rules ~f:(fun r ->
       match
@@ -3815,6 +3916,7 @@ let preview_category_restore db (snapshot : Category_portable.t) =
   if List.contains_dup ids ~compare:[%compare: string * string * string * string]
   then problem "duplicate transaction identities";
   let unchanged = ref 0 in
+  let types_to_apply = ref [] in
   let decisions_to_apply =
     List.filter_map snapshot.decisions ~f:(fun d ->
       let label = d.institution ^ "/" ^ d.source_id in
@@ -3858,30 +3960,61 @@ let preview_category_restore db (snapshot : Category_portable.t) =
             problem ("not a bank movement: " ^ label);
             None
           | Some row ->
-            (match
-               Bank_category.create ~event_id:id ~account:d.account ~reason:d.reason
-             with
-             | Error e ->
-               problem (label ^ ": " ^ Error.to_string_hum e);
-               None
-             | Ok decision ->
+            (match d.type_override with
+             | None -> ()
+             | Some name ->
+               let kind = Movement_type.of_string name in
                if
-                 not
-                   (Poly.equal row.classification Unclassified
-                    || Poly.equal row.classification Category)
-               then (
-                 problem ("linked transfer, settlement or reversal: " ^ label);
-                 None)
-               else if Option.is_some row.reason
-               then
-                 if String.equal row.counter_account d.account
-                 then (
-                   Int.incr unchanged;
-                   None)
-                 else (
-                   problem ("existing decision differs: " ^ label);
-                   None)
-               else Some decision))
+                 String.is_empty (String.strip name)
+                 || String.equal name "unknown"
+                 || not (String.equal name (Movement_type.to_string kind))
+               then problem ("invalid type override: " ^ label)
+               else if
+                 match kind with
+                 | Other value ->
+                   not
+                     (List.exists review ~f:(fun r ->
+                        Poly.equal
+                          r.imported_movement_type
+                          (Some (Movement_type.Other value))))
+                 | _ -> false
+               then problem ("unknown movement type: " ^ label)
+               else (
+                 match row.movement_type_override with
+                 | None -> types_to_apply := (id, kind) :: !types_to_apply
+                 | Some current when Poly.equal current kind -> ()
+                 | Some _ -> problem ("existing type override differs: " ^ label)));
+            (match d.account, d.reason with
+             | None, None ->
+               if Option.is_none d.type_override
+               then problem ("empty transaction decision: " ^ label);
+               None
+             | Some account, Some reason ->
+               (match Bank_category.create ~event_id:id ~account ~reason with
+                | Error e ->
+                  problem (label ^ ": " ^ Error.to_string_hum e);
+                  None
+                | Ok decision ->
+                  if
+                    not
+                      (Poly.equal row.classification Unclassified
+                       || Poly.equal row.classification Category)
+                  then (
+                    problem ("linked transfer, settlement or reversal: " ^ label);
+                    None)
+                  else if Option.is_some row.reason
+                  then
+                    if String.equal row.counter_account account
+                    then (
+                      Int.incr unchanged;
+                      None)
+                    else (
+                      problem ("existing decision differs: " ^ label);
+                      None)
+                  else Some decision)
+             | _ ->
+               problem ("category requires an account and reason: " ^ label);
+               None))
       | [] ->
         problem ("transaction not found: " ^ label);
         None
@@ -3893,77 +4026,10 @@ let preview_category_restore db (snapshot : Category_portable.t) =
     { categories_to_add
     ; rules_to_add
     ; decisions_to_apply
+    ; types_to_apply = List.rev !types_to_apply
     ; unchanged = !unchanged
     ; problems = List.rev !problems
     }
-;;
-
-let restore_categories db ~expected snapshot =
-  transaction db (fun db ->
-    let* current = preview_category_restore db snapshot in
-    if not (Poly.equal current expected)
-    then Or_error.error_string "restore preview changed; review it again"
-    else if not (List.is_empty current.problems)
-    then Or_error.error_string "resolve restore problems before applying"
-    else (
-      let insert =
-        Rel_sql.Stmt.(
-          func "INSERT OR IGNORE INTO category_catalog(account) VALUES (?)" (text @-> unit))
-      in
-      let* () =
-        List.fold_result current.categories_to_add ~init:() ~f:(fun () account ->
-          db_result (Db.exec db.conn (insert account)))
-      in
-      let* () =
-        List.fold_result current.rules_to_add ~init:() ~f:(fun () rule ->
-          add_classification_rule_in_transaction db rule)
-      in
-      let* _ =
-        if List.is_empty current.rules_to_add
-        then Ok 0
-        else retype db ~reason:"restore category rules"
-      in
-      let* changed = set_bank_categories_in_transaction db current.decisions_to_apply in
-      Ok changed))
-;;
-
-let observed_provider_movement_types db =
-  let* rows = bank_review db in
-  Ok
-    (List.filter_map rows ~f:(fun r ->
-       match r.imported_movement_type with
-       | Some (Movement_type.Other name) -> Some name
-       | _ -> None)
-     |> List.dedup_and_sort ~compare:String.compare)
-;;
-
-type movement_type_history_entry =
-  { id : int64
-  ; event_id : int64
-  ; previous_type : Movement_type.t option
-  ; movement_type : Movement_type.t option
-  ; reason : string
-  ; changed_at : Ptime.t
-  }
-
-let movement_type_history db =
-  let* rows =
-    collect
-      db
-      (statement
-         "SELECT id,event_id,previous_type,movement_type,reason,changed_at FROM \
-          movement_type_changes ORDER BY id"
-         Db_schema.Movement_type_changes.row)
-  in
-  Ok
-    (List.map rows ~f:(fun (r : Db_schema.Movement_type_changes.t) ->
-       { id = r.id
-       ; event_id = r.event_id
-       ; previous_type = Option.map r.previous_type ~f:Movement_type.of_string
-       ; movement_type = Option.map r.movement_type ~f:Movement_type.of_string
-       ; reason = r.reason
-       ; changed_at = r.changed_at
-       }))
 ;;
 
 let write_movement_type_override db ~event_id ~previous ~movement_type ~reason =
@@ -4009,12 +4075,92 @@ let write_movement_type_override db ~event_id ~previous ~movement_type ~reason =
     Ok true
 ;;
 
-let set_movement_type_override db ~event_id ~movement_type =
+let restore_categories db ~expected snapshot =
+  transaction db (fun db ->
+    let* current = preview_category_restore db snapshot in
+    if not (Poly.equal current expected)
+    then Or_error.error_string "restore preview changed; review it again"
+    else if not (List.is_empty current.problems)
+    then Or_error.error_string "resolve restore problems before applying"
+    else (
+      let insert =
+        Rel_sql.Stmt.(
+          func "INSERT OR IGNORE INTO category_catalog(account) VALUES (?)" (text @-> unit))
+      in
+      let* () =
+        List.fold_result current.categories_to_add ~init:() ~f:(fun () account ->
+          db_result (Db.exec db.conn (insert account)))
+      in
+      let* () =
+        List.fold_result current.rules_to_add ~init:() ~f:(fun () rule ->
+          add_classification_rule_in_transaction db rule)
+      in
+      let* _ =
+        if List.is_empty current.rules_to_add
+        then Ok 0
+        else retype db ~reason:"restore category rules"
+      in
+      let* changed = set_bank_categories_in_transaction db current.decisions_to_apply in
+      let* _ =
+        traverse
+          (fun (event_id, kind) ->
+             write_movement_type_override
+               db
+               ~event_id
+               ~previous:None
+               ~movement_type:(Some kind)
+               ~reason:"Restored transaction type override")
+          current.types_to_apply
+      in
+      Ok changed))
+;;
+
+let observed_provider_movement_types db =
+  let* rows = bank_review db in
+  Ok
+    (List.filter_map rows ~f:(fun r ->
+       match r.imported_movement_type with
+       | Some (Movement_type.Other name) -> Some name
+       | _ -> None)
+     |> List.dedup_and_sort ~compare:String.compare)
+;;
+
+type movement_type_history_entry =
+  { id : int64
+  ; event_id : int64
+  ; previous_type : Movement_type.t option
+  ; movement_type : Movement_type.t option
+  ; reason : string
+  ; changed_at : Ptime.t
+  }
+
+let movement_type_history db =
+  let* rows =
+    collect
+      db
+      (statement
+         "SELECT id,event_id,previous_type,movement_type,reason,changed_at FROM \
+          movement_type_changes ORDER BY id"
+         Db_schema.Movement_type_changes.row)
+  in
+  Ok
+    (List.map rows ~f:(fun (r : Db_schema.Movement_type_changes.t) ->
+       { id = r.id
+       ; event_id = r.event_id
+       ; previous_type = Option.map r.previous_type ~f:Movement_type.of_string
+       ; movement_type = Option.map r.movement_type ~f:Movement_type.of_string
+       ; reason = r.reason
+       ; changed_at = r.changed_at
+       }))
+;;
+
+let set_movement_type_overrides db ~event_ids ~movement_type =
   transaction db (fun db ->
     let* rows = bank_review db in
-    let* row =
-      List.find rows ~f:(fun r -> Int64.equal r.event_id event_id)
-      |> Or_error.of_option ~error:(Error.of_string "unknown transaction event ID")
+    let* () =
+      if List.contains_dup event_ids ~compare:Int64.compare
+      then Or_error.error_string "duplicate transaction event ID"
+      else Ok ()
     in
     let* () =
       match movement_type with
@@ -4026,12 +4172,27 @@ let set_movement_type_override db ~event_id ~movement_type =
         else Or_error.error_string "unknown movement type; see fin tx type list"
       | _ -> Ok ()
     in
-    write_movement_type_override
-      db
-      ~event_id
-      ~previous:row.movement_type_override
-      ~movement_type
-      ~reason:"Manual type override")
+    let* changed =
+      traverse
+        (fun event_id ->
+           let* row =
+             List.find rows ~f:(fun r -> Int64.equal r.event_id event_id)
+             |> Or_error.of_option ~error:(Error.of_string "unknown transaction event ID")
+           in
+           write_movement_type_override
+             db
+             ~event_id
+             ~previous:row.movement_type_override
+             ~movement_type
+             ~reason:"Manual type override")
+        event_ids
+    in
+    Ok (List.count changed ~f:Fn.id))
+;;
+
+let set_movement_type_override db ~event_id ~movement_type =
+  let* changed = set_movement_type_overrides db ~event_ids:[ event_id ] ~movement_type in
+  Ok (changed > 0)
 ;;
 
 let find_account_iban =
@@ -4656,7 +4817,15 @@ let transfer_pairs =
         (Col.make "second" Type.int64 Col.no_proj))
 ;;
 
-let transfer_candidates_from ?pairs ?(include_reviewed = false) db source table transfers =
+let transfer_candidates_from
+      ?pairs
+      ?(include_reviewed = false)
+      db
+      source
+      table
+      categories
+      transfers
+  =
   let* known = known_account_ibans db source ~movement:(stored table) in
   let* items =
     traverse
@@ -4675,32 +4844,40 @@ let transfer_candidates_from ?pairs ?(include_reviewed = false) db source table 
       if Int64.(id < other) then id, a, ta, other, b, tb else other, b, tb, id, a, ta
     in
     let decision = Hashtbl.find indexed (id, other) in
-    let* a_iban, _ = account_iban db a ta in
-    let* b_iban, _ = account_iban db b tb in
-    let* iban_compatible, iban_match, iban_evidence =
-      transfer_iban_evidence_with known ~a_iban ~b_iban a ta b tb
+    let categorized event_id =
+      Option.exists (Hashtbl.find categories event_id) ~f:(fun (account, _) ->
+        not (String.equal account "equity:unclassified"))
     in
-    if
-      (not include_reviewed)
-      && (la || lb || Option.is_some decision || not iban_compatible)
+    let unavailable = categorized id || categorized other in
+    if unavailable && ((not include_reviewed) || Option.is_none decision)
     then Ok None
     else
-      Ok
-        (Some
-           { first_event_id = id
-           ; second_event_id = other
-           ; first = a
-           ; second = b
-           ; first_transaction = ta
-           ; second_transaction = tb
-           ; days_apart = Int.abs (Date.diff ta.booked_on tb.booked_on)
-           ; state = Option.map decision ~f:(fun d -> d.state)
-           ; reason = Option.map decision ~f:(fun d -> d.reason)
-           ; unique = false
-           ; iban_compatible
-           ; iban_match
-           ; iban_evidence
-           })
+      let* a_iban, _ = account_iban db a ta in
+      let* b_iban, _ = account_iban db b tb in
+      let* iban_compatible, iban_match, iban_evidence =
+        transfer_iban_evidence_with known ~a_iban ~b_iban a ta b tb
+      in
+      if
+        (not include_reviewed)
+        && (la || lb || Option.is_some decision || not iban_compatible)
+      then Ok None
+      else
+        Ok
+          (Some
+             { first_event_id = id
+             ; second_event_id = other
+             ; first = a
+             ; second = b
+             ; first_transaction = ta
+             ; second_transaction = tb
+             ; days_apart = Int.abs (Date.diff ta.booked_on tb.booked_on)
+             ; state = Option.map decision ~f:(fun d -> d.state)
+             ; reason = Option.map decision ~f:(fun d -> d.reason)
+             ; unique = false
+             ; iban_compatible
+             ; iban_match
+             ; iban_evidence
+             })
   in
   let* pairs =
     match pairs with
@@ -4744,8 +4921,8 @@ let transfer_candidates_from ?pairs ?(include_reviewed = false) db source table 
 let transfer_candidates ?include_reviewed db =
   let* source = movement_source db in
   let* table = movement_table db in
-  let* _, transfers, _, _ = review_metadata db in
-  transfer_candidates_from ?include_reviewed db source table transfers
+  let* categories, transfers, _, _ = review_metadata db in
+  transfer_candidates_from ?include_reviewed db source table categories transfers
 ;;
 
 let find_settlement =
@@ -5185,7 +5362,7 @@ type classification_rule_match =
   ; explanation : string option
   }
 
-let preview_classification_rule db (rule : Classification_rule.t) =
+let preview_classification_rule ?(force = false) db (rule : Classification_rule.t) =
   let* pattern =
     match rule.pattern with
     | None -> Ok None
@@ -5283,6 +5460,15 @@ let preview_classification_rule db (rule : Classification_rule.t) =
        let account_reason =
          if not account_requested
          then None
+         else if
+           force
+           && Poly.equal row.classification Category
+           &&
+           match rule.action with
+           | Category account | Type_and_category (_, account) ->
+             not (String.equal row.counter_account account)
+           | _ -> false
+         then None
          else if already_reviewed
          then Some "already reviewed"
          else (
@@ -5346,7 +5532,7 @@ let preview_classification_rule db (rule : Classification_rule.t) =
        }))
 ;;
 
-let apply_classification_rule db ~expected ~selected =
+let apply_classification_rule ?(force = false) db ~expected ~selected =
   let event_ids = List.map selected ~f:(fun m -> m.transaction.event_id) in
   if List.contains_dup event_ids ~compare:Int64.compare
   then Or_error.error_string "duplicate rule match"
@@ -5361,7 +5547,7 @@ let apply_classification_rule db ~expected ~selected =
       if not (Poly.equal current expected)
       then Or_error.error_string "rule changed since preview; review it again"
       else
-        let* matches = preview_classification_rule db current in
+        let* matches = preview_classification_rule ~force db current in
         let* () =
           traverse
             (fun old ->
@@ -5419,7 +5605,7 @@ let apply_classification_rule db ~expected ~selected =
               account_ids
           in
           let* _ =
-            set_bank_categories_in_transaction ~only_unclassified:true db decisions
+            set_bank_categories_in_transaction ~only_unclassified:(not force) db decisions
           in
           Ok (List.length selected)
         | Settlement card_id ->
@@ -5458,10 +5644,12 @@ let bank_overview db =
     Hash_set.add needed a;
     Hash_set.add needed b);
   let* table = selected_movements db needed in
-  let* _, transfers, _, _ = review_metadata db in
+  let* categories, transfers, _, _ = review_metadata db in
   let* summaries, movements, unclassified = status_summaries db source in
   let* accounts = bank_account_info_from ~summaries db source table in
-  let* candidates = transfer_candidates_from ~pairs db source table transfers in
+  let* candidates =
+    transfer_candidates_from ~pairs db source table categories transfers
+  in
   Ok (accounts, movements, unclassified, List.length candidates)
 ;;
 

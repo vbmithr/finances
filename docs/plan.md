@@ -34,6 +34,10 @@ provider observations before treating them as authoritative.
   institution libraries are `finances.import` and `finances.institutions`.
 - Wise uses a matched, nonempty and consistent CSV `Merchant` as the effective
   transaction description, falling back to CAMT; source evidence remains intact.
+- Manual movement types can be set for a batch of transaction IDs atomically.
+- Portable transaction snapshots restore category decisions and manual type
+  overrides together after source identity, evidence and conflict checks.
+- Transaction lists can filter by the exact category or other counter-account.
 - All four banks import: BoursoBank (OFX, CSV companion), Wise (CAMT.053, CSV
   companion), Bunq (MT940, CSV companion) and Revolut (CSV). All use bundled
   profiles and shared import components; none has a dedicated bank module.
@@ -81,7 +85,7 @@ provider observations before treating them as authoritative.
   `fin backup` saves one
   consistent SQLite snapshot; `fin restore BACKUP` validates and restores it,
   with overwrite confirmation and automatic removal of stale generated files.
-- OCaml test suites and 98 CLI cases, plus status performance and package
+- OCaml test suites and 114 CLI cases, plus status performance and package
   man-page checks. Selected import changes have also been compared by
   rebuilding a personal database and diffing reports and source payloads.
 - Issue #1 is implemented locally and awaits publication.
@@ -241,7 +245,8 @@ configurable yet.
   dropping the unused `payee` and `details_type` definition columns (step 5, done).
 - [x] Wise rules shipped in `wise.json` (2026-10-31), on the `TransferWise ID`
   column rather than the description: `FEE-` to `fee` (187 rows), `BALANCE_CASHBACK-`
-  to `bonus` (29) and the `MONEY_ADDED` code to `deposit` (2). They are ordinary
+  to `interest` (29, originally typed `bonus`) and the `MONEY_ADDED` code to
+  `deposit` (2). They are ordinary
   column rules, so they move to the single rule form with the others.
 - [x] `fin tx show EVENT-ID` (2026-10-31): source, files, payload fields, statement,
   companion rows by column, decisions.
@@ -329,23 +334,34 @@ The import side is done; turning movements into accounting is not.
 - [ ] Support partial reversals and fees after designing their accounting.
 - [x] Recognize deferred-card settlement types and refresh stored movement types
   with a preview and confirmation, without removing accounting decisions.
+- [x] Transaction listings support multi-column ordering, with SQLite sorting for
+  stored date, currency, institution, effective type and event ID; exact amounts
+  and computed values are sorted after review data is assembled.
 - [x] Transaction listings show accounting classification and use a terminal pager;
   settlement rule batches reuse loaded data across decisions.
 - [x] CSV enrichment, with ambiguous matches visible.
+- [x] Classify unclassified movements in a keyboard queue with hierarchical
+  category browsing, shortcuts, search, creation, skip and undo; color amounts
+  by direction when color is enabled, filter by movement type, and classify
+  exact matches together with whole-batch undo and atomic save on quit.
 - [x] Summarize transaction classification progress and category and movement-type counts
   with `fin tx status` using SQLite aggregation.
+- [x] Exclude categorized movements from unreviewed transfer candidates and
+  show ranked candidates in descending score order.
 - [x] Find similar transactions across institutions during category review.
 - [x] Search descriptions and select transactions across searches during category review.
 - [x] Set or correct categories for one or more transactions atomically; re-review
   categorized batches.
 - [x] Offer uncapped ranked fuzzy suggestions during category review; evaluate on real variations.
-- [x] Export and safely restore category decisions and rules across database rebuilds;
-  preview literal category rules from reviewed examples.
+- [x] Export and safely restore the category catalog, transaction decisions, and
+  stored rules independently across database rebuilds; create missing target
+  categories and preview literal rules from reviewed examples.
 - [x] Maintain a personal category catalog with `fin cat add`, `list`, `delete`
   and interactive `init`.
 - [ ] [Classification and review](classification.md): rules (regular expressions
   with automatic, review and disabled modes, priorities, type and category
-  actions), previews and interactive review exist. User tags, richer similarity,
+  actions), previews and interactive review exist; explicit forced application can
+  replace existing categories. User tags, richer similarity,
   rule provenance and shareable institution definitions, a rule-authoring workflow and a possible
   vendored Notty interface remain to be designed and implemented.
 - [ ] Transfer matching: the review workflow exists; the 4 candidates await

@@ -8,8 +8,9 @@ type decision =
   ; occurred : string
   ; payload_sha256 : string
   ; fields_sha256 : string
-  ; account : string
-  ; reason : string
+  ; account : string option
+  ; reason : string option
+  ; type_override : string option
   }
 
 type t =
@@ -18,4 +19,10 @@ type t =
   ; decisions : decision list
   }
 
+(** Version 1 combined backup, retained for restoring existing exports. *)
 val codec : t Jsont.t
+
+val categories_codec : t Jsont.t
+val rules_codec : t Jsont.t
+val decisions_codec : t Jsont.t
+val legacy_decisions_codec : t Jsont.t
