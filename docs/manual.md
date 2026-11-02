@@ -22,11 +22,11 @@ command creates a database. Every command supports `--help`, including nested
 commands such as `fin import --help`. The installed package also provides
 `man fin` and subcommand man pages.
 
-`tx` and `txn` are shortcuts for `transaction`; `acc` is a shortcut for
+`op` is a shortcut for `operation`; `acc` is a shortcut for
 `account`; `inst` for `institution`; and `cat` for the top-level `category`
-catalog. Under `transaction`, `cat` also abbreviates `category` for transaction
-review commands. For example, `fin cat list` lists the catalog, and
-`fin tx cat review EVENT-ID` reviews a transaction. Help displays canonical names.
+catalog. Under `operation`, `cat` also abbreviates `category` for review
+commands. For example, `fin cat list` lists the catalog, and
+`fin operation category review EVENT-ID` reviews a movement. Help displays canonical names.
 
 From a development checkout, `make run ARGS='tx list'` runs the current code
 through Dune without installing. It uses the normal Fin database unless you pass
@@ -52,8 +52,8 @@ quiet initialization for scripts, and `fin paths` shows where everything lives.
 ```sh
 fin status
 fin account list
-fin transaction list
-fin transaction review
+fin operation list
+fin operation review
 fin transfer candidates
 ```
 
@@ -73,7 +73,7 @@ readable text by default. Add `--json` for machine-readable output:
 ```sh
 fin status --json
 fin account list --json
-fin transaction review --json > bank-review.json
+fin operation review --json > bank-review.json
 fin transfer candidates --json > transfer-candidates.json
 ```
 
@@ -175,16 +175,16 @@ you have decisions to recreate:
 ```sh
 fin account export -o ~/fin-accounts.json
 fin cat export > ~/fin-categories-portable.json
-fin tx export > ~/fin-transaction-decisions.json
+fin operation export > ~/fin-transaction-decisions.json
 fin rule export > ~/fin-rules-portable.json
 fin backup ~/fin-backups
-fin transaction list --json > ~/fin-transactions-before-rebuild.json
-fin transaction category history > ~/fin-categories-before-rebuild.json
+fin operation list --json > ~/fin-transactions-before-rebuild.json
+fin operation categoryegory history > ~/fin-categories-before-rebuild.json
 fin transfer history > ~/fin-transfers-before-rebuild.json
 ```
 
 Use an executable that supports the three export commands. Older executables may
-use `fin tx cat export` for category decisions; `fin tx restore` accepts those
+use `fin operation category export` for category decisions; `fin operation restore` accepts those
 files, but they do not contain type overrides. If the old executable only supports
 the combined `fin cat export`, save that file and pass it to each restore command
 below. Those older files do not contain non-category rules; save
@@ -192,7 +192,7 @@ below. Those older files do not contain non-category rules; save
 exports contain personal source identifiers; keep all backups private.
 
 Also save `fin settlement history`, `fin rule list --json`,
-`fin tx type history --json` and `fin reversal history` when those commands are
+`fin operation type history --json` and `fin reversal history` when those commands are
 available in the old executable.
 
 Then run `fin delete` with the old executable.
@@ -223,8 +223,8 @@ preview and restore the three independent snapshots:
 ```sh
 fin cat restore ~/fin-categories-portable.json
 fin cat restore ~/fin-categories-portable.json --apply
-fin tx restore ~/fin-transaction-decisions.json
-fin tx restore ~/fin-transaction-decisions.json --apply
+fin operation restore ~/fin-transaction-decisions.json
+fin operation restore ~/fin-transaction-decisions.json --apply
 fin rule restore ~/fin-rules-portable.json
 fin rule restore ~/fin-rules-portable.json --apply
 ```
@@ -309,14 +309,14 @@ To retain an export and its proposed operations in the database:
 ```sh
 fin import cdc wallet.csv
 fin import cdc wallet.csv --apply
-fin transaction sources --institution cdc
-fin tx operation EVENT-ID --json
+fin db sources --institution cdc
+fin db event operations EVENT-ID --json
 ```
 
 Directories are searched recursively for `.csv` files, as for banks, and each file is
 previewed or imported in sorted order; the first rejected file stops the run, so
 files before it stay imported with `--apply`. The first command previews the import. `--apply` asks for confirmation; add
-`--yes` to skip it. `fin transaction sources --institution cdc --json` includes the original fields and
+`--yes` to skip it. `fin db sources --institution cdc --json` includes the original fields and
 source event IDs. The complete CSV is archived in the database. Reimporting
 the identical file is safe, but a different file containing already imported
 rows or a file containing identical rows is refused as ambiguous. Review those
@@ -511,7 +511,7 @@ For example, put your BoursoBank exports in `~/Statements/boursobank`, then run:
 ```sh
 fin import boursobank ~/Statements/boursobank
 fin account list
-fin transaction review
+fin operation review
 ```
 
 Use the corresponding institution for your other inboxes:
@@ -603,7 +603,7 @@ It shows the bank, timestamp, filename, outcome, new/existing movement counts an
 any diagnostic. Attempts appear newest first; an unchanged file can appear more
 than once because each attempt is recorded. Use `fin institution history --limit 10` for
 the ten latest attempts, or `fin institution history --json` for machine-readable output.
-Use `fin transaction list` to browse individual movements instead.
+Use `fin operation list` to browse individual movements instead.
 
 See [Bank import and review reference](../README.md#folder-workflow) for
 additional detail, or use `fin import --help` for current options.
@@ -807,7 +807,7 @@ identity fields unchanged. Save and exit the editor. Categorize individual card
 purchases as expenses, and treat the monthly repayment as settlement, so it is
 not counted as spending a second time.
 
-Find the bank debit's event ID with `fin transaction list`, then replace `123`
+Find the bank debit's event ID with `fin operation list`, then replace `123`
 with that ID:
 
 ```sh
@@ -830,31 +830,31 @@ reports both actions as JSON. Export a fresh
 journal after review changes, for example `fin journal export > my-finances.journal`.
 
 ```sh
-fin transaction review
+fin operation review
 fin transfer candidates
 ```
 
 Unclassified movements initially use `equity:unclassified`. Imported bank
 categories are suggestions. To classify or re-review a movement interactively, find its event
-ID in `fin transaction list`, then replace `123` below with that ID:
+ID in `fin operation list`, then replace `123` below with that ID:
 
 ```sh
-fin transaction category review 123
+fin operation categoryegory review 123
 ```
 
 To assign or change categories without the interactive batch review, put the
 account first, followed by one or more transaction event IDs:
 
 ```sh
-fin tx cat set expenses:food:restaurants 123 456
+fin operation category set expenses:food:restaurants 123 456
 ```
 
-To assign the transactions selected by any `fin tx list` filters, pipe its JSON
+To assign the transactions selected by any `fin operation list` filters, pipe its JSON
 output into `set` using `-` in place of an event ID:
 
 ```sh
-fin tx list --type withdrawal --decision unclassified --json |
-  fin tx cat set expenses:cash-withdrawals -
+fin operation list --type withdrawal --decision unclassified --json |
+  fin operation category set expenses:cash-withdrawals -
 ```
 
 Both commands must use the same database. You can combine `-` with explicit
@@ -881,10 +881,10 @@ the catalog. The initializer requires a terminal.
 For a fast, one-at-a-time workflow, run:
 
 ```sh
-fin tx cat queue
-fin tx cat queue --type card
-fin tx cat queue --type card --type withdrawal
-fin tx cat queue --key f=expenses:food:restaurants --key r=expenses:home:rent
+fin operation category queue
+fin operation category queue --type card
+fin operation category queue --type card --type withdrawal
+fin operation category queue --key f=expenses:food:restaurants --key r=expenses:home:rent
 ```
 
 Use `--type` to include only movements of a given effective type; repeat it to
@@ -990,7 +990,7 @@ account. The balance clears when both movements are included. Undo restores both
 to review. `--yes` skips confirmation on `review` and `undo`. This workflow covers
 full ATM withdrawal reversals; partial reversals and fees need separate work.
 BoursoBank `ANNUL RETRAIT DAB` movements have type `withdrawal` and recorded
-reversal evidence. Types follow the rules at once; refresh source evidence with `fin tx refresh-evidence --institution boursobank`.
+reversal evidence. Types follow the rules at once; refresh source evidence with `fin operation refresh-evidence --institution boursobank`.
 
 To undo a confirmed transfer, use its two event IDs (shown by
 `fin transfer candidates --all` or `fin transfer history`):
@@ -1008,10 +1008,10 @@ After preparing review JSON using the examples in the
 [README](../README.md), apply it with:
 
 ```sh
-fin transaction category apply categories.json
+fin operation categoryegory apply categories.json
 fin transfer review transfers.json
 fin journal project
-fin transaction category history
+fin operation categoryegory history
 fin transfer history
 ```
 
@@ -1019,8 +1019,8 @@ After categorizing a transaction, preview similar unclassified movements with
 its event ID (replace `123` with a reviewed transaction ID):
 
 ```sh
-fin transaction category similar 123
-fin transaction category similar 123 --json
+fin operation categoryegory similar 123
+fin operation categoryegory similar 123 --json
 ```
 
 The preview searches across institutions, comparing their effective descriptions.
@@ -1038,11 +1038,11 @@ regenerate the journal after changing settings or decisions.
 
 ## Transaction status
 
-`fin tx status` summarizes imported bank movements by accounting decision and
+`fin operation status` summarizes imported bank movements by accounting decision and
 shows the percentage classified. Classified means a category, confirmed transfer,
 settlement or reversal; categorized counts income and expense categories alone.
 Both percentages use all imported bank movements as the denominator. An empty
-database shows `n/a` rather than a percentage. `fin tx status --json` emits counts
+database shows `n/a` rather than a percentage. `fin operation status --json` emits counts
 and numeric percentages, with `null` percentages when there are no movements.
 The category breakdown lists exact assigned accounts without rolling up parent
 categories. The movement-type breakdown includes manual type overrides and
@@ -1052,12 +1052,12 @@ and reversals are counted per movement, not per pair. The top-level
 
 ## List transactions
 
-`fin transaction list` lists all imported movements, including reviewed ones,
+`fin operation list` lists all imported movements, including reviewed ones,
 newest first, with the institution and account ID for each movement. The
 displayed event IDs can be used in review decisions; account IDs come from
 `fin account list`.
 
-Use `fin tx operation EVENT-ID` to inspect the operation linked to an imported
+Use `fin db event operations EVENT-ID` to inspect the operation linked to an imported
 bank movement or CDC source; add `--json` for commodity identities and source references.
 Confirmed transfers show both movements and source events together. Undoing a
 transfer exposes the original operations again. An account shown as not
@@ -1073,17 +1073,17 @@ in `$PAGER` (default `less -FRX`); an empty `PAGER` disables paging. Redirected
 output and `--json` go directly to stdout.
 
 ```sh
-fin transaction list
-fin transaction list --from 2026-01-01 --to 2026-01-31
-fin transaction list --search coffee --limit 20
-fin tx list --type interest
-fin tx list --category expenses:food:restaurants
-fin tx list --type card-settlement --decision settlement
-fin tx list --type unknown --decision unclassified
-fin transaction list --asc
-fin tx list --order-by currency,amount --asc
-fin tx list --order-by institution,date --desc
-fin transaction list --json
+fin operation list
+fin operation list --from 2026-01-01 --to 2026-01-31
+fin operation list --search coffee --limit 20
+fin operation list --type interest
+fin operation list --category expenses:food:restaurants
+fin operation list --type card-settlement --decision settlement
+fin operation list --type unknown --decision unclassified
+fin operation list --asc
+fin operation list --order-by currency,amount --asc
+fin operation list --order-by institution,date --desc
+fin operation list --json
 ```
 
 Dates are inclusive booking dates. Use `--account ID` for one account or
@@ -1123,12 +1123,12 @@ name. A reported transfer type does not confirm a transfer between your accounts
 To list types and correct an individual movement's type:
 
 ```sh
-fin tx type list
-fin tx type show EVENT-ID
-fin tx type set fee EVENT-ID
-fin tx type set bonus EVENT-ID OTHER-EVENT-ID
-fin tx type history
-fin tx type reset EVENT-ID
+fin operation type list
+fin operation type show EVENT-ID
+fin operation type set fee EVENT-ID
+fin operation type set bonus EVENT-ID OTHER-EVENT-ID
+fin operation type history
+fin operation type reset EVENT-ID
 ```
 
 `type list` shows common types and provider-specific types observed in imported
@@ -1139,7 +1139,7 @@ accounting classification, survive reimports and rule changes, and take
 precedence over derived types. `type show` and transaction-list
 JSON expose the imported type and any override. `type reset` removes the override
 and returns to the imported type. The append-only history records changes;
-`fin tx type history --json` is available for scripts.
+`fin operation type history --json` is available for scripts.
 On import, fin determines BoursoBank movement types from explicit leading OFX
 description words: `PAIEMENT CARTE` and `AVOIR` (card refunds), `CARTE` on a card account, `VIR` or
 `VIREMENT`, `PRLV` or `PRELEVEMENT`, `RETRAIT` and `ANNUL RETRAIT DAB`. Other descriptions remain
@@ -1210,7 +1210,7 @@ add`, or rebuilding.
 
 #### See everything stored about a transaction
 
-`fin tx show EVENT-ID` prints what fin knows about one transaction in plain text: its
+`fin operation show EVENT-ID` prints what fin knows about one transaction in plain text: its
 type, category and confirmed transfer; the source event (institution, account,
 kind, source identifier, occurrence and retrieval time); where it was imported from
 (the stored document with its hash and import time, every file it was read from,
@@ -1236,7 +1236,7 @@ which comes first in the list), and the single description for Wise and Revolut.
 - any column of a CSV primary, by its header exactly as it appears in the file:
   Revolut's `Type`, `Product`, `State` or `Balance`, or a column of a bank you added
   yourself, such as `Merchant ID`. Fin stores every column of each row beside the
-  transaction, and `fin tx show` lists them under "Source columns".
+  transaction, and `fin operation show` lists them under "Source columns".
 
 A rule matches when any value under the field matches. A field that a transaction
 does not have matches nothing, and `fin rule explain` says so. A rule that names a
@@ -1257,7 +1257,7 @@ exposed so far. `fin rule gaps` groups by the main description, like the rules.
 
 #### Explain a movement's type
 
-`fin rule explain EVENT-ID` (the event ID is in `fin tx list`) traces how one
+`fin rule explain EVENT-ID` (the event ID is in `fin operation list`) traces how one
 movement got its type, in the order fin applies the sources: a manual override, then the
 type rules over the transaction's fields, matched companion columns counting as
 fields, the first rule that matches deciding. Each stage shows the rule that decides and the text it matched, the later rules
@@ -1293,7 +1293,7 @@ lists up to `--limit` examples (default 10) per outcome, or prints everything wi
 import.
 
 Types are never refreshed by hand: fin recomputes them after every import, rule
-change and institution-definition change, and records each change in `fin tx type
+change and institution-definition change, and records each change in `fin operation type
 history`. Event IDs, accounting classifications and review history are untouched.
 A type rule that names a column also applies to the rows of a matched companion
 file, tested on that file's own columns:
@@ -1336,7 +1336,7 @@ default to 1000, so give a rule a negative priority to outrank the bundled ones.
 A row of a companion
 file that is not matched yet affects nothing until its transaction arrives.
 Manual type overrides and accounting decisions are preserved. Use
-`fin transaction review` for unclassified items and hledger for accounting
+`fin operation review` for unclassified items and hledger for accounting
 reports and running balances.
 
 ### Settlement and reversal evidence rules
@@ -1353,7 +1353,7 @@ fin rule add-evidence card-id card-reference '^CARD PAYMENT (.+)$' \
   --institution mybank
 fin rule add-evidence atm-refund withdrawal-reversal '^ATM REVERSAL ' \
   --institution mybank
-fin tx refresh-evidence --institution mybank
+fin operation refresh-evidence --institution mybank
 ```
 
 The `card-reference` expression must contain a capture group; fin records group
@@ -1367,7 +1367,7 @@ first matching card-reference rule supplies the reference.
 
 A hint is only evidence: settlement and reversal candidates still need their
 normal account, amount and date checks and explicit confirmation. Changing,
-disabling or replacing a rule affects future imports. `fin tx refresh-evidence`
+disabling or replacing a rule affects future imports. `fin operation refresh-evidence`
 previews changes to stored clues and asks before applying them; it does not
 change types, classifications or reviewed decisions. Transaction-list JSON exposes the recorded clues
 as `source_card_reference` and `source_withdrawal_reversal`.
@@ -1423,13 +1423,13 @@ fin rule apply interest-income
 ```
 
 An action can set a type, a category, or both; `--set-type` and `--match-type`
-accept the common or observed provider-specific types from `fin tx type list`.
+accept the common or observed provider-specific types from `fin operation type list`.
 An institution, description or type condition is required. When both a type and
 category are proposed, each is assessed separately. Existing manual type overrides
 and reviewed accounting decisions are not overwritten: the preview explains any
 skipped action, while another eligible action on the same transaction can still
 be applied. A type already matching the proposal does not create a redundant
-override. Use `fin tx type reset` or the relevant accounting review workflow to
+override. Use `fin operation type reset` or the relevant accounting review workflow to
 change an earlier decision explicitly.
 Use `--match-type unknown` to select movements without an effective type;
 `unknown` cannot be used as a `--set-type` value.
@@ -1577,10 +1577,10 @@ above; no automatic migration runs.
 | `fin paths` | Resolved storage paths |
 | `fin account --help` | Account listing, config and history |
 | `fin institution --help` | Institution list and generic import setup |
-| `fin transaction --help` | Imported transaction listing |
+| `fin operation --help` | Imported transaction listing |
 | `fin statement --help` | Statement reconciliation and companion files |
 | `fin reversal --help` | Withdrawal reversal candidates and review |
-| `fin transaction --help` | Transaction listing, review and categories |
+| `fin operation --help` | Transaction listing, review and categories |
 | `fin transfer --help` | Candidates, preview and explicit decisions |
 | `fin journal --help` | hledger journal export |
 | `fin backup` | Copy the database, including account settings |

@@ -198,7 +198,7 @@ type, fees, a richer description). Fields that disagree are not overwritten:
 - differing dates, descriptions or types are shown side by side with their
   source, and the precedence value is used for ordering and reporting.
 
-The presentation of conflicts in `fin transaction show` is still to design.
+The presentation of conflicts in `fin operation show` is still to design.
 
 ## Worked cases
 

@@ -45,8 +45,8 @@ provider observations before treating them as authoritative.
   movements; bank imports create a corresponding operation. Confirmed transfer
   operations group on read. Bank category and type decisions are keyed by the
   primary movement; existing CLI and journal projection retain event references.
-  Moving `fin tx`, review and the journal onto operations is designed in
-  [operation-transactions.md](operation-transactions.md).
+  Moving the `fin operation` list, review and the journal onto operations is
+  designed in [operation-transactions.md](operation-transactions.md).
 - Portable transaction snapshots restore category decisions and manual type
   overrides together after source identity, movement-role, evidence and conflict
   checks. Non-primary movement decisions are not yet supported.
@@ -261,7 +261,7 @@ configurable yet.
   to `interest` (29, originally typed `bonus`) and the `MONEY_ADDED` code to
   `deposit` (2). They are ordinary
   column rules, so they move to the single rule form with the others.
-- [x] `fin tx show EVENT-ID` (2026-10-31): source, files, payload fields, statement,
+- [x] `fin operation show EVENT-ID` (2026-10-31): source, files, payload fields, statement,
   companion rows by column, decisions.
 - [x] `fin rule explain EVENT-ID` (2026-10-31): type trace by stage, stale-type
   warning. Category rules are not traced yet; `--json` is not implemented.
@@ -358,7 +358,7 @@ The import side is done; turning movements into accounting is not.
   by direction when color is enabled, filter by movement type, and classify
   exact matches together with whole-batch undo and atomic save on quit.
 - [x] Summarize transaction classification progress and category and movement-type counts
-  with `fin tx status` using SQLite aggregation.
+  with `fin operation status` using SQLite aggregation.
 - [x] Exclude categorized movements from unreviewed transfer candidates and
   show ranked candidates in descending score order.
 - [x] Find similar transactions across institutions during category review.
@@ -465,15 +465,15 @@ position observations, derive positions from fills, or calculate funding.
 - [ ] Bring crypto deposits, withdrawals and fees into the accounting workflow and
   review transfers between banks, wallets and exchanges.
 - [x] Expose CDC through `fin import cdc` and general
-  `fin transaction sources` instead of a separate `fin crypto` group.
+  `fin db sources` instead of a separate `fin crypto` group.
 - [x] Describe CDC as data (`cdc.json`) interpreted by the generic
   `Movement_csv`, with no institution-specific OCaml.
-- [ ] [Unify `fin tx` over operations](operation-transactions.md) (design agreed
-  2026-11-02): `fin tx list` and `fin tx show` read operations, one row per
-  operation with `--legs` to expand to movements; review decisions attach to
-  movement identities, so unresolved wallets, commodities and kinds join the
+- [ ] [Unify `fin operation` over operations](operation-transactions.md) (design agreed
+  2026-11-02; command rename done): `fin operation list` and `fin operation show` read
+  operations, one row per operation with `--movements` to expand; review decisions attach
+  to movement identities, so unresolved wallets, commodities and kinds join the
   review queue; journal and hledger export read operations. Step 1 (read-only
-  `fin tx` over operations) comes first, then wallet/commodity resolution and
+  `fin operation` over operations) comes first, then wallet/commodity resolution and
   review, then journal projection, then the bank importer onto the same
   pipeline. The old bank tables stay as a projection during the transition; the
   schema-rebuild decision is deferred until after journal projection.

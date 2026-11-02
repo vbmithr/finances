@@ -8,6 +8,18 @@ short line of their own.
 
 ## Unreleased
 
+- Rename the `fin transaction` command group to `fin operation` (beta breaking
+  change): `fin operation list`, `fin operation show`, `fin operation review`,
+  `fin operation category ...`, `fin operation type ...`, `fin operation
+  status`, `fin operation export` and `fin operation restore` replace their
+  `fin tx` / `fin transaction` spellings; `op` is the only shortcut for
+  `operation`, and `tx` / `txn` / `transaction` no longer work. Source-record
+  inspection moves to the `db` group: `fin db sources [--institution NAME]
+  [--json]` replaces `fin transaction sources`, and `fin db event operations
+  EVENT-ID` replaces `fin tx operation EVENT-ID`. Help text, the manual and
+  README examples use the new names.
+  **Action required:** update scripts and muscle memory from `fin tx ...` /
+  `fin transaction ...` to `fin operation ...` (or `fin op ...`).
 - CDC is now a bundled JSON profile (`institutions/cdc.json`:
   header, columns and per-kind rules) read by a generic movement-CSV interpreter,
   like the banks. `fin import` selects it through the institution profile, not

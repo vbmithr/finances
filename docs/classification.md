@@ -66,7 +66,7 @@ that might share its category. Separate these operations:
   a literal description rule from a categorized example and can save it in review
   mode; accepting a batch does not automatically create a rule.
 
-The first implemented preview is `fin transaction category similar EVENT_ID`. The
+The first implemented preview is `fin operation categoryegory similar EVENT_ID`. The
 example must have a reviewed income or expense category. It searches across
 institutions, comparing one effective description per transaction. Comparisons
 ignore ASCII case and whitespace. It reports unclassified matches and separately
@@ -147,7 +147,7 @@ exports: an unrecognized description prefix turned up, a regular expression was
 added to the bundled defaults (first in code, then as institution typing
 profiles, then as unified rules in `institutions/*_defaults.json`, now in each
 institution's definition), and
-`fin transaction refresh-types` re-applied them. `CHANGES.md` records the
+`fin operation refresh-types` re-applied them. `CHANGES.md` records the
 increments: card payments, interest labels, fees, cheques, malformed
 deferred-card labels "found in exports". Today the defaults cover BoursoBank
 description prefixes (ten patterns), BoursoBank evidence (card reference,
@@ -430,11 +430,11 @@ fork keeps its upstream history and local compatibility fix. Extend
 and evaluate the interface for classification; noninteractive commands and JSON
 workflows must remain available for scripts.
 
-The initial `fin transaction category review EVENT_ID` workflow presents an
+The initial `fin operation categoryegory review EVENT_ID` workflow presents an
 unclassified or categorized movement, offers catalog categories or a new category name,
 and lets the user select exact matches and confirm a transactional batch. It
 shows conflicting classifications and leaves cancellation without changes. The
-event ID can be found with `fin transaction list`. This first interface uses
+event ID can be found with `fin operation list`. This first interface uses
 terminal prompts, including repeated substring searches and selectable results; it
 does not yet provide tags or category search. Separately,
 `fin rule` saves conditions and actions for automatic import or explicit preview

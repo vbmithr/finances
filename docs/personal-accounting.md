@@ -18,7 +18,7 @@ in the other end of transfers too: otherwise a payment to your own savings accou
 can look like unexplained spending.
 
 If fin already contains older records, keep them. Focus reports on your chosen
-month and review the corresponding event IDs. `fin transaction review` and `fin status`
+month and review the corresponding event IDs. `fin operation review` and `fin status`
 cover the whole database; they currently have no month filter. Older unresolved
 movements do not need to be finished before you can review a later month.
 
@@ -207,8 +207,8 @@ unexplained movement unclassified. You can refine the chart as useful patterns
 emerge; there is no need to anticipate every merchant.
 
 ```sh
-fin transaction review
-fin transaction review --json > reports/bank-review.json
+fin operation review
+fin operation review --json > reports/bank-review.json
 ```
 
 Review the amount, description, date and source account. Bank-supplied category
@@ -223,8 +223,8 @@ tags are suggestions, not applied decisions. Create a small batch in
 ```
 
 ```sh
-fin transaction category apply reviews/categories-2026-09.json
-fin transaction category history
+fin operation categoryegory apply reviews/categories-2026-09.json
+fin operation categoryegory history
 fin journal export > ledger/bank.journal
 hledger --no-conf -f ledger/main.journal --strict check
 ```

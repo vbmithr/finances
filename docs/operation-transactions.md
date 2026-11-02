@@ -1,15 +1,16 @@
-# `fin tx` over operations
+# `fin operation` over operations
 
-Status: design, agreed 2026-11-02. Not yet implemented. The operation and movement
-model described in [operations.md](operations.md) is the general layer; `fin tx`
-still reads only the bank `movements` table, so CDC operations never appear
-in `fin tx list`. This document is the design for making the two meet.
+Status: design agreed 2026-11-02; the command rename is implemented (2026-11-02),
+the rest is not. The operation and movement model described in
+[operations.md](operations.md) is the general layer; `fin operation list` still
+reads only the bank `movements` table, so CDC operations never appear in
+it. This document is the design for making the two meet.
 
-Verified starting point: `fin tx list` calls `list_transactions` in `bin/main.ml`,
-which reads `Store.bank_review`, which loads the `movements` table filtered by
-`Registry.is_movement`. Operation movements live in `operations` /
-`operation_movements` and are read only by `fin tx operation` and
-`fin transaction sources`. Category, type and review decisions are already keyed by
+Verified starting point: `fin operation list` calls `list_transactions` in
+`bin/main.ml`, which reads `Store.bank_review`, which loads the `movements` table
+filtered by `Registry.is_movement`. Operation movements live in `operations` /
+`operation_movements` and are read only by `fin db event operations` and
+`fin db sources`. Category, type and review decisions are already keyed by
 movement identity (the primary movement's anchor event), so they can attach to
 crypto movements unchanged.
 
@@ -26,27 +27,24 @@ The model terms from [operations.md](operations.md) are authoritative:
   shape names used by movement-CSV rules (`single-in`, `single-out`,
   `exchange`). Do not use "leg" for an operation's movements.
 
-CLI mapping (decided 2026-11-02: only model words are used, old names are
-dropped): the `fin transaction` group is renamed to **`fin operation`**
+CLI mapping (decided and implemented 2026-11-02: only model words are used, old
+names are dropped): the `fin transaction` group is renamed to **`fin operation`**
 (`fin operation list`, `fin operation show`, review and category subcommands
-move under it), and the aliases `transaction`, `tx` and `txn` are removed
-entirely — the alias rewrite in `command_argv` loses those cases. Source-event
-inspection stays on the `db` side (`fin db events`); the current
-`fin transaction operation EVENT-ID` (operations linked to one source event)
-moves there as `fin db event operations EVENT-ID`, because a group called
-`operation` cannot contain a subcommand also called `operation`. "Transaction"
-disappears from canonical command names, help text, the manual and README
-examples in the same change. This is a user-visible breaking change: ship it
-with an **Action required** entry in `CHANGES.md` (fin is in beta; clean design
-over backward compatibility). Until the rename lands, the old names still work
-and this document refers to the current commands (`fin tx list`) when
-describing verified behavior.
+move under it; `op` is the remaining shortcut), and the aliases `transaction`,
+`tx` and `txn` are removed — the alias rewrite in `command_argv` loses those
+cases. Source-event inspection stays on the `db` side: `fin db sources` lists
+stored source records and `fin db event operations EVENT-ID` shows the
+operations linked to one source event, because a group called `operation`
+cannot contain a subcommand also called `operation`. "Transaction" is gone from
+canonical command names, help text, the manual and README examples. This is a
+user-visible breaking change, recorded with an **Action required** entry in
+`CHANGES.md` (fin is in beta; clean design over backward compatibility).
 
 ## Target behavior
 
 - **One view over operations.** A bank transaction is an operation with one
   movement; a CDC exchange is an operation with two. `fin operation
-  list` (renamed from `fin tx list`) shows both, filterable by institution,
+  list` shows both, filterable by institution,
   account or commodity, in addition to the existing date, search, type,
   classification and counter-account filters.
 - **Display: one row per operation**, with its movements shown together, for
@@ -63,8 +61,8 @@ describing verified behavior.
 
 ## Order of work
 
-1. **Make `fin operation list` and `fin operation show` (renamed from `fin tx
-   list` / `fin tx show`) read operations.** Mostly read-only,
+1. **Make `fin operation list` and `fin operation show` read operations.** Mostly
+   read-only,
    so the risk is low. Bank rows keep their current shape (a one-movement
    operation looks exactly like today's bank movement row); multi-movement
    operations render as one row with the movements together, `--movements` to

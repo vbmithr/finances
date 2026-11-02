@@ -45,7 +45,7 @@ infer opening balances. Those operations can be added around the core APIs.
 
 Inspect CDC App CSV rows without importing them with
 `fin import cdc --inspect --json wallet.csv`. Use `fin import cdc wallet.csv`
-to preview and `--apply` to store source evidence and proposals; `fin transaction sources --institution cdc`
+to preview and `--apply` to store source evidence and proposals; `fin db sources --institution cdc`
 shows imported source IDs. Proposed legs are not reconciled or posted; see the
 [manual](docs/manual.md#importing-statements) for limitations.
 
@@ -61,7 +61,7 @@ fin init
 fin status
 fin paths
 fin account list
-fin transaction list
+fin operation list
 fin statement list --institution bunq
 fin transfer candidates
 ```
@@ -559,18 +559,18 @@ Existing version 1 JSON exports remain accepted by `fin account import FILE`.
 
 ## List imported transactions
 
-Use `fin transaction list` to see imported movements, including their accounting
+Use `fin operation list` to see imported movements, including their accounting
 classification. Terminal output uses `$PAGER` (default `less -FRX`); redirected
 and JSON output is not paged.
 Filter by movement type or accounting decision with, for example,
-`fin tx list --type interest` or `fin tx list --decision settlement`.
+`fin operation list --type interest` or `fin operation list --decision settlement`.
 Inspect automatic and reviewed rules with `fin rule list`; evidence rules can
 also record card references and withdrawal reversals at import. See the
 [manual](docs/manual.md#automatic-rules-at-import).
 
-Use `fin tx type list` to see available movement types, then run
-`fin tx type set TYPE EVENT-ID...` to record manual overrides atomically. The imported type
-remains available, and `fin tx type reset EVENT-ID` removes the override.
+Use `fin operation type list` to see available movement types, then run
+`fin operation type set TYPE EVENT-ID...` to record manual overrides atomically. The imported type
+remains available, and `fin operation type reset EVENT-ID` removes the override.
 Types are derived from the type rules and recomputed whenever a rule, an institution
 definition or a matched companion file changes, without changing accounting
 decisions.
@@ -582,12 +582,12 @@ journal; hledger is installed separately. See the [manual](docs/manual.md#export
 
 ## Review and categorize bank movements
 
-Use `fin tx status` (or `--json`) for category and movement-type counts,
+Use `fin operation status` (or `--json`) for category and movement-type counts,
 transaction decision counts and the
 percentage classified. Confirmed transfers, settlements and reversals count as
 classified; categorized income and expenses are shown separately.
 
-Use `fin tx cat queue` for a keyboard-driven queue of unclassified movements.
+Use `fin operation category queue` for a keyboard-driven queue of unclassified movements.
 Assign with displayed shortcuts, search, or browse categories level by level;
 matching unclassified descriptions in the queue are assigned together by default.
 Skip, undo, and add categories without leaving the queue; `q` saves the staged
@@ -597,8 +597,8 @@ changes and Ctrl-C discards them. See the
 List movements that still use `equity:unclassified`:
 
 ```sh
-fin transaction review --json > personal/reports/bank-review.json
-fin transaction review --all
+fin operation review --json > personal/reports/bank-review.json
+fin operation review --all
 ```
 
 Use `fin cat init` to choose suggested starter categories, `fin cat add
@@ -609,10 +609,10 @@ Save separate portable snapshots before rebuilding:
 
 ```sh
 fin cat export > categories-portable.json
-fin tx export > transaction-decisions.json
+fin operation export > transaction-decisions.json
 fin rule export > rules-portable.json
 fin cat restore categories-portable.json                # preview
-fin tx restore transaction-decisions.json --apply        # confirm
+fin operation restore transaction-decisions.json --apply        # confirm
 fin rule restore rules-portable.json --apply             # confirm
 ```
 
@@ -630,25 +630,25 @@ Transfer candidates are shown by descending score and exclude movements already
 assigned an income or expense category. Reset a category to `equity:unclassified` before reviewing it as a
 transfer.
 
-Use `fin tx cat set expenses:food EVENT_ID...` to assign or change categories;
+Use `fin operation category set expenses:food EVENT_ID...` to assign or change categories;
 all provided transactions are updated atomically. Use `equity:unclassified`
 to return them to review.
 
 To categorize a filtered transaction list, pipe its JSON output into `set`:
 
 ```sh
-fin tx list --type withdrawal --decision unclassified --json |
-  fin tx cat set expenses:cash-withdrawals -
+fin operation list --type withdrawal --decision unclassified --json |
+  fin operation category set expenses:cash-withdrawals -
 ```
 
 Without `--decision unclassified`, this also replaces existing categories.
 
-Use `fin transaction list` to find an event ID, then run
-`fin transaction category review EVENT_ID` to choose or change its category, select matching
+Use `fin operation list` to find an event ID, then run
+`fin operation categoryegory review EVENT_ID` to choose or change its category, select matching
 movements (including previously categorized ones) or search descriptions across institutions, then confirm the
 proposed batch in a terminal. Ranked approximate matches appear alongside exact matches. Toggle rows with
 numbers and ranges, including across searches.
-After reviewing a transaction, `fin transaction category similar EVENT_ID` previews
+After reviewing a transaction, `fin operation categoryegory similar EVENT_ID` previews
 unclassified movements across institutions with matching normalized effective
 descriptions, and flags conflicting
 reviewed categories. It does not apply decisions. See the
@@ -668,10 +668,10 @@ Apply the entire batch atomically, then regenerate the accounting projection and
 journal:
 
 ```sh
-fin transaction category apply personal/reviews/categories.json
+fin operation categoryegory apply personal/reviews/categories.json
 fin journal project
 fin journal export > personal/bank.journal
-fin transaction category history
+fin operation categoryegory history
 hledger -f personal/bank.journal --strict check
 hledger -f personal/bank.journal balance expenses --monthly
 ```

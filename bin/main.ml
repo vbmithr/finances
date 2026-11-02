@@ -442,8 +442,8 @@ let welcome () =
      \032 fin status              See import coverage and review progress\n\
      \032 fin account list        See your accounts\n\
      \032 fin category list       See your category catalog\n\
-     \032 fin transaction list    List imported transactions\n\
-     \032 fin transaction review  Review unclassified movements\n\
+     \032 fin operation list    List imported operations\n\
+     \032 fin operation review  Review unclassified movements\n\
      \032 fin statement list       Inspect statement reconciliation\n\
      \032 fin settlement review    Review card settlements\n\
      \032 fin reversal candidates  Find possible reversals\n\
@@ -479,8 +479,8 @@ let setup database =
      \032 fin import INSTITUTION ~/Statements/INSTITUTION%s\n\n\
      Accounts appear when you import statements. Then explore:\n\
      \032 fin account list%s\n\
-     \032 fin transaction list%s\n\
-     \032 fin transaction review%s\n\
+     \032 fin operation list%s\n\
+     \032 fin operation review%s\n\
      \032 fin settlement review%s\n\n\
      See fin import --help for import options.\n\
      You can repeat fin init safely; existing data and account settings are preserved.\n"
@@ -691,7 +691,7 @@ let status database json_output =
        Date ranges show observed records, not complete statement coverage. Financial \
        reports: fin journal export, then query with hledger.";
     print_endline
-      "Next: fin transaction review; fin transfer candidates; fin institution history.");
+      "Next: fin operation review; fin transfer candidates; fin institution history.");
   Ok ()
 ;;
 
@@ -1495,7 +1495,7 @@ let import_bank_cmd =
            command: $(b,fin import cdc FILE-OR-DIRECTORY) previews, $(b,--apply) \
            stores source evidence and proposed movements, and $(b,--inspect) reads \
            without a database. Review wallets, commodities and kinds afterwards with \
-           $(b,fin transaction sources)."
+           $(b,fin db sources)."
       ]
     "import"
     "Import a bank's statement files, apply mappings, and publish a bank journal."
@@ -1832,7 +1832,9 @@ let category_set database account inputs =
         if String.equal input "-"
         then
           if Unix.isatty Unix.stdin
-          then Or_error.error_string "pipe fin tx list --json output into standard input"
+          then
+            Or_error.error_string
+              "pipe fin operation list --json output into standard input"
           else (
             let%bind contents =
               Or_error.try_with (fun () -> In_channel.input_all In_channel.stdin)
@@ -1846,11 +1848,17 @@ let category_set database account inputs =
     in
     let event_ids = List.concat id_lists in
     let%bind _ =
-      Bank_category.create ~event_id:1L ~account ~reason:"Set with fin tx cat set"
+      Bank_category.create
+        ~event_id:1L
+        ~account
+        ~reason:"Set with fin operation category set"
     in
     let%bind decisions =
       List.map event_ids ~f:(fun event_id ->
-        Bank_category.create ~event_id ~account ~reason:"Set with fin tx cat set")
+        Bank_category.create
+          ~event_id
+          ~account
+          ~reason:"Set with fin operation category set")
       |> Or_error.combine_errors
     in
     with_database database (fun db ->
@@ -1880,8 +1888,8 @@ let category_set_cmd =
               []
               ~docv:"EVENT-ID|-"
               ~doc:
-                "Transaction event IDs, or - to read fin tx list --json from standard \
-                 input."))
+                "Transaction event IDs, or - to read fin operation list --json from \
+                 standard input."))
 ;;
 
 let categorize_bank_cmd =
@@ -2150,7 +2158,7 @@ let list_transactions
 let transaction_list_cmd =
   command
     "list"
-    "List imported transactions, newest first. Terminal tables use PAGER (default: less \
+    "List imported operations, newest first. Terminal tables use PAGER (default: less \
      -FRX); redirected and JSON output is not paged."
     Term.(
       const list_transactions
@@ -2162,10 +2170,7 @@ let transaction_list_cmd =
       $ Arg.(
           value
           & opt (some string) None
-          & info
-              [ "institution" ]
-              ~docv:"NAME"
-              ~doc:"Only transactions from this provider.")
+          & info [ "institution" ] ~docv:"NAME" ~doc:"Only operations from this provider.")
       $ Arg.(
           value
           & opt (some string) None
@@ -2225,7 +2230,7 @@ let transaction_list_cmd =
       $ Arg.(
           value
           & opt (some int) None
-          & info [ "limit" ] ~docv:"COUNT" ~doc:"Maximum number of transactions.")
+          & info [ "limit" ] ~docv:"COUNT" ~doc:"Maximum number of operations.")
       $ Arg.(
           value
           & opt (some string) None
@@ -2312,7 +2317,7 @@ let transaction_type_list database =
     then print_endline "  None."
     else List.iter provider_types ~f:(fun name -> printf "  %s\n" (Terminal.text name));
     print_endline
-      "\nUse --type unknown with fin tx list to find movements without a type.")
+      "\nUse --type unknown with fin operation list to find movements without a type.")
 ;;
 
 let transaction_type_list_cmd =
@@ -2327,7 +2332,8 @@ let transaction_type_set database value event_ids =
     if String.is_empty (String.strip value) || String.equal value "unknown"
     then
       Or_error.error_string
-        "choose a type from fin tx type list; use fin tx type reset to remove an override"
+        "choose a type from fin operation type list; use fin operation type reset to \
+         remove an override"
     else Ok (Movement_type.of_string value)
   in
   with_database database (fun db ->
@@ -2347,11 +2353,11 @@ let transaction_type_set_cmd =
       $ Arg.(
           required
           & pos 0 (some string) None
-          & info [] ~docv:"TYPE" ~doc:"Type from fin tx type list.")
+          & info [] ~docv:"TYPE" ~doc:"Type from fin operation type list.")
       $ Arg.(
           non_empty
           & pos_right 0 int64 []
-          & info [] ~docv:"EVENT-ID" ~doc:"One or more transaction event IDs."))
+          & info [] ~docv:"EVENT-ID" ~doc:"One or more source event IDs."))
 ;;
 
 let transaction_type_reset database event_id =
@@ -2371,7 +2377,7 @@ let transaction_type_reset_cmd =
       $ Arg.(
           required
           & pos 0 (some int64) None
-          & info [] ~docv:"EVENT-ID" ~doc:"Transaction event ID."))
+          & info [] ~docv:"EVENT-ID" ~doc:"Source event ID."))
 ;;
 
 let transaction_type_show database event_id =
@@ -2396,7 +2402,7 @@ let transaction_type_show_cmd =
       $ Arg.(
           required
           & pos 0 (some int64) None
-          & info [] ~docv:"EVENT-ID" ~doc:"Transaction event ID."))
+          & info [] ~docv:"EVENT-ID" ~doc:"Source event ID."))
 ;;
 
 let transaction_type_history database json_output =
@@ -3590,7 +3596,7 @@ let settlement_undo_cmd =
       $ Arg.(
           required
           & pos 0 (some int64) None
-          & info [] ~docv:"EVENT-ID" ~doc:"Confirmed settlement transaction ID.")
+          & info [] ~docv:"EVENT-ID" ~doc:"Confirmed settlement event ID.")
       $ Arg.(value & flag & info [ "yes" ] ~doc:"Undo without prompting."))
 ;;
 
@@ -3648,7 +3654,7 @@ let rule_add
   let parse_type = function
     | None -> Ok None
     | Some value when String.is_empty (String.strip value) || String.equal value "unknown"
-      -> Or_error.error_string "choose a movement type from fin tx type list"
+      -> Or_error.error_string "choose a movement type from fin operation type list"
     | Some value -> Ok (Some (Movement_type.of_string value))
   in
   let%bind match_type =
@@ -3703,7 +3709,7 @@ let rule_add
         ]
       |> List.map ~f:(function
         | Movement_type.Other name when not (List.mem observed name ~equal:String.equal)
-          -> Or_error.error_string "unknown movement type; see fin tx type list"
+          -> Or_error.error_string "unknown movement type; see fin operation type list"
         | _ -> Ok ())
       |> Or_error.combine_errors_unit
     in
@@ -3794,7 +3800,7 @@ let rule_add_cmd ~settlement =
         & info
             [ "set-type" ]
             ~docv:"TYPE"
-            ~doc:"Propose this movement type; see fin tx type list.")
+            ~doc:"Propose this movement type; see fin operation type list.")
   in
   let category_arg =
     if settlement
@@ -3909,8 +3915,8 @@ let rule_add_evidence
       else Store.add_classification_rule db rule
     in
     printf
-      "Saved evidence rule %s. It applies to future imports; run fin tx refresh-evidence \
-       to preview existing changes.\n"
+      "Saved evidence rule %s. It applies to future imports; run fin operation \
+       refresh-evidence to preview existing changes.\n"
       (Terminal.text name);
     Ok ())
 ;;
@@ -4188,7 +4194,7 @@ let rule_preview database name force json_output =
       match rule.action with
       | Card_reference | Withdrawal_reversal_hint ->
         Or_error.error_string
-          "use fin tx refresh-evidence to preview automatic evidence changes"
+          "use fin operation refresh-evidence to preview automatic evidence changes"
       | Type _ when Option.is_some rule.field ->
         Or_error.error_string
           "this rule names a field and applies automatically; use fin rule test to \
@@ -4226,7 +4232,7 @@ let rule_apply database name force yes =
       match rule.action with
       | Card_reference | Withdrawal_reversal_hint ->
         Or_error.error_string
-          "use fin tx refresh-evidence to preview and apply evidence changes"
+          "use fin operation refresh-evidence to preview and apply evidence changes"
       | Type _ when Option.is_some rule.field ->
         Or_error.error_string
           "this rule names a field and applies automatically; use fin rule test to \
@@ -4443,7 +4449,7 @@ let rule_test
   let parse_type = function
     | None -> Ok None
     | Some value when String.is_empty (String.strip value) || String.equal value "unknown"
-      -> Or_error.error_string "choose a movement type from fin tx type list"
+      -> Or_error.error_string "choose a movement type from fin operation type list"
     | Some value -> Ok (Some (Movement_type.of_string value))
   in
   let%bind match_type =
@@ -4484,7 +4490,7 @@ let rule_test
         ]
       |> List.map ~f:(function
         | Movement_type.Other name when not (List.mem observed name ~equal:String.equal)
-          -> Or_error.error_string "unknown movement type; see fin tx type list"
+          -> Or_error.error_string "unknown movement type; see fin operation type list"
         | _ -> Ok ())
       |> Or_error.combine_errors_unit
     in
@@ -4533,7 +4539,7 @@ let rule_test_cmd =
           & info
               [ "set-type" ]
               ~docv:"TYPE"
-              ~doc:"The movement type the rule assigns; see fin tx type list.")
+              ~doc:"The movement type the rule assigns; see fin operation type list.")
       $ Arg.(
           value
           & opt (some string) None
@@ -4639,7 +4645,7 @@ let rule_explain_cmd =
       $ Arg.(
           required
           & pos 0 (some int64) None
-          & info [] ~docv:"EVENT-ID" ~doc:"Transaction event ID from fin tx list.")
+          & info [] ~docv:"EVENT-ID" ~doc:"Source event ID from fin operation list.")
       $ Arg.(
           value
           & flag
@@ -4761,7 +4767,7 @@ let transaction_show_cmd =
       $ Arg.(
           required
           & pos 0 (some int64) None
-          & info [] ~docv:"EVENT-ID" ~doc:"Transaction event ID from fin tx list."))
+          & info [] ~docv:"EVENT-ID" ~doc:"Source event ID from fin operation list."))
 ;;
 
 let transaction_operations database event_id json_output =
@@ -4846,7 +4852,7 @@ let transaction_sources_cmd =
 
 let transaction_operations_cmd =
   command
-    "operation"
+    "operations"
     "Show operations linked to a source event."
     Term.(
       const transaction_operations
@@ -4854,7 +4860,7 @@ let transaction_operations_cmd =
       $ Arg.(
           required
           & pos 0 (some int64) None
-          & info [] ~docv:"EVENT-ID" ~doc:"Transaction event ID.")
+          & info [] ~docv:"EVENT-ID" ~doc:"Source event ID.")
       $ json_output)
 ;;
 
@@ -4942,7 +4948,7 @@ let transaction_status database json_output =
 let transaction_status_cmd =
   command
     "status"
-    "Summarize transaction accounting decisions and classification progress."
+    "Summarize accounting decisions and classification progress."
     Term.(const transaction_status $ database $ json_output)
 ;;
 
@@ -5006,7 +5012,7 @@ let category_similar_cmd =
           & info
               []
               ~docv:"EVENT-ID"
-              ~doc:"Reviewed transaction event ID from fin transaction list.")
+              ~doc:"Reviewed source event ID from fin operation list.")
       $ json_output)
 ;;
 
@@ -5666,7 +5672,7 @@ let category_review_cmd =
               []
               ~docv:"EVENT-ID"
               ~doc:
-                "Transaction ID from fin transaction list; existing categories may be \
+                "Transaction ID from fin operation list; existing categories may be \
                  changed."))
 ;;
 
@@ -5993,11 +5999,11 @@ let transfer_undo_cmd =
       $ Arg.(
           required
           & pos 0 (some int64) None
-          & info [] ~docv:"FIRST-EVENT-ID" ~doc:"First transaction event ID.")
+          & info [] ~docv:"FIRST-EVENT-ID" ~doc:"First source event ID.")
       $ Arg.(
           required
           & pos 1 (some int64) None
-          & info [] ~docv:"SECOND-EVENT-ID" ~doc:"Second transaction event ID.")
+          & info [] ~docv:"SECOND-EVENT-ID" ~doc:"Second source event ID.")
       $ Arg.(value & flag & info [ "yes" ] ~doc:"Undo without prompting."))
 ;;
 
@@ -6448,14 +6454,14 @@ let command_argv () =
   then
     argv.(1)
     <- (match argv.(1) with
-        | "tx" | "txn" -> "transaction"
+        | "op" -> "operation"
         | "acc" -> "account"
         | "inst" -> "institution"
         | "cat" -> "category"
         | command -> command);
   if
     Stdlib.Array.length argv > 2
-    && String.equal argv.(1) "transaction"
+    && String.equal argv.(1) "operation"
     && String.equal argv.(2) "cat"
   then argv.(2) <- "category";
   if Stdlib.Array.length argv > 1 && String.equal argv.(1) "ledger"
@@ -6505,16 +6511,16 @@ let () =
                     fin import boursobank ~/Statements/boursobank\n\
                     fin status\n\
                     fin account list\n\
-                    fin transaction list\n\
-                    fin transaction review\n\
+                    fin operation list\n\
+                    fin operation review\n\
                     fin journal export > my-finances.journal"
                ; `P
                    "Use $(b,fin paths) to inspect storage locations, or append \
                     $(b,--help) to any subcommand for its options."
                ; `P
-                   "Command shortcuts: $(b,tx) and $(b,txn) mean $(b,transaction); \
-                    $(b,acc) means $(b,account); $(b,inst) means $(b,institution); \
-                    $(b,cat) means $(b,category)."
+                   "Command shortcuts: $(b,op) means $(b,operation); $(b,acc) means \
+                    $(b,account); $(b,inst) means $(b,institution); $(b,cat) means \
+                    $(b,category)."
                ])
           [ setup_cmd
           ; status_cmd
@@ -6596,7 +6602,12 @@ let () =
           ; group
               "db"
               "Initialize and inspect local source evidence."
-              [ init; events; ingest_cmd ]
+              [ init
+              ; events
+              ; ingest_cmd
+              ; transaction_sources_cmd
+              ; group "event" "Inspect one source event." [ transaction_operations_cmd ]
+              ]
           ; group
               "statement"
               "Inspect and reconcile imported statements and companion files."
@@ -6610,19 +6621,17 @@ let () =
               ; transfer_history_cmd
               ]
           ; group
-              "transaction"
-              "Inspect and classify imported transactions."
+              "operation"
+              "Inspect and classify imported operations."
               [ transaction_list_cmd
               ; transaction_status_cmd
               ; transaction_show_cmd
-              ; transaction_sources_cmd
-              ; transaction_operations_cmd
               ; category_decisions_export_cmd
               ; category_decisions_restore_cmd
               ; refresh_transaction_evidence_cmd
               ; group
                   "type"
-                  "Inspect and override transaction movement types."
+                  "Inspect and override movement types."
                   [ transaction_type_list_cmd
                   ; transaction_type_show_cmd
                   ; transaction_type_set_cmd
@@ -6632,7 +6641,7 @@ let () =
               ; bank_review_cmd
               ; group
                   "category"
-                  "Manage reviewed transaction categories."
+                  "Manage reviewed categories."
                   [ categorize_bank_cmd
                   ; category_set_cmd
                   ; category_history_cmd
