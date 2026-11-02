@@ -8,6 +8,55 @@ short line of their own.
 
 ## Unreleased
 
+- CDC is now a bundled JSON profile (`institutions/cdc.json`:
+  header, columns and per-kind rules) read by a generic movement-CSV interpreter,
+  like the banks. `fin import` selects it through the institution profile, not
+  by name. New kinds are profile entries, not code. Stored data is unchanged.
+- `fin import cdc` accepts several CSV files and directories (searched
+  recursively), like the bank importers.
+- `fin backup` no longer requires the current schema, so a database that
+  needs a rebuild can still be backed up first.
+- Fold the `fin crypto` group into the general commands (beta breaking change):
+  `fin import cdc FILE` previews, `--apply` stores and `--inspect`
+  (with `--summary`, `--json`) reads without a database;
+  `fin transaction sources [--institution NAME] [--json]` lists stored source
+  records of any institution. Source JSON now includes `venue` and `kind`.
+  **Action required:** replace `fin crypto inspect-cdc`, `import-cdc` and
+  `list` in scripts.
+- Add `fin import cdc` to preview and store CDC CSV evidence and
+  proposed movements, and `fin transaction sources --institution cdc` to browse the imported sources.
+  Identical document replay is safe; ambiguous overlapping or identical rows
+  are rejected. Proposals do not create journal entries or verified balances.
+  A full database backup is required to preserve these imports.
+
+- Add persisted operations with source-linked, stable movement identities and
+  exact commodity quantities; imported bank events get one operation each.
+  Confirmed transfers group both operations on read, and undo restores the two
+  original operation identities without rewriting source movements.
+  Inspect the result with `fin tx operation EVENT-ID` (or `--json`).
+  Existing bank reviews and exports retain event-ID compatibility; category and
+  type decisions and their histories are keyed by the primary movement.
+  **Action required:** schema 32 requires a database
+  rebuild; export settings and decisions and keep a full backup first.
+  Portable transaction snapshots do not yet include independent operations.
+
+- Transaction decision exports use version 4 with an explicit `primary` movement
+  role. Restore continues to read versions 1–3 and refuses unsupported roles.
+  Older executables cannot read version 4 exports; keep the previous snapshot.
+
+- Define an operation model linking source references to multiple proposed
+  balance movements; use it in CDC inspection and evidence import.
+
+- Add `fin import cdc --inspect --summary` to count transaction kinds and flag
+  identical source rows for review without deduplicating them.
+
+- Add an explicit core commodity identity for fiat and provider-scoped reported
+  symbols, and a read-only `fin import cdc --inspect` CSV interpretation. Unknown
+  patterns remain in review; no accounting entries or balances are created.
+
+- Accept `YYYY-MM-DD HH:MM:SS` in generic CSV date columns; validate the clock,
+  use its calendar date for booking and retain the original value as evidence.
+
 - Replace `fin tx cat export/restore` with `fin tx export/restore` and include
   manual type overrides alongside category decisions. Restore previews conflicts
   and applies all decisions atomically; older category snapshots remain readable.

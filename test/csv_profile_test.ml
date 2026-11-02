@@ -113,6 +113,29 @@ let localized_formats () =
      && Poly.equal legacy.amount_format Csv_profile.Dot_decimal)
 ;;
 
+let datetime_format () =
+  let profile = { profile with date_format = Csv_profile.Iso_datetime } in
+  let profile =
+    Json.decode Csv_profile.codec (Json.encode Csv_profile.codec profile)
+    |> Or_error.ok_exn
+  in
+  let row =
+    Csv_profile.parse profile "Merchant,Date,USD\nShop,2025-06-09 17:56:16,4.3\n"
+    |> Or_error.ok_exn
+    |> List.hd_exn
+  in
+  Alcotest.(check string) "booking date" "2025-06-09" (Date.to_string row.date);
+  Alcotest.(check (list string))
+    "original timestamp"
+    [ "Shop"; "2025-06-09 17:56:16"; "4.3" ]
+    row.fields;
+  Alcotest.(check bool)
+    "invalid clock rejected"
+    true
+    (Result.is_error
+       (Csv_profile.parse profile "Merchant,Date,USD\nShop,2025-06-09 25:00:00,4.3\n"))
+;;
+
 let bank_account () =
   let profile =
     { profile with account_type = Csv_profile.Savings; invert_amount = false }
@@ -248,6 +271,7 @@ let () =
         ; Alcotest.test_case "identities" `Quick identities
         ; Alcotest.test_case "bank account" `Quick bank_account
         ; Alcotest.test_case "localized formats" `Quick localized_formats
+        ; Alcotest.test_case "date and time" `Quick datetime_format
         ; Alcotest.test_case "import and overlap" `Quick integration
         ; Alcotest.test_case "profile roundtrip" `Quick profile_roundtrip
         ; Alcotest.test_case "provider identity" `Quick provider_identity

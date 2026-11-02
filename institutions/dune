@@ -10,11 +10,11 @@
 
 (rule
  (targets bundled_definitions.ml)
- (deps boursobank.json wise.json revolut.json bunq.json)
+ (deps boursobank.json wise.json revolut.json bunq.json cdc.json)
  (action
   (write-file
    %{targets}
-   "let boursobank = {fin|%{read:boursobank.json}|fin}\n\nlet wise = {fin|%{read:wise.json}|fin}\n\nlet revolut = {fin|%{read:revolut.json}|fin}\n\nlet bunq = {fin|%{read:bunq.json}|fin}\n")))
+   "let boursobank = {fin|%{read:boursobank.json}|fin}\n\nlet wise = {fin|%{read:wise.json}|fin}\n\nlet revolut = {fin|%{read:revolut.json}|fin}\n\nlet bunq = {fin|%{read:bunq.json}|fin}\n\nlet cdc = {fin|%{read:cdc.json}|fin}\n")))
 
 ; Adapters are pure: no Rel or SQLite dependency, enforced here.
 

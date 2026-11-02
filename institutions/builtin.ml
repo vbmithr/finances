@@ -13,6 +13,18 @@ let definitions : Institution_definition.t list =
     ~f:(fun json -> Json.decode Institution_definition.codec json |> Or_error.ok_exn)
 ;;
 
+(** Movement CSV sources (one source row, one or two commodity movements). They
+    are data like the banks, and do not use the one-movement bank adapter. *)
+let movement_profiles : Movement_csv.profile list =
+  List.map [ Bundled_definitions.cdc ] ~f:(fun json ->
+    Json.decode Movement_csv.profile_codec json |> Or_error.ok_exn)
+;;
+
+let movement_profile name =
+  List.find movement_profiles ~f:(fun p ->
+    List.mem (Movement_csv.names p) name ~equal:String.equal)
+;;
+
 let definition name =
   List.find definitions ~f:(fun d ->
     List.mem (Institution_definition.names d) name ~equal:String.equal)

@@ -9,13 +9,54 @@ type ingest =
   | Inserted of int64
   | Existing of int64
 
+(** Persist an operation and its movements atomically. Every source must already
+    exist; every movement needs a stable identity anchored to one of its sources.
+    File-row references are inspection-only and cannot be persisted. *)
+val add_operation : t -> Operation.t -> int64 Or_error.t
+
+(** Reload an operation, validating its commodities, quantities and references.
+    Confirmed transfers combine both bank operations using the first event's
+    operation ID; either component ID retrieves the grouped operation. *)
+val get_operation : t -> int64 -> Operation.t Or_error.t
+
+(** Find operations supported by a source event; confirmed bank transfer
+    components resolve to the same canonical operation ID. *)
+val operations_for_event : t -> int64 -> (int64 * Operation.t) list Or_error.t
+
+type operation_document_preview =
+  { rows : int
+  ; already_imported : bool
+  ; fingerprint : string
+  ; problems : string list
+  }
+
+(** Inspect a complete source document without writing. Identical rows or
+    overlapping records in a different document are reported as ambiguous. *)
+val preview_operation_document
+  :  t
+  -> institution:string
+  -> contents:string
+  -> rows:Operation_import.row list
+  -> operation_document_preview Or_error.t
+
+(** Recheck the preview and atomically archive/import the entire document. *)
+val import_operation_document
+  :  t
+  -> institution:string
+  -> contents:string
+  -> rows:Operation_import.row list
+  -> expected:operation_document_preview
+  -> int Or_error.t
+
 (** The registry supplies every bank the store can decode; the store itself
     names none. *)
 val with_open : registry:Registry.t -> string -> (t -> 'a Or_error.t) -> 'a Or_error.t
 
-(** Writes a consistent copy of the database to [path], a new file, with SQLite's
-    [VACUUM INTO]; other connections may be using the database meanwhile. *)
-val backup : t -> string -> unit Or_error.t
+(** [backup source path] writes a consistent copy of the database file [source] to
+    [path], a new file, with SQLite's [VACUUM INTO]; other connections may be using
+    the database meanwhile. It does not check the schema version, so it works on
+    databases this build cannot open. *)
+val backup : string -> string -> unit Or_error.t
 
 (** Restore a SQLite backup after checking its schema, integrity and foreign
     keys. The source is opened read-only. SQLite replaces the destination in

@@ -8,6 +8,7 @@ type decision =
   ; occurred : string
   ; payload_sha256 : string
   ; fields_sha256 : string
+  ; movement_role : string
   ; account : string option
   ; reason : string option
   ; type_override : string option
@@ -19,38 +20,54 @@ type t =
   ; decisions : decision list
   }
 
-let decision =
-  Jsont.Object.map
-    (fun
-        institution
-         source_account
-         kind
-         source_id
-         occurred
-         payload_sha256
-         fields_sha256
-         account
-         reason
-         type_override
-       ->
-       { institution
-       ; source_account
-       ; kind
-       ; source_id
-       ; occurred
-       ; payload_sha256
-       ; fields_sha256
-       ; account
-       ; reason
-       ; type_override
-       })
-  |> Jsont.Object.mem "institution" Jsont.string ~enc:(fun r -> r.institution)
-  |> Jsont.Object.mem "source_account" Jsont.string ~enc:(fun r -> r.source_account)
-  |> Jsont.Object.mem "kind" Jsont.string ~enc:(fun r -> r.kind)
-  |> Jsont.Object.mem "source_id" Jsont.string ~enc:(fun r -> r.source_id)
-  |> Jsont.Object.mem "occurred" Jsont.string ~enc:(fun r -> r.occurred)
-  |> Jsont.Object.mem "payload_sha256" Jsont.string ~enc:(fun r -> r.payload_sha256)
-  |> Jsont.Object.mem "fields_sha256" Jsont.string ~enc:(fun r -> r.fields_sha256)
+let decision ~legacy =
+  let map =
+    Jsont.Object.map
+      (fun
+          institution
+           source_account
+           kind
+           source_id
+           occurred
+           payload_sha256
+           fields_sha256
+           movement_role
+           account
+           reason
+           type_override
+         ->
+         { institution
+         ; source_account
+         ; kind
+         ; source_id
+         ; occurred
+         ; payload_sha256
+         ; fields_sha256
+         ; movement_role
+         ; account
+         ; reason
+         ; type_override
+         })
+    |> Jsont.Object.mem "institution" Jsont.string ~enc:(fun r -> r.institution)
+    |> Jsont.Object.mem "source_account" Jsont.string ~enc:(fun r -> r.source_account)
+    |> Jsont.Object.mem "kind" Jsont.string ~enc:(fun r -> r.kind)
+    |> Jsont.Object.mem "source_id" Jsont.string ~enc:(fun r -> r.source_id)
+    |> Jsont.Object.mem "occurred" Jsont.string ~enc:(fun r -> r.occurred)
+    |> Jsont.Object.mem "payload_sha256" Jsont.string ~enc:(fun r -> r.payload_sha256)
+    |> Jsont.Object.mem "fields_sha256" Jsont.string ~enc:(fun r -> r.fields_sha256)
+  in
+  let map =
+    if legacy
+    then
+      Jsont.Object.mem
+        "movement_role"
+        Jsont.string
+        ~dec_absent:"primary"
+        ~enc:(fun r -> r.movement_role)
+        map
+    else Jsont.Object.mem "movement_role" Jsont.string ~enc:(fun r -> r.movement_role) map
+  in
+  map
   |> Jsont.Object.opt_mem "account" Jsont.string ~enc:(fun r -> r.account)
   |> Jsont.Object.opt_mem "reason" Jsont.string ~enc:(fun r -> r.reason)
   |> Jsont.Object.opt_mem "type_override" Jsont.string ~enc:(fun r -> r.type_override)
@@ -150,7 +167,10 @@ let codec =
   |> Jsont.Object.mem "version" (Json.version 1) ~enc:(fun _ -> ())
   |> Jsont.Object.mem "categories" (Jsont.list Jsont.string) ~enc:(fun r -> r.categories)
   |> Jsont.Object.mem "rules" (Jsont.list rule) ~enc:(fun r -> r.rules)
-  |> Jsont.Object.mem "decisions" (Jsont.list decision) ~enc:(fun r -> r.decisions)
+  |> Jsont.Object.mem
+       "decisions"
+       (Jsont.list (decision ~legacy:true))
+       ~enc:(fun r -> r.decisions)
   |> Jsont.Object.error_unknown
   |> Jsont.Object.finish
 ;;
@@ -173,13 +193,17 @@ let rules_codec =
   |> Jsont.Object.finish
 ;;
 
-let decisions_codec_for version =
+let decisions_codec_for ~legacy version =
   Jsont.Object.map (fun () decisions -> { categories = []; rules = []; decisions })
   |> Jsont.Object.mem "version" (Json.version version) ~enc:(fun _ -> ())
-  |> Jsont.Object.mem "decisions" (Jsont.list decision) ~enc:(fun r -> r.decisions)
+  |> Jsont.Object.mem
+       "decisions"
+       (Jsont.list (decision ~legacy))
+       ~enc:(fun r -> r.decisions)
   |> Jsont.Object.error_unknown
   |> Jsont.Object.finish
 ;;
 
-let decisions_codec = decisions_codec_for 3
-let legacy_decisions_codec = decisions_codec_for 2
+let decisions_codec = decisions_codec_for ~legacy:false 4
+let previous_decisions_codec = decisions_codec_for ~legacy:true 3
+let legacy_decisions_codec = decisions_codec_for ~legacy:true 2

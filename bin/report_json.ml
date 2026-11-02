@@ -23,6 +23,112 @@ let transfer_state =
 
 let print codec value = Stdio.print_endline (Json.encode ~format:Jsont.Indent codec value)
 
+let movement_csv_leg =
+  let field name codec (enc : Movement_csv.leg -> _) map =
+    Jsont.Object.mem name codec ~enc map
+  in
+  Jsont.Object.enc_only ()
+  |> field "provider" (Jsont.option Jsont.string) (fun leg ->
+    Commodity.provider leg.commodity)
+  |> field "commodity" Jsont.string (fun leg -> Commodity.display leg.commodity)
+  |> field "amount" Json.quantity (fun leg -> leg.amount)
+  |> Jsont.Object.finish
+;;
+
+let movement_csv_row =
+  let field name codec (enc : Movement_csv.row -> _) map =
+    Jsont.Object.mem name codec ~enc map
+  in
+  Jsont.Object.enc_only ()
+  |> field "file" Jsont.string (fun row -> row.file)
+  |> field "row" Jsont.int (fun row -> row.row_number)
+  |> field "timestamp" timestamp (fun row -> row.timestamp)
+  |> field "kind" Jsont.string (fun row -> row.kind)
+  |> field "interpretation" Jsont.string (fun row ->
+    match row.interpretation with
+    | Single -> "single"
+    | Exchange -> "exchange"
+    | Review _ -> "review")
+  |> field "review_reason" (Jsont.option Jsont.string) (fun row ->
+    match row.interpretation with
+    | Review reason -> Some reason
+    | _ -> None)
+  |> field "proposed_legs" (Jsont.list movement_csv_leg) (fun row -> row.proposed_legs)
+  |> field "fields" Json.string_map (fun row -> row.fields)
+  |> Jsont.Object.finish
+;;
+
+let movement_csv_kind_summary =
+  let field name codec (enc : Movement_csv.kind_summary -> _) map =
+    Jsont.Object.mem name codec ~enc map
+  in
+  Jsont.Object.enc_only ()
+  |> field "kind" Jsont.string (fun row -> row.kind)
+  |> field "rows" Jsont.int (fun row -> row.rows)
+  |> field "single" Jsont.int (fun row -> row.single)
+  |> field "exchange" Jsont.int (fun row -> row.exchange)
+  |> field "review" Jsont.int (fun row -> row.review)
+  |> Jsont.Object.finish
+;;
+
+let movement_csv_row_reference =
+  let field name codec (enc : Movement_csv.row_reference -> _) map =
+    Jsont.Object.mem name codec ~enc map
+  in
+  Jsont.Object.enc_only ()
+  |> field "file" Jsont.string (fun row -> row.file)
+  |> field "row" Jsont.int (fun row -> row.row_number)
+  |> Jsont.Object.finish
+;;
+
+let movement_csv_summary =
+  let field name codec (enc : Movement_csv.summary -> _) map =
+    Jsont.Object.mem name codec ~enc map
+  in
+  Jsont.Object.enc_only ()
+  |> field "total" Jsont.int (fun summary -> summary.total)
+  |> field "by_kind" (Jsont.list movement_csv_kind_summary) (fun summary ->
+    summary.by_kind)
+  |> field
+       "identical_rows"
+       (Jsont.list (Jsont.list movement_csv_row_reference))
+       (fun summary -> summary.identical_rows)
+  |> Jsont.Object.finish
+;;
+
+let operation_evidence =
+  Jsont.Object.enc_only ()
+  |> Jsont.Object.mem "event_id" Json.int64_codec ~enc:(function
+    | Operation.Stored_event id -> id
+    | Operation.File_row _ -> failwith "file-row evidence is not persisted")
+  |> Jsont.Object.finish
+;;
+
+let operation_movement =
+  let field name codec (enc : Operation.movement -> _) map =
+    Jsont.Object.mem name codec ~enc map
+  in
+  Jsont.Object.enc_only ()
+  |> field "identity" (Jsont.option Movement_identity.codec) (fun m -> m.identity)
+  |> field "account" (Jsont.option Jsont.string) (fun m -> m.account)
+  |> field "commodity" Commodity.codec (fun m -> m.commodity)
+  |> field "quantity" Json.quantity (fun m -> m.quantity)
+  |> field "evidence" (Jsont.list operation_evidence) (fun m -> m.evidence)
+  |> Jsont.Object.finish
+;;
+
+let operation =
+  let field name codec (enc : int64 * Operation.t -> _) map =
+    Jsont.Object.mem name codec ~enc map
+  in
+  Jsont.Object.enc_only ()
+  |> field "id" Json.int64_codec fst
+  |> field "occurred" temporal (fun (_, op) -> op.occurred)
+  |> field "evidence" (Jsont.list operation_evidence) (fun (_, op) -> op.evidence)
+  |> field "movements" (Jsont.list operation_movement) (fun (_, op) -> op.movements)
+  |> Jsont.Object.finish
+;;
+
 let event =
   let field name codec (enc : int64 * Source_event.t -> _) map =
     Jsont.Object.mem name codec ~enc map
@@ -41,6 +147,19 @@ let event =
     match (snd r).occurred with
     | Temporal.Date d -> Some d
     | Temporal.Instant _ -> None)
+  |> Jsont.Object.finish
+;;
+
+let source_event =
+  let field name codec (enc : int64 * Source_event.t -> _) map =
+    Jsont.Object.mem name codec ~enc map
+  in
+  Jsont.Object.enc_only ()
+  |> field "id" Json.int64_codec fst
+  |> field "venue" Jsont.string (fun (_, event) -> event.venue)
+  |> field "kind" Jsont.string (fun (_, event) -> event.kind)
+  |> field "occurred" temporal (fun (_, event) -> event.occurred)
+  |> field "fields" Json.string_map (fun (_, event) -> event.fields)
   |> Jsont.Object.finish
 ;;
 

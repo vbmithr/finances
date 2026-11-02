@@ -153,6 +153,20 @@ let replay_and_archive () =
         match e.occurred with
         | Temporal.Date _ -> ()
         | Temporal.Instant _ -> failwith "bank date became a fabricated instant");
+      List.iter events ~f:(fun (id, _) ->
+        let operations = ok (Store.operations_for_event db id) in
+        Alcotest.(check int) "one operation after reimport" 1 (List.length operations);
+        let _, operation = List.hd_exn operations in
+        Alcotest.(check int) "one bank movement" 1 (List.length operation.movements);
+        let movement = List.hd_exn operation.movements in
+        Alcotest.(check string)
+          "stable primary role"
+          "primary"
+          (Option.value_exn movement.identity).role;
+        Alcotest.(check bool)
+          "account mapping remains authoritative"
+          true
+          (Option.is_none movement.account));
       Alcotest.(check int)
         "no automatic accounting classification"
         0
@@ -223,6 +237,39 @@ let institution_scoping () =
     check_counts path 2 6 6)
 ;;
 
+let shared_operation_blocks_account_deletion () =
+  with_database (fun path ->
+    ignore (import path (fixture ()));
+    with_store path (fun db ->
+      let events = ok (Store.events db) in
+      let first_id, first_event = List.hd_exn events in
+      let second_id, _ =
+        List.find_exn events ~f:(fun (_, event) ->
+          not (String.equal event.Source_event.account first_event.account))
+      in
+      let operation =
+        ok
+          (Operation.create
+             ~occurred:first_event.occurred
+             ~evidence:
+               [ Operation.Stored_event first_id; Operation.Stored_event second_id ]
+             ~movements:[])
+      in
+      ignore (ok (Store.add_operation db operation) : int64);
+      let account =
+        ok (Store.bank_account_info db)
+        |> List.find_exn ~f:(fun info ->
+          String.equal
+            (Bank_account_mapping.source_account info.Store.mapping)
+            first_event.account)
+      in
+      error (Store.delete_account db account.mapping);
+      Alcotest.(check int)
+        "source events are preserved"
+        3
+        (List.length (ok (Store.events db)))))
+;;
+
 let balance_times () =
   let document =
     fixture ()
@@ -263,6 +310,8 @@ let () =
           ; "overlapping exports", overlapping_exports
           ; "atomic conflict rollback", atomic_conflict
           ; "institution scoping", institution_scoping
+          ; ( "shared operation protects account deletion"
+            , shared_operation_blocks_account_deletion )
           ]
           ~f:(fun (name, f) -> Alcotest.test_case name `Quick f) )
     ]

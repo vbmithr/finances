@@ -163,6 +163,84 @@ class ImportOnboarding(unittest.TestCase):
         self.assertEqual((rent['booked_on'], rent['amount']), ('2026-04-03', '-123.45'))
         self.assertIn('inserted=0', self.run_fin('import', csv_path, '--account-id', 'main', '--provider', 'localbank').stdout)
 
+    def test_cdc_inspection_is_read_only_and_conservative(self):
+        path = self.root / 'cdc.csv'
+        path.write_text('Timestamp (UTC),Transaction Description,Currency,Amount,To Currency,To Amount,Native Currency,Native Amount,Native Amount (in USD),Transaction Kind,Transaction Hash\n'
+                        '2025-06-09 17:56:16,Reward,CRO,1.23456789,,,EUR,0.10,0.12,referral_card_cashback,\n'
+                        '2025-06-09 17:56:17,Exchange,CRO,-2,EUR,0.20,EUR,0.20,0.23,crypto_viban_exchange,\n'
+                        '2025-06-09 17:56:18,Payment,CRO,-3,CRO,-3,EUR,1,1,crypto_payment,\n'
+                        '2025-06-09 17:56:19,Unknown,CRO,-1,EUR,,EUR,1,1,unknown_kind,\n')
+        env = dict(self.env, XDG_DATA_HOME=str(self.root / 'unused-data'))
+        result = subprocess.run([FIN, 'import', 'cdc', '--inspect', '--json', str(path)],
+                                env=env, stdin=subprocess.DEVNULL, capture_output=True, text=True)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        rows = json.loads(result.stdout)
+        self.assertEqual([r['interpretation'] for r in rows], ['single', 'exchange', 'review', 'review'])
+        self.assertEqual(rows[0]['proposed_legs'], [{'provider': 'cdc', 'commodity': 'CRO', 'amount': '1.23456789'}])
+        self.assertEqual([leg['amount'] for leg in rows[1]['proposed_legs']], ['-2', '0.2'])
+        self.assertEqual(rows[2]['proposed_legs'], [])
+        self.assertEqual(rows[2]['fields']['To Amount'], '-3')
+        self.assertIn('Incomplete', rows[3]['review_reason'])
+        self.assertFalse((self.root / 'unused-data').exists())
+        copy = self.root / 'cdc-copy.csv'
+        copy.write_bytes(Path(path).read_bytes())
+        summary = json.loads(self.run_fin('import', 'cdc', '--inspect', '--summary', '--json', path, str(copy)).stdout)
+        self.assertEqual(summary['total'], 8)
+        self.assertEqual(len(summary['identical_rows']), 4)
+        self.assertEqual(next(k for k in summary['by_kind'] if k['kind'] == 'crypto_payment')['review'], 2)
+        self.assertTrue(all(len(group) == 2 for group in summary['identical_rows']))
+        self.assertNotEqual(self.run_fin('import', 'cdc', '--inspect', check=False).returncode, 0)
+        journal = self.run_fin('journal', 'export').stdout
+        preview = self.run_fin('import', 'cdc', path).stdout
+        self.assertIn('Rows: 4; need review: 2', preview)
+        self.assertEqual(json.loads(self.run_fin('db', 'events').stdout), [])
+        self.assertIn('operation_sources_imported=4', self.run_fin('import', 'cdc', path, '--apply', '--yes').stdout)
+        self.assertIn('operation_sources_imported=0', self.run_fin('import', 'cdc', path, '--apply', '--yes').stdout)
+        sources = json.loads(self.run_fin('transaction', 'sources', '--institution', 'cdc', '--json').stdout)
+        self.assertEqual(len(sources), 4)
+        self.assertEqual(next(s for s in sources if s['fields']['Transaction Description'] == 'Exchange')['fields']['To Amount'], '0.20')
+        self.assertIn('Exchange', self.run_fin('transaction', 'sources', '--institution', 'cdc').stdout)
+        events = json.loads(self.run_fin('db', 'events').stdout)
+        self.assertEqual(len(events), 4)
+        exchange_event = next(e for e in events if e['occurred_at'].startswith('2025-06-09T17:56:17'))
+        operation = json.loads(self.run_fin('tx', 'operation', exchange_event['id'], '--json').stdout)[0]
+        self.assertEqual([m['identity']['role'] for m in operation['movements']], ['from', 'to'])
+        self.assertEqual([m['quantity'] for m in operation['movements']], ['-2', '0.2'])
+        self.assertEqual(self.run_fin('journal', 'export').stdout, journal)
+        overlap = self.root / 'overlap.csv'
+        overlap.write_text(path.read_text() + '2025-06-09 17:56:20,Another,CRO,2,,,EUR,1,1,referral_bonus,\n')
+        blocked = self.run_fin('import', 'cdc', overlap, '--apply', '--yes', check=False)
+        self.assertNotEqual(blocked.returncode, 0)
+        self.assertIn('overlap is ambiguous', blocked.stdout)
+        self.assertEqual(len(json.loads(self.run_fin('db', 'events').stdout)), 4)
+        duplicated = self.root / 'duplicated.csv'
+        header, first, *_ = path.read_text().splitlines()
+        duplicated.write_text(header + '\n' + first + '\n' + first + '\n')
+        blocked = self.run_fin('import', 'cdc', duplicated, '--apply', '--yes', check=False)
+        self.assertNotEqual(blocked.returncode, 0)
+        self.assertIn('identical source rows are ambiguous', blocked.stdout)
+
+    def test_generic_csv_timestamp_setup(self):
+        path = self.root / 'timestamp.csv'
+        path.write_text('Timestamp (UTC),Transaction Description,Currency,Amount,To Currency,To Amount,Native Currency,Native Amount,Native Amount (in USD),Transaction Kind,Transaction Hash\n'
+                        '2025-06-09 17:56:16,Crv*Le Genre Urbain,EUR,-4.3,,,EUR,-4.3,-4.938386557,,\n')
+        output = self.terminal(['import', path, '--provider', 'cdc', '--account-id', 'main'], [
+            ('Column containing the transaction date:', '1'),
+            ('Column containing the merchant or description:', '2'),
+            ('Column containing the amount charged to the account:', '4'),
+            ('Account currency (e.g. USD):', 'EUR'),
+            ('Account type:', '3'),
+            ('Are outgoing amounts positive in the file?', '2'),
+            ('Skip a summary row with an empty date?', '2'),
+            ('Import these transactions?', '1'),
+            ('IBAN (Enter to skip):', ''),
+        ])
+        self.assertIn('Detected date and time', output)
+        row = json.loads(self.run_fin('tx', 'list', '--json').stdout)[0]
+        self.assertEqual((row['booked_on'], row['amount'], row['description']),
+                         ('2025-06-09', '-4.3', 'Crv*Le Genre Urbain'))
+        self.assertIn('inserted=0', self.run_fin('import', path, '--provider', 'cdc', '--account-id', 'main').stdout)
+
     def test_generic_bank_csv_setup_and_reimport(self):
         csv_path = self.root / 'checking.csv'
         csv_path.write_text('Date,Description,EUR\n2026-10-01,Rent,-120.00\n2026-10-02,Salary,950.00\n')
@@ -317,12 +395,15 @@ class ImportOnboarding(unittest.TestCase):
         self.assertEqual(set(r), {'version', 'rules'})
         self.assertEqual(set(exported), {'version', 'decisions'})
         self.assertTrue(all(x['version'] == 2 for x in (c, r)))
-        self.assertEqual(exported['version'], 3)
+        self.assertEqual(exported['version'], 4)
+        self.assertTrue(all(d['movement_role'] == 'primary' for d in exported['decisions']))
         self.assertIn('expenses:unused', c['categories'])
         self.assertTrue(any(rule['name'] == 'deposit-rule' for rule in r['rules']))
         self.assertEqual(len(exported['decisions']), 1)
         older = self.root / 'category-v2.json'
-        older.write_text(json.dumps(dict(exported, version=2)))
+        older.write_text(json.dumps({'version': 2, 'decisions': [{k: v for k, v in d.items() if k != 'movement_role'} for d in exported['decisions']]}))
+        previous = self.root / 'transaction-v3.json'
+        previous.write_text(json.dumps({'version': 3, 'decisions': [{k: v for k, v in d.items() if k != 'movement_role'} for d in exported['decisions']]}))
         other = self.root / 'rebuilt.sqlite3'
         self.run_fin('init', '--database', other)
         self.run_fin('import', 'boursobank', 'fixtures/bank.ofx', '--database', other)
@@ -338,6 +419,7 @@ class ImportOnboarding(unittest.TestCase):
         self.assertEqual(current['counter_account'], 'income:salary')
         self.assertIn('income:salary', json.loads(self.run_fin('cat', 'list', '--database', other, '--json').stdout))
         self.assertIn('category_changes=0', self.run_fin('tx', 'restore', older, '--database', other, '--apply', '--yes').stdout)
+        self.assertIn('category_changes=0', self.run_fin('tx', 'restore', previous, '--database', other, '--apply', '--yes').stdout)
         self.assertNotIn('expenses:unused', json.loads(self.run_fin('cat', 'list', '--database', other, '--json').stdout))
         self.run_fin('cat', 'restore', catalog, '--database', other, '--apply', '--yes')
         self.assertIn('expenses:rule-only', self.run_fin('rule', 'restore', rules, '--database', other).stdout)
@@ -465,6 +547,25 @@ class ImportOnboarding(unittest.TestCase):
         self.assertNotEqual(result.returncode, 0)
         self.assertIn('duplicate transaction identities', result.stdout)
         self.assertNotIn('expenses:should-not-appear', self.run_fin('cat', 'list').stdout)
+        exported['decisions'] = [exported['decisions'][0]]
+        exported['decisions'][0]['movement_role'] = 'to'
+        snapshot.write_text(json.dumps(exported))
+        result = self.run_fin('tx', 'restore', snapshot, '--apply', '--yes', check=False)
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn('unsupported movement role', result.stdout)
+        self.assertNotIn('expenses:should-not-appear', self.run_fin('cat', 'list').stdout)
+        del exported['decisions'][0]['movement_role']
+        snapshot.write_text(json.dumps(exported))
+        self.assertNotEqual(self.run_fin('tx', 'restore', snapshot, check=False).returncode, 0)
+        exported['decisions'][0]['movement_role'] = 'primary'
+        snapshot.write_text(json.dumps(exported))
+        with sqlite3.connect(self.root / 'data/fin/fin.sqlite3') as db:
+            db.execute('DELETE FROM operation_movement_sources WHERE movement_id IN '
+                       '(SELECT id FROM operation_movements WHERE anchor_event_id=?)', (first,))
+        result = self.run_fin('tx', 'restore', snapshot, '--apply', '--yes', check=False)
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn('primary movement or its source link is missing', result.stdout)
+        self.assertNotEqual(self.run_fin('tx', 'export', check=False).returncode, 0)
 
     def test_ledger_wrapper_streams_journal_and_forwards_arguments(self):
         self.run_fin('import', 'revolut', self.csv, '--account-id', 'main')
@@ -1233,6 +1334,14 @@ class ImportOnboarding(unittest.TestCase):
         self.assertEqual(len(json.loads(self.run_fin('transfer', 'history').stdout)), 1)
         tx_status = json.loads(self.run_fin('tx', 'status', '--json').stdout)
         self.assertEqual((tx_status['transfers'], tx_status['classified'], tx_status['categorized']), (2, 2, 0))
+        operation = json.loads(self.run_fin('tx', 'operation', first, '--json').stdout)
+        other_operation = json.loads(self.run_fin('tx', 'operation', second, '--json').stdout)
+        self.assertEqual(len(operation), 1)
+        self.assertEqual(operation[0]['id'], other_operation[0]['id'])
+        self.assertEqual({x['event_id'] for x in operation[0]['evidence']}, {first, second})
+        self.assertEqual(len(operation[0]['movements']), 2)
+        self.assertIn('Sources:', self.run_fin('tx', 'operation', first).stdout)
+        self.assertNotEqual(self.run_fin('tx', 'operation', '9999999', check=False).returncode, 0)
         self.run_fin('tx', 'type', 'set', 'fee', first)
         snapshot = self.root / 'transfer-type.json'
         snapshot.write_text(self.run_fin('tx', 'export').stdout)
@@ -1252,6 +1361,10 @@ class ImportOnboarding(unittest.TestCase):
             [('Undo this transfer? [Y/n]:', 'n')]))
         self.assertEqual(len(json.loads(self.run_fin('transfer', 'history').stdout)), 1)
         self.assertIn('transfer_changes=1', self.run_fin('transfer', 'undo', second, first, '--yes').stdout)
+        first_operation = json.loads(self.run_fin('tx', 'operation', first, '--json').stdout)
+        second_operation = json.loads(self.run_fin('tx', 'operation', second, '--json').stdout)
+        self.assertNotEqual(first_operation[0]['id'], second_operation[0]['id'])
+        self.assertEqual(len(first_operation[0]['movements']), 1)
         self.assertEqual(len(json.loads(self.run_fin('transfer', 'history').stdout)), 2)
         rows = json.loads(self.run_fin('transaction', 'list', '--json').stdout)
         self.assertTrue(all(r['decision'] == 'unclassified' for r in rows if r['event_id'] in (first, second)))

@@ -43,6 +43,12 @@ infer opening balances. Those operations can be added around the core APIs.
 
 ## CLI and XDG storage
 
+Inspect CDC App CSV rows without importing them with
+`fin import cdc --inspect --json wallet.csv`. Use `fin import cdc wallet.csv`
+to preview and `--apply` to store source evidence and proposals; `fin transaction sources --institution cdc`
+shows imported source IDs. Proposed legs are not reconciled or posted; see the
+[manual](docs/manual.md#importing-statements) for limitations.
+
 Start with the [user manual](docs/manual.md) for setup, bank imports, account
 configuration, review and hledger queries.
 
@@ -321,11 +327,11 @@ or `Date of Date.t`.
 The `events` command prints an RFC 3339 `occurred_at` for instants, or
 `occurred_at: null` and a populated `occurred_on` for date-only OFX records.
 Wise records retain an instant and project using the local booking date.
-This experimental build supports schema 31. Fresh files initialize it atomically;
+This experimental build supports schema 32. Fresh files initialize it atomically;
 other schema versions are rejected without changes. There are no historical
-migrations. For a rebuild, export category decisions and rules with `fin cat
-export`, reimport original statements, and preview restoration with `fin cat
-restore`. Account settings have a separate export. Transfer review files use
+migrations. For a rebuild, export the category catalog, transaction decisions,
+rules and account settings separately, reimport original statements, and preview
+each restore. Transfer review files use
 internal event IDs: inspect the new records before recreating those decisions.
 Follow the [schema rebuild recipe](docs/manual.md#rebuilding-after-a-schema-change)
 before upgrading, while the old executable can still read its database.
@@ -612,6 +618,7 @@ fin rule restore rules-portable.json --apply             # confirm
 
 The transaction file contains current category decisions and manual type overrides,
 as well as personal source identities; store backups privately.
+It does not yet contain independently created operations or their source links.
 Restoring assignments or rules creates missing target categories. Assignment
 restore requires matching source identity and evidence and refuses conflicts or
 ambiguity. See the [manual](docs/manual.md#rebuilding-after-a-schema-change) for

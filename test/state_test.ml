@@ -62,11 +62,11 @@ let backup () =
                  db
                  ~institution:"boursobank"
                  (In_channel.read_all "fixtures/bank.ofx")));
-         let%map.Or_error () = Store.backup db copy in
+         let%map.Or_error () = Store.backup database copy in
          Alcotest.(check bool)
            "never overwrites"
            true
-           (Result.is_error (Store.backup db copy));
+           (Result.is_error (Store.backup database copy));
          count db))
   in
   Alcotest.(check bool) "events imported" true (original > 0);
@@ -101,6 +101,21 @@ let seed path =
            (In_channel.read_all "fixtures/bank.ofx")
        in
        ()))
+;;
+
+let backup_old_schema () =
+  let root = Fpath.to_string (bos (Bos.OS.Dir.tmp "fin-backup-old-%s")) in
+  let database = join root "fin.sqlite3"
+  and copy = join root "copy.sqlite3" in
+  seed database;
+  raw database (fun db -> sql db "PRAGMA user_version = 1");
+  Alcotest.(check bool)
+    "build cannot open it"
+    true
+    (Result.is_error
+       (Store.with_open ~registry:Test_support.registry database (fun _ -> Ok ())));
+  ok (Store.backup database copy);
+  raw copy (fun db -> sql db "SELECT 1")
 ;;
 
 let restore () =
@@ -210,6 +225,7 @@ let () =
     [ ( "state"
       , [ Alcotest.test_case "files and delete" `Quick files
         ; Alcotest.test_case "backup" `Quick backup
+        ; Alcotest.test_case "backup of an unsupported schema" `Quick backup_old_schema
         ; Alcotest.test_case "restore validation and fresh destination" `Quick restore
         ; Alcotest.test_case "restore WAL and rollback on copy failure" `Quick restore_wal
         ] )

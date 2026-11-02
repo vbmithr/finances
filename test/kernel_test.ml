@@ -328,6 +328,327 @@ let temporal_codec () =
     error (Or_error.try_with (fun () -> Temporal.of_string_exn text)))
 ;;
 
+let commodity_identity () =
+  let usd = Iso4217.of_alpha_code "USD" |> Option.value_exn in
+  let fiat = Commodity.fiat usd in
+  let reported = ok (Commodity.reported ~provider:"cdc" ~symbol:"USD") in
+  let other = ok (Commodity.reported ~provider:"other" ~symbol:"USD") in
+  let eth = ok (Commodity.onchain_native ~network:"ethereum-mainnet") in
+  let token =
+    ok
+      (Commodity.onchain_token
+         ~network:"ethereum-mainnet"
+         ~contract:"0x123"
+         ~token_id:None)
+  in
+  let other_network =
+    ok
+      (Commodity.onchain_token
+         ~network:"polygon-mainnet"
+         ~contract:"0x123"
+         ~token_id:None)
+  in
+  let multi_token =
+    ok
+      (Commodity.onchain_token
+         ~network:"ethereum-mainnet"
+         ~contract:"0x123"
+         ~token_id:(Some "1"))
+  in
+  Alcotest.(check bool)
+    "fiat differs from reported symbol"
+    false
+    (Commodity.equal fiat reported);
+  Alcotest.(check bool) "provider scopes symbol" false (Commodity.equal reported other);
+  Alcotest.(check bool) "identity equals itself" true (Commodity.equal reported reported);
+  Alcotest.(check bool) "network scopes token" false (Commodity.equal token other_network);
+  Alcotest.(check bool) "token ID scopes token" false (Commodity.equal token multi_token);
+  List.iter
+    [ fiat; reported; other; eth; token; other_network; multi_token ]
+    ~f:(fun commodity ->
+      let restored =
+        Json.decode Commodity.codec (Json.encode Commodity.codec commodity) |> ok
+      in
+      Alcotest.(check bool)
+        "commodity identity survives JSON"
+        true
+        (Commodity.equal commodity restored));
+  error (Json.decode Commodity.codec {|{"kind":"onchain-token","network":"ethereum"}|});
+  error (Commodity.reported ~provider:"cdc" ~symbol:"")
+;;
+
+let operation_model () =
+  let usd = Commodity.fiat (Option.value_exn (Iso4217.of_alpha_code "USD")) in
+  let eur = Commodity.fiat (Option.value_exn (Iso4217.of_alpha_code "EUR")) in
+  let source = Operation.Stored_event 1L
+  and other = Operation.Stored_event 2L in
+  let identity = ok (Movement_identity.of_event (event "trade-1") ~role:"from") in
+  let identity_to = ok (Movement_identity.of_event (event "trade-1") ~role:"to") in
+  let roundtrip =
+    ok
+      (Json.decode Movement_identity.codec (Json.encode Movement_identity.codec identity))
+  in
+  Alcotest.(check bool)
+    "portable identity roundtrip"
+    true
+    (Movement_identity.equal identity roundtrip);
+  Alcotest.(check bool)
+    "movement roles differ"
+    false
+    (Movement_identity.equal identity identity_to);
+  error (Movement_identity.of_event (event "trade-1") ~role:"");
+  let leg ?account commodity quantity evidence =
+    ok (Operation.movement ?account ~commodity ~quantity:(decimal quantity) ~evidence ())
+  in
+  let date = Temporal.Date (Date.of_string "2026-11-02") in
+  let debit = leg ~account:"assets:bank:eur" eur "-100" [ source ] in
+  let credit = leg ~account:"assets:bank:usd" usd "108" [ source ] in
+  let conversion =
+    ok (Operation.create ~occurred:date ~evidence:[ source ] ~movements:[ debit; credit ])
+  in
+  Alcotest.(check int)
+    "one source can describe two effects"
+    2
+    (List.length conversion.movements);
+  let incoming = leg ~account:"assets:bank:usd" usd "10" [ other ] in
+  let outgoing = leg ~account:"assets:bank:other" usd "-10" [ source ] in
+  let transfer =
+    ok
+      (Operation.create
+         ~occurred:date
+         ~evidence:[ source; other ]
+         ~movements:[ outgoing; incoming ])
+  in
+  Alcotest.(check int) "two records support a transfer" 2 (List.length transfer.evidence);
+  let purchase = leg ~account:"assets:bank:card" eur "-4.30" [ source ] in
+  let card =
+    ok (Operation.create ~occurred:date ~evidence:[ source ] ~movements:[ purchase ])
+  in
+  Alcotest.(check int)
+    "card purchase has one observed movement"
+    1
+    (List.length card.movements);
+  let cro = ok (Commodity.reported ~provider:"cdc" ~symbol:"CRO") in
+  let cashback = leg cro "0.0123456789" [ source ] in
+  Alcotest.(check bool)
+    "cashback account is unresolved"
+    true
+    (Option.is_none cashback.account);
+  Alcotest.(check bool)
+    "cashback quantity is exact"
+    true
+    (Quantity.equal cashback.quantity (decimal "0.0123456789"));
+  let top_up = leg cro "-20" [ source ] in
+  let partial =
+    ok (Operation.create ~occurred:date ~evidence:[ source ] ~movements:[ top_up ])
+  in
+  Alcotest.(check int)
+    "top-up does not invent a destination"
+    1
+    (List.length partial.movements);
+  error (Operation.create ~occurred:date ~evidence:[ source ] ~movements:[ incoming ]);
+  error (Operation.create ~occurred:date ~evidence:[ source; source ] ~movements:[]);
+  let identified =
+    ok
+      (Operation.movement
+         ~identity
+         ~commodity:usd
+         ~quantity:Quantity.one
+         ~evidence:[ source ]
+         ())
+  in
+  error
+    (Operation.create
+       ~occurred:date
+       ~evidence:[ source ]
+       ~movements:[ identified; identified ]);
+  let zero =
+    ok (Operation.movement ~commodity:usd ~quantity:Quantity.zero ~evidence:[ source ] ())
+  in
+  Alcotest.(check bool)
+    "zero source movement is retained"
+    true
+    (Quantity.is_zero zero.quantity);
+  error
+    (Operation.movement
+       ~account:"bad account"
+       ~commodity:usd
+       ~quantity:Quantity.one
+       ~evidence:[ source ]
+       ());
+  error
+    (Operation.create
+       ~occurred:date
+       ~evidence:[ Operation.File_row { document = "x"; row = 0 } ]
+       ~movements:[]);
+  let unknown = ok (Operation.create ~occurred:date ~evidence:[ source ] ~movements:[]) in
+  Alcotest.(check int) "unknown meaning is retained" 0 (List.length unknown.movements)
+;;
+
+let operation_storage () =
+  with_database (fun path ->
+    let operation_id = ref 0L in
+    with_store path (fun db ->
+      let from_event = event "conversion" in
+      let second_event = event "confirmation" in
+      let first = inserted (ok (Store.ingest db from_event)) in
+      let second = inserted (ok (Store.ingest db second_event)) in
+      let evidence = [ Operation.Stored_event first; Operation.Stored_event second ] in
+      let from = ok (Movement_identity.of_event from_event ~role:"from") in
+      let into = ok (Movement_identity.of_event from_event ~role:"to") in
+      let eur = Commodity.fiat (Option.value_exn (Iso4217.of_alpha_code "EUR")) in
+      let btc = ok (Commodity.reported ~provider:"cdc" ~symbol:"BTC") in
+      let from_leg =
+        ok
+          (Operation.movement
+             ~identity:from
+             ~account:"assets:bank:cash"
+             ~commodity:eur
+             ~quantity:(decimal "-100")
+             ~evidence:[ Operation.Stored_event first ]
+             ())
+      in
+      let to_leg =
+        ok
+          (Operation.movement
+             ~identity:into
+             ~commodity:btc
+             ~quantity:(decimal "0.00123456789")
+             ~evidence
+             ())
+      in
+      let op =
+        ok
+          (Operation.create
+             ~occurred:from_event.occurred
+             ~evidence
+             ~movements:[ from_leg; to_leg ])
+      in
+      operation_id := ok (Store.add_operation db op);
+      error (Store.add_operation db op);
+      let bad_id = ok (Movement_identity.of_event second_event ~role:"wrong") in
+      let bad_leg =
+        ok
+          (Operation.movement
+             ~identity:bad_id
+             ~commodity:btc
+             ~quantity:Quantity.one
+             ~evidence:[ Operation.Stored_event first ]
+             ())
+      in
+      let bad =
+        ok
+          (Operation.create
+             ~occurred:from_event.occurred
+             ~evidence
+             ~movements:[ bad_leg ])
+      in
+      error (Store.add_operation db bad);
+      let temporary =
+        ok
+          (Operation.create
+             ~occurred:from_event.occurred
+             ~evidence:[ Operation.File_row { document = "sample.csv"; row = 1 } ]
+             ~movements:[])
+      in
+      error (Store.add_operation db temporary));
+    with_store path (fun db ->
+      let restored = ok (Store.get_operation db !operation_id) in
+      Alcotest.(check int) "both sources survive reopen" 2 (List.length restored.evidence);
+      Alcotest.(check int) "both legs survive reopen" 2 (List.length restored.movements);
+      let incoming = List.nth_exn restored.movements 1 in
+      equal_decimal "0.00123456789" incoming.quantity;
+      Alcotest.(check bool)
+        "unassigned account remains unknown"
+        true
+        (Option.is_none incoming.account);
+      Alcotest.(check string)
+        "reported asset survives"
+        "BTC"
+        (Commodity.display incoming.commodity);
+      error (Store.get_operation db 999999L));
+    raw path (fun db ->
+      Alcotest.(check bool)
+        "failed operations rolled back"
+        true
+        (match
+           Rel_sqlite3.first
+             db
+             (Rel_sql.Stmt.v
+                "SELECT count(*) FROM operations"
+                ~rev_args:[]
+                ~result:Rel.Row.(t1 (int "n")))
+         with
+         | Ok (Some 1) -> true
+         | _ -> false)))
+;;
+
+let operation_document_safety () =
+  with_database (fun path ->
+    let source = event "document-row" in
+    let commodity = ok (Commodity.reported ~provider:"demo" ~symbol:"BTC") in
+    let make quantity =
+      let leg =
+        ok (Operation_import.leg ~role:"primary" ~commodity ~quantity:(decimal quantity))
+      in
+      ok (Operation_import.row ~source ~legs:[ leg ])
+    in
+    with_store path (fun db ->
+      let rows = [ make "1.25" ] in
+      let preview =
+        ok
+          (Store.preview_operation_document
+             db
+             ~institution:"paradex"
+             ~contents:"document"
+             ~rows)
+      in
+      error
+        (Store.import_operation_document
+           db
+           ~institution:"paradex"
+           ~contents:"document"
+           ~rows:[ make "9" ]
+           ~expected:preview);
+      Alcotest.(check int)
+        "changed preview stores no source"
+        0
+        (List.length (ok (Store.events db)));
+      Alcotest.(check int)
+        "document imported"
+        1
+        (ok
+           (Store.import_operation_document
+              db
+              ~institution:"paradex"
+              ~contents:"document"
+              ~rows
+              ~expected:preview)));
+    raw path (fun db ->
+      sql db "UPDATE operation_movements SET quantity='9' WHERE role='primary'");
+    with_store path (fun db ->
+      let rows = [ make "1.25" ] in
+      let preview =
+        ok
+          (Store.preview_operation_document
+             db
+             ~institution:"paradex"
+             ~contents:"document"
+             ~rows)
+      in
+      Alcotest.(check bool)
+        "corrupt replay is blocked"
+        true
+        (not (List.is_empty preview.problems));
+      error
+        (Store.import_operation_document
+           db
+           ~institution:"paradex"
+           ~contents:"document"
+           ~rows
+           ~expected:preview)))
+;;
+
 let () =
   Alcotest.run
     "finances kernel"
@@ -342,10 +663,14 @@ let () =
           ; "atomic rollback", rollback
           ; "immutable evidence", immutable_evidence
           ; "future schema", future_schema
+          ; "operation storage and rollback", operation_storage
+          ; "operation document replay and preview safety", operation_document_safety
           ]
           ~f:(fun (name, f) -> Alcotest.test_case name `Quick f) )
     ; ( "model"
       , [ Alcotest.test_case "shared temporal codec" `Quick temporal_codec
+        ; Alcotest.test_case "commodity identity" `Quick commodity_identity
+        ; Alcotest.test_case "multi-movement operations" `Quick operation_model
         ; Alcotest.test_case "accounting invariants" `Quick accounting_invariants
         ; Alcotest.test_case "linear perpetual valuation" `Quick linear_perpetual
         ] )

@@ -393,9 +393,9 @@ let initialize db =
     | _ ->
       Or_error.errorf
         "unsupported database schema; this experimental build accepts only schema %d. \
-         Use the previous fin version to export account settings and run fin backup \
-         before rebuilding. Then run fin delete and fin init, import your statement \
-         folders again and import the account snapshot"
+         Run fin backup first (it works on any schema); to export account settings, use \
+         the previous fin version. Then run fin delete and fin init, import your \
+         statement folders again and import the account snapshot"
         Db_schema.version)
 ;;
 
@@ -431,12 +431,17 @@ let with_open ~registry path f =
     f db)
 ;;
 
-let backup db path =
+let backup source path =
   if Stdlib.Sys.file_exists path
   then Or_error.errorf "%s already exists" path
-  else (
-    let quoted = "'" ^ String.substr_replace_all path ~pattern:"'" ~with_:"''" ^ "'" in
-    db_result (Db.exec_sql db.conn ("VACUUM INTO " ^ quoted)))
+  else if not (Stdlib.Sys.file_exists source)
+  then Or_error.errorf "no database at %s" source
+  else
+    (* Deliberately independent of the schema version: a backup must be possible
+       before rebuilding a database that this build can no longer open. *)
+    with_connection ~mode:Read source (fun conn ->
+      let quoted = "'" ^ String.substr_replace_all path ~pattern:"'" ~with_:"''" ^ "'" in
+      db_result (Db.exec_sql conn ("VACUUM INTO " ^ quoted)))
 ;;
 
 let validate_backup conn =
@@ -683,6 +688,72 @@ let store_event_fields db event_id fields =
     db_result (Db.exec db.conn (insert event_id ordinal name value)))
 ;;
 
+(* Preserve the existing one-record bank interpretation as an operation. The
+   account mapping remains authoritative and is deliberately not copied here. *)
+let store_bank_operation db event_id (event : Source_event.t) (movement : Movement.t) =
+  let insert_operation =
+    Rel_sql.Stmt.(
+      func
+        "INSERT INTO operations(occurred,bank_event_id,source_event_id) VALUES (?,?,?)"
+        (text @-> int64 @-> int64 @-> unit))
+  in
+  let insert_source =
+    Rel_sql.Stmt.(
+      func
+        "INSERT INTO operation_sources(operation_id,event_id) VALUES (?,?)"
+        (int64 @-> int64 @-> unit))
+  in
+  let insert_movement =
+    Rel_sql.Stmt.(
+      func
+        "INSERT INTO \
+         operation_movements(operation_id,anchor_event_id,role,account,commodity,quantity) \
+         VALUES (?,?,'primary',NULL,?,?)"
+        (int64 @-> int64 @-> text @-> text @-> unit))
+  in
+  let insert_evidence =
+    Rel_sql.Stmt.(
+      func
+        "INSERT INTO operation_movement_sources(movement_id,operation_id,event_id) \
+         VALUES (?,?,?)"
+        (int64 @-> int64 @-> int64 @-> unit))
+  in
+  let* () =
+    db_result
+      (Db.exec
+         db.conn
+         (insert_operation (Temporal.to_string event.occurred) event_id event_id))
+  in
+  let operation_id = Db.last_insert_rowid db.conn in
+  let* () = db_result (Db.exec db.conn (insert_source operation_id event_id)) in
+  let commodity =
+    Commodity.fiat movement.account.currency |> Json.encode Commodity.codec
+  in
+  let* () =
+    db_result
+      (Db.exec
+         db.conn
+         (insert_movement
+            operation_id
+            event_id
+            commodity
+            (Quantity.to_string movement.amount)))
+  in
+  let movement_id = Db.last_insert_rowid db.conn in
+  db_result (Db.exec db.conn (insert_evidence movement_id operation_id event_id))
+;;
+
+let bank_primary_movement_id db event_id =
+  let query =
+    Rel_sql.Stmt.(
+      func
+        "SELECT id FROM operation_movements WHERE anchor_event_id=? AND role='primary'"
+        (int64 @-> ret Row.(t1 (int64 "id"))))
+  in
+  let* id = db_result (Db.first db.conn (query event_id)) in
+  Or_error.of_option id ~error:(Error.of_string "bank primary movement is missing")
+;;
+
 (* The movement stored at import, rebuilt and validated again. *)
 let movement_of_row (r : Db_schema.Movements.t) =
   Or_error.tag
@@ -917,19 +988,21 @@ let apply_automatic_category
       then select rest
       else (
         let reason = "Automatic rule " ^ name in
+        let* movement_id = bank_primary_movement_id db event_id in
         let insert =
           Rel_sql.Stmt.(
             func
-              "INSERT INTO bank_categories(event_id,account,reason) VALUES (?,?,?)"
-              (int64 @-> text @-> text @-> unit))
+              "INSERT INTO bank_categories(movement_id,event_id,account,reason) VALUES \
+               (?,?,?,?)"
+              (int64 @-> int64 @-> text @-> text @-> unit))
         in
         let audit =
           Rel_sql.Stmt.(
             func
               "INSERT INTO \
-               bank_category_changes(event_id,previous_account,account,reason) VALUES \
-               (?,NULL,?,?)"
-              (int64 @-> text @-> text @-> unit))
+               bank_category_changes(movement_id,event_id,previous_account,account,reason) \
+               VALUES (?,?,NULL,?,?)"
+              (int64 @-> int64 @-> text @-> text @-> unit))
         in
         let catalog =
           Rel_sql.Stmt.(
@@ -938,8 +1011,10 @@ let apply_automatic_category
               (text @-> unit))
         in
         let* () = db_result (Db.exec db.conn (catalog target)) in
-        let* () = db_result (Db.exec db.conn (insert event_id target reason)) in
-        db_result (Db.exec db.conn (audit event_id target reason)))
+        let* () =
+          db_result (Db.exec db.conn (insert movement_id event_id target reason))
+        in
+        db_result (Db.exec db.conn (audit movement_id event_id target reason)))
   in
   select (List.rev rows)
 ;;
@@ -977,6 +1052,7 @@ let ingest_in_transaction db (e : Source_event.t) =
         let* raw = Registry.movement ~source_typing:raw_profile db.registry e in
         let m = Source_typing.apply profile raw in
         let* () = db_result (Db.exec db.conn (insert_movement id e m)) in
+        let* () = store_bank_operation db id e m in
         let* rules = source_evidence_rules db e.venue in
         let evidence = Source_evidence.apply rules m in
         let* () = write_source_evidence db id evidence in
@@ -2872,9 +2948,10 @@ let retype ?institution ?reason db =
   let log =
     Rel_sql.Stmt.(
       func
-        "INSERT INTO movement_type_changes(event_id,previous_type,movement_type,reason) \
-         VALUES (?,?,?,?)"
-        (int64 @-> option text @-> option text @-> text @-> unit))
+        "INSERT INTO \
+         movement_type_changes(movement_id,event_id,previous_type,movement_type,reason) \
+         VALUES (?,?,?,?,?)"
+        (int64 @-> int64 @-> option text @-> option text @-> text @-> unit))
   in
   let* changed =
     traverse
@@ -2900,7 +2977,8 @@ let retype ?institution ?reason db =
              match reason with
              | None -> Ok ()
              | Some reason ->
-               db_result (Db.exec db.conn (log event_id before after reason))
+               let* movement_id = bank_primary_movement_id db event_id in
+               db_result (Db.exec db.conn (log movement_id event_id before after reason))
            in
            Ok 1)
       source
@@ -3276,6 +3354,7 @@ let set_bank_categories_in_transaction ?(only_unclassified = false) db decisions
               Option.equal [%equal: string * string] previous (Some (d.account, d.reason))
             then apply changed rest
             else
+              let* movement_id = bank_primary_movement_id db d.event_id in
               let* existing =
                 db_result (Db.first db.conn (find_entry d.event_id Bank_projection.key))
               in
@@ -3298,18 +3377,19 @@ let set_bank_categories_in_transaction ?(only_unclassified = false) db decisions
               let upsert =
                 Rel_sql.Stmt.(
                   func
-                    "INSERT INTO bank_categories(event_id,account,reason) VALUES (?,?,?) \
-                     ON CONFLICT(event_id) DO UPDATE SET \
+                    "INSERT INTO bank_categories(movement_id,event_id,account,reason) \
+                     VALUES (?,?,?,?) ON CONFLICT(event_id) DO UPDATE SET \
                      account=excluded.account,reason=excluded.reason"
-                    (int64 @-> text @-> text @-> unit))
+                    (int64 @-> int64 @-> text @-> text @-> unit))
               in
               let audit =
                 let open Db_schema.Bank_category_changes in
                 let insert = Rel_sql.insert_into_cols Db.dialect table in
-                fun v_event_id v_previous_account v_account v_reason ->
+                fun v_movement_id v_event_id v_previous_account v_account v_reason ->
                   insert
                     Col.
-                      [ Value (event_id, v_event_id)
+                      [ Value (movement_id, v_movement_id)
+                      ; Value (event_id, v_event_id)
                       ; Value (previous_account, v_previous_account)
                       ; Value (account, v_account)
                       ; Value (reason, v_reason)
@@ -3327,13 +3407,19 @@ let set_bank_categories_in_transaction ?(only_unclassified = false) db decisions
                 else db_result (Db.exec db.conn (catalog d.account))
               in
               let* () =
-                db_result (Db.exec db.conn (upsert d.event_id d.account d.reason))
+                db_result
+                  (Db.exec db.conn (upsert movement_id d.event_id d.account d.reason))
               in
               let* () =
                 db_result
                   (Db.exec
                      db.conn
-                     (audit d.event_id (Option.map previous ~f:fst) d.account d.reason))
+                     (audit
+                        movement_id
+                        d.event_id
+                        (Option.map previous ~f:fst)
+                        d.account
+                        d.reason))
               in
               apply (changed + 1) rest
       in
@@ -3679,7 +3765,7 @@ let bank_review_with_order ?order db =
     collect
       db
       (statement
-         "SELECT event_id,movement_type FROM movement_type_overrides"
+         "SELECT movement_id,event_id,movement_type FROM movement_type_overrides"
          Db_schema.Movement_type_overrides.row)
   in
   let overrides =
@@ -3756,6 +3842,50 @@ let category_fields_hash (e : Source_event.t) =
   |> Digestif.SHA256.to_hex
 ;;
 
+let bank_operation_anchors db =
+  let* sources =
+    collect
+      db
+      (statement
+         "SELECT o.bank_event_id FROM operations o JOIN operation_sources s ON \
+          s.operation_id=o.id AND s.event_id=o.bank_event_id WHERE o.bank_event_id IS \
+          NOT NULL"
+         Row.(t1 (int64 "event_id")))
+  in
+  let* rows =
+    collect
+      db
+      (statement
+         "SELECT m.anchor_event_id,m.commodity,m.quantity FROM operation_movements m \
+          JOIN operations o ON o.id=m.operation_id AND o.bank_event_id=m.anchor_event_id \
+          WHERE m.role='primary' AND EXISTS (SELECT 1 FROM operation_movement_sources s \
+          WHERE s.movement_id=m.id AND s.operation_id=m.operation_id AND \
+          s.event_id=m.anchor_event_id)"
+         Row.(t3 (int64 "event_id") (text "commodity") (text "quantity")))
+  in
+  Ok
+    ( Hashtbl.of_alist_exn
+        (module Int64)
+        (List.map rows ~f:(fun (id, commodity, quantity) -> id, (commodity, quantity)))
+    , Set.of_list (module Int64) sources )
+;;
+
+let verify_bank_operation_anchor (anchors, sources) (row : bank_review) =
+  if not (Set.mem sources row.event_id)
+  then Or_error.error_string "bank primary movement or its source link is missing"
+  else (
+    match Hashtbl.find anchors row.event_id with
+    | None -> Or_error.error_string "bank primary movement or its source link is missing"
+    | Some (commodity, amount) ->
+      let* commodity = Json.decode Commodity.codec commodity in
+      let* quantity = Or_error.try_with (fun () -> Quantity.of_string amount) in
+      if
+        Commodity.equal commodity (Commodity.fiat row.transaction.account.currency)
+        && Quantity.equal quantity row.transaction.amount
+      then Ok ()
+      else Or_error.error_string "bank primary movement differs from source movement")
+;;
+
 let category_snapshot db =
   transaction db (fun db ->
     let* categories = categories db in
@@ -3769,6 +3899,7 @@ let category_snapshot db =
     let* events = events db in
     let events_by_id = Hashtbl.of_alist_exn (module Int64) events in
     let* review = bank_review db in
+    let* anchors = bank_operation_anchors db in
     let* decisions =
       List.filter review ~f:(fun r ->
         Option.is_some r.movement_type_override
@@ -3776,6 +3907,7 @@ let category_snapshot db =
              || Poly.equal r.classification Category)
             && Option.is_some r.reason))
       |> traverse (fun r ->
+        let* () = verify_bank_operation_anchor anchors r in
         let* event =
           Hashtbl.find events_by_id r.event_id
           |> Or_error.of_option
@@ -3790,6 +3922,7 @@ let category_snapshot db =
             ; occurred = Temporal.to_string event.occurred
             ; payload_sha256 = Digestif.SHA256.(to_hex (digest_string event.payload))
             ; fields_sha256 = category_fields_hash event
+            ; movement_role = "primary"
             ; account =
                 Option.some_if
                   ((Poly.equal r.classification Unclassified
@@ -3814,6 +3947,7 @@ let preview_category_restore db (snapshot : Category_portable.t) =
   let* existing_rules = classification_rules db in
   let* source = events db in
   let* review = bank_review db in
+  let* anchors = bank_operation_anchors db in
   let by_identity = Hashtbl.Poly.create () in
   let by_evidence = Hashtbl.Poly.create () in
   let review_by_id = Hashtbl.create (module Int64) in
@@ -3911,9 +4045,13 @@ let preview_category_restore db (snapshot : Category_portable.t) =
   in
   let ids =
     List.map snapshot.decisions ~f:(fun d ->
-      d.Category_portable.institution, d.source_account, d.kind, d.source_id)
+      ( d.Category_portable.institution
+      , d.source_account
+      , d.kind
+      , d.source_id
+      , d.movement_role ))
   in
-  if List.contains_dup ids ~compare:[%compare: string * string * string * string]
+  if List.contains_dup ids ~compare:[%compare: string * string * string * string * string]
   then problem "duplicate transaction identities";
   let unchanged = ref 0 in
   let types_to_apply = ref [] in
@@ -3927,100 +4065,108 @@ let preview_category_restore db (snapshot : Category_portable.t) =
              (d.institution, d.source_account, d.kind, d.source_id))
           ~default:[]
       in
-      match matches with
-      | [ (id, e, digest) ] ->
-        if
-          not
-            (String.equal (Temporal.to_string e.occurred) d.occurred
-             && String.equal digest d.payload_sha256
-             && String.equal (category_fields_hash e) d.fields_sha256)
-        then (
-          problem ("source evidence differs: " ^ label);
-          None)
-        else if
-          List.length
-            (Option.value
-               (Hashtbl.find
-                  by_evidence
-                  ( d.institution
-                  , d.source_account
-                  , d.kind
-                  , d.occurred
-                  , if List.is_empty e.fields
-                    then "payload:" ^ d.payload_sha256
-                    else "fields:" ^ d.fields_sha256 ))
-               ~default:[])
-          > 1
-        then (
-          problem ("ambiguous duplicate source evidence: " ^ label);
-          None)
-        else (
-          match Hashtbl.find review_by_id id with
-          | None ->
-            problem ("not a bank movement: " ^ label);
-            None
-          | Some row ->
-            (match d.type_override with
-             | None -> ()
-             | Some name ->
-               let kind = Movement_type.of_string name in
-               if
-                 String.is_empty (String.strip name)
-                 || String.equal name "unknown"
-                 || not (String.equal name (Movement_type.to_string kind))
-               then problem ("invalid type override: " ^ label)
-               else if
-                 match kind with
-                 | Other value ->
-                   not
-                     (List.exists review ~f:(fun r ->
-                        Poly.equal
-                          r.imported_movement_type
-                          (Some (Movement_type.Other value))))
-                 | _ -> false
-               then problem ("unknown movement type: " ^ label)
-               else (
-                 match row.movement_type_override with
-                 | None -> types_to_apply := (id, kind) :: !types_to_apply
-                 | Some current when Poly.equal current kind -> ()
-                 | Some _ -> problem ("existing type override differs: " ^ label)));
-            (match d.account, d.reason with
-             | None, None ->
-               if Option.is_none d.type_override
-               then problem ("empty transaction decision: " ^ label);
-               None
-             | Some account, Some reason ->
-               (match Bank_category.create ~event_id:id ~account ~reason with
-                | Error e ->
-                  problem (label ^ ": " ^ Error.to_string_hum e);
-                  None
-                | Ok decision ->
-                  if
-                    not
-                      (Poly.equal row.classification Unclassified
-                       || Poly.equal row.classification Category)
-                  then (
-                    problem ("linked transfer, settlement or reversal: " ^ label);
-                    None)
-                  else if Option.is_some row.reason
-                  then
-                    if String.equal row.counter_account account
-                    then (
-                      Int.incr unchanged;
-                      None)
-                    else (
-                      problem ("existing decision differs: " ^ label);
-                      None)
-                  else Some decision)
-             | _ ->
-               problem ("category requires an account and reason: " ^ label);
-               None))
-      | [] ->
-        problem ("transaction not found: " ^ label);
-        None
-      | _ ->
-        problem ("ambiguous transaction identity: " ^ label);
+      if not (String.equal d.movement_role "primary")
+      then (
+        problem ("unsupported movement role: " ^ label);
         None)
+      else (
+        match matches with
+        | [ (id, e, digest) ] ->
+          if
+            not
+              (String.equal (Temporal.to_string e.occurred) d.occurred
+               && String.equal digest d.payload_sha256
+               && String.equal (category_fields_hash e) d.fields_sha256)
+          then (
+            problem ("source evidence differs: " ^ label);
+            None)
+          else if
+            List.length
+              (Option.value
+                 (Hashtbl.find
+                    by_evidence
+                    ( d.institution
+                    , d.source_account
+                    , d.kind
+                    , d.occurred
+                    , if List.is_empty e.fields
+                      then "payload:" ^ d.payload_sha256
+                      else "fields:" ^ d.fields_sha256 ))
+                 ~default:[])
+            > 1
+          then (
+            problem ("ambiguous duplicate source evidence: " ^ label);
+            None)
+          else (
+            match Hashtbl.find review_by_id id with
+            | None ->
+              problem ("not a bank movement: " ^ label);
+              None
+            | Some row ->
+              (match verify_bank_operation_anchor anchors row with
+               | Error e -> problem (label ^ ": " ^ Error.to_string_hum e)
+               | Ok () -> ());
+              (match d.type_override with
+               | None -> ()
+               | Some name ->
+                 let kind = Movement_type.of_string name in
+                 if
+                   String.is_empty (String.strip name)
+                   || String.equal name "unknown"
+                   || not (String.equal name (Movement_type.to_string kind))
+                 then problem ("invalid type override: " ^ label)
+                 else if
+                   match kind with
+                   | Other value ->
+                     not
+                       (List.exists review ~f:(fun r ->
+                          Poly.equal
+                            r.imported_movement_type
+                            (Some (Movement_type.Other value))))
+                   | _ -> false
+                 then problem ("unknown movement type: " ^ label)
+                 else (
+                   match row.movement_type_override with
+                   | None -> types_to_apply := (id, kind) :: !types_to_apply
+                   | Some current when Poly.equal current kind -> ()
+                   | Some _ -> problem ("existing type override differs: " ^ label)));
+              (match d.account, d.reason with
+               | None, None ->
+                 if Option.is_none d.type_override
+                 then problem ("empty transaction decision: " ^ label);
+                 None
+               | Some account, Some reason ->
+                 (match Bank_category.create ~event_id:id ~account ~reason with
+                  | Error e ->
+                    problem (label ^ ": " ^ Error.to_string_hum e);
+                    None
+                  | Ok decision ->
+                    if
+                      not
+                        (Poly.equal row.classification Unclassified
+                         || Poly.equal row.classification Category)
+                    then (
+                      problem ("linked transfer, settlement or reversal: " ^ label);
+                      None)
+                    else if Option.is_some row.reason
+                    then
+                      if String.equal row.counter_account account
+                      then (
+                        Int.incr unchanged;
+                        None)
+                      else (
+                        problem ("existing decision differs: " ^ label);
+                        None)
+                    else Some decision)
+               | _ ->
+                 problem ("category requires an account and reason: " ^ label);
+                 None))
+        | [] ->
+          problem ("transaction not found: " ^ label);
+          None
+        | _ ->
+          problem ("ambiguous transaction identity: " ^ label);
+          None))
   in
   Ok
     { categories_to_add
@@ -4036,6 +4182,7 @@ let write_movement_type_override db ~event_id ~previous ~movement_type ~reason =
   if Option.equal Poly.equal previous movement_type
   then Ok false
   else
+    let* movement_id = bank_primary_movement_id db event_id in
     let* () =
       match movement_type with
       | None ->
@@ -4048,13 +4195,16 @@ let write_movement_type_override db ~event_id ~previous ~movement_type ~reason =
         let query =
           Rel_sql.Stmt.(
             func
-              "INSERT INTO movement_type_overrides(event_id,movement_type) VALUES (?,?) \
-               ON CONFLICT(event_id) DO UPDATE SET movement_type=excluded.movement_type"
-              (int64 @-> text @-> unit))
+              "INSERT INTO movement_type_overrides(movement_id,event_id,movement_type) \
+               VALUES (?,?,?) ON CONFLICT(event_id) DO UPDATE SET \
+               movement_type=excluded.movement_type"
+              (int64 @-> int64 @-> text @-> unit))
         in
-        db_result (Db.exec db.conn (query event_id (Movement_type.to_string kind)))
+        db_result
+          (Db.exec db.conn (query movement_id event_id (Movement_type.to_string kind)))
     in
-    let event_value = event_id
+    let movement_value = movement_id
+    and event_value = event_id
     and old_value = Option.map previous ~f:Movement_type.to_string
     and new_value = Option.map movement_type ~f:Movement_type.to_string
     and reason_value = reason in
@@ -4067,6 +4217,7 @@ let write_movement_type_override db ~event_id ~previous ~movement_type ~reason =
            (insert
               Col.
                 [ Value (Db_schema.Movement_type_changes.event_id, event_value)
+                ; Value (Db_schema.Movement_type_changes.movement_id, movement_value)
                 ; Value (previous_type, old_value)
                 ; Value (Db_schema.Movement_type_changes.movement_type, new_value)
                 ; Value (Db_schema.Movement_type_changes.reason, reason_value)
@@ -4139,8 +4290,8 @@ let movement_type_history db =
     collect
       db
       (statement
-         "SELECT id,event_id,previous_type,movement_type,reason,changed_at FROM \
-          movement_type_changes ORDER BY id"
+         "SELECT id,movement_id,event_id,previous_type,movement_type,reason,changed_at \
+          FROM movement_type_changes ORDER BY id"
          Db_schema.Movement_type_changes.row)
   in
   Ok
@@ -6292,6 +6443,16 @@ let delete_account ?(dry_run = false) db (mapping : Bank_account_mapping.t) =
            ^ account
            ^ ")")
       in
+      let* shared_operations =
+        scalar
+          ("SELECT count(DISTINCT s.operation_id) FROM operation_sources s WHERE \
+            s.event_id IN ("
+           ^ events
+           ^ ") AND EXISTS (SELECT 1 FROM operation_sources other WHERE \
+              other.operation_id=s.operation_id AND other.event_id NOT IN ("
+           ^ events
+           ^ "))")
+      in
       if
         shared
         + statements_shared
@@ -6300,11 +6461,13 @@ let delete_account ?(dry_run = false) db (mapping : Bank_account_mapping.t) =
         + transfers
         + settlement_refs
         + shared_inventories
+        + shared_operations
         > 0
       then
         Or_error.error_string
-          "account has shared documents, companion matches, transfer decisions or \
-           settlement references; deletion cannot safely affect other accounts"
+          "account has shared documents, companion matches, transfer decisions, \
+           operations or settlement references; deletion cannot safely affect other \
+           accounts"
       else if dry_run
       then Ok { transactions; documents }
       else
@@ -6312,6 +6475,14 @@ let delete_account ?(dry_run = false) db (mapping : Bank_account_mapping.t) =
         let* () = exec ("INSERT INTO fin_delete_events " ^ events) in
         let* () = exec "CREATE TEMP TABLE fin_delete_docs(id INTEGER PRIMARY KEY)" in
         let* () = exec ("INSERT INTO fin_delete_docs " ^ docs) in
+        let* () =
+          exec "CREATE TEMP TABLE fin_delete_operations(id INTEGER PRIMARY KEY)"
+        in
+        let* () =
+          exec
+            "INSERT INTO fin_delete_operations SELECT DISTINCT operation_id FROM \
+             operation_sources WHERE event_id IN (SELECT id FROM fin_delete_events)"
+        in
         let tables =
           [ "source_events"
           ; "movements"
@@ -6361,6 +6532,14 @@ let delete_account ?(dry_run = false) db (mapping : Bank_account_mapping.t) =
           ; "DELETE FROM bank_category_changes WHERE event_id IN (" ^ event_ids ^ ")"
           ; "DELETE FROM movement_type_overrides WHERE event_id IN (" ^ event_ids ^ ")"
           ; "DELETE FROM movement_type_changes WHERE event_id IN (" ^ event_ids ^ ")"
+          ; "DELETE FROM operation_movement_sources WHERE movement_id IN (SELECT id FROM \
+             operation_movements WHERE operation_id IN (SELECT id FROM \
+             fin_delete_operations))"
+          ; "DELETE FROM operation_movements WHERE operation_id IN (SELECT id FROM \
+             fin_delete_operations)"
+          ; "DELETE FROM operation_sources WHERE operation_id IN (SELECT id FROM \
+             fin_delete_operations)"
+          ; "DELETE FROM operations WHERE id IN (SELECT id FROM fin_delete_operations)"
           ; "DELETE FROM reversal_changes WHERE original IN ("
             ^ event_ids
             ^ ") OR reversal IN ("
@@ -6389,6 +6568,7 @@ let delete_account ?(dry_run = false) db (mapping : Bank_account_mapping.t) =
           ; "DELETE FROM bank_account_settlement_changes WHERE " ^ local
           ; "DROP TABLE fin_delete_events"
           ; "DROP TABLE fin_delete_docs"
+          ; "DROP TABLE fin_delete_operations"
           ]
         in
         let* () = List.fold_result statements ~init:() ~f:(fun () sql -> exec sql) in
@@ -6480,7 +6660,7 @@ let test_type_rule db (draft : Classification_rule.t) =
     collect
       db
       (statement
-         "SELECT event_id,movement_type FROM movement_type_overrides"
+         "SELECT movement_id,event_id,movement_type FROM movement_type_overrides"
          Db_schema.Movement_type_overrides.row)
   in
   let overridden =
@@ -7090,4 +7270,477 @@ let show_movement db event_id =
     ; companions
     ; transfer
     }
+;;
+
+let operation_event_id = function
+  | Operation.Stored_event id -> Ok id
+  | Operation.File_row _ ->
+    Or_error.error_string "file-row references must be imported as source events first"
+;;
+
+let add_operation_with_sources ?source_event_id db by_id (operation : Operation.t) =
+  let* source_ids = traverse operation_event_id operation.evidence in
+  let* () =
+    match source_event_id with
+    | Some id when not (List.mem source_ids id ~equal:Int64.equal) ->
+      Or_error.error_string "operation source event must be part of its evidence"
+    | _ -> Ok ()
+  in
+  let* () =
+    List.map source_ids ~f:(fun id ->
+      if Hashtbl.mem by_id id
+      then Ok ()
+      else Or_error.error_string "unknown operation source event")
+    |> Or_error.combine_errors_unit
+  in
+  let insert_operation =
+    Rel_sql.Stmt.(
+      func
+        "INSERT INTO operations(occurred,source_event_id) VALUES (?,?)"
+        (text @-> option int64 @-> unit))
+  in
+  let insert_source =
+    Rel_sql.Stmt.(
+      func
+        "INSERT INTO operation_sources(operation_id,event_id) VALUES (?,?)"
+        (int64 @-> int64 @-> unit))
+  in
+  let insert_movement =
+    Rel_sql.Stmt.(
+      func
+        "INSERT INTO \
+         operation_movements(operation_id,anchor_event_id,role,account,commodity,quantity) \
+         VALUES (?,?,?,?,?,?)"
+        (int64 @-> int64 @-> text @-> option text @-> text @-> text @-> unit))
+  in
+  let insert_movement_source =
+    Rel_sql.Stmt.(
+      func
+        "INSERT INTO operation_movement_sources(movement_id,operation_id,event_id) \
+         VALUES (?,?,?)"
+        (int64 @-> int64 @-> int64 @-> unit))
+  in
+  let* () =
+    db_result
+      (Db.exec
+         db.conn
+         (insert_operation (Temporal.to_string operation.occurred) source_event_id))
+  in
+  let operation_id = Db.last_insert_rowid db.conn in
+  let* () =
+    List.fold_result source_ids ~init:() ~f:(fun () id ->
+      db_result (Db.exec db.conn (insert_source operation_id id)))
+  in
+  let* () =
+    List.fold_result operation.movements ~init:() ~f:(fun () movement ->
+      let* identity =
+        Or_error.of_option
+          movement.Operation.identity
+          ~error:(Error.of_string "persisted movement needs a stable source identity")
+      in
+      let* movement_sources = traverse operation_event_id movement.evidence in
+      let anchors =
+        List.filter movement_sources ~f:(fun id ->
+          Option.value_map (Hashtbl.find by_id id) ~default:false ~f:(fun event ->
+            match Movement_identity.of_event event ~role:identity.role with
+            | Ok actual -> Movement_identity.equal actual identity
+            | Error _ -> false))
+      in
+      let* anchor =
+        match anchors with
+        | [ id ] -> Ok id
+        | [] ->
+          Or_error.error_string "movement identity is not backed by its source evidence"
+        | _ -> Or_error.error_string "movement identity matches multiple source events"
+      in
+      let* () =
+        db_result
+          (Db.exec
+             db.conn
+             (insert_movement
+                operation_id
+                anchor
+                identity.role
+                movement.account
+                (Json.encode Commodity.codec movement.commodity)
+                (Quantity.to_string movement.quantity)))
+      in
+      let movement_id = Db.last_insert_rowid db.conn in
+      List.fold_result movement_sources ~init:() ~f:(fun () id ->
+        db_result (Db.exec db.conn (insert_movement_source movement_id operation_id id))))
+  in
+  Ok operation_id
+;;
+
+let add_operation_in_transaction db operation =
+  let* source = events db in
+  add_operation_with_sources db (Hashtbl.of_alist_exn (module Int64) source) operation
+;;
+
+let add_operation db operation =
+  transaction db (fun db -> add_operation_in_transaction db operation)
+;;
+
+let get_operation_in_transaction db operation_id =
+  let query =
+    Rel_sql.Stmt.(
+      func
+        "SELECT occurred FROM operations WHERE id=?"
+        (int64 @-> ret Row.(t1 (text "occurred"))))
+  in
+  let* occurred = db_result (Db.first db.conn (query operation_id)) in
+  let* occurred =
+    Or_error.of_option occurred ~error:(Error.of_string "unknown operation")
+  in
+  let* occurred = Or_error.try_with (fun () -> Temporal.of_string_exn occurred) in
+  let sources =
+    Rel_sql.Stmt.(
+      func
+        "SELECT event_id FROM operation_sources WHERE operation_id=? ORDER BY event_id"
+        (int64 @-> ret Row.(t1 (int64 "event_id"))))
+  in
+  let* source_ids = collect db (sources operation_id) in
+  let* source = events db in
+  let by_id = Hashtbl.of_alist_exn (module Int64) source in
+  let rows =
+    Rel_sql.Stmt.(
+      func
+        "SELECT id,operation_id,anchor_event_id,role,account,commodity,quantity FROM \
+         operation_movements WHERE operation_id=? ORDER BY id"
+        (int64 @-> ret Db_schema.Operation_movements.row))
+  in
+  let* rows = collect db (rows operation_id) in
+  let movement_sources =
+    Rel_sql.Stmt.(
+      func
+        "SELECT event_id FROM operation_movement_sources WHERE movement_id=? ORDER BY \
+         event_id"
+        (int64 @-> ret Row.(t1 (int64 "event_id"))))
+  in
+  let* movements =
+    traverse
+      (fun (row : Db_schema.Operation_movements.t) ->
+         let* anchor =
+           Or_error.of_option
+             (Hashtbl.find by_id row.anchor_event_id)
+             ~error:(Error.of_string "operation movement anchor is missing")
+         in
+         let* identity = Movement_identity.of_event anchor ~role:row.role in
+         let* commodity = Json.decode Commodity.codec row.commodity in
+         let* quantity = Or_error.try_with (fun () -> Quantity.of_string row.quantity) in
+         let* source_ids = collect db (movement_sources row.id) in
+         let evidence = List.map source_ids ~f:(fun id -> Operation.Stored_event id) in
+         if not (List.mem source_ids row.anchor_event_id ~equal:Int64.equal)
+         then Or_error.error_string "movement anchor is not in its source evidence"
+         else
+           Operation.movement
+             ~identity
+             ?account:row.account
+             ~commodity
+             ~quantity
+             ~evidence
+             ())
+      rows
+  in
+  Operation.create
+    ~occurred
+    ~evidence:(List.map source_ids ~f:(fun id -> Operation.Stored_event id))
+    ~movements
+;;
+
+let bank_operation_for_event db event_id =
+  let query =
+    Rel_sql.Stmt.(
+      func
+        "SELECT id FROM operations WHERE bank_event_id=?"
+        (int64 @-> ret Row.(t1 (int64 "id"))))
+  in
+  let* id = db_result (Db.first db.conn (query event_id)) in
+  Or_error.of_option
+    id
+    ~error:(Error.of_string "confirmed transfer is missing a bank operation")
+;;
+
+let operation_group db operation_id =
+  let query =
+    Rel_sql.Stmt.(
+      func
+        "SELECT bank_event_id FROM operations WHERE id=?"
+        (int64 @-> ret Row.(t1 (option Rel.Type.int64 "bank_event_id"))))
+  in
+  let* row = db_result (Db.first db.conn (query operation_id)) in
+  let* bank_event = Or_error.of_option row ~error:(Error.of_string "unknown operation") in
+  match bank_event with
+  | None -> Ok (operation_id, None)
+  | Some event_id ->
+    let* link = linked_transfer db event_id in
+    (match link with
+     | None -> Ok (operation_id, None)
+     | Some (first, second, _) ->
+       let* first_op = bank_operation_for_event db first in
+       let* second_op = bank_operation_for_event db second in
+       Ok (first_op, Some second_op))
+;;
+
+let grouped_operation_in_transaction db operation_id =
+  let* first_id, other = operation_group db operation_id in
+  let* first = get_operation_in_transaction db first_id in
+  match other with
+  | None -> Ok (first_id, first)
+  | Some other_id ->
+    let* second = get_operation_in_transaction db other_id in
+    let evidence =
+      List.dedup_and_sort (first.evidence @ second.evidence) ~compare:Poly.compare
+    in
+    let* operation =
+      Operation.create
+        ~occurred:first.occurred
+        ~evidence
+        ~movements:(first.movements @ second.movements)
+    in
+    Ok (first_id, operation)
+;;
+
+let get_operation db operation_id =
+  transaction db (fun db ->
+    let* _, operation = grouped_operation_in_transaction db operation_id in
+    Ok operation)
+;;
+
+let operations_for_event db event_id =
+  transaction db (fun db ->
+    let query =
+      Rel_sql.Stmt.(
+        func
+          "SELECT operation_id FROM operation_sources WHERE event_id=? ORDER BY \
+           operation_id"
+          (int64 @-> ret Row.(t1 (int64 "operation_id"))))
+    in
+    let* ids = collect db (query event_id) in
+    let* groups = traverse (operation_group db) ids in
+    let canonical =
+      List.map groups ~f:fst |> List.dedup_and_sort ~compare:Int64.compare
+    in
+    traverse (grouped_operation_in_transaction db) canonical)
+;;
+
+type operation_document_preview =
+  { rows : int
+  ; already_imported : bool
+  ; fingerprint : string
+  ; problems : string list
+  }
+
+let imported_operation_matches db event_id (row : Operation_import.row) =
+  let query =
+    Rel_sql.Stmt.(
+      func
+        "SELECT id,occurred FROM operations WHERE source_event_id=?"
+        (int64 @-> ret Row.(t2 (int64 "id") (text "occurred"))))
+  in
+  let* operation = db_result (Db.first db.conn (query event_id)) in
+  match operation with
+  | None -> Ok false
+  | Some (operation_id, occurred) ->
+    let evidence =
+      Rel_sql.Stmt.(
+        func
+          "SELECT EXISTS(SELECT 1 FROM operation_sources WHERE operation_id=? AND \
+           event_id=?)"
+          (int64 @-> int64 @-> ret Row.(t1 (bool "present"))))
+    in
+    let* linked = db_result (Db.first db.conn (evidence operation_id event_id)) in
+    let movements =
+      Rel_sql.Stmt.(
+        func
+          "SELECT m.role,m.commodity,m.quantity,m.anchor_event_id,EXISTS(SELECT 1 FROM \
+           operation_movement_sources s WHERE s.movement_id=m.id AND \
+           s.operation_id=m.operation_id AND s.event_id=m.anchor_event_id) FROM \
+           operation_movements m WHERE m.operation_id=? ORDER BY m.role"
+          (int64
+           @-> ret
+                 Row.(
+                   t5
+                     (text "role")
+                     (text "commodity")
+                     (text "quantity")
+                     (int64 "anchor_event_id")
+                     (bool "linked"))))
+    in
+    let* stored = collect db (movements operation_id) in
+    let expected =
+      List.sort row.legs ~compare:(fun a b ->
+        String.compare a.Operation_import.role b.role)
+    in
+    let equal (role, commodity, quantity, anchor, linked) (leg : Operation_import.leg) =
+      linked
+      && Int64.equal anchor event_id
+      && String.equal role leg.role
+      &&
+      match
+        ( Json.decode Commodity.codec commodity
+        , Or_error.try_with (fun () -> Quantity.of_string quantity) )
+      with
+      | Ok commodity, Ok quantity ->
+        Commodity.equal commodity leg.commodity && Quantity.equal quantity leg.quantity
+      | _ -> false
+    in
+    Ok
+      (Option.value linked ~default:false
+       && String.equal occurred (Temporal.to_string row.source.occurred)
+       && Int.equal (List.length stored) (List.length expected)
+       && List.for_all2_exn stored expected ~f:equal)
+;;
+
+let preview_operation_document_in_transaction db ~institution ~contents ~rows =
+  let* institution = Validation.token "institution" institution in
+  let* existing = events db in
+  let by_identity = Hashtbl.Poly.create () in
+  let identity (source : Source_event.t) =
+    source.venue, source.account, source.kind, source.source_id
+  in
+  List.iter existing ~f:(fun (id, source) ->
+    Hashtbl.set by_identity ~key:(identity source) ~data:(id, source));
+  let problems = ref [] in
+  let problem message = problems := message :: !problems in
+  if List.is_empty rows then problem "document has no transaction rows";
+  let keys = List.map rows ~f:(fun (row : Operation_import.row) -> identity row.source) in
+  if List.contains_dup keys ~compare:[%compare: string * string * string * string]
+  then problem "identical source rows are ambiguous; no rows can be imported";
+  List.iter rows ~f:(fun (row : Operation_import.row) ->
+    if not (String.equal row.source.venue institution)
+    then problem "source venue does not match institution";
+    if Registry.is_movement db.registry row.source
+    then problem "bank movement sources must use the bank importer");
+  let hash = Digestif.SHA256.(to_hex (digest_string contents)) in
+  let* document = db_result (Db.first db.conn (find_document institution hash)) in
+  let* already_imported =
+    match document with
+    | None ->
+      if List.exists keys ~f:(Hashtbl.mem by_identity)
+      then problem "a source row already exists in another document; overlap is ambiguous";
+      Ok false
+    | Some (document_id, stored) ->
+      if not (String.equal stored contents)
+      then problem "document digest conflicts with stored bytes";
+      let query =
+        Rel_sql.Stmt.(
+          func
+            "SELECT event_id FROM import_document_events WHERE document_id=? ORDER BY \
+             event_id"
+            (int64 @-> ret Row.(t1 (int64 "event_id"))))
+      in
+      let* linked = collect db (query document_id) in
+      let matches =
+        List.filter_map rows ~f:(fun (row : Operation_import.row) ->
+          match Hashtbl.find by_identity (identity row.source) with
+          | Some (id, source) when Poly.equal source row.source -> Some id
+          | _ -> None)
+      in
+      if
+        (not
+           (List.equal
+              Int64.equal
+              (List.sort linked ~compare:Int64.compare)
+              (List.sort matches ~compare:Int64.compare)))
+        || List.length matches <> List.length rows
+      then problem "stored document evidence differs from the proposed import";
+      let* operation_checks =
+        traverse
+          (fun (row : Operation_import.row) ->
+             match Hashtbl.find by_identity (identity row.source) with
+             | Some (id, _) -> imported_operation_matches db id row
+             | None -> Ok false)
+          rows
+      in
+      if not (List.for_all operation_checks ~f:Fn.id)
+      then problem "stored operation movements differ from the source interpretation";
+      Ok true
+  in
+  let parts =
+    [ institution; contents ]
+    @ List.map rows ~f:(fun (row : Operation_import.row) ->
+      let legs =
+        List.map row.legs ~f:(fun (leg : Operation_import.leg) ->
+          Json.encode
+            (Jsont.list Jsont.string)
+            [ leg.role
+            ; Json.encode Commodity.codec leg.commodity
+            ; Quantity.to_string leg.quantity
+            ])
+      in
+      Json.encode
+        (Jsont.list Jsont.string)
+        ([ row.source.venue
+         ; row.source.account
+         ; row.source.kind
+         ; row.source.source_id
+         ; Temporal.to_string row.source.occurred
+         ; row.source.payload
+         ; Json.encode Json.string_map row.source.fields
+         ]
+         @ legs))
+  in
+  let fingerprint =
+    Digestif.SHA256.(to_hex (digest_string (Json.encode (Jsont.list Jsont.string) parts)))
+  in
+  Ok
+    { rows = List.length rows
+    ; already_imported
+    ; fingerprint
+    ; problems = List.rev !problems
+    }
+;;
+
+let preview_operation_document db ~institution ~contents ~rows =
+  transaction db (fun db ->
+    preview_operation_document_in_transaction db ~institution ~contents ~rows)
+;;
+
+let import_operation_document db ~institution ~contents ~rows ~expected =
+  transaction db (fun db ->
+    let* current =
+      preview_operation_document_in_transaction db ~institution ~contents ~rows
+    in
+    if not (Poly.equal current expected)
+    then Or_error.error_string "document import preview changed; review it again"
+    else if not (List.is_empty current.problems)
+    then Or_error.error_string "resolve document import problems before applying"
+    else if current.already_imported
+    then Ok 0
+    else
+      let* document_id = archive_document db ~institution ~contents in
+      let* source = events db in
+      let by_id = Hashtbl.of_alist_exn (module Int64) source in
+      let* () =
+        List.fold_result rows ~init:() ~f:(fun () (row : Operation_import.row) ->
+          let* outcome = ingest_in_transaction db row.source in
+          let* event_id =
+            match outcome with
+            | Inserted id -> Ok id
+            | Existing _ -> Or_error.error_string "source appeared after preview"
+          in
+          Hashtbl.set by_id ~key:event_id ~data:row.source;
+          let evidence = [ Operation.Stored_event event_id ] in
+          let* movements =
+            traverse
+              (fun (leg : Operation_import.leg) ->
+                 let* identity = Movement_identity.of_event row.source ~role:leg.role in
+                 Operation.movement
+                   ~identity
+                   ~commodity:leg.commodity
+                   ~quantity:leg.quantity
+                   ~evidence
+                   ())
+              row.legs
+          in
+          let* operation =
+            Operation.create ~occurred:row.source.occurred ~evidence ~movements
+          in
+          let* _ =
+            add_operation_with_sources ~source_event_id:event_id db by_id operation
+          in
+          db_result (Db.exec db.conn (link_document document_id event_id)))
+      in
+      Ok (List.length rows))
 ;;

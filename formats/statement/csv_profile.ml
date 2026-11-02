@@ -25,6 +25,7 @@ let account_type_codec =
 
 type date_format =
   | Iso
+  | Iso_datetime
   | Day_first
   | Month_first
 
@@ -33,7 +34,12 @@ type amount_format =
   | Comma_decimal
 
 let date_format_codec =
-  Jsont.enum [ "iso", Iso; "day-first", Day_first; "month-first", Month_first ]
+  Jsont.enum
+    [ "iso", Iso
+    ; "iso-datetime", Iso_datetime
+    ; "day-first", Day_first
+    ; "month-first", Month_first
+    ]
 ;;
 
 let amount_format_codec = Jsont.enum [ "dot", Dot_decimal; "comma", Comma_decimal ]
@@ -42,6 +48,10 @@ let date_cell format =
   let pattern = Re.Perl.compile_pat "^[0-9]{2}[/-][0-9]{2}[/-][0-9]{4}$" in
   match format with
   | Iso -> Csv_schema.Cell.iso_date ()
+  | Iso_datetime ->
+    Csv_schema.Cell.map (Csv_schema.Cell.utc_clock ()) ~f:(fun instant ->
+      let year, month, day = Ptime.to_date instant in
+      Date.of_string (Printf.sprintf "%04d-%02d-%02d" year month day))
   | Day_first | Month_first ->
     Csv_schema.Cell.create ~name:"date" (fun value ->
       if (not (Re.execp pattern value)) || not (Char.equal value.[2] value.[5])
@@ -53,7 +63,7 @@ let date_cell format =
         match format with
         | Day_first -> second, first
         | Month_first -> first, second
-        | Iso -> assert false
+        | Iso | Iso_datetime -> assert false
       in
       Date.of_string (year ^ "-" ^ month ^ "-" ^ day))
 ;;

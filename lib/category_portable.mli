@@ -8,6 +8,7 @@ type decision =
   ; occurred : string
   ; payload_sha256 : string
   ; fields_sha256 : string
+  ; movement_role : string
   ; account : string option
   ; reason : string option
   ; type_override : string option
@@ -26,3 +27,4 @@ val categories_codec : t Jsont.t
 val rules_codec : t Jsont.t
 val decisions_codec : t Jsont.t
 val legacy_decisions_codec : t Jsont.t
+val previous_decisions_codec : t Jsont.t

@@ -44,10 +44,10 @@ let initialize () =
          check "fresh database empty" 0 (List.length (ok (Store.events db)));
          Ok ()));
     raw path (fun db ->
-      check "latest baseline" 31 (scalar db "PRAGMA user_version");
+      check "latest baseline" 32 (scalar db "PRAGMA user_version");
       check
         "all tables are strict"
-        37
+        41
         (scalar
            db
            "SELECT count(*) FROM pragma_table_list WHERE schema='main' AND name NOT LIKE \
@@ -143,6 +143,43 @@ let sqlite_constraints () =
            "('bank','third','transaction','third','1970-01-01T00:00:00.001000000000Z',NULL,X'00')");
       rejected "INSERT INTO bank_transfer_memberships VALUES (3,1,2)";
       sql db "INSERT INTO bank_transfer_memberships VALUES (1,1,2)";
+      sql
+        db
+        "INSERT INTO operations(id,occurred) VALUES (1,'2026-01-01'),(2,'2026-01-01')";
+      sql db "INSERT INTO operation_sources(operation_id,event_id) VALUES (1,1),(2,2)";
+      sql
+        db
+        "INSERT INTO \
+         operation_movements(id,operation_id,anchor_event_id,role,account,commodity,quantity) \
+         VALUES (1,1,1,'primary',NULL,'{}','1')";
+      rejected
+        "INSERT INTO operation_movement_sources(movement_id,operation_id,event_id) \
+         VALUES (1,1,2)";
+      rejected
+        "INSERT INTO operation_movement_sources(movement_id,operation_id,event_id) \
+         VALUES (1,2,2)";
+      rejected
+        "INSERT INTO \
+         operation_movements(id,operation_id,anchor_event_id,role,account,commodity,quantity) \
+         VALUES (2,1,1,'primary',NULL,'{}','1')";
+      sql
+        db
+        "INSERT INTO operation_movement_sources(movement_id,operation_id,event_id) \
+         VALUES (1,1,1)";
+      rejected
+        "INSERT INTO bank_categories(movement_id,event_id,account,reason) VALUES \
+         (1,2,'expenses:test','test')";
+      rejected
+        "INSERT INTO movement_type_overrides(movement_id,event_id,movement_type) VALUES \
+         (1,2,'fee')";
+      sql
+        db
+        "INSERT INTO bank_categories(movement_id,event_id,account,reason) VALUES \
+         (1,1,'expenses:test','test')";
+      sql
+        db
+        "INSERT INTO movement_type_overrides(movement_id,event_id,movement_type) VALUES \
+         (1,1,'fee')";
       let attempt format outcome document inserted =
         Printf.sprintf
           "INSERT INTO \
@@ -230,7 +267,7 @@ let large_rowid () =
 ;;
 
 let rejects_old () =
-  List.iter [ 9; 12; 13; 14; 15; 16; 17; 18; 19; 20; 21; 22; 23 ] ~f:(fun version ->
+  List.iter [ 9; 12; 13; 14; 15; 16; 17; 18; 19; 20; 21; 22; 23; 31 ] ~f:(fun version ->
     workspace (fun path ->
       raw path (fun db ->
         sql

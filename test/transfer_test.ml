@@ -303,7 +303,31 @@ let confirm_and_reject () =
     project db;
     let c = candidate db in
     let d = decision c in
+    let first_op =
+      ok (Store.operations_for_event db c.first_event_id) |> List.hd_exn |> fst
+    in
+    let second_op =
+      ok (Store.operations_for_event db c.second_event_id) |> List.hd_exn |> fst
+    in
+    Alcotest.(check bool)
+      "unreviewed operations are distinct"
+      false
+      (Int64.equal first_op second_op);
     check "confirm" 1 (ok (Store.set_bank_transfers db [ d ]));
+    let grouped_first = ok (Store.operations_for_event db c.first_event_id) in
+    let grouped_second = ok (Store.operations_for_event db c.second_event_id) in
+    let id, operation = List.hd_exn grouped_first in
+    Alcotest.(check int64) "canonical operation belongs to first event" first_op id;
+    Alcotest.(check int64)
+      "both records resolve to one operation"
+      id
+      (fst (List.hd_exn grouped_second));
+    check "both source records preserved" 2 (List.length operation.evidence);
+    check "both movements preserved" 2 (List.length operation.movements);
+    check
+      "old component ID remains resolvable"
+      2
+      (List.length (ok (Store.get_operation db second_op)).movements);
     check "confirm replay" 0 (ok (Store.set_bank_transfers db [ d ]));
     let account = Bank_transfer.account c.first_event_id c.second_event_id in
     List.iter [ c.first_event_id; c.second_event_id ] ~f:(fun id ->
@@ -415,6 +439,18 @@ let confirm_and_reject () =
       "undo confirmation"
       1
       (ok (Store.set_bank_transfers db [ decision ~state:Rejected c ]));
+    Alcotest.(check int64)
+      "first operation restored"
+      first_op
+      (fst (List.hd_exn (ok (Store.operations_for_event db c.first_event_id))));
+    Alcotest.(check int64)
+      "second operation restored"
+      second_op
+      (fst (List.hd_exn (ok (Store.operations_for_event db c.second_event_id))));
+    check
+      "undo leaves a single movement"
+      1
+      (List.length (ok (Store.get_operation db second_op)).movements);
     List.iter [ c.first_event_id; c.second_event_id ] ~f:(fun id ->
       Alcotest.(check string)
         "restored unclassified"
@@ -551,6 +587,18 @@ let conflict_and_reopen () =
            "reopened decisions"
            1
            (List.length (ok (Store.bank_transfer_decisions db)));
+         let first = ok (Store.operations_for_event db d.first_event_id) |> List.hd_exn in
+         let second =
+           ok (Store.operations_for_event db d.second_event_id) |> List.hd_exn
+         in
+         Alcotest.(check int64)
+           "grouped operation survives reopen"
+           (fst first)
+           (fst second);
+         check
+           "reopened group retains both source events"
+           2
+           (List.length (snd first).evidence);
          Ok ()));
     raw path (fun db ->
       sql

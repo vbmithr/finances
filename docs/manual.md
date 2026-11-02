@@ -129,7 +129,9 @@ current directory), creating missing parent directories with mode 0700. The new
 backup folder is readable only by you and holds a consistent copy of the
 database (safe even while `fin` is running), including all account settings.
 The snapshot includes original statement contents, movements, accounting entries,
-settings and review history. Keep your original bank exports too.
+settings and review history. Keep your original bank exports too. Backup does
+not check the schema version, so it also works on a database this version of `fin`
+cannot open; take one before rebuilding after a schema change.
 
 Restore the complete workspace from a backup folder or its SQLite file:
 
@@ -161,7 +163,7 @@ skips the question; without a terminal and without `--yes` it refuses.
 
 ### Rebuilding after a schema change
 
-This experimental release accepts schema version 31; it does not migrate older
+This experimental release accepts schema version 32; it does not migrate older
 databases and refuses them without changing the file. If upgrading from schema 21
 with customized institution typing profiles, use the old executable to save each
 profile with `fin institution typing show INSTITUTION > profile.json` before
@@ -237,6 +239,15 @@ transactions. Settlement rules require their target card to exist. Automatic rul
 may affect subsequent imports. The exports do not contain transfer, settlement,
 reversal decisions or audit history. Type resets are not exported: they leave no
 manual override. Restore writes new type-history entries for restored overrides.
+Schema 32 recreates one preliminary operation for each imported bank event. The
+portable transaction snapshot does not yet include independently created
+operations or their source links; retain a full database backup for those.
+New transaction exports identify bank decisions with the `primary` movement
+role. Version 1–3 category and transaction exports remain readable and imply
+that role. Other movement roles are refused rather than applied to the wrong leg;
+decisions on multi-movement operations are not yet supported.
+Older executables cannot read version 4 transaction exports; keep an older-format
+snapshot if you may return to an older Fin executable.
 
 Transaction and rule restore previews list missing target categories, which are
 created atomically with the restored data. Different existing decisions or rules,
@@ -259,6 +270,63 @@ Other review histories must still be recreated using saved reference exports. Th
 event IDs are database-specific; do not blindly reuse old IDs.
 
 ## Importing statements
+
+### Inspect CDC CSV exports
+
+CDC is a bundled institution profile, `institutions/cdc.json`, not
+code: it lists the expected CSV header, the column roles and one rule per reported
+transaction kind (`single-in`, `single-out` or `exchange`). Kinds without a rule
+are flagged for review. Name it as `cdc` (alias `cdc`).
+
+Use the read-only inspector for CDC App transaction or card CSV exports:
+
+```sh
+fin import cdc --inspect wallet.csv card.csv
+fin import cdc --inspect wallet.csv card.csv --json
+fin import cdc --inspect --summary wallet.csv card.csv
+```
+
+The command does not need a database and does not import or post anything. It
+preserves each CSV row's fields in JSON, validates timestamps and amounts, and
+shows proposed commodity legs for recognized transaction-kind and sign patterns.
+Unsupported, ambiguous or incomplete patterns are marked for review without
+proposed legs. Symbols are scoped to the provider: the inspector does not claim
+that a symbol uniquely identifies a crypto asset or network. Native amount
+columns remain source evidence; they do not create legs. A single proposed leg
+does not establish the counterparty, wallet, category or fee.
+
+Each input row is shown independently. Overlapping exports are not deduplicated;
+proposals are not reconciled with account balances. Check source statements and
+wallet balances before treating any proposal as accounting. JSON contains
+personal transaction details and should be kept private. This inspector is not
+the generic bank CSV importer and does not change bank movements or hledger.
+`--summary` groups counts by reported kind and flags identical parsed field
+values as candidates, including rows within one file. Identical rows may be
+distinct activity; different rows can still overlap. No duplicates are removed.
+
+To retain an export and its proposed operations in the database:
+
+```sh
+fin import cdc wallet.csv
+fin import cdc wallet.csv --apply
+fin transaction sources --institution cdc
+fin tx operation EVENT-ID --json
+```
+
+Directories are searched recursively for `.csv` files, as for banks, and each file is
+previewed or imported in sorted order; the first rejected file stops the run, so
+files before it stay imported with `--apply`. The first command previews the import. `--apply` asks for confirmation; add
+`--yes` to skip it. `fin transaction sources --institution cdc --json` includes the original fields and
+source event IDs. The complete CSV is archived in the database. Reimporting
+the identical file is safe, but a different file containing already imported
+rows or a file containing identical rows is refused as ambiguous. Review those
+exports before importing them.
+
+Imported legs are proposals, with unresolved account and commodity identities;
+unknown rows may have no proposed legs. They cannot yet be categorized or
+projected to hledger, and no balances are established. The transaction decision
+export does not contain these sources or operations: use a full database backup
+to preserve them. Treat backups and JSON output as private financial data.
 
 Use `fin import INSTITUTION PATH...` to read exports. This replaces the former
 `fin bank sync` command; update existing scripts to use `fin import`.
@@ -404,7 +472,7 @@ those of your CSV, and set `currency` to the file's ISO currency, such as
 `"EUR"`. Positions are **zero-based**. `account_id`, `booked_on`, `amount`
 and `description` are required positions; optional metadata positions may be
 `null`. Positions distinguish repeated header names. `date_format` is `iso`,
-`day-first` or `month-first`; `amount_format` and `balance_format` are `dot`
+`iso-datetime`, `day-first` or `month-first`; `amount_format` and `balance_format` are `dot`
 or `comma`. The header must match the profile. Boolean settings control header
 and cell trimming and blank-row skipping. Profile changes are previewed and
 require confirmation; `--yes` accepts them for scripts.
@@ -583,6 +651,8 @@ below; reviews and account settings associated with the deleted account are lost
 Current and savings accounts default to `assets:bank:PROVIDER:TYPE:ACCOUNT`.
 Fin can record an optional IBAN for them. A generic CSV profile still covers
 one account and one fixed currency. Supported dates are ISO `YYYY-MM-DD`,
+`YYYY-MM-DD HH:MM:SS` (the calendar date is used for booking; the original
+timestamp is retained in source fields),
 day-first `DD/MM/YYYY` or `DD-MM-YYYY`, and month-first `MM/DD/YYYY` or
 `MM-DD-YYYY`. Amounts use a dot decimal mark without grouping, or a comma
 with optional space grouping. Separate debit/credit columns, multiple currencies
@@ -986,6 +1056,14 @@ and reversals are counted per movement, not per pair. The top-level
 newest first, with the institution and account ID for each movement. The
 displayed event IDs can be used in review decisions; account IDs come from
 `fin account list`.
+
+Use `fin tx operation EVENT-ID` to inspect the operation linked to an imported
+bank movement or CDC source; add `--json` for commodity identities and source references.
+Confirmed transfers show both movements and source events together. Undoing a
+transfer exposes the original operations again. An account shown as not
+assigned in the operation can still have a bank-to-ledger mapping, shown by
+`fin account list`; the operation does not duplicate that mapping yet. Operation
+IDs are database-local and may change after a rebuild.
 
 The table shows the movement type and the counter-account used in the exported
 journal. `-` means the movement remains unclassified (`equity:unclassified`).
@@ -1446,7 +1524,7 @@ belongs to hledger; `fin` tracks import evidence, account identity and review st
 ## Library and dependency changes
 
 This build uses Base, decimal, Ptime and Bos, with no Core or Bigdecimal
-dependency. Version 1 account snapshots remain compatible; databases use schema 31 and
+dependency. Version 1 account snapshots remain compatible; databases use schema 32 and
 are rebuilt from the original statements (see above).
 
 OCaml callers use `Quantity.t` (a `Decimal.t` alias) and `Date.t` (a `Ptime.date`

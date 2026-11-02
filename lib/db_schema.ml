@@ -3,7 +3,7 @@ open Rel
 
 (** One current experimental baseline; older databases must be reimported. Banks
     have no tables of their own. *)
-let version = 31
+let version = 32
 
 let timestamp = `Expr "(strftime('%Y-%m-%dT%H:%M:%f','now') || '000000000Z')"
 
@@ -296,6 +296,211 @@ end
 
 (* Every column or tag a source carried, by name, kept beside the immutable event so
    rules can match fields the payload does not hold. Not part of the event's identity. *)
+module Operations = struct
+  type t =
+    { id : int64
+    ; occurred : string
+    ; bank_event_id : int64 option
+    ; source_event_id : int64 option
+    }
+
+  let id = Col.make "id" Type.int64 (fun (r : t) -> r.id)
+  let occurred = Col.make "occurred" Type.text (fun (r : t) -> r.occurred)
+
+  let bank_event_id =
+    Col.make "bank_event_id" Type.(option int64) (fun (r : t) -> r.bank_event_id)
+  ;;
+
+  let source_event_id =
+    Col.make "source_event_id" Type.(option int64) (fun (r : t) -> r.source_event_id)
+  ;;
+
+  let row =
+    Row.(
+      unit (fun id occurred bank_event_id source_event_id ->
+        { id; occurred; bank_event_id; source_event_id })
+      * id
+      * occurred
+      * bank_event_id
+      * source_event_id)
+  ;;
+
+  let table =
+    Table.make
+      ~primary_key:(Table.Primary_key.make [ Col.Def id ])
+      ~unique_keys:
+        [ Table.Unique_key.make [ Col.Def bank_event_id ]
+        ; Table.Unique_key.make [ Col.Def source_event_id ]
+        ]
+      ~foreign_keys:
+        [ Table.Foreign_key.make
+            ~cols:[ Col.Def bank_event_id ]
+            ~parent:
+              (Table.Foreign_key.Table (Source_events.table, [ Col.Def Source_events.id ]))
+            ()
+        ; Table.Foreign_key.make
+            ~cols:[ Col.Def source_event_id ]
+            ~parent:
+              (Table.Foreign_key.Table (Source_events.table, [ Col.Def Source_events.id ]))
+            ()
+        ]
+      "operations"
+      row
+  ;;
+
+  let definition = Sqlite_schema.table table
+end
+
+module Operation_sources = struct
+  type t =
+    { operation_id : int64
+    ; event_id : int64
+    }
+
+  let operation_id = Col.make "operation_id" Type.int64 (fun (r : t) -> r.operation_id)
+  let event_id = Col.make "event_id" Type.int64 (fun (r : t) -> r.event_id)
+
+  let row =
+    Row.(
+      unit (fun operation_id event_id -> { operation_id; event_id })
+      * operation_id
+      * event_id)
+  ;;
+
+  let table =
+    Table.make
+      ~primary_key:(Table.Primary_key.make [ Col.Def operation_id; Col.Def event_id ])
+      ~foreign_keys:
+        [ Table.Foreign_key.make
+            ~cols:[ Col.Def operation_id ]
+            ~parent:
+              (Table.Foreign_key.Table (Operations.table, [ Col.Def Operations.id ]))
+            ()
+        ; Table.Foreign_key.make
+            ~cols:[ Col.Def event_id ]
+            ~parent:
+              (Table.Foreign_key.Table (Source_events.table, [ Col.Def Source_events.id ]))
+            ()
+        ]
+      "operation_sources"
+      row
+  ;;
+
+  let definition = Sqlite_schema.table table
+end
+
+module Operation_movements = struct
+  type t =
+    { id : int64
+    ; operation_id : int64
+    ; anchor_event_id : int64
+    ; role : string
+    ; account : string option
+    ; commodity : string
+    ; quantity : string
+    }
+
+  let id = Col.make "id" Type.int64 (fun (r : t) -> r.id)
+  let operation_id = Col.make "operation_id" Type.int64 (fun (r : t) -> r.operation_id)
+
+  let anchor_event_id =
+    Col.make "anchor_event_id" Type.int64 (fun (r : t) -> r.anchor_event_id)
+  ;;
+
+  let role = Col.make "role" Type.text (fun (r : t) -> r.role)
+  let account = Col.make "account" Type.(option text) (fun (r : t) -> r.account)
+  let commodity = Col.make "commodity" Type.text (fun (r : t) -> r.commodity)
+  let quantity = Col.make "quantity" Type.text (fun (r : t) -> r.quantity)
+
+  let row =
+    Row.(
+      unit (fun id operation_id anchor_event_id role account commodity quantity ->
+        { id; operation_id; anchor_event_id; role; account; commodity; quantity })
+      * id
+      * operation_id
+      * anchor_event_id
+      * role
+      * account
+      * commodity
+      * quantity)
+  ;;
+
+  let table =
+    Table.make
+      ~primary_key:(Table.Primary_key.make [ Col.Def id ])
+      ~unique_keys:
+        [ Table.Unique_key.make [ Col.Def anchor_event_id; Col.Def role ]
+        ; Table.Unique_key.make [ Col.Def id; Col.Def operation_id ]
+        ; Table.Unique_key.make [ Col.Def id; Col.Def anchor_event_id ]
+        ]
+      ~foreign_keys:
+        [ Table.Foreign_key.make
+            ~cols:[ Col.Def operation_id; Col.Def anchor_event_id ]
+            ~parent:
+              (Table.Foreign_key.Table
+                 ( Operation_sources.table
+                 , [ Col.Def Operation_sources.operation_id
+                   ; Col.Def Operation_sources.event_id
+                   ] ))
+            ()
+        ]
+      "operation_movements"
+      row
+  ;;
+
+  let definition = Sqlite_schema.table table
+end
+
+module Operation_movement_sources = struct
+  type t =
+    { movement_id : int64
+    ; operation_id : int64
+    ; event_id : int64
+    }
+
+  let movement_id = Col.make "movement_id" Type.int64 (fun (r : t) -> r.movement_id)
+  let operation_id = Col.make "operation_id" Type.int64 (fun (r : t) -> r.operation_id)
+  let event_id = Col.make "event_id" Type.int64 (fun (r : t) -> r.event_id)
+
+  let row =
+    Row.(
+      unit (fun movement_id operation_id event_id ->
+        { movement_id; operation_id; event_id })
+      * movement_id
+      * operation_id
+      * event_id)
+  ;;
+
+  let table =
+    Table.make
+      ~primary_key:(Table.Primary_key.make [ Col.Def movement_id; Col.Def event_id ])
+      ~foreign_keys:
+        [ Table.Foreign_key.make
+            ~cols:[ Col.Def movement_id; Col.Def operation_id ]
+            ~parent:
+              (Table.Foreign_key.Table
+                 ( Operation_movements.table
+                 , [ Col.Def Operation_movements.id
+                   ; Col.Def Operation_movements.operation_id
+                   ] ))
+            ()
+        ; Table.Foreign_key.make
+            ~cols:[ Col.Def operation_id; Col.Def event_id ]
+            ~parent:
+              (Table.Foreign_key.Table
+                 ( Operation_sources.table
+                 , [ Col.Def Operation_sources.operation_id
+                   ; Col.Def Operation_sources.event_id
+                   ] ))
+            ()
+        ]
+      "operation_movement_sources"
+      row
+  ;;
+
+  let definition = Sqlite_schema.table table
+end
+
 module Source_event_fields = struct
   type t =
     { event_id : int64
@@ -1066,18 +1271,22 @@ end
 
 module Bank_categories = struct
   type t =
-    { event_id : int64
+    { movement_id : int64
+    ; event_id : int64
     ; account : string
     ; reason : string
     }
 
+  let movement_id = Col.make "movement_id" Type.int64 (fun (r : t) -> r.movement_id)
   let event_id = Col.make "event_id" Type.int64 (fun (r : t) -> r.event_id)
   let account = Col.make "account" Type.text (fun (r : t) -> r.account)
   let reason = Col.make "reason" Type.text (fun (r : t) -> r.reason)
 
   let row =
     Row.(
-      unit (fun event_id account reason -> { event_id; account; reason })
+      unit (fun movement_id event_id account reason ->
+        { movement_id; event_id; account; reason })
+      * movement_id
       * event_id
       * account
       * reason)
@@ -1085,12 +1294,17 @@ module Bank_categories = struct
 
   let table =
     Table.make
-      ~primary_key:(Table.Primary_key.make [ Col.Def event_id ])
+      ~primary_key:(Table.Primary_key.make [ Col.Def movement_id ])
+      ~unique_keys:[ Table.Unique_key.make [ Col.Def event_id ] ]
       ~foreign_keys:
         [ Table.Foreign_key.make
-            ~cols:[ Col.Def event_id ]
+            ~cols:[ Col.Def movement_id; Col.Def event_id ]
             ~parent:
-              (Table.Foreign_key.Table (Source_events.table, [ Col.Def Source_events.id ]))
+              (Table.Foreign_key.Table
+                 ( Operation_movements.table
+                 , [ Col.Def Operation_movements.id
+                   ; Col.Def Operation_movements.anchor_event_id
+                   ] ))
             ()
         ]
       "bank_categories"
@@ -1103,6 +1317,7 @@ end
 module Bank_category_changes = struct
   type t =
     { id : int64
+    ; movement_id : int64
     ; event_id : int64
     ; previous_account : string option
     ; account : string
@@ -1111,6 +1326,7 @@ module Bank_category_changes = struct
     }
 
   let id = Col.make "id" Type.int64 (fun (r : t) -> r.id)
+  let movement_id = Col.make "movement_id" Type.int64 (fun (r : t) -> r.movement_id)
   let event_id = Col.make "event_id" Type.int64 (fun (r : t) -> r.event_id)
 
   let previous_account =
@@ -1126,9 +1342,10 @@ module Bank_category_changes = struct
 
   let row =
     Row.(
-      unit (fun id event_id previous_account account reason changed_at ->
-        { id; event_id; previous_account; account; reason; changed_at })
+      unit (fun id movement_id event_id previous_account account reason changed_at ->
+        { id; movement_id; event_id; previous_account; account; reason; changed_at })
       * id
+      * movement_id
       * event_id
       * previous_account
       * account
@@ -1141,9 +1358,13 @@ module Bank_category_changes = struct
       ~primary_key:(Table.Primary_key.make [ Col.Def id ])
       ~foreign_keys:
         [ Table.Foreign_key.make
-            ~cols:[ Col.Def event_id ]
+            ~cols:[ Col.Def movement_id; Col.Def event_id ]
             ~parent:
-              (Table.Foreign_key.Table (Source_events.table, [ Col.Def Source_events.id ]))
+              (Table.Foreign_key.Table
+                 ( Operation_movements.table
+                 , [ Col.Def Operation_movements.id
+                   ; Col.Def Operation_movements.anchor_event_id
+                   ] ))
             ()
         ]
       "bank_category_changes"
@@ -2124,28 +2345,37 @@ end
 
 module Movement_type_overrides = struct
   type t =
-    { event_id : int64
+    { movement_id : int64
+    ; event_id : int64
     ; movement_type : string
     }
 
+  let movement_id = Col.make "movement_id" Type.int64 (fun (r : t) -> r.movement_id)
   let event_id = Col.make "event_id" Type.int64 (fun (r : t) -> r.event_id)
   let movement_type = Col.make "movement_type" Type.text (fun (r : t) -> r.movement_type)
 
   let row =
     Row.(
-      unit (fun event_id movement_type -> { event_id; movement_type })
+      unit (fun movement_id event_id movement_type ->
+        { movement_id; event_id; movement_type })
+      * movement_id
       * event_id
       * movement_type)
   ;;
 
   let table =
     Table.make
-      ~primary_key:(Table.Primary_key.make [ Col.Def event_id ])
+      ~primary_key:(Table.Primary_key.make [ Col.Def movement_id ])
+      ~unique_keys:[ Table.Unique_key.make [ Col.Def event_id ] ]
       ~foreign_keys:
         [ Table.Foreign_key.make
-            ~cols:[ Col.Def event_id ]
+            ~cols:[ Col.Def movement_id; Col.Def event_id ]
             ~parent:
-              (Table.Foreign_key.Table (Source_events.table, [ Col.Def Source_events.id ]))
+              (Table.Foreign_key.Table
+                 ( Operation_movements.table
+                 , [ Col.Def Operation_movements.id
+                   ; Col.Def Operation_movements.anchor_event_id
+                   ] ))
             ()
         ]
       "movement_type_overrides"
@@ -2158,6 +2388,7 @@ end
 module Movement_type_changes = struct
   type t =
     { id : int64
+    ; movement_id : int64
     ; event_id : int64
     ; previous_type : string option
     ; movement_type : string option
@@ -2166,6 +2397,7 @@ module Movement_type_changes = struct
     }
 
   let id = Col.make "id" Type.int64 (fun (r : t) -> r.id)
+  let movement_id = Col.make "movement_id" Type.int64 (fun (r : t) -> r.movement_id)
   let event_id = Col.make "event_id" Type.int64 (fun (r : t) -> r.event_id)
 
   let previous_type =
@@ -2184,9 +2416,10 @@ module Movement_type_changes = struct
 
   let row =
     Row.(
-      unit (fun id event_id previous_type movement_type reason changed_at ->
-        { id; event_id; previous_type; movement_type; reason; changed_at })
+      unit (fun id movement_id event_id previous_type movement_type reason changed_at ->
+        { id; movement_id; event_id; previous_type; movement_type; reason; changed_at })
       * id
+      * movement_id
       * event_id
       * previous_type
       * movement_type
@@ -2199,9 +2432,13 @@ module Movement_type_changes = struct
       ~primary_key:(Table.Primary_key.make [ Col.Def id ])
       ~foreign_keys:
         [ Table.Foreign_key.make
-            ~cols:[ Col.Def event_id ]
+            ~cols:[ Col.Def movement_id; Col.Def event_id ]
             ~parent:
-              (Table.Foreign_key.Table (Source_events.table, [ Col.Def Source_events.id ]))
+              (Table.Foreign_key.Table
+                 ( Operation_movements.table
+                 , [ Col.Def Operation_movements.id
+                   ; Col.Def Operation_movements.anchor_event_id
+                   ] ))
             ()
         ]
       "movement_type_changes"
@@ -2216,6 +2453,10 @@ end
 let definitions =
   [ Source_events.definition
   ; Movements.definition
+  ; Operations.definition
+  ; Operation_sources.definition
+  ; Operation_movements.definition
+  ; Operation_movement_sources.definition
   ; Source_event_fields.definition
   ; Movement_evidence.definition
   ; Journal_entries.definition
