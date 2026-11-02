@@ -5,7 +5,7 @@ its status: tick off finished work, add discovered work, and refresh the "Where 
 are" figures when they move. History belongs in `CHANGES.md`; designs stay in the
 other documents, which this one links to rather than repeats.
 
-Last updated: 2026-11-01.
+Last updated: 2026-11-02.
 
 ## Direction
 
@@ -35,14 +35,27 @@ provider observations before treating them as authoritative.
 - Wise uses a matched, nonempty and consistent CSV `Merchant` as the effective
   transaction description, falling back to CAMT; source evidence remains intact.
 - Manual movement types can be set for a batch of transaction IDs atomically.
+- Generic CSV dates can include a validated clock; booking uses the calendar date.
+- Core commodities distinguish fiat, native network assets, contract tokens
+  and provider-scoped symbols; a read-only CDC CSV inspector proposes
+  legs and highlights identical rows without posting them. CDC CSV
+  evidence and proposed operations can also be imported and listed; ambiguous
+  overlapping records are refused.
+- The [operation model](operations.md) persists source links and multiple
+  movements; bank imports create a corresponding operation. Confirmed transfer
+  operations group on read. Bank category and type decisions are keyed by the
+  primary movement; existing CLI and journal projection retain event references.
+  Moving `fin tx`, review and the journal onto operations is designed in
+  [operation-transactions.md](operation-transactions.md).
 - Portable transaction snapshots restore category decisions and manual type
-  overrides together after source identity, evidence and conflict checks.
+  overrides together after source identity, movement-role, evidence and conflict
+  checks. Non-primary movement decisions are not yet supported.
 - Transaction lists can filter by the exact category or other counter-account.
 - All four banks import: BoursoBank (OFX, CSV companion), Wise (CAMT.053, CSV
   companion), Bunq (MT940, CSV companion) and Revolut (CSV). All use bundled
   profiles and shared import components; none has a dedicated bank module.
   User-added institutions can import OFX or configure a generic CSV layout.
-- Storage is schema 31: generic tables for every bank, plus each movement stored
+- Storage is schema 32: generic tables for every bank, plus each movement stored
   normalized at import, so reads are SQL queries instead of payload decoding. No
   migrations; older databases are refused unchanged.
 - Event occurrences and statement boundaries share `Temporal.t` (`Date` or
@@ -85,11 +98,11 @@ provider observations before treating them as authoritative.
   `fin backup` saves one
   consistent SQLite snapshot; `fin restore BACKUP` validates and restores it,
   with overwrite confirmation and automatic removal of stale generated files.
-- OCaml test suites and 114 CLI cases, plus status performance and package
+- OCaml test suites and 116 CLI cases, plus status performance and package
   man-page checks. Selected import changes have also been compared by
   rebuilding a personal database and diffing reports and source payloads.
 - Issue #1 is implemented locally and awaits publication.
-- The installed Arch package is `finances 0.1.0-23`; the tree uses schema 31.
+- The installed Arch package is `finances 0.1.0-23`; the tree uses schema 32.
 
 ### Personal data
 
@@ -451,6 +464,28 @@ position observations, derive positions from fills, or calculate funding.
   unrealized P&L, observation time and source; distinguish missing data from zero.
 - [ ] Bring crypto deposits, withdrawals and fees into the accounting workflow and
   review transfers between banks, wallets and exchanges.
+- [x] Expose CDC through `fin import cdc` and general
+  `fin transaction sources` instead of a separate `fin crypto` group.
+- [x] Describe CDC as data (`cdc.json`) interpreted by the generic
+  `Movement_csv`, with no institution-specific OCaml.
+- [ ] [Unify `fin tx` over operations](operation-transactions.md) (design agreed
+  2026-11-02): `fin tx list` and `fin tx show` read operations, one row per
+  operation with `--legs` to expand to movements; review decisions attach to
+  movement identities, so unresolved wallets, commodities and kinds join the
+  review queue; journal and hledger export read operations. Step 1 (read-only
+  `fin tx` over operations) comes first, then wallet/commodity resolution and
+  review, then journal projection, then the bank importer onto the same
+  pipeline. The old bank tables stay as a projection during the transition; the
+  schema-rebuild decision is deferred until after journal projection.
+- [ ] Let user-added institutions declare movement-CSV profiles in the database
+  (today only bundled ones), and move the bank importer onto the shared operation and movement pipeline (step 4 of [operation-transactions.md](operation-transactions.md)).
+- [ ] Reconcile CDC proposed legs against account and wallet balances;
+  identify overlapping exports, commodity identities, wallet ownership, card
+  top-ups and unrecognized transaction kinds before enabling journal projection.
+- [ ] Connect stored commodity identities to accounting and resolve
+  provider-reported symbols to verified assets.
+- [ ] Connect persisted operations to general reviewed source links and portable
+  non-primary movement decisions; bank reviews use the primary movement.
 - [ ] Import fills, funding and other necessary events, derive positions, and
   reconcile them against provider-reported observations. Surface discrepancies and
   verify venue-specific contract and settlement semantics.
