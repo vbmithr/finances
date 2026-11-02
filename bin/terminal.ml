@@ -119,7 +119,7 @@ let review rows =
 
 let transactions ?(out = stdout) rows =
   if List.is_empty rows
-  then Out_channel.output_string out "No transactions found.\n"
+  then Out_channel.output_string out "No operations found.\n"
   else
     table
       ~out
