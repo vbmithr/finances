@@ -23,31 +23,6 @@ val get_operation : t -> int64 -> Operation.t Or_error.t
     components resolve to the same canonical operation ID. *)
 val operations_for_event : t -> int64 -> (int64 * Operation.t) list Or_error.t
 
-type operation_document_preview =
-  { rows : int
-  ; already_imported : bool
-  ; fingerprint : string
-  ; problems : string list
-  }
-
-(** Inspect a complete source document without writing. Identical rows or
-    overlapping records in a different document are reported as ambiguous. *)
-val preview_operation_document
-  :  t
-  -> institution:string
-  -> contents:string
-  -> rows:Operation_import.row list
-  -> operation_document_preview Or_error.t
-
-(** Recheck the preview and atomically archive/import the entire document. *)
-val import_operation_document
-  :  t
-  -> institution:string
-  -> contents:string
-  -> rows:Operation_import.row list
-  -> expected:operation_document_preview
-  -> int Or_error.t
-
 (** The registry supplies every bank the store can decode; the store itself
     names none. *)
 val with_open : registry:Registry.t -> string -> (t -> 'a Or_error.t) -> 'a Or_error.t

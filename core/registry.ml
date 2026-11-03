@@ -3,6 +3,7 @@ open Base
 type t =
   { adapters : (module Adapter.S) Map.M(String).t
   ; kinds : Set.M(String).t
+  ; operation_kinds : Set.M(String).t
   ; fallbacks : (string * (Source_event.t -> Movement.t Or_error.t)) list
   ; fallback_institutions : Set.M(String).t
   ; type_rules : Type_default.t list
@@ -25,8 +26,13 @@ let create
     List.map adapters ~f:(fun (module A : Adapter.S) ->
       let%bind institution = Validation.token "institution" A.institution in
       let companion_formats = List.map A.companions ~f:(fun c -> c.Companion.format) in
-      if List.is_empty A.kinds
+      if List.is_empty A.kinds && List.is_empty A.operation_kinds
       then Or_error.errorf "adapter %s declares no event kinds" institution
+      else if
+        List.exists A.kinds ~f:(fun kind ->
+          List.mem A.operation_kinds kind ~equal:String.equal)
+      then
+        Or_error.errorf "adapter %s declares a kind as movement and operation" institution
       else if List.contains_dup A.formats ~compare:String.compare
       then Or_error.errorf "adapter %s declares a format twice" institution
       else if
@@ -47,6 +53,11 @@ let create
     let kinds =
       Map.data adapters
       |> List.concat_map ~f:(fun (module A : Adapter.S) -> A.kinds)
+      |> Set.of_list (module String)
+    in
+    let operation_kinds =
+      Map.data adapters
+      |> List.concat_map ~f:(fun (module A : Adapter.S) -> A.operation_kinds)
       |> Set.of_list (module String)
     in
     let%bind profiles =
@@ -80,6 +91,7 @@ let create
     Ok
       { adapters
       ; kinds
+      ; operation_kinds
       ; fallbacks
       ; fallback_institutions
       ; type_rules
@@ -99,6 +111,21 @@ let aliases t institution =
 
 let is_movement_kind t kind = Set.mem t.kinds kind
 let is_movement t (event : Source_event.t) = is_movement_kind t event.kind
+let is_operation_kind t kind = Set.mem t.operation_kinds kind
+
+(* Decode an operation-kind event with the venue adapter that owns the kind. *)
+let operation_rows t (event : Source_event.t) =
+  match Map.find t.adapters event.venue with
+  | Some (module A) when List.mem A.operation_kinds event.kind ~equal:String.equal ->
+    A.operation_rows event
+  | Some _ ->
+    Or_error.errorf
+      "institution %s does not produce %s operation events"
+      event.venue
+      event.kind
+  | None -> Or_error.errorf "no adapter is registered for institution %s" event.venue
+;;
+
 let default_source_typing t institution = Map.find t.source_typing institution
 let default_source_evidence t = t.source_evidence
 let default_type_rules t = t.type_rules

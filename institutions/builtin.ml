@@ -14,7 +14,7 @@ let definitions : Institution_definition.t list =
 ;;
 
 (** Movement CSV sources (one source row, one or two commodity movements). They
-    are data like the banks, and do not use the one-movement bank adapter. *)
+    are data like the banks and register as adapters like the banks. *)
 let movement_profiles : Movement_csv.profile list =
   List.map [ Bundled_definitions.cdc ] ~f:(fun json ->
     Json.decode Movement_csv.profile_codec json |> Or_error.ok_exn)
@@ -60,7 +60,9 @@ let mt940_profile name =
 ;;
 
 let adapters : (module Adapter.S) list =
-  List.map definitions ~f:Institution_definition.adapter @ [ (module Csv_adapter) ]
+  List.map definitions ~f:Institution_definition.adapter
+  @ List.map movement_profiles ~f:(fun profile -> Movement_csv_adapter.make profile ())
+  @ [ (module Csv_adapter) ]
 ;;
 
 let companion_layout name = Option.map (ofx_preset name) ~f:(fun p -> p.layout)

@@ -4,7 +4,8 @@ open Base
     learns about bank events comes through a registry. *)
 type t
 
-(** Rejects invalid or duplicate institutions, adapters without kinds, repeated
+(** Rejects invalid or duplicate institutions, adapters without event kinds, a
+    kind declared as both movement and operation, repeated
     formats and companions for formats the adapter does not declare. Fallbacks
     decode specified kinds for unregistered institutions and for explicitly
     named fallback institutions whose current adapter does not claim that kind. *)
@@ -31,6 +32,14 @@ val aliases : t -> string -> string list
 val is_movement_kind : t -> string -> bool
 
 val is_movement : t -> Source_event.t -> bool
+
+(** Whether some adapter interprets the kind as an operation with several
+    role-labelled movements rather than one bank movement. *)
+val is_operation_kind : t -> string -> bool
+
+(** Decode an operation-kind event into its proposed source rows with the venue
+    adapter that owns the kind. *)
+val operation_rows : t -> Source_event.t -> Operation_import.row list Or_error.t
 
 (** Look up a bundled automatic source-typing profile. *)
 val default_source_typing : t -> string -> Source_typing.t option

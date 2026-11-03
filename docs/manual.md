@@ -325,23 +325,23 @@ the generic bank CSV importer and does not change bank movements or hledger.
 values as candidates, including rows within one file. Identical rows may be
 distinct activity; different rows can still overlap. No duplicates are removed.
 
-To retain an export and its proposed operations in the database:
+To retain an export and its proposed operations in the database, import it like
+any other venue — there is no separate preview or `--apply` step:
 
 ```sh
 fin import cdc wallet.csv
-fin import cdc wallet.csv --apply
 fin db sources --institution cdc
 fin db event operations EVENT-ID --json
 ```
 
-Directories are searched recursively for `.csv` files, as for banks, and each file is
-previewed or imported in sorted order; the first rejected file stops the run, so
-files before it stay imported with `--apply`. The first command previews the import. `--apply` asks for confirmation; add
-`--yes` to skip it. `fin db sources --institution cdc --json` includes the original fields and
-source event IDs. The complete CSV is archived in the database. Reimporting
-the identical file is safe, but a different file containing already imported
-rows or a file containing identical rows is refused as ambiguous. Review those
-exports before importing them.
+CDC imports go through the same pipeline as banks: files and directories
+are scanned recursively (including inside ZIP archives), each recognized file is
+imported in sorted order with the usual per-file and summary outcome lines, and the
+journal is published. `fin db sources --institution cdc --json` includes the
+original fields and source event IDs. The complete CSV is archived in the database.
+Reimporting the identical file is reported as unchanged, but a different file
+containing already imported rows or a file containing identical rows is rejected
+as ambiguous. Review those exports before importing them.
 
 Imported legs are proposals, with unresolved account and commodity identities;
 unknown rows may have no proposed legs. Only explicitly resolved and confirmed

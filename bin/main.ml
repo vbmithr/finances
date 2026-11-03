@@ -1417,66 +1417,6 @@ let statement_files ?(extensions = [ ".csv"; ".ofx"; ".zip" ]) paths =
 
 let generic_statement_files paths = statement_files paths
 
-let import_movement_csv (profile : Movement_csv.profile) database path apply yes =
-  let%bind contents = read_file path in
-  let%bind parsed = Movement_csv.parse profile ~file:path contents in
-  let%bind rows = Movement_csv.import_rows profile parsed in
-  with_database database (fun db ->
-    let%bind preview =
-      Store.preview_operation_document db ~institution:profile.institution ~contents ~rows
-    in
-    let review =
-      List.count parsed ~f:(fun (row : Movement_csv.row) ->
-        match row.interpretation with
-        | Review _ -> true
-        | _ -> false)
-    in
-    printf
-      "Rows: %d; need review: %d; already imported: %s\n"
-      preview.rows
-      review
-      (if preview.already_imported then "yes" else "no");
-    if not (List.is_empty preview.problems)
-    then (
-      print_endline "Problems (import is blocked):";
-      List.iter preview.problems ~f:(fun problem ->
-        printf "  %s\n" (Terminal.text problem)));
-    if not apply
-    then (
-      print_endline
-        "Preview only; pass --apply to import source evidence and proposed operations.";
-      Ok ())
-    else if not (List.is_empty preview.problems)
-    then Or_error.error_string "resolve import problems before applying"
-    else (
-      let%bind confirmed =
-        if yes
-        then Ok true
-        else if Unix.isatty Unix.stdin
-        then
-          Ok
-            (Option.value_map
-               (prompt "Import these source records? [y/N]: ")
-               ~default:false
-               ~f:confirm_default_no)
-        else Or_error.error_string "CDC import requires a terminal or --yes"
-      in
-      if not confirmed
-      then (
-        print_endline "Nothing imported.";
-        Ok ())
-      else (
-        let%map changed =
-          Store.import_operation_document
-            db
-            ~institution:profile.institution
-            ~contents
-            ~rows
-            ~expected:preview
-        in
-        printf "operation_sources_imported=%d\n" changed)))
-;;
-
 let import_bank_cmd =
   command
     ~man:
@@ -1492,10 +1432,11 @@ let import_bank_cmd =
            pass its filename directly."
       ; `P
           "Movement CSV institutions (bundled: cdc, alias cdc) use the same \
-           command: $(b,fin import cdc FILE-OR-DIRECTORY) previews, $(b,--apply) \
-           stores source evidence and proposed movements, and $(b,--inspect) reads \
-           without a database. Review wallets, commodities and kinds afterwards with \
-           $(b,fin db sources)."
+           command and the same import pipeline as every other venue: $(b,fin import \
+           cdc FILE-OR-DIRECTORY) stores source evidence and proposed operations, \
+           and $(b,--inspect) reads a CSV without a database. Review wallets, \
+           commodities and kinds afterwards with $(b,fin db sources) and $(b,fin \
+           operation list)."
       ]
     "import"
     "Import a bank's statement files, apply mappings, and publish a bank journal."
@@ -1511,29 +1452,25 @@ let import_bank_cmd =
              provider
              inspect
              summary
-             apply
-             yes
              json
            ->
-           match Builtin.movement_profile (String.lowercase first) with
-           | Some profile ->
+           let movement_profile = Builtin.movement_profile (String.lowercase first) in
+           match movement_profile with
+           | Some profile when inspect ->
              (match paths with
               | [] -> Or_error.error_string "provide at least one CSV file or directory"
               | _ ->
                 let%bind files = statement_files ~extensions:[ ".csv" ] paths in
-                if inspect
-                then inspect_movement_csv profile files summary json
-                else
-                  List.fold_result files ~init:() ~f:(fun () path ->
-                    printf "CSV file: %s\n" (Terminal.text path);
-                    Out_channel.flush stdout;
-                    import_movement_csv profile database path apply yes))
-           | None ->
-             if inspect || summary || apply || yes || json
+                inspect_movement_csv profile files summary json)
+           | _ ->
+             if inspect || summary || json
              then
                Or_error.error_string
-                 "--inspect, --summary, --apply, --yes and --json apply only to movement \
-                  CSV institutions (for example cdc)"
+                 (match movement_profile with
+                  | Some _ -> "--summary and --json require --inspect"
+                  | None ->
+                    "--inspect, --summary and --json apply only to movement CSV \
+                     institutions (for example cdc)")
              else (
                let%bind () = require_database database in
                let%bind runtime_registry = registry_for database in
@@ -1703,15 +1640,6 @@ let import_bank_cmd =
           & info
               [ "summary" ]
               ~doc:"With --inspect, summarize kinds and identical row candidates.")
-      $ Arg.(
-          value
-          & flag
-          & info
-              [ "apply" ]
-              ~doc:
-                "Movement CSV institutions only: store the evidence after reviewing the \
-                 preview.")
-      $ Arg.(value & flag & info [ "yes" ] ~doc:"With --apply, skip confirmation.")
       $ json_output)
 ;;
 

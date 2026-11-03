@@ -98,6 +98,9 @@ let adapter
       ~institution
       ~aliases
       ~kinds
+      ?(operation_kinds = [])
+      ?(operation_rows =
+        fun _ -> Or_error.error_string "this adapter does not interpret operation events")
       ~formats
       ~takes_account_label
       ~overlap
@@ -112,6 +115,8 @@ let adapter
     let institution = institution
     let aliases = aliases
     let kinds = kinds
+    let operation_kinds = operation_kinds
+    let operation_rows = operation_rows
     let formats = formats
     let takes_account_label = takes_account_label
     let overlap = overlap

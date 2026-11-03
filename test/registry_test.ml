@@ -14,6 +14,8 @@ module Example = struct
   let institution = "example"
   let aliases = [ "examplebank" ]
   let kinds = [ "example-transaction"; "bank-transaction" ]
+  let operation_kinds = []
+  let operation_rows _ = Or_error.error_string "example produces no operation events"
   let formats = [ "example" ]
   let probe ~filename:_ _ = None
   let takes_account_label = false
@@ -52,7 +54,7 @@ let construction () =
   let registry = ok (Registry.create (Builtin.adapters @ [ (module Example) ])) in
   Alcotest.(check (list string))
     "institutions"
-    [ "boursobank"; "bunq"; "csv"; "example"; "revolut"; "wise" ]
+    [ "boursobank"; "bunq"; "cdc"; "csv"; "example"; "revolut"; "wise" ]
     (Registry.institutions registry);
   rejected
     "duplicate institution"
@@ -147,7 +149,8 @@ let unregistered_import () =
              true
              (String.is_substring
                 (Option.value_exn report.message)
-                ~substring:"known institutions: boursobank, bunq, csv, revolut, wise");
+                ~substring:
+                  "known institutions: boursobank, bunq, cdc, csv, revolut, wise");
            Alcotest.(check int) "no events" 0 (List.length (ok (Store.events db)));
            Ok ())))
 ;;

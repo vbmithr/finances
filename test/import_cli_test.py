@@ -191,11 +191,11 @@ class ImportOnboarding(unittest.TestCase):
         self.assertTrue(all(len(group) == 2 for group in summary['identical_rows']))
         self.assertNotEqual(self.run_fin('import', 'cdc', '--inspect', check=False).returncode, 0)
         journal = self.run_fin('journal', 'export').stdout
-        preview = self.run_fin('import', 'cdc', path).stdout
-        self.assertIn('Rows: 4; need review: 2', preview)
         self.assertEqual(json.loads(self.run_fin('db', 'events').stdout), [])
-        self.assertIn('operation_sources_imported=4', self.run_fin('import', 'cdc', path, '--apply', '--yes').stdout)
-        self.assertIn('operation_sources_imported=0', self.run_fin('import', 'cdc', path, '--apply', '--yes').stdout)
+        self.assertIn('inserted=4', self.run_fin('import', 'cdc', path).stdout)
+        reimport = self.run_fin('import', 'cdc', path).stdout
+        self.assertIn('unchanged=1', reimport)
+        self.assertIn('inserted=0', reimport)
         sources = json.loads(self.run_fin('db', 'sources', '--institution', 'cdc', '--json').stdout)
         self.assertEqual(len(sources), 4)
         self.assertEqual(next(s for s in sources if s['fields']['Transaction Description'] == 'Exchange')['fields']['To Amount'], '0.20')
@@ -237,7 +237,7 @@ class ImportOnboarding(unittest.TestCase):
         self.assertEqual((saved['version'], len(saved['resolutions'])), (5, 2))
         rebuilt = self.root / 'crypto-rebuilt.sqlite3'
         self.run_fin('init', '--database', rebuilt)
-        self.run_fin('import', 'cdc', path, '--database', rebuilt, '--apply', '--yes')
+        self.run_fin('import', 'cdc', path, '--database', rebuilt)
         preview = self.run_fin('operation', 'restore', portable, '--database', rebuilt).stdout
         self.assertIn('Movement resolutions to restore: 2', preview)
         self.run_fin('operation', 'restore', portable, '--database', rebuilt, '--apply', '--yes')
@@ -249,7 +249,7 @@ class ImportOnboarding(unittest.TestCase):
         blocked = self.run_fin('operation', 'restore', portable, '--database', rebuilt, '--apply', '--yes', check=False)
         self.assertNotEqual(blocked.returncode, 0)
         self.assertIn('movement interpretation differs', blocked.stdout)
-        self.assertIn('operation_sources_imported=0', self.run_fin('import', 'cdc', path, '--apply', '--yes').stdout)
+        self.assertIn('unchanged=1', self.run_fin('import', 'cdc', path).stdout)
         self.assertEqual(self.run_fin('journal', 'export').stdout, journal)
         self.assertIn('exchange_changes=1', self.run_fin('operation', 'exchange', 'confirm', op, '--yes').stdout)
         after = self.run_fin('journal', 'export').stdout
@@ -271,14 +271,14 @@ class ImportOnboarding(unittest.TestCase):
         self.assertEqual(self.run_fin('journal', 'export').stdout, journal)
         overlap = self.root / 'overlap.csv'
         overlap.write_text(path.read_text() + '2025-06-09 17:56:20,Another,CRO,2,,,EUR,1,1,referral_bonus,\n')
-        blocked = self.run_fin('import', 'cdc', overlap, '--apply', '--yes', check=False)
+        blocked = self.run_fin('import', 'cdc', overlap, check=False)
         self.assertNotEqual(blocked.returncode, 0)
         self.assertIn('overlap is ambiguous', blocked.stdout)
         self.assertEqual(len(json.loads(self.run_fin('db', 'events').stdout)), 4)
         duplicated = self.root / 'duplicated.csv'
         header, first, *_ = path.read_text().splitlines()
         duplicated.write_text(header + '\n' + first + '\n' + first + '\n')
-        blocked = self.run_fin('import', 'cdc', duplicated, '--apply', '--yes', check=False)
+        blocked = self.run_fin('import', 'cdc', duplicated, check=False)
         self.assertNotEqual(blocked.returncode, 0)
         self.assertIn('identical source rows are ambiguous', blocked.stdout)
 
@@ -286,7 +286,7 @@ class ImportOnboarding(unittest.TestCase):
         path = self.root / 'forex.csv'
         path.write_text('Timestamp (UTC),Transaction Description,Currency,Amount,To Currency,To Amount,Native Currency,Native Amount,Native Amount (in USD),Transaction Kind,Transaction Hash\n'
                         '2025-06-09 17:56:17,Forex,EUR,-100,USD,108,EUR,-100,-108,crypto_viban_exchange,\n')
-        self.run_fin('import', 'cdc', path, '--apply', '--yes')
+        self.run_fin('import', 'cdc', path)
         row = json.loads(self.run_fin('operation', 'list', '--json').stdout)[0]
         op = row['operation_id']
         for role, account, currency in [('from', 'assets:forex:eur', 'EUR'), ('to', 'assets:forex:usd', 'USD')]:
@@ -307,7 +307,7 @@ class ImportOnboarding(unittest.TestCase):
         wallet.write_text('Timestamp (UTC),Transaction Description,Currency,Amount,To Currency,To Amount,Native Currency,Native Amount,Native Amount (in USD),Transaction Kind,Transaction Hash\n'
                           '2026-01-02 10:01:00,Deposit,EUR,10,,,EUR,10,11,crypto_deposit,\n')
         self.run_fin('import', 'revolut', bank, '--account-id', 'main')
-        self.run_fin('import', 'cdc', wallet, '--apply', '--yes')
+        self.run_fin('import', 'cdc', wallet)
         rows = json.loads(self.run_fin('operation', 'list', '--json').stdout)
         bank_op = next(r['operation_id'] for r in rows if r['institution'] == 'revolut')
         wallet_op = next(r['operation_id'] for r in rows if r['institution'] == 'cdc')
@@ -329,7 +329,7 @@ class ImportOnboarding(unittest.TestCase):
         transfers.write_text(self.run_fin('transfer', 'export').stdout)
         rebuilt = self.root / 'transfer-general-rebuilt.sqlite3'
         self.run_fin('init', '--database', rebuilt)
-        self.run_fin('import', 'cdc', wallet, '--database', rebuilt, '--apply', '--yes')
+        self.run_fin('import', 'cdc', wallet, '--database', rebuilt)
         self.run_fin('import', 'revolut', bank, '--account-id', 'main', '--database', rebuilt)
         self.run_fin('operation', 'restore', resolutions, '--database', rebuilt, '--apply', '--yes')
         self.assertIn('Transfers to restore: 1', self.run_fin('transfer', 'restore', transfers, '--database', rebuilt).stdout)
@@ -344,7 +344,7 @@ class ImportOnboarding(unittest.TestCase):
         path.write_text('Timestamp (UTC),Transaction Description,Currency,Amount,To Currency,To Amount,Native Currency,Native Amount,Native Amount (in USD),Transaction Kind,Transaction Hash\n'
                         '2026-01-02 10:01:00,Wallet withdrawal,BTC,-0.12345678,,,EUR,0,0,supercharger_deposit,\n'
                         '2026-01-02 10:02:00,Wallet deposit,BTC,0.12345678,,,EUR,0,0,crypto_deposit,\n')
-        self.run_fin('import', 'cdc', path, '--apply', '--yes')
+        self.run_fin('import', 'cdc', path)
         rows = json.loads(self.run_fin('operation', 'list', '--json').stdout)
         first = next(r['operation_id'] for r in rows if r['description'] == 'Wallet withdrawal')
         second = next(r['operation_id'] for r in rows if r['description'] == 'Wallet deposit')
@@ -364,7 +364,7 @@ class ImportOnboarding(unittest.TestCase):
         path = self.root / 'timestamp.csv'
         path.write_text('Timestamp (UTC),Transaction Description,Currency,Amount,To Currency,To Amount,Native Currency,Native Amount,Native Amount (in USD),Transaction Kind,Transaction Hash\n'
                         '2025-06-09 17:56:16,Crv*Le Genre Urbain,EUR,-4.3,,,EUR,-4.3,-4.938386557,,\n')
-        output = self.terminal(['import', path, '--provider', 'cdc', '--account-id', 'main'], [
+        output = self.terminal(['import', path, '--provider', 'mycdc', '--account-id', 'main'], [
             ('Column containing the transaction date:', '1'),
             ('Column containing the merchant or description:', '2'),
             ('Column containing the amount charged to the account:', '4'),
@@ -379,7 +379,7 @@ class ImportOnboarding(unittest.TestCase):
         row = json.loads(self.run_fin('operation', 'list', '--json').stdout)[0]
         self.assertEqual((row['booked_on'], row['amount'], row['description']),
                          ('2025-06-09', '-4.3', 'Crv*Le Genre Urbain'))
-        self.assertIn('inserted=0', self.run_fin('import', path, '--provider', 'cdc', '--account-id', 'main').stdout)
+        self.assertIn('inserted=0', self.run_fin('import', path, '--provider', 'mycdc', '--account-id', 'main').stdout)
 
     def test_generic_bank_csv_setup_and_reimport(self):
         csv_path = self.root / 'checking.csv'
@@ -1139,7 +1139,7 @@ class ImportOnboarding(unittest.TestCase):
         cdc.write_text('Timestamp (UTC),Transaction Description,Currency,Amount,To Currency,To Amount,Native Currency,Native Amount,Native Amount (in USD),Transaction Kind,Transaction Hash\n'
                        '2025-06-09 17:56:16,Reward,CRO,1.23456789,,,EUR,0.10,0.12,referral_card_cashback,\n'
                        '2025-06-09 17:56:17,Exchange,CRO,-2,EUR,0.20,EUR,0.20,0.23,crypto_viban_exchange,\n')
-        self.run_fin('import', 'cdc', cdc, '--apply', '--yes')
+        self.run_fin('import', 'cdc', cdc)
         rows = json.loads(self.run_fin('operation', 'list', '--json').stdout)
         self.assertEqual(len(rows), 7)
         exchange = next(r for r in rows if r['institution'] == 'cdc' and r['description'] == 'Exchange')

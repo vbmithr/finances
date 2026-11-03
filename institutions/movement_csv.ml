@@ -212,7 +212,59 @@ let interpret profile ~kind ~from_leg ~to_leg =
   | None -> Review "Unrecognized kind or field pattern; no balance effects proposed", []
 ;;
 
-let parse profile ~file contents =
+let cell fields name =
+  List.Assoc.find fields name ~equal:String.equal |> Option.map ~f:String.strip
+;;
+
+(* The leg and kind columns of one row, as raw fields. *)
+let read_row profile ~fields =
+  let open Or_error.Let_syntax in
+  let parse_leg asset amount =
+    let%bind commodity = Commodity.reported ~provider:profile.institution ~symbol:asset in
+    let%map amount = Or_error.try_with (fun () -> Quantity.of_string amount) in
+    { commodity; amount }
+  in
+  let columns = profile.columns in
+  let required name =
+    Or_error.of_option
+      (cell fields name)
+      ~error:(Error.of_string ("missing column " ^ name))
+  in
+  let%bind asset = required columns.currency_column in
+  let%bind amount = required columns.amount_column in
+  let%bind from_leg = parse_leg asset amount in
+  let%bind to_currency = required columns.to_currency_column in
+  let%bind to_amount = required columns.to_amount_column in
+  let%bind kind = required columns.kind_column in
+  let%bind to_leg, incomplete_to =
+    match String.is_empty to_currency, String.is_empty to_amount with
+    | true, true -> Ok (None, false)
+    | false, false ->
+      let%map leg = parse_leg to_currency to_amount in
+      Some leg, false
+    | _ -> Ok (None, true)
+  in
+  Ok (kind, from_leg, to_leg, incomplete_to)
+;;
+
+let interpret_row profile ~kind ~from_leg ~to_leg ~incomplete_to =
+  if incomplete_to
+  then Review "Incomplete To currency/amount pair", []
+  else interpret profile ~kind ~from_leg ~to_leg
+;;
+
+(** A parsed CSV row without its file context: enough to build both the
+    read-only inspection view and the durable source event. *)
+type parsed_row =
+  { row_number : int
+  ; timestamp : Ptime.t
+  ; kind : string
+  ; fields : (string * string) list
+  ; interpretation : interpretation
+  ; proposed_legs : leg list
+  }
+
+let parse_rows profile contents =
   let header = profile.header in
   let columns = profile.columns in
   Or_error.try_with (fun () ->
@@ -228,17 +280,7 @@ let parse profile ~file contents =
       if List.length values <> List.length header
       then failwith (Printf.sprintf "row %d has the wrong number of columns" (i + 1));
       let fields = List.zip_exn header values in
-      let cell name =
-        List.Assoc.find_exn fields name ~equal:String.equal |> String.strip
-      in
-      let parse_leg asset amount =
-        let commodity =
-          Commodity.reported ~provider:profile.institution ~symbol:asset
-          |> Or_error.ok_exn
-        in
-        { commodity; amount = Quantity.of_string amount }
-      in
-      let timestamp = cell columns.timestamp_column in
+      let timestamp = cell fields columns.timestamp_column |> Option.value_exn in
       let timestamp =
         Csv_schema.Cell.utc_clock ()
         |> fun clock ->
@@ -254,74 +296,102 @@ let parse profile ~file contents =
         in
         Csv_schema.of_fields schema ~row_number:(i + 1) [ timestamp ] |> Or_error.ok_exn
       in
-      let from_leg =
-        parse_leg (cell columns.currency_column) (cell columns.amount_column)
+      let kind, from_leg, to_leg, incomplete_to =
+        read_row profile ~fields |> Or_error.ok_exn
       in
-      let to_currency, to_amount =
-        cell columns.to_currency_column, cell columns.to_amount_column
-      in
-      let to_leg, incomplete_to =
-        match String.is_empty to_currency, String.is_empty to_amount with
-        | true, true -> None, false
-        | false, false -> Some (parse_leg to_currency to_amount), false
-        | _ -> None, true
-      in
-      let kind = cell columns.kind_column in
       let interpretation, proposed_legs =
-        if incomplete_to
-        then Review "Incomplete To currency/amount pair", []
-        else interpret profile ~kind ~from_leg ~to_leg
+        interpret_row profile ~kind ~from_leg ~to_leg ~incomplete_to
       in
-      let evidence = [ Operation.File_row { document = file; row = i + 1 } ] in
-      let movements =
-        List.map proposed_legs ~f:(fun leg ->
-          Operation.movement ~commodity:leg.commodity ~quantity:leg.amount ~evidence ()
-          |> Or_error.ok_exn)
-      in
-      let operation =
-        Operation.create ~occurred:(Temporal.Instant timestamp) ~evidence ~movements
-        |> Or_error.ok_exn
-      in
-      { file
-      ; row_number = i + 1
-      ; timestamp
-      ; kind
-      ; fields
-      ; interpretation
-      ; proposed_legs
-      ; operation
-      }))
+      { row_number = i + 1; timestamp; kind; fields; interpretation; proposed_legs }))
+  |> Or_error.tag ~tag:(profile.institution ^ " CSV")
+;;
+
+let parse profile ~file contents =
+  Or_error.map
+    (parse_rows profile contents)
+    ~f:
+      (List.map ~f:(fun (r : parsed_row) ->
+         let evidence = [ Operation.File_row { document = file; row = r.row_number } ] in
+         let movements =
+           List.map r.proposed_legs ~f:(fun leg ->
+             Operation.movement ~commodity:leg.commodity ~quantity:leg.amount ~evidence ()
+             |> Or_error.ok_exn)
+         in
+         let operation =
+           Operation.create ~occurred:(Temporal.Instant r.timestamp) ~evidence ~movements
+           |> Or_error.ok_exn
+         in
+         { file
+         ; row_number = r.row_number
+         ; timestamp = r.timestamp
+         ; kind = r.kind
+         ; fields = r.fields
+         ; interpretation = r.interpretation
+         ; proposed_legs = r.proposed_legs
+         ; operation
+         }))
   |> Or_error.tag ~tag:(profile.institution ^ " CSV " ^ file)
+;;
+
+(* One durable source event per CSV row; the row's fields are the payload, so
+   the proposal can be re-derived from the stored event alone. *)
+let source_event profile ~timestamp ~fields =
+  let payload = Json.encode Json.string_map fields in
+  let source_id = Digestif.SHA256.(to_hex (digest_string payload)) in
+  Source_event.create
+    ~venue:profile.institution
+    ~account:profile.account
+    ~kind:profile.payload_tag
+    ~source_id
+    ~occurred_at:timestamp
+    ~payload
+    ~fields
+    ()
+;;
+
+let legs ~interpretation ~proposed_legs =
+  let roles =
+    match interpretation, proposed_legs with
+    | Single, [ leg ] -> [ "primary", leg ]
+    | Exchange, [ first; second ] -> [ "from", first; "to", second ]
+    | Review _, [] -> []
+    | _ -> failwith "invalid movement CSV interpretation"
+  in
+  List.map roles ~f:(fun (role, leg) ->
+    Operation_import.leg ~role ~commodity:leg.commodity ~quantity:leg.amount)
+  |> Or_error.combine_errors
 ;;
 
 let import_rows profile rows =
   List.map rows ~f:(fun row ->
     let open Or_error.Let_syntax in
-    let payload = Json.encode Json.string_map row.fields in
-    let source_id = Digestif.SHA256.(to_hex (digest_string payload)) in
-    let%bind source =
-      Source_event.create
-        ~venue:profile.institution
-        ~account:profile.account
-        ~kind:profile.payload_tag
-        ~source_id
-        ~occurred_at:row.timestamp
-        ~payload
-        ~fields:row.fields
-        ()
-    in
-    let roles =
-      match row.interpretation, row.proposed_legs with
-      | Single, [ leg ] -> [ "primary", leg ]
-      | Exchange, [ first; second ] -> [ "from", first; "to", second ]
-      | Review _, [] -> []
-      | _ -> failwith "invalid movement CSV interpretation"
-    in
-    let%bind legs =
-      List.map roles ~f:(fun (role, leg) ->
-        Operation_import.leg ~role ~commodity:leg.commodity ~quantity:leg.amount)
-      |> Or_error.combine_errors
+    let%bind source = source_event profile ~timestamp:row.timestamp ~fields:row.fields in
+    let%map legs =
+      legs ~interpretation:row.interpretation ~proposed_legs:row.proposed_legs
     in
     Operation_import.row ~source ~legs)
   |> Or_error.combine_errors
+;;
+
+(* The source events of a whole export, as a document's loose events. *)
+let events profile contents =
+  let open Or_error.Let_syntax in
+  let%bind rows = parse_rows profile contents in
+  List.map rows ~f:(fun (r : parsed_row) ->
+    source_event profile ~timestamp:r.timestamp ~fields:r.fields)
+  |> Or_error.combine_errors
+;;
+
+(* Re-derive the proposed rows of a stored event from its fields. *)
+let operation_rows_of_event profile (event : Source_event.t) =
+  let open Or_error.Let_syntax in
+  let%bind kind, from_leg, to_leg, incomplete_to =
+    read_row profile ~fields:event.fields
+  in
+  let interpretation, proposed_legs =
+    interpret_row profile ~kind ~from_leg ~to_leg ~incomplete_to
+  in
+  let%bind legs = legs ~interpretation ~proposed_legs in
+  let%map row = Operation_import.row ~source:event ~legs in
+  [ row ]
 ;;

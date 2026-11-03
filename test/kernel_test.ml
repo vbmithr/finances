@@ -583,70 +583,145 @@ let operation_storage () =
          | _ -> false)))
 ;;
 
-let operation_document_safety () =
+let cdc_header =
+  "Timestamp (UTC),Transaction Description,Currency,Amount,To Currency,To Amount,Native \
+   Currency,Native Amount,Native Amount (in USD),Transaction Kind,Transaction Hash\n"
+;;
+
+let cdc_row n kind amount to_currency to_amount =
+  Printf.sprintf
+    "2026-01-0%d 10:0%d:00,Row %d,CRO,%s,%s,%s,EUR,1,1,%s,\n"
+    n
+    n
+    n
+    amount
+    to_currency
+    to_amount
+    kind
+;;
+
+(* CDC rows import through the same registry adapter and store path as
+   every other venue: source events plus proposed operations. *)
+let cdc_import_unified () =
   with_database (fun path ->
-    let source = event "document-row" in
-    let commodity = ok (Commodity.reported ~provider:"demo" ~symbol:"BTC") in
-    let make quantity =
-      let leg =
-        ok (Operation_import.leg ~role:"primary" ~commodity ~quantity:(decimal quantity))
-      in
-      ok (Operation_import.row ~source ~legs:[ leg ])
+    let contents =
+      cdc_header
+      ^ cdc_row 1 "crypto_deposit" "1.5" "" ""
+      ^ cdc_row 2 "crypto_viban_exchange" "-2" "EUR" "0.20"
     in
     with_store path (fun db ->
-      let rows = [ make "1.25" ] in
-      let preview =
-        ok
-          (Store.preview_operation_document
-             db
-             ~institution:"paradex"
-             ~contents:"document"
-             ~rows)
-      in
-      error
-        (Store.import_operation_document
-           db
-           ~institution:"paradex"
-           ~contents:"document"
-           ~rows:[ make "9" ]
-           ~expected:preview);
-      Alcotest.(check int)
-        "changed preview stores no source"
-        0
-        (List.length (ok (Store.events db)));
-      Alcotest.(check int)
-        "document imported"
-        1
-        (ok
-           (Store.import_operation_document
-              db
-              ~institution:"paradex"
-              ~contents:"document"
-              ~rows
-              ~expected:preview)));
-    raw path (fun db ->
-      sql db "UPDATE operation_movements SET quantity='9' WHERE role='primary'");
-    with_store path (fun db ->
-      let rows = [ make "1.25" ] in
-      let preview =
-        ok
-          (Store.preview_operation_document
-             db
-             ~institution:"paradex"
-             ~contents:"document"
-             ~rows)
+      let report =
+        ok (Store.import_bank_file db ~institution:"cdc" ~path:"cdc.csv" ~contents)
       in
       Alcotest.(check bool)
-        "corrupt replay is blocked"
+        "imported"
         true
-        (not (List.is_empty preview.problems));
-      error
-        (Store.import_operation_document
-           db
-           ~institution:"paradex"
-           ~contents:"document"
-           ~rows
-           ~expected:preview)))
+        (match report.Bank_import.outcome with
+         | Bank_import.Imported -> true
+         | _ -> false);
+      Alcotest.(check int) "two rows inserted" 2 report.inserted;
+      let events = ok (Store.events db) in
+      Alcotest.(check int) "two source events" 2 (List.length events);
+      List.iter events ~f:(fun (_, (e : Source_event.t)) ->
+        Alcotest.(check string) "venue" "cdc" e.venue;
+        Alcotest.(check string) "operation kind" "cdc-csv-v1" e.kind);
+      let exchange =
+        List.find_exn events ~f:(fun (_, e) ->
+          String.equal
+            (List.Assoc.find_exn
+               e.Source_event.fields
+               "Transaction Kind"
+               ~equal:String.equal)
+            "crypto_viban_exchange")
+      in
+      let operations = ok (Store.operations_for_event db (fst exchange)) in
+      Alcotest.(check int) "one proposed operation" 1 (List.length operations);
+      let operation = snd (List.hd_exn operations) in
+      Alcotest.(check int)
+        "exchange has two movements"
+        2
+        (List.length operation.Operation.movements);
+      let roles =
+        List.sort
+          (List.map operation.movements ~f:(fun m ->
+             (Option.value_exn m.Operation.identity).Movement_identity.role))
+          ~compare:String.compare
+      in
+      Alcotest.(check (list string)) "roles" [ "from"; "to" ] roles;
+      (* Reimporting the identical file is unchanged. *)
+      let again =
+        ok (Store.import_bank_file db ~institution:"cdc" ~path:"cdc.csv" ~contents)
+      in
+      Alcotest.(check bool)
+        "unchanged"
+        true
+        (match again.Bank_import.outcome with
+         | Bank_import.Unchanged -> true
+         | _ -> false);
+      Alcotest.(check int) "nothing new inserted" 0 again.inserted;
+      Alcotest.(check int) "both rows existing" 2 again.existing;
+      (* A different document overlapping an imported row is refused. *)
+      let overlap =
+        cdc_header
+        ^ cdc_row 1 "crypto_deposit" "1.5" "" ""
+        ^ cdc_row 3 "crypto_deposit" "9" "" ""
+      in
+      let blocked =
+        Store.import_bank_file
+          db
+          ~institution:"cdc"
+          ~path:"overlap.csv"
+          ~contents:overlap
+      in
+      Alcotest.(check bool)
+        "partial overlap refused"
+        true
+        (match blocked with
+         | Error _ -> true
+         | Ok report ->
+           (match report.Bank_import.outcome with
+            | Bank_import.Rejected -> true
+            | _ -> false));
+      (* Identical rows inside one document are ambiguous. *)
+      let duplicated =
+        cdc_header
+        ^ cdc_row 1 "crypto_deposit" "1.5" "" ""
+        ^ cdc_row 1 "crypto_deposit" "1.5" "" ""
+      in
+      let ambiguous =
+        Store.import_bank_file
+          db
+          ~institution:"cdc"
+          ~path:"dup.csv"
+          ~contents:duplicated
+      in
+      Alcotest.(check bool)
+        "identical rows refused"
+        true
+        (match ambiguous with
+         | Error _ -> true
+         | Ok report ->
+           (match report.Bank_import.outcome with
+            | Bank_import.Rejected -> true
+            | _ -> false));
+      (* A file the adapter does not recognize is unsupported. *)
+      let foreign = "a,b\n1,2\n" in
+      let unsupported =
+        Store.import_bank_file
+          db
+          ~institution:"cdc"
+          ~path:"other.csv"
+          ~contents:foreign
+      in
+      Alcotest.(check bool)
+        "foreign CSV unsupported"
+        true
+        (match unsupported with
+         | Error _ -> true
+         | Ok report ->
+           (match report.Bank_import.outcome with
+            | Bank_import.Unsupported -> true
+            | _ -> false))))
 ;;
 
 let exchange_accounting () =
@@ -756,7 +831,7 @@ let () =
           ; "immutable evidence", immutable_evidence
           ; "future schema", future_schema
           ; "operation storage and rollback", operation_storage
-          ; "operation document replay and preview safety", operation_document_safety
+          ; "cdc imports through the unified path", cdc_import_unified
           ]
           ~f:(fun (name, f) -> Alcotest.test_case name `Quick f) )
     ; ( "model"

@@ -8,6 +8,8 @@ module Other_bank = struct
 
   let institution = "other-bank"
   let aliases = []
+  let operation_kinds = []
+  let operation_rows _ = Or_error.error_string "OFX events are bank movements"
   let parse ~context:_ ~format:_ contents = Ofx_bank.parse ~institution contents
 end
 

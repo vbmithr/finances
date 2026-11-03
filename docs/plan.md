@@ -490,6 +490,10 @@ position observations, derive positions from fills, or calculate funding.
   The old bank tables
   stay as a projection during the transition; schema 33 adds persisted movement
   links and requires a rebuild.
+- [x] Import bundled movement-CSV institutions (CDC) through the shared
+  adapter and import pipeline: `fin import cdc` scans, probes, parses and
+  ingests like any bank, storing source events and proposed operations with no
+  separate preview path.
 - [ ] Let user-added institutions declare movement-CSV profiles in the database
   (today only bundled ones), and move the bank importer onto the shared operation and movement pipeline (step 4 of [operation-transactions.md](operation-transactions.md)).
 - [ ] Reconcile CDC proposed legs against account and wallet balances;

@@ -45,7 +45,8 @@ infer opening balances. Those operations can be added around the core APIs.
 
 Inspect CDC App CSV rows without importing them with
 `fin import cdc --inspect --json wallet.csv`. Use `fin import cdc wallet.csv`
-to preview and `--apply` to store source evidence and proposals; `fin db sources --institution cdc`
+to store source evidence and proposals through the same import pipeline as banks;
+`fin db sources --institution cdc`
 shows imported source IDs. Proposed legs are not reconciled; resolved and
 explicitly confirmed two-movement exchanges can be posted. See the
 [manual](docs/manual.md#importing-statements) for limitations.

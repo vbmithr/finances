@@ -26,6 +26,15 @@ module type S = sig
 
   val decode : Source_event.t -> Movement.t Base.Or_error.t
 
+  (** Event kinds the adapter interprets as operations with several
+      role-labelled movements instead of one bank movement (a movement-CSV
+      exchange row, for example). Disjoint from [kinds]. *)
+  val operation_kinds : string list
+
+  (** Decode an [operation_kinds] event into its proposed source rows. Bank
+      adapters own no operation kinds. *)
+  val operation_rows : Source_event.t -> Operation_import.row list Base.Or_error.t
+
   (** Format identifiers, recorded in import history. *)
   val formats : string list
 

@@ -1019,6 +1019,139 @@ let apply_automatic_category
   select (List.rev rows)
 ;;
 
+let traverse f xs = Or_error.combine_errors (List.map xs ~f)
+
+let operation_event_id = function
+  | Operation.Stored_event id -> Ok id
+  | Operation.File_row _ ->
+    Or_error.error_string "file-row references must be imported as source events first"
+;;
+
+let add_operation_with_sources ?source_event_id db by_id (operation : Operation.t) =
+  let* source_ids = traverse operation_event_id operation.evidence in
+  let* () =
+    match source_event_id with
+    | Some id when not (List.mem source_ids id ~equal:Int64.equal) ->
+      Or_error.error_string "operation source event must be part of its evidence"
+    | _ -> Ok ()
+  in
+  let* () =
+    List.map source_ids ~f:(fun id ->
+      if Hashtbl.mem by_id id
+      then Ok ()
+      else Or_error.error_string "unknown operation source event")
+    |> Or_error.combine_errors_unit
+  in
+  let insert_operation =
+    Rel_sql.Stmt.(
+      func
+        "INSERT INTO operations(occurred,source_event_id) VALUES (?,?)"
+        (text @-> option int64 @-> unit))
+  in
+  let insert_source =
+    Rel_sql.Stmt.(
+      func
+        "INSERT INTO operation_sources(operation_id,event_id) VALUES (?,?)"
+        (int64 @-> int64 @-> unit))
+  in
+  let insert_movement =
+    Rel_sql.Stmt.(
+      func
+        "INSERT INTO \
+         operation_movements(operation_id,anchor_event_id,role,account,commodity,quantity) \
+         VALUES (?,?,?,?,?,?)"
+        (int64 @-> int64 @-> text @-> option text @-> text @-> text @-> unit))
+  in
+  let insert_movement_source =
+    Rel_sql.Stmt.(
+      func
+        "INSERT INTO operation_movement_sources(movement_id,operation_id,event_id) \
+         VALUES (?,?,?)"
+        (int64 @-> int64 @-> int64 @-> unit))
+  in
+  let* () =
+    db_result
+      (Db.exec
+         db.conn
+         (insert_operation (Temporal.to_string operation.occurred) source_event_id))
+  in
+  let operation_id = Db.last_insert_rowid db.conn in
+  let* () =
+    List.fold_result source_ids ~init:() ~f:(fun () id ->
+      db_result (Db.exec db.conn (insert_source operation_id id)))
+  in
+  let* () =
+    List.fold_result operation.movements ~init:() ~f:(fun () movement ->
+      let* identity =
+        Or_error.of_option
+          movement.Operation.identity
+          ~error:(Error.of_string "persisted movement needs a stable source identity")
+      in
+      let* movement_sources = traverse operation_event_id movement.evidence in
+      let anchors =
+        List.filter movement_sources ~f:(fun id ->
+          Option.value_map (Hashtbl.find by_id id) ~default:false ~f:(fun event ->
+            match Movement_identity.of_event event ~role:identity.role with
+            | Ok actual -> Movement_identity.equal actual identity
+            | Error _ -> false))
+      in
+      let* anchor =
+        match anchors with
+        | [ id ] -> Ok id
+        | [] ->
+          Or_error.error_string "movement identity is not backed by its source evidence"
+        | _ -> Or_error.error_string "movement identity matches multiple source events"
+      in
+      let* () =
+        db_result
+          (Db.exec
+             db.conn
+             (insert_movement
+                operation_id
+                anchor
+                identity.role
+                movement.account
+                (Json.encode Commodity.codec movement.commodity)
+                (Quantity.to_string movement.quantity)))
+      in
+      let movement_id = Db.last_insert_rowid db.conn in
+      List.fold_result movement_sources ~init:() ~f:(fun () id ->
+        db_result (Db.exec db.conn (insert_movement_source movement_id operation_id id))))
+  in
+  Ok operation_id
+;;
+
+(* A non-movement event whose adapter interprets it as an operation with
+   role-labelled movements: decode the proposal from the stored event and
+   persist it like any other operation. *)
+let persist_operation_event db ~event_id (event : Source_event.t) =
+  let* rows = Registry.operation_rows db.registry event in
+  match rows with
+  | [ row ] ->
+    let by_id = Hashtbl.of_alist_exn (module Int64) [ event_id, event ] in
+    let evidence = [ Operation.Stored_event event_id ] in
+    let* movements =
+      traverse
+        (fun (leg : Operation_import.leg) ->
+           let* identity =
+             Movement_identity.of_event row.Operation_import.source ~role:leg.role
+           in
+           Operation.movement
+             ~identity
+             ~commodity:leg.commodity
+             ~quantity:leg.quantity
+             ~evidence
+             ())
+        row.legs
+    in
+    let* operation =
+      Operation.create ~occurred:row.source.occurred ~evidence ~movements
+    in
+    let* _ = add_operation_with_sources ~source_event_id:event_id db by_id operation in
+    Ok ()
+  | _ -> Or_error.error_string "operation adapters must propose one row per event"
+;;
+
 let ingest_in_transaction db (e : Source_event.t) =
   let at, on = occurrence_columns e in
   let* existing =
@@ -1057,6 +1190,8 @@ let ingest_in_transaction db (e : Source_event.t) =
         let evidence = Source_evidence.apply rules m in
         let* () = write_source_evidence db id evidence in
         apply_automatic_category db id e raw m
+      else if Registry.is_operation_kind db.registry e.kind
+      then persist_operation_event db ~event_id:id e
       else Ok ()
     in
     Ok (Inserted id)
@@ -1079,8 +1214,6 @@ let document_contexts db ~institution =
   in
   collect db (query institution)
 ;;
-
-let traverse f xs = Or_error.combine_errors (List.map xs ~f)
 
 let classification_rules db =
   let* rows =
@@ -1796,9 +1929,30 @@ let import_document
     let* () =
       if
         List.for_all all_events ~f:(fun (e : Source_event.t) ->
-          String.equal e.venue institution && List.mem A.kinds e.kind ~equal:String.equal)
+          String.equal e.venue institution
+          && (List.mem A.kinds e.kind ~equal:String.equal
+              || List.mem A.operation_kinds e.kind ~equal:String.equal))
       then Ok ()
       else Or_error.errorf "the %s adapter produced an event it does not own" institution
+    in
+    (* A new document of operation rows must not partially overlap stored
+       sources: content-hashed row identities make partial overlap ambiguous. *)
+    let* () =
+      if Option.value accepted ~default:false
+      then Ok ()
+      else
+        List.filter all_events ~f:(fun (e : Source_event.t) ->
+          Registry.is_operation_kind db.registry e.kind)
+        |> List.fold_result ~init:() ~f:(fun () (e : Source_event.t) ->
+          let* existing =
+            db_result
+              (Db.first db.conn (find_source e.venue e.account e.kind e.source_id))
+          in
+          match existing with
+          | Some _ ->
+            Or_error.error_string
+              "a source row already exists in another document; overlap is ambiguous"
+          | None -> Ok ())
     in
     let* () =
       if List.is_empty document.context
@@ -8067,106 +8221,6 @@ let show_movement db event_id =
     }
 ;;
 
-let operation_event_id = function
-  | Operation.Stored_event id -> Ok id
-  | Operation.File_row _ ->
-    Or_error.error_string "file-row references must be imported as source events first"
-;;
-
-let add_operation_with_sources ?source_event_id db by_id (operation : Operation.t) =
-  let* source_ids = traverse operation_event_id operation.evidence in
-  let* () =
-    match source_event_id with
-    | Some id when not (List.mem source_ids id ~equal:Int64.equal) ->
-      Or_error.error_string "operation source event must be part of its evidence"
-    | _ -> Ok ()
-  in
-  let* () =
-    List.map source_ids ~f:(fun id ->
-      if Hashtbl.mem by_id id
-      then Ok ()
-      else Or_error.error_string "unknown operation source event")
-    |> Or_error.combine_errors_unit
-  in
-  let insert_operation =
-    Rel_sql.Stmt.(
-      func
-        "INSERT INTO operations(occurred,source_event_id) VALUES (?,?)"
-        (text @-> option int64 @-> unit))
-  in
-  let insert_source =
-    Rel_sql.Stmt.(
-      func
-        "INSERT INTO operation_sources(operation_id,event_id) VALUES (?,?)"
-        (int64 @-> int64 @-> unit))
-  in
-  let insert_movement =
-    Rel_sql.Stmt.(
-      func
-        "INSERT INTO \
-         operation_movements(operation_id,anchor_event_id,role,account,commodity,quantity) \
-         VALUES (?,?,?,?,?,?)"
-        (int64 @-> int64 @-> text @-> option text @-> text @-> text @-> unit))
-  in
-  let insert_movement_source =
-    Rel_sql.Stmt.(
-      func
-        "INSERT INTO operation_movement_sources(movement_id,operation_id,event_id) \
-         VALUES (?,?,?)"
-        (int64 @-> int64 @-> int64 @-> unit))
-  in
-  let* () =
-    db_result
-      (Db.exec
-         db.conn
-         (insert_operation (Temporal.to_string operation.occurred) source_event_id))
-  in
-  let operation_id = Db.last_insert_rowid db.conn in
-  let* () =
-    List.fold_result source_ids ~init:() ~f:(fun () id ->
-      db_result (Db.exec db.conn (insert_source operation_id id)))
-  in
-  let* () =
-    List.fold_result operation.movements ~init:() ~f:(fun () movement ->
-      let* identity =
-        Or_error.of_option
-          movement.Operation.identity
-          ~error:(Error.of_string "persisted movement needs a stable source identity")
-      in
-      let* movement_sources = traverse operation_event_id movement.evidence in
-      let anchors =
-        List.filter movement_sources ~f:(fun id ->
-          Option.value_map (Hashtbl.find by_id id) ~default:false ~f:(fun event ->
-            match Movement_identity.of_event event ~role:identity.role with
-            | Ok actual -> Movement_identity.equal actual identity
-            | Error _ -> false))
-      in
-      let* anchor =
-        match anchors with
-        | [ id ] -> Ok id
-        | [] ->
-          Or_error.error_string "movement identity is not backed by its source evidence"
-        | _ -> Or_error.error_string "movement identity matches multiple source events"
-      in
-      let* () =
-        db_result
-          (Db.exec
-             db.conn
-             (insert_movement
-                operation_id
-                anchor
-                identity.role
-                movement.account
-                (Json.encode Commodity.codec movement.commodity)
-                (Quantity.to_string movement.quantity)))
-      in
-      let movement_id = Db.last_insert_rowid db.conn in
-      List.fold_result movement_sources ~init:() ~f:(fun () id ->
-        db_result (Db.exec db.conn (insert_movement_source movement_id operation_id id))))
-  in
-  Ok operation_id
-;;
-
 let add_operation_in_transaction db operation =
   let* source = events db in
   add_operation_with_sources db (Hashtbl.of_alist_exn (module Int64) source) operation
@@ -9318,225 +9372,4 @@ let restore_exchanges db ~expected snapshot =
           current.exchange_decisions
       in
       Ok (List.count changes ~f:Fn.id))
-;;
-
-type operation_document_preview =
-  { rows : int
-  ; already_imported : bool
-  ; fingerprint : string
-  ; problems : string list
-  }
-
-let imported_operation_matches db event_id (row : Operation_import.row) =
-  let query =
-    Rel_sql.Stmt.(
-      func
-        "SELECT id,occurred FROM operations WHERE source_event_id=?"
-        (int64 @-> ret Row.(t2 (int64 "id") (text "occurred"))))
-  in
-  let* operation = db_result (Db.first db.conn (query event_id)) in
-  match operation with
-  | None -> Ok false
-  | Some (operation_id, occurred) ->
-    let evidence =
-      Rel_sql.Stmt.(
-        func
-          "SELECT EXISTS(SELECT 1 FROM operation_sources WHERE operation_id=? AND \
-           event_id=?)"
-          (int64 @-> int64 @-> ret Row.(t1 (bool "present"))))
-    in
-    let* linked = db_result (Db.first db.conn (evidence operation_id event_id)) in
-    let movements =
-      Rel_sql.Stmt.(
-        func
-          "SELECT m.role,m.commodity,m.quantity,m.anchor_event_id,EXISTS(SELECT 1 FROM \
-           operation_movement_sources s WHERE s.movement_id=m.id AND \
-           s.operation_id=m.operation_id AND s.event_id=m.anchor_event_id) FROM \
-           operation_movements m WHERE m.operation_id=? ORDER BY m.role"
-          (int64
-           @-> ret
-                 Row.(
-                   t5
-                     (text "role")
-                     (text "commodity")
-                     (text "quantity")
-                     (int64 "anchor_event_id")
-                     (bool "linked"))))
-    in
-    let* stored = collect db (movements operation_id) in
-    let expected =
-      List.sort row.legs ~compare:(fun a b ->
-        String.compare a.Operation_import.role b.role)
-    in
-    let equal (role, commodity, quantity, anchor, linked) (leg : Operation_import.leg) =
-      linked
-      && Int64.equal anchor event_id
-      && String.equal role leg.role
-      &&
-      match
-        ( Json.decode Commodity.codec commodity
-        , Or_error.try_with (fun () -> Quantity.of_string quantity) )
-      with
-      | Ok commodity, Ok quantity ->
-        Commodity.equal commodity leg.commodity && Quantity.equal quantity leg.quantity
-      | _ -> false
-    in
-    Ok
-      (Option.value linked ~default:false
-       && String.equal occurred (Temporal.to_string row.source.occurred)
-       && Int.equal (List.length stored) (List.length expected)
-       && List.for_all2_exn stored expected ~f:equal)
-;;
-
-let preview_operation_document_in_transaction db ~institution ~contents ~rows =
-  let* institution = Validation.token "institution" institution in
-  let* existing = events db in
-  let by_identity = Hashtbl.Poly.create () in
-  let identity (source : Source_event.t) =
-    source.venue, source.account, source.kind, source.source_id
-  in
-  List.iter existing ~f:(fun (id, source) ->
-    Hashtbl.set by_identity ~key:(identity source) ~data:(id, source));
-  let problems = ref [] in
-  let problem message = problems := message :: !problems in
-  if List.is_empty rows then problem "document has no transaction rows";
-  let keys = List.map rows ~f:(fun (row : Operation_import.row) -> identity row.source) in
-  if List.contains_dup keys ~compare:[%compare: string * string * string * string]
-  then problem "identical source rows are ambiguous; no rows can be imported";
-  List.iter rows ~f:(fun (row : Operation_import.row) ->
-    if not (String.equal row.source.venue institution)
-    then problem "source venue does not match institution";
-    if Registry.is_movement db.registry row.source
-    then problem "bank movement sources must use the bank importer");
-  let hash = Digestif.SHA256.(to_hex (digest_string contents)) in
-  let* document = db_result (Db.first db.conn (find_document institution hash)) in
-  let* already_imported =
-    match document with
-    | None ->
-      if List.exists keys ~f:(Hashtbl.mem by_identity)
-      then problem "a source row already exists in another document; overlap is ambiguous";
-      Ok false
-    | Some (document_id, stored) ->
-      if not (String.equal stored contents)
-      then problem "document digest conflicts with stored bytes";
-      let query =
-        Rel_sql.Stmt.(
-          func
-            "SELECT event_id FROM import_document_events WHERE document_id=? ORDER BY \
-             event_id"
-            (int64 @-> ret Row.(t1 (int64 "event_id"))))
-      in
-      let* linked = collect db (query document_id) in
-      let matches =
-        List.filter_map rows ~f:(fun (row : Operation_import.row) ->
-          match Hashtbl.find by_identity (identity row.source) with
-          | Some (id, source) when Poly.equal source row.source -> Some id
-          | _ -> None)
-      in
-      if
-        (not
-           (List.equal
-              Int64.equal
-              (List.sort linked ~compare:Int64.compare)
-              (List.sort matches ~compare:Int64.compare)))
-        || List.length matches <> List.length rows
-      then problem "stored document evidence differs from the proposed import";
-      let* operation_checks =
-        traverse
-          (fun (row : Operation_import.row) ->
-             match Hashtbl.find by_identity (identity row.source) with
-             | Some (id, _) -> imported_operation_matches db id row
-             | None -> Ok false)
-          rows
-      in
-      if not (List.for_all operation_checks ~f:Fn.id)
-      then problem "stored operation movements differ from the source interpretation";
-      Ok true
-  in
-  let parts =
-    [ institution; contents ]
-    @ List.map rows ~f:(fun (row : Operation_import.row) ->
-      let legs =
-        List.map row.legs ~f:(fun (leg : Operation_import.leg) ->
-          Json.encode
-            (Jsont.list Jsont.string)
-            [ leg.role
-            ; Json.encode Commodity.codec leg.commodity
-            ; Quantity.to_string leg.quantity
-            ])
-      in
-      Json.encode
-        (Jsont.list Jsont.string)
-        ([ row.source.venue
-         ; row.source.account
-         ; row.source.kind
-         ; row.source.source_id
-         ; Temporal.to_string row.source.occurred
-         ; row.source.payload
-         ; Json.encode Json.string_map row.source.fields
-         ]
-         @ legs))
-  in
-  let fingerprint =
-    Digestif.SHA256.(to_hex (digest_string (Json.encode (Jsont.list Jsont.string) parts)))
-  in
-  Ok
-    { rows = List.length rows
-    ; already_imported
-    ; fingerprint
-    ; problems = List.rev !problems
-    }
-;;
-
-let preview_operation_document db ~institution ~contents ~rows =
-  transaction db (fun db ->
-    preview_operation_document_in_transaction db ~institution ~contents ~rows)
-;;
-
-let import_operation_document db ~institution ~contents ~rows ~expected =
-  transaction db (fun db ->
-    let* current =
-      preview_operation_document_in_transaction db ~institution ~contents ~rows
-    in
-    if not (Poly.equal current expected)
-    then Or_error.error_string "document import preview changed; review it again"
-    else if not (List.is_empty current.problems)
-    then Or_error.error_string "resolve document import problems before applying"
-    else if current.already_imported
-    then Ok 0
-    else
-      let* document_id = archive_document db ~institution ~contents in
-      let* source = events db in
-      let by_id = Hashtbl.of_alist_exn (module Int64) source in
-      let* () =
-        List.fold_result rows ~init:() ~f:(fun () (row : Operation_import.row) ->
-          let* outcome = ingest_in_transaction db row.source in
-          let* event_id =
-            match outcome with
-            | Inserted id -> Ok id
-            | Existing _ -> Or_error.error_string "source appeared after preview"
-          in
-          Hashtbl.set by_id ~key:event_id ~data:row.source;
-          let evidence = [ Operation.Stored_event event_id ] in
-          let* movements =
-            traverse
-              (fun (leg : Operation_import.leg) ->
-                 let* identity = Movement_identity.of_event row.source ~role:leg.role in
-                 Operation.movement
-                   ~identity
-                   ~commodity:leg.commodity
-                   ~quantity:leg.quantity
-                   ~evidence
-                   ())
-              row.legs
-          in
-          let* operation =
-            Operation.create ~occurred:row.source.occurred ~evidence ~movements
-          in
-          let* _ =
-            add_operation_with_sources ~source_event_id:event_id db by_id operation
-          in
-          db_result (Db.exec db.conn (link_document document_id event_id)))
-      in
-      Ok (List.length rows))
 ;;

@@ -8,6 +8,17 @@ short line of their own.
 
 ## Unreleased
 
+- `fin import cdc` (alias `cdc`) now imports through the same pipeline as
+  every other venue: the bundled movement-CSV profile registers as a registry
+  adapter, so files, directories and ZIP archives are scanned in one run with the
+  standard per-file outcomes and summary, and the journal is published. Source
+  events and proposed operations are stored exactly as before; ambiguous overlaps
+  (identical rows in one file, or rows already imported from another file) are
+  still rejected. **Action required:** `fin import` no longer previews movement
+  CSV imports and does not take `--apply` or `--yes`; `fin import cdc FILE`
+  imports immediately, like bank statements. `fin import cdc --inspect
+  [--summary] [--json]` remains the read-only, database-free view.
+
 - Add `fin transfer link` and `unlink` for reviewed transfers involving a
   resolved wallet movement. Portable transfer snapshots version 2 also preserve
   these links; version 1 bank snapshots remain readable. Restore movement
