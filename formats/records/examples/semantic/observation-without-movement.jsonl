@@ -1,0 +1,5 @@
+{"kind":"header","format":"fin-records","version":1,"institution":"boursobank","identity":"inventory","converter":{"name":"boursobank-csv-example","version":"1"}}
+{"kind":"source","name":"export.csv","sha256":"0000000000000000000000000000000000000000000000000000000000000000"}
+{"kind":"account","id":"checking","currency":"EUR"}
+{"kind":"record","id":"2025-01-02/1","account":"checking","occurred":"2025-01-02","observation":true,"movements":[],"details":{"descriptions":["Synthetic grocer"],"fields":[["Category","Food"]]}}
+{"kind":"end","records":1}

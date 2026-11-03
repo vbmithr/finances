@@ -158,9 +158,9 @@ separate, each with its own source event.
 
 ### Source-stated grouping
 
-Grouping rules are data in the institution definition, like its type rules: for
-Wise, group by `reference` after removing a `FEE-` prefix, for `BALANCE-`
-references only. Other prefixes stay ungrouped until checked, because a reference
+These rules will belong to converters and reach fin as the `group` and `supporting`
+members of [records](records-format.md). For Wise: group by `reference` after removing a
+`FEE-` prefix, for `BALANCE-` references only. Other prefixes stay ungrouped until checked, because a reference
 may also be shared by a payment and its refund.
 
 The `reference` comes from CAMT and is stored on the source event, so this does not

@@ -8,6 +8,8 @@ short line of their own.
 
 ## Unreleased
 
+- Internal: draft of the records format (`docs/records-format.md`, a JSON Schema and
+  examples) for statements converted outside fin's adapters. fin does not read it yet.
 - Internal: one module, `Operation_groups`, now decides which stored operations read
   as one; the operation list and operation lookups both use it. No user-visible
   change. A database where an operation is named by two transfer links now reports

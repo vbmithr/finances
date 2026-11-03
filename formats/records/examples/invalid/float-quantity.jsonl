@@ -1,0 +1,6 @@
+{"kind":"header","format":"fin-records","version":1,"institution":"revolut","identity":"inventory"}
+{"kind":"source","name":"export.csv","sha256":"0000000000000000000000000000000000000000000000000000000000000000"}
+{"kind":"account","id":"main","currency":"EUR"}
+{"kind":"record","id":"2025-01-02/1","account":"main","occurred":"2025-01-02","value_on":"2025-01-03","movements":[{"role":"primary","quantity":-3.5,"commodity":{"kind":"fiat","code":"EUR"}}],"details":{"descriptions":["Coffee"],"type":"card"}}
+{"kind":"record","id":"2025-01-02/2","account":"main","occurred":"2025-01-02","movements":[{"role":"primary","quantity":"-3.50","commodity":{"kind":"fiat","code":"EUR"}}],"fee":"0.10","details":{"descriptions":["Coffee"],"type":"card","counterparty":{"name":"Example","iban":"XX00SYNTHETIC"}}}
+{"kind":"end","records":2}

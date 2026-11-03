@@ -1,0 +1,6 @@
+{"kind":"header","format":"fin-records","version":1,"institution":"cdc","identity":"source"}
+{"kind":"source","name":"wallet.csv","sha256":"0000000000000000000000000000000000000000000000000000000000000000"}
+{"kind":"account","id":"app","no_iban":true}
+{"kind":"record","id":"row-sha256-aaaa","account":"app","occurred":"2025-01-02T10:00:00Z","movements":[{"role":"from","quantity":"-2","commodity":{"kind":"reported","code":"CRO","provider":"cdc"}},{"role":"to","quantity":"0.20","commodity":{"kind":"fiat","code":"EUR"}}],"details":{"descriptions":["Exchange"],"type":"conversion","exchange":{"source":"CRO","target":"EUR","target_quantity":"0.20"},"fields":[["Transaction Kind","crypto_viban_exchange"]]}}
+{"kind":"record","id":"row-sha256-bbbb","account":"app","occurred":"2025-01-03T10:00:00Z","movements":[],"details":{"descriptions":["Unknown"],"reported":{"quantity":"-1","symbol":"CRO"},"references":{"hash":"0xsynthetic"},"fields":[["Transaction Kind","unknown_kind"]]}}
+{"kind":"end","records":2}

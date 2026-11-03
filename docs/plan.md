@@ -487,6 +487,12 @@ position observations, derive positions from fills, or calculate funding.
   `fin db sources` instead of a separate `fin crypto` group.
 - [x] Describe CDC as data (`cdc.json`) interpreted by the generic
   `Movement_csv`, with no institution-specific OCaml.
+- [ ] Unified records format with converters ([records-format.md](records-format.md)):
+  every statement entry becomes a record, one file in and one file out, and fin matches
+  across all stored records. Built-in converters keep `fin import wise FILE` working;
+  other institutions write their own. Schema, spec and examples drafted 2026-11-03.
+  Next: `fin import` for records beside the current adapters, then Wise as the first
+  built-in converter, and retire adapters one at a time.
 - [ ] Group movements into operations by evidence strength, covering transfers,
   CDC exchanges and Wise conversions: design proposed 2026-11-03 in
   [operation-transactions.md](operation-transactions.md#grouping-movements-into-operations-proposal),

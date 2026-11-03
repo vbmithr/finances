@@ -459,6 +459,14 @@
 
 (rule
  (alias runtest)
+ (deps
+  records_schema_test.py
+  (source_tree ../formats/records))
+ (action
+  (run python3 %{dep:records_schema_test.py} ../formats/records)))
+
+(rule
+ (alias runtest)
  (deps manpage_cli_test.py ../packaging/arch/build.py)
  (action
   (run

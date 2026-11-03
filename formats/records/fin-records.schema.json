@@ -1,0 +1,518 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/vbmithr/finances/formats/records/fin-records.schema.json",
+  "title": "fin records, version 1: one line",
+  "description": "One line of a records file, which is JSON Lines. See docs/records-format.md. This schema checks each line's shape only; fin also checks the order of lines, identity and references.",
+  "oneOf": [
+    {
+      "$ref": "#/$defs/header"
+    },
+    {
+      "$ref": "#/$defs/source"
+    },
+    {
+      "$ref": "#/$defs/account"
+    },
+    {
+      "$ref": "#/$defs/statement"
+    },
+    {
+      "$ref": "#/$defs/record"
+    },
+    {
+      "$ref": "#/$defs/end"
+    }
+  ],
+  "$defs": {
+    "text": {
+      "type": "string",
+      "minLength": 1
+    },
+    "token": {
+      "type": "string",
+      "pattern": "^[a-z0-9][a-z0-9_-]*$"
+    },
+    "symbol": {
+      "description": "A commodity symbol or network name.",
+      "type": "string",
+      "pattern": "^[A-Za-z0-9_-]+$"
+    },
+    "line": {
+      "type": "string",
+      "pattern": "^[^\\u0000-\\u001f\\u007f]+$"
+    },
+    "date": {
+      "type": "string",
+      "pattern": "^[0-9]{4}-[0-9]{2}-[0-9]{2}$"
+    },
+    "temporal": {
+      "description": "A calendar date, or an instant with an explicit offset. A date asserts no time of day.",
+      "type": "string",
+      "pattern": "^[0-9]{4}-[0-9]{2}-[0-9]{2}(T[0-9]{2}:[0-9]{2}:[0-9]{2}(\\.[0-9]+)?(Z|[+-][0-9]{2}:[0-9]{2}))?$"
+    },
+    "quantity": {
+      "description": "A signed decimal in a string, so that it is never a float.",
+      "type": "string",
+      "pattern": "^-?[0-9]+(\\.[0-9]+)?$"
+    },
+    "positive_quantity": {
+      "type": "string",
+      "pattern": "^[0-9]+(\\.[0-9]+)?$"
+    },
+    "currency": {
+      "type": "string",
+      "pattern": "^[A-Z]{3}$"
+    },
+    "commodity": {
+      "oneOf": [
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "kind",
+            "code"
+          ],
+          "properties": {
+            "kind": {
+              "const": "fiat"
+            },
+            "code": {
+              "$ref": "#/$defs/currency"
+            }
+          }
+        },
+        {
+          "description": "A symbol as the provider reports it; it does not identify an asset.",
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "kind",
+            "code",
+            "provider"
+          ],
+          "properties": {
+            "kind": {
+              "const": "reported"
+            },
+            "code": {
+              "$ref": "#/$defs/symbol"
+            },
+            "provider": {
+              "$ref": "#/$defs/token"
+            }
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "kind",
+            "network"
+          ],
+          "properties": {
+            "kind": {
+              "const": "onchain-native"
+            },
+            "network": {
+              "$ref": "#/$defs/symbol"
+            }
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "kind",
+            "network",
+            "contract"
+          ],
+          "properties": {
+            "kind": {
+              "const": "onchain-token"
+            },
+            "network": {
+              "$ref": "#/$defs/symbol"
+            },
+            "contract": {
+              "$ref": "#/$defs/line"
+            },
+            "token_id": {
+              "$ref": "#/$defs/line"
+            }
+          }
+        }
+      ]
+    },
+    "account": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "kind",
+        "id"
+      ],
+      "not": {
+        "required": [
+          "iban",
+          "no_iban"
+        ]
+      },
+      "properties": {
+        "kind": {
+          "const": "account"
+        },
+        "id": {
+          "$ref": "#/$defs/text"
+        },
+        "bank": {
+          "$ref": "#/$defs/text"
+        },
+        "number": {
+          "$ref": "#/$defs/text"
+        },
+        "type": {
+          "$ref": "#/$defs/text"
+        },
+        "currency": {
+          "$ref": "#/$defs/currency"
+        },
+        "iban": {
+          "$ref": "#/$defs/text"
+        },
+        "no_iban": {
+          "const": true
+        }
+      }
+    },
+    "balance": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "quantity",
+        "as_of"
+      ],
+      "properties": {
+        "quantity": {
+          "$ref": "#/$defs/quantity"
+        },
+        "as_of": {
+          "$ref": "#/$defs/temporal"
+        }
+      }
+    },
+    "statement": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "kind",
+        "id",
+        "account",
+        "currency",
+        "period_start",
+        "period_end",
+        "opening",
+        "closing"
+      ],
+      "properties": {
+        "kind": {
+          "const": "statement"
+        },
+        "id": {
+          "$ref": "#/$defs/text"
+        },
+        "account": {
+          "$ref": "#/$defs/text"
+        },
+        "currency": {
+          "$ref": "#/$defs/currency"
+        },
+        "period_start": {
+          "$ref": "#/$defs/temporal"
+        },
+        "period_end": {
+          "$ref": "#/$defs/temporal"
+        },
+        "opening": {
+          "$ref": "#/$defs/balance"
+        },
+        "closing": {
+          "$ref": "#/$defs/balance"
+        }
+      }
+    },
+    "movement": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "role",
+        "quantity",
+        "commodity"
+      ],
+      "properties": {
+        "role": {
+          "$ref": "#/$defs/token"
+        },
+        "quantity": {
+          "$ref": "#/$defs/quantity"
+        },
+        "commodity": {
+          "$ref": "#/$defs/commodity"
+        }
+      }
+    },
+    "record": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "kind",
+        "id",
+        "account",
+        "occurred",
+        "movements"
+      ],
+      "dependentRequired": {
+        "supporting": [
+          "group"
+        ]
+      },
+      "properties": {
+        "kind": {
+          "const": "record"
+        },
+        "id": {
+          "$ref": "#/$defs/text"
+        },
+        "account": {
+          "$ref": "#/$defs/text"
+        },
+        "statements": {
+          "description": "The statements that list this row. Overlapping exports add to it.",
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/text"
+          }
+        },
+        "occurred": {
+          "$ref": "#/$defs/temporal"
+        },
+        "value_on": {
+          "$ref": "#/$defs/date"
+        },
+        "movements": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/movement"
+          }
+        },
+        "fee": {
+          "$ref": "#/$defs/positive_quantity"
+        },
+        "group": {
+          "$ref": "#/$defs/text"
+        },
+        "supporting": {
+          "const": true
+        },
+        "details": {
+          "$ref": "#/$defs/details"
+        },
+        "observation": {
+          "description": "This row describes a row stated elsewhere. It enriches that row and is never counted itself.",
+          "const": true
+        }
+      },
+      "not": {
+        "required": [
+          "observation",
+          "supporting"
+        ]
+      }
+    },
+    "details": {
+      "description": "Enrichment. A later import may add to it but may not change it.",
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "descriptions": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "type": {
+          "$ref": "#/$defs/text"
+        },
+        "counterparty": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "name": {
+              "$ref": "#/$defs/text"
+            },
+            "iban": {
+              "$ref": "#/$defs/text"
+            }
+          }
+        },
+        "references": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "servicer": {
+              "$ref": "#/$defs/text"
+            },
+            "end_to_end": {
+              "$ref": "#/$defs/text"
+            },
+            "payment": {
+              "$ref": "#/$defs/text"
+            },
+            "hash": {
+              "$ref": "#/$defs/text"
+            }
+          }
+        },
+        "exchange": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "source",
+            "target"
+          ],
+          "properties": {
+            "source": {
+              "$ref": "#/$defs/text"
+            },
+            "target": {
+              "$ref": "#/$defs/text"
+            },
+            "rate": {
+              "$ref": "#/$defs/positive_quantity"
+            },
+            "target_quantity": {
+              "$ref": "#/$defs/positive_quantity"
+            }
+          }
+        },
+        "reported": {
+          "description": "An amount the source states but the converter could not turn into movements.",
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "quantity",
+            "symbol"
+          ],
+          "properties": {
+            "quantity": {
+              "$ref": "#/$defs/quantity"
+            },
+            "symbol": {
+              "$ref": "#/$defs/text"
+            }
+          }
+        },
+        "fields": {
+          "description": "Raw source values in source order, as name and value. A name may repeat.",
+          "type": "array",
+          "items": {
+            "type": "array",
+            "prefixItems": [
+              {
+                "$ref": "#/$defs/text"
+              },
+              {
+                "type": "string"
+              }
+            ],
+            "minItems": 2,
+            "maxItems": 2
+          }
+        }
+      }
+    },
+    "header": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "kind",
+        "format",
+        "version",
+        "institution",
+        "identity"
+      ],
+      "properties": {
+        "kind": {
+          "const": "header"
+        },
+        "format": {
+          "const": "fin-records"
+        },
+        "version": {
+          "const": 1
+        },
+        "institution": {
+          "$ref": "#/$defs/token"
+        },
+        "identity": {
+          "enum": [
+            "source",
+            "inventory"
+          ]
+        },
+        "converter": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "name"
+          ],
+          "properties": {
+            "name": {
+              "$ref": "#/$defs/text"
+            },
+            "version": {
+              "$ref": "#/$defs/text"
+            }
+          }
+        }
+      }
+    },
+    "source": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "kind",
+        "name",
+        "sha256"
+      ],
+      "properties": {
+        "kind": {
+          "const": "source"
+        },
+        "name": {
+          "$ref": "#/$defs/text"
+        },
+        "sha256": {
+          "type": "string",
+          "pattern": "^[0-9a-f]{64}$"
+        }
+      }
+    },
+    "end": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "kind",
+        "records"
+      ],
+      "properties": {
+        "kind": {
+          "const": "end"
+        },
+        "records": {
+          "description": "How many records lines the section has, so that a truncated file is noticed.",
+          "type": "integer",
+          "minimum": 0
+        }
+      }
+    }
+  }
+}
