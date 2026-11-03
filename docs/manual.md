@@ -58,7 +58,8 @@ fin transfer candidates
 ```
 
 `fin status` shows discovered banks and accounts, per-account observed date
-ranges, movement counts, unclassified movements, unreviewed transfer candidate
+ranges, movement counts, operations that have no bank account (such as CDC
+rows, per institution, with how many are unresolved), unclassified movements, unreviewed transfer candidate
 pairs, and the latest inbox import attempt (including failures). Candidate pairs can overlap: their count is not a
 count of distinct transfers. The latest attempt is not a summary of all unresolved
 import failures; use `fin institution history` to inspect earlier attempts.
@@ -384,7 +385,13 @@ order after importing the original sources.
 
 Use `fin import INSTITUTION PATH...` to read exports. This replaces the former
 `fin bank sync` command; update existing scripts to use `fin import`.
-Run `fin institution list` to list built-in and user-added institutions.
+Run `fin institution list` to list built-in and user-added institutions with their
+type: `bank` or `crypto exchange` (brokers are not modelled yet). Statement
+definitions are banks; a movement-CSV profile such as CDC declares its `type` in its
+JSON file (`bank` or `crypto-exchange`). `fin institution show`, without an
+argument, gives an overview of every institution: type, origin, how many movements
+and operations are imported, how many operations are still unresolved, and the
+first and last observed dates.
 For BoursoBank, `bourso` and `boursorama` are accepted aliases for `boursobank`;
 all three import into the same institution.
 Add an institution with `fin institution add NAME`; optionally supply a sample
@@ -1314,7 +1321,9 @@ institution's definition, one file per institution:
 reads from each source column by role, the columns it does not read, what rules
 can match (type rules test the main description, or any field a rule names, such as
 a column of the CSV), its default rules and, when a database exists, how many
-movements are imported by type. It also works for installed definitions.
+movements are imported by type. It also works for installed definitions and for
+movement-CSV institutions such as `cdc`, where it shows the columns read, how each
+reported kind becomes an operation, and the imported operations.
 
 There is one kind of type rule. A bank's own type code is just a column: Wise's
 definition maps its `Transaction Details Type` column and, ahead of it, the prefix

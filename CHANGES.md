@@ -8,6 +8,18 @@ short line of their own.
 
 ## Unreleased
 
+- Institutions have a type, `bank` or `crypto exchange`, shown by `fin institution
+  list` and `fin institution show`. Movement-CSV profiles declare it as `"type"`
+  (`bank` or `crypto-exchange`; required, so custom profiles need the field);
+  statement definitions are banks.
+- `fin institution show` without an argument gives an overview of every
+  institution (type, origin, movements, operations, unresolved, first and last
+  dates), and `fin institution show cdc` now describes the CDC profile instead of
+  reporting an unknown institution.
+- `fin status` reports operations that have no bank account, such as CDC rows, per
+  institution; `fin status --json` has a new `operations` list. Before, CDC was
+  missing from status. `fin institution list` lines now include the type, for
+  example `wise (bank, built-in)`.
 - Internal: the 9,500-line `lib/store.ml` is now the `finances.store` library
   (`store/`), split by domain into `Handle`, `Setup`, `Sources`, `Import`,
   `Ledger`, `Review`, `Restore`, `Transfers`, `Accounts`, `Explain` and

@@ -104,6 +104,7 @@ type columns =
 
 type profile =
   { institution : string
+  ; institution_type : Institution_type.t
   ; aliases : string list
   ; payload_tag : string
   ; account : string
@@ -153,7 +154,18 @@ let columns_codec =
 
 let profile_codec =
   Jsont.Object.map
-    (fun () () institution aliases payload_tag account header columns rules ->
+    (fun
+        ()
+         ()
+         institution
+         institution_type
+         aliases
+         payload_tag
+         account
+         header
+         columns
+         rules
+       ->
        let institution = Validation.token "institution" institution |> Json.or_error in
        let aliases =
          List.map aliases ~f:(fun alias ->
@@ -174,10 +186,19 @@ let profile_codec =
            then
              Json.or_error
                (Or_error.errorf "column %S is not in the profile header" column));
-       { institution; aliases; payload_tag; account; header; columns; rules })
+       { institution
+       ; institution_type
+       ; aliases
+       ; payload_tag
+       ; account
+       ; header
+       ; columns
+       ; rules
+       })
   |> Jsont.Object.mem "version" (Json.version 1) ~enc:(fun _ -> ())
   |> Jsont.Object.mem "kind" (Json.tag "movement-csv") ~enc:(fun _ -> ())
   |> Jsont.Object.mem "institution" Jsont.string ~enc:(fun p -> p.institution)
+  |> Jsont.Object.mem "type" Institution_type.jsont ~enc:(fun p -> p.institution_type)
   |> Jsont.Object.mem "aliases" (Jsont.list Jsont.string) ~enc:(fun p -> p.aliases)
   |> Jsont.Object.mem "payload_tag" Jsont.string ~enc:(fun p -> p.payload_tag)
   |> Jsont.Object.mem "account" Jsont.string ~enc:(fun p -> p.account)

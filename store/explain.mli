@@ -62,6 +62,22 @@ type institution_summary =
 
 val institution_summary : t -> string -> institution_summary Or_error.t
 
+(** Operations of one institution that no bank movement anchors (for example
+    exchange rows): how many, over what dates, and how many still have a movement
+    without an account. *)
+type operation_summary =
+  { operations : int
+  ; first_on : string option
+  ; last_on : string option
+  ; unresolved : int
+  }
+
+val operation_summary : t -> string -> operation_summary Or_error.t
+
+(** {!operation_summary} for every institution that has such operations, by
+    name. *)
+val operation_institutions : t -> (string * operation_summary) list Or_error.t
+
 (** Trace how a movement got its type, step by step, and report its recorded
     category. Reads one movement; nothing is changed. *)
 val explain_movement : t -> int64 -> Explanation.t Or_error.t

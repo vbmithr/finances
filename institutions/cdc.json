@@ -2,6 +2,7 @@
   "version": 1,
   "kind": "movement-csv",
   "institution": "cdc",
+  "type": "crypto-exchange",
   "aliases": [],
   "payload_tag": "cdc-csv-v1",
   "account": "app",

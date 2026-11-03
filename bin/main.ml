@@ -656,13 +656,15 @@ let status database json_output =
   else (
     printf "Database: %s\n\n" (Terminal.text database);
     printf
-      "%d banks, %d accounts, %d imported movements\n\n"
+      "%d banks, %d accounts, %d imported movements\n"
       banks
       (List.length report.accounts)
       report.movements;
-    if List.is_empty report.accounts
-    then print_endline "No bank records yet. See fin import --help."
-    else
+    if List.is_empty report.accounts && List.is_empty report.operations
+    then print_endline "\nNo records yet. See fin import --help.";
+    if not (List.is_empty report.accounts)
+    then (
+      print_endline "";
       Terminal.table
         [ "Bank"; "Account"; "Currency"; "Movements"; "First observed"; "Last observed" ]
         (List.map report.accounts ~f:(fun a ->
@@ -672,7 +674,21 @@ let status database json_output =
            ; Int.to_string a.movements
            ; Date.to_string a.first_on
            ; Date.to_string a.last_on
-           ]));
+           ])));
+    if not (List.is_empty report.operations)
+    then (
+      print_endline "\nOperations without a bank account";
+      Terminal.table
+        [ "Institution"; "Operations"; "Unresolved"; "First observed"; "Last observed" ]
+        (List.map
+           report.operations
+           ~f:(fun (institution, (s : Explain.operation_summary)) ->
+             [ institution
+             ; Int.to_string s.operations
+             ; Int.to_string s.unresolved
+             ; Option.value s.first_on ~default:"-"
+             ; Option.value s.last_on ~default:"-"
+             ])));
     printf
       "\nReview: %d unclassified movements; %d unreviewed transfer candidate pairs\n"
       report.unclassified_movements
@@ -2504,32 +2520,64 @@ let transaction_type_history_cmd =
     Term.(const transaction_type_history $ database $ json_output)
 ;;
 
+type institution_origin =
+  | Built_in of string list
+  | Definition
+  | Generic
+
+(* Every institution fin knows: bundled, installed from a definition, or added
+   as a generic CSV layout. A missing database only lacks the last two. *)
+let institution_entries database =
+  let present = Stdlib.Sys.file_exists database in
+  let%bind definitions = if present then institution_definitions database else Ok [] in
+  let built_in =
+    List.filter_map (Registry.institutions Builtin.registry) ~f:(fun institution ->
+      if String.equal institution "csv"
+      then None
+      else
+        Some
+          ( institution
+          , Builtin.institution_type institution
+          , Built_in (List.tl_exn (Registry.aliases Builtin.registry institution)) ))
+  in
+  let defined =
+    List.filter_map definitions ~f:(fun definition ->
+      let name = Institution_definition.institution definition in
+      Option.some_if
+        (not (Registry.is_registered Builtin.registry name))
+        (name, Institution_definition.institution_type definition, Definition))
+  in
+  let%map generic =
+    if not present
+    then Ok []
+    else
+      with_database database (fun db ->
+        let%map names = Setup.institutions db in
+        List.filter_map names ~f:(fun name ->
+          Option.some_if
+            (not
+               (List.exists definitions ~f:(fun definition ->
+                  String.equal name (Institution_definition.institution definition))))
+            (name, Institution_type.Bank, Generic)))
+  in
+  built_in @ defined @ generic
+;;
+
 let institution_list database =
   let%bind () = require_database database in
-  let%bind definitions = institution_definitions database in
-  List.iter (Registry.institutions Builtin.registry) ~f:(fun institution ->
-    if not (String.equal institution "csv")
-    then (
-      let aliases = Registry.aliases Builtin.registry institution |> List.tl_exn in
-      if List.is_empty aliases
-      then printf "%s (built-in)\n" institution
-      else
-        printf
-          "%s (built-in; aliases: %s)\n"
-          institution
-          (String.concat ~sep:", " aliases)));
-  List.iter definitions ~f:(fun definition ->
-    let name = Institution_definition.institution definition in
-    if not (Registry.is_registered Builtin.registry name)
-    then printf "%s (definition)\n" (Terminal.text name));
-  with_database database (fun db ->
-    let%map names = Setup.institutions db in
-    List.iter names ~f:(fun name ->
-      if
-        not
-          (List.exists definitions ~f:(fun definition ->
-             String.equal name (Institution_definition.institution definition)))
-      then printf "%s (generic)\n" (Terminal.text name)))
+  let%map entries = institution_entries database in
+  List.iter entries ~f:(fun (name, institution_type, origin) ->
+    let kind = Institution_type.label institution_type in
+    match origin with
+    | Built_in [] -> printf "%s (%s, built-in)\n" name kind
+    | Built_in aliases ->
+      printf
+        "%s (%s, built-in; aliases: %s)\n"
+        name
+        kind
+        (String.concat ~sep:", " aliases)
+    | Definition -> printf "%s (%s, definition)\n" (Terminal.text name) kind
+    | Generic -> printf "%s (%s, generic)\n" (Terminal.text name) kind)
 ;;
 
 let institution_list_cmd =
@@ -2539,8 +2587,12 @@ let institution_list_cmd =
     Term.(const institution_list $ database)
 ;;
 
-let print_institution_description (d : Institution_definition.description) =
+let print_institution_description
+      ~institution_type
+      (d : Institution_definition.description)
+  =
   printf "%s\n" (Terminal.text d.institution);
+  printf "  Type: %s\n" (Institution_type.label institution_type);
   printf "  Kind: %s\n" d.kind;
   printf
     "  Aliases: %s\n"
@@ -2579,60 +2631,202 @@ let print_institution_rules (definition : Institution_definition.t) =
 ;;
 
 let print_institution_data db institution =
-  let%map summary = Explain.institution_summary db institution in
-  match summary.first_on, summary.last_on with
+  let%bind summary = Explain.institution_summary db institution in
+  let%map operations = Explain.operation_summary db institution in
+  (match summary.first_on, summary.last_on with
+   | Some first, Some last ->
+     printf
+       "\n  Imported data: %d movements, %s to %s.\n  By type:\n"
+       summary.movements
+       first
+       last;
+     List.iter summary.by_type ~f:(fun (kind, n) ->
+       printf
+         "    %6d  %s\n"
+         n
+         (Option.value_map kind ~default:"(no type)" ~f:(fun kind ->
+            Terminal.text (Movement_type.to_string kind))))
+   | _ -> if operations.operations = 0 then print_endline "\n  Imported data: none.");
+  match operations.first_on, operations.last_on with
   | Some first, Some last ->
     printf
-      "\n  Imported data: %d movements, %s to %s.\n  By type:\n"
-      summary.movements
+      "\n  Imported data: %d operations, %s to %s; %d unresolved.\n"
+      operations.operations
       first
-      last;
-    List.iter summary.by_type ~f:(fun (kind, n) ->
-      printf
-        "    %6d  %s\n"
-        n
-        (Option.value_map kind ~default:"(no type)" ~f:(fun kind ->
-           Terminal.text (Movement_type.to_string kind))))
-  | _ -> print_endline "\n  Imported data: none."
+      last
+      operations.unresolved
+  | _ -> ()
+;;
+
+let print_movement_profile (profile : Movement_csv.profile) =
+  printf "%s\n" (Terminal.text profile.institution);
+  printf "  Type: %s\n" (Institution_type.label profile.institution_type);
+  print_endline "  Kind: movement-csv";
+  printf
+    "  Aliases: %s\n"
+    (if List.is_empty profile.aliases
+     then "none"
+     else String.concat ~sep:", " (List.map profile.aliases ~f:Terminal.text));
+  let c = profile.columns in
+  print_endline "\n  What fin reads, by role:";
+  List.iter
+    [ "timestamp", c.timestamp_column
+    ; "currency", c.currency_column
+    ; "amount", c.amount_column
+    ; "to currency", c.to_currency_column
+    ; "to amount", c.to_amount_column
+    ; "transaction kind", c.kind_column
+    ]
+    ~f:(fun (role, name) -> printf "    %-24s %s\n" role (Terminal.text name));
+  let read =
+    [ c.timestamp_column
+    ; c.currency_column
+    ; c.amount_column
+    ; c.to_currency_column
+    ; c.to_amount_column
+    ; c.kind_column
+    ]
+  in
+  (match
+     List.filter profile.header ~f:(fun h -> not (List.mem read h ~equal:String.equal))
+   with
+   | [] -> ()
+   | unread ->
+     print_endline "\n  Columns fin does not read:";
+     printf "    %s\n" (String.concat ~sep:", " (List.map unread ~f:Terminal.text)));
+  print_endline "\n  How each reported kind becomes an operation:";
+  List.iter profile.rules ~f:(fun (rule : Movement_csv.rule) ->
+    let shape =
+      match rule.legs with
+      | Single_in -> "one movement in"
+      | Single_out -> "one movement out"
+      | Exchange -> "an exchange"
+    in
+    printf
+      "    %-18s %s\n"
+      shape
+      (String.concat ~sep:", " (List.map rule.kinds ~f:Terminal.text)))
+;;
+
+let institution_overview database =
+  let%bind entries = institution_entries database in
+  let%map rows =
+    if Stdlib.Sys.file_exists database
+    then
+      with_database database (fun db ->
+        List.map entries ~f:(fun (name, institution_type, origin) ->
+          let%bind movements = Explain.institution_summary db name in
+          let%map operations = Explain.operation_summary db name in
+          let dates =
+            List.filter_opt
+              [ movements.first_on
+              ; operations.first_on
+              ; movements.last_on
+              ; operations.last_on
+              ]
+          in
+          let count n = if n = 0 then "-" else Int.to_string n in
+          [ name
+          ; Institution_type.label institution_type
+          ; (match origin with
+             | Built_in _ -> "built-in"
+             | Definition -> "definition"
+             | Generic -> "generic")
+          ; count movements.movements
+          ; count operations.operations
+          ; count operations.unresolved
+          ; Option.value (List.min_elt dates ~compare:String.compare) ~default:"-"
+          ; Option.value (List.max_elt dates ~compare:String.compare) ~default:"-"
+          ])
+        |> Or_error.combine_errors)
+    else
+      Ok
+        (List.map entries ~f:(fun (name, institution_type, _) ->
+           [ name
+           ; Institution_type.label institution_type
+           ; "built-in"
+           ; "-"
+           ; "-"
+           ; "-"
+           ; "-"
+           ; "-"
+           ]))
+  in
+  Terminal.table
+    [ "Institution"
+    ; "Type"
+    ; "Origin"
+    ; "Movements"
+    ; "Operations"
+    ; "Unresolved"
+    ; "First"
+    ; "Last"
+    ]
+    rows;
+  print_endline "\nDetails and rules: fin institution show INSTITUTION."
 ;;
 
 let institution_show database name =
-  let%bind installed =
-    if Stdlib.Sys.file_exists database then institution_definitions database else Ok []
-  in
-  let%bind definition =
-    match
-      List.find installed ~f:(fun d ->
-        List.mem (Institution_definition.names d) name ~equal:String.equal)
-    with
-    | Some d -> Ok d
-    | None ->
-      Builtin.definition name
-      |> Or_error.of_option
-           ~error:
-             (Error.of_string
-                "unknown institution, or one without a definition; see fin institution \
-                 list")
-  in
-  print_institution_description (Institution_definition.describe definition);
-  print_institution_rules definition;
-  if Stdlib.Sys.file_exists database
-  then
-    with_database database (fun db ->
-      print_institution_data db (Institution_definition.institution definition))
-  else (
-    print_endline "\n  Imported data: no database yet.";
-    Ok ())
+  match name with
+  | None -> institution_overview database
+  | Some name ->
+    let%bind installed =
+      if Stdlib.Sys.file_exists database then institution_definitions database else Ok []
+    in
+    let%bind () =
+      match
+        List.find installed ~f:(fun d ->
+          List.mem (Institution_definition.names d) name ~equal:String.equal)
+      with
+      | Some d ->
+        print_institution_description
+          ~institution_type:(Institution_definition.institution_type d)
+          (Institution_definition.describe d);
+        print_institution_rules d;
+        Ok ()
+      | None ->
+        (match Builtin.definition name, Builtin.movement_profile name with
+         | Some d, _ ->
+           print_institution_description
+             ~institution_type:(Institution_definition.institution_type d)
+             (Institution_definition.describe d);
+           print_institution_rules d;
+           Ok ()
+         | None, Some profile ->
+           print_movement_profile profile;
+           Ok ()
+         | None, None ->
+           Or_error.error_string
+             "unknown institution, or one without a definition; see fin institution list")
+    in
+    let canonical =
+      match Builtin.movement_profile name, Builtin.definition name with
+      | Some p, _ -> p.institution
+      | None, Some d -> Institution_definition.institution d
+      | None, None ->
+        (match
+           List.find installed ~f:(fun d ->
+             List.mem (Institution_definition.names d) name ~equal:String.equal)
+         with
+         | Some d -> Institution_definition.institution d
+         | None -> name)
+    in
+    if Stdlib.Sys.file_exists database
+    then with_database database (fun db -> print_institution_data db canonical)
+    else (
+      print_endline "\n  Imported data: no database yet.";
+      Ok ())
 ;;
 
 let institution_show_cmd =
   command
     "show"
-    "Show what fin reads for an institution, its default rules and what is imported."
+    "Without an argument, give an overview of every institution and what is imported; \
+     with one, show what fin reads for it, its default rules and what is imported."
     Term.(
       const institution_show
       $ database
-      $ Arg.(required & pos 0 (some string) None & info [] ~docv:"INSTITUTION"))
+      $ Arg.(value & pos 0 (some string) None & info [] ~docv:"INSTITUTION"))
 ;;
 
 let institution_add database name sample =

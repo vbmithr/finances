@@ -196,6 +196,14 @@ class ImportOnboarding(unittest.TestCase):
         reimport = self.run_fin('import', 'cdc', path).stdout
         self.assertIn('unchanged=1', reimport)
         self.assertIn('inserted=0', reimport)
+        status = json.loads(self.run_fin('status', '--json').stdout)
+        self.assertEqual([(o['institution'], o['operations']) for o in status['operations']], [('cdc', 4)])
+        self.assertIn('Operations without a bank account', self.run_fin('status').stdout)
+        self.assertRegex(self.run_fin('institution', 'show').stdout, r'cdc\s+crypto exchange\s+built-in\s+-\s+4\s+')
+        self.assertIn('cdc (crypto exchange, built-in)', self.run_fin('institution', 'list').stdout)
+        shown = self.run_fin('institution', 'show', 'cdc').stdout
+        self.assertIn('Type: crypto exchange', shown)
+        self.assertIn('Imported data: 4 operations', shown)
         sources = json.loads(self.run_fin('db', 'sources', '--institution', 'cdc', '--json').stdout)
         self.assertEqual(len(sources), 4)
         self.assertEqual(next(s for s in sources if s['fields']['Transaction Description'] == 'Exchange')['fields']['To Amount'], '0.20')
@@ -1479,11 +1487,11 @@ class ImportOnboarding(unittest.TestCase):
     def test_institution_list_reports_builtin_and_added(self):
         self.run_fin('institution', 'add', 'provider')
         result = self.run_fin('institution', 'list').stdout
-        self.assertIn('boursobank (built-in; aliases: boursorama, bourso)', result)
+        self.assertIn('boursobank (bank, built-in; aliases: boursorama, bourso)', result)
         self.assertIn('wise', result)
         self.assertIn('bunq', result)
         self.assertIn('revolut', result)
-        self.assertIn('provider (generic)', result)
+        self.assertIn('provider (bank, generic)', result)
         self.assertNotEqual(self.run_fin('institution', 'add', 'provider', check=False).returncode, 0)
         self.assertNotEqual(self.run_fin('institution', 'add', 'bourso', check=False).returncode, 0)
 
@@ -1520,11 +1528,11 @@ class ImportOnboarding(unittest.TestCase):
         self.assertNotEqual(self.run_fin('institution', 'delete', '--yes', check=False).returncode, 0)
         output = self.terminal(['institution', 'delete', 'provider'], [('Delete this institution? [Y/n]:', 'no')])
         self.assertIn('Nothing deleted.', output)
-        self.assertIn('provider (generic)', self.run_fin('institution', 'list').stdout)
+        self.assertIn('provider (bank, generic)', self.run_fin('institution', 'list').stdout)
         self.run_fin('institution', 'delete', 'provider', '--yes')
         result = self.run_fin('institution', 'list').stdout
-        self.assertNotIn('provider (generic)', result)
-        self.assertIn('wise (built-in)', result)
+        self.assertNotIn('provider (bank, generic)', result)
+        self.assertIn('wise (bank, built-in)', result)
 
     def test_institution_first_import_saves_profile(self):
         self.run_fin('institution', 'add', 'provider')
@@ -2699,7 +2707,7 @@ class ImportOnboarding(unittest.TestCase):
         self.assertEqual(json.loads(self.run_fin('operation', 'list', '--json').stdout), [])
         self.run_fin('institution', 'add', 'samplebank')
         self.run_fin('institution', 'definition', 'set', 'samplebank', definition, '--yes')
-        self.assertIn('samplebank (definition)', self.run_fin('institution', 'list').stdout)
+        self.assertIn('samplebank (bank, definition)', self.run_fin('institution', 'list').stdout)
         self.run_fin('import', 'sample', 'fixtures/wise.csv', 'fixtures/wise.xml')
         rows = json.loads(self.run_fin('operation', 'list', '--institution', 'samplebank', '--json').stdout)
         self.assertEqual(len(rows), 3)

@@ -280,6 +280,10 @@ configurable yet.
   companion rows by column, decisions.
 - [x] `fin rule explain OPERATION-ID` (2026-10-31): type trace by stage, stale-type
   warning. Category rules are not traced yet; `--json` is not implemented.
+- [x] Institution type (`bank`, `crypto exchange`) and a `fin institution show`
+  overview of all institutions, including CDC; `fin status` lists operations
+  without a bank account (2026-11-03). Brokers (IBKR, Degiro) need a third type
+  when their first importer lands.
 - [x] `fin institution show INSTITUTION` (2026-10-31): fields read and unread, what
   rules can match, default rules, imported types.
 - [x] `fin rule gaps`: movements with no type, grouped by the first words of their

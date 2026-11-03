@@ -269,6 +269,10 @@ let aliases t =
 
 let names t = institution t :: aliases t
 
+(* Every statement-based definition describes a bank account; an institution of
+   another type reads its files through a movement CSV profile instead. *)
+let institution_type (_ : t) = Institution_type.Bank
+
 (* Default rules, in the shapes the registry and the store consume. A bundled
    definition's [Type] rules are named [INSTITUTION-default-NN] with priority
    NN-1, which is how the store names them when it installs them. *)

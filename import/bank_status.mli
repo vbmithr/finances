@@ -9,6 +9,8 @@ type t =
   ; movements : int
   ; unclassified_movements : int
   ; transfer_candidate_pairs : int
+  ; operations : (string * Explain.operation_summary) list
+    (** Institutions whose rows are operations with no bank account. *)
   ; latest_import : Bank_import.file_report option
   }
 

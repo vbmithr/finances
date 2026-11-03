@@ -285,6 +285,66 @@ let institution_summary db institution =
     }
 ;;
 
+type operation_summary =
+  { operations : int
+  ; first_on : string option
+  ; last_on : string option
+  ; unresolved : int
+  }
+
+(* Operations whose source is a non-bank event (no bank movement anchors them),
+   such as exchange rows. An operation is unresolved while one of its movements
+   still has no account. *)
+let operation_summary db institution =
+  let* rows =
+    collect
+      db
+      (Rel_sql.Stmt.(
+         func
+           "SELECT o.id,substr(o.occurred,1,10) FROM operations o JOIN source_events e \
+            ON e.id=o.source_event_id WHERE o.bank_event_id IS NULL AND e.venue=?"
+           (text @-> ret Row.(t2 (int64 "id") (text "occurred"))))
+         institution)
+  in
+  let* unresolved =
+    collect
+      db
+      (Rel_sql.Stmt.(
+         func
+           "SELECT COUNT(DISTINCT o.id) FROM operations o JOIN source_events e ON \
+            e.id=o.source_event_id JOIN operation_movements m ON m.operation_id=o.id \
+            LEFT JOIN operation_movement_resolutions r ON r.movement_id=m.id WHERE \
+            o.bank_event_id IS NULL AND e.venue=? AND COALESCE(r.account,m.account) IS \
+            NULL"
+           (text @-> ret integer))
+         institution)
+  in
+  let dates = List.map rows ~f:snd in
+  Ok
+    { operations = List.length rows
+    ; first_on = List.min_elt dates ~compare:String.compare
+    ; last_on = List.max_elt dates ~compare:String.compare
+    ; unresolved = List.hd unresolved |> Option.value ~default:0
+    }
+;;
+
+let operation_institutions db =
+  let* venues =
+    collect
+      db
+      Rel_sql.Stmt.(
+        func
+          "SELECT DISTINCT e.venue FROM operations o JOIN source_events e ON \
+           e.id=o.source_event_id WHERE o.bank_event_id IS NULL ORDER BY e.venue"
+          (ret Row.(t1 (text "venue"))))
+  in
+  traverse
+    (fun venue ->
+       let* summary = operation_summary db venue in
+       Ok (venue, summary))
+    venues
+;;
+
 (* The columns of the companion rows matched to one movement. *)
 let companion_columns_of_event db event_id =
   let* rows =

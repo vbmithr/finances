@@ -233,6 +233,19 @@ let latest_import =
   |> Jsont.Object.finish
 ;;
 
+let operation_summary =
+  let field name codec (enc : string * Explain.operation_summary -> _) map =
+    Jsont.Object.mem name codec ~enc map
+  in
+  Jsont.Object.enc_only ()
+  |> field "institution" Jsont.string (fun (institution, _) -> institution)
+  |> field "operations" Json.integer (fun (_, s) -> s.operations)
+  |> field "unresolved" Json.integer (fun (_, s) -> s.unresolved)
+  |> field "first_on" (Jsont.option Jsont.string) (fun (_, s) -> s.first_on)
+  |> field "last_on" (Jsont.option Jsont.string) (fun (_, s) -> s.last_on)
+  |> Jsont.Object.finish
+;;
+
 let status =
   let field name codec (enc : string * int * Finances_import.Bank_status.t -> _) map =
     Jsont.Object.mem name codec ~enc map
@@ -256,6 +269,9 @@ let status =
   |> field "transfer_candidate_pairs" Json.integer (fun r ->
     let _, _, report = r in
     report.transfer_candidate_pairs)
+  |> field "operations" (Jsont.list operation_summary) (fun r ->
+    let _, _, report = r in
+    report.operations)
   |> field "latest_import" (Jsont.option latest_import) (fun r ->
     let _, _, report = r in
     report.latest_import)
