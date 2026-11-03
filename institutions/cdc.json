@@ -2,7 +2,7 @@
   "version": 1,
   "kind": "movement-csv",
   "institution": "cdc",
-  "aliases": ["cdc"],
+  "aliases": [],
   "payload_tag": "cdc-csv-v1",
   "account": "app",
   "header": [

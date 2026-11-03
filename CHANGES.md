@@ -20,7 +20,7 @@ short line of their own.
   the importer's interpretation and refuses a discrepancy with an error, leaving
   stored decisions untouched. A CSV with only the header is rejected as having no
   transaction rows instead of reporting a successful empty import.
-- `fin import cdc` (alias `cdc`) now imports through the same pipeline as
+- `fin import cdc` now imports through the same pipeline as
   every other venue: the bundled movement-CSV profile registers as a registry
   adapter, so files, directories and ZIP archives are scanned in one run with the
   standard per-file outcomes and summary, and the journal is published. Source

@@ -1433,12 +1433,11 @@ let import_bank_cmd =
            are separate primary sources and cannot be mixed. To configure a generic CSV, \
            pass its filename directly."
       ; `P
-          "Movement CSV institutions (bundled: cdc, alias cdc) use the same \
-           command and the same import pipeline as every other venue: $(b,fin import \
-           cdc FILE-OR-DIRECTORY) stores source evidence and proposed operations, \
-           and $(b,--inspect) reads a CSV without a database. Review wallets, \
-           commodities and kinds afterwards with $(b,fin db sources) and $(b,fin \
-           operation list)."
+          "Movement CSV institutions (bundled: cdc) use the same command and the same \
+           import pipeline as every other venue: $(b,fin import cdc FILE-OR-DIRECTORY) \
+           stores source evidence and proposed operations, and $(b,--inspect) reads a \
+           CSV without a database. Review wallets, commodities and kinds afterwards with \
+           $(b,fin db sources) and $(b,fin operation list)."
       ]
     "import"
     "Import a bank's statement files, apply mappings, and publish a bank journal."
@@ -1634,8 +1633,8 @@ let import_bank_cmd =
           & info
               [ "inspect" ]
               ~doc:
-                "Movement CSV institutions such as cdc: read-only interpretation \
-                 of the CSV rows; needs no database.")
+                "Movement CSV institutions such as cdc: read-only interpretation of the \
+                 CSV rows; needs no database.")
       $ Arg.(
           value
           & flag

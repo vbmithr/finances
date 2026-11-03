@@ -690,11 +690,7 @@ let cdc_import_unified () =
         ^ cdc_row 1 "crypto_deposit" "1.5" "" ""
       in
       let ambiguous =
-        Import.import_bank_file
-          db
-          ~institution:"cdc"
-          ~path:"dup.csv"
-          ~contents:duplicated
+        Import.import_bank_file db ~institution:"cdc" ~path:"dup.csv" ~contents:duplicated
       in
       Alcotest.(check bool)
         "identical rows refused"
@@ -725,11 +721,7 @@ let cdc_import_unified () =
       (* A file the adapter does not recognize is unsupported. *)
       let foreign = "a,b\n1,2\n" in
       let unsupported =
-        Import.import_bank_file
-          db
-          ~institution:"cdc"
-          ~path:"other.csv"
-          ~contents:foreign
+        Import.import_bank_file db ~institution:"cdc" ~path:"other.csv" ~contents:foreign
       in
       Alcotest.(check bool)
         "foreign CSV unsupported"
@@ -746,8 +738,7 @@ let cdc_reimport_validates_movements () =
   with_database (fun path ->
     let contents = cdc_header ^ cdc_row 2 "crypto_viban_exchange" "-2" "EUR" "0.20" in
     with_store path (fun db ->
-      ignore
-        (ok (Import.import_bank_file db ~institution:"cdc" ~path:"a.csv" ~contents)));
+      ignore (ok (Import.import_bank_file db ~institution:"cdc" ~path:"a.csv" ~contents)));
     raw path (fun conn ->
       sql conn "UPDATE operation_movements SET quantity='-999' WHERE quantity='-2'");
     with_store path (fun db ->
@@ -886,8 +877,7 @@ let () =
           ; "future schema", future_schema
           ; "operation storage and rollback", operation_storage
           ; "cdc imports through the unified path", cdc_import_unified
-          ; ( "cdc reimport validates stored movements"
-            , cdc_reimport_validates_movements )
+          ; "cdc reimport validates stored movements", cdc_reimport_validates_movements
           ]
           ~f:(fun (name, f) -> Alcotest.test_case name `Quick f) )
     ; ( "model"

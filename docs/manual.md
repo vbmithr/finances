@@ -297,7 +297,7 @@ event IDs are database-specific; do not blindly reuse old IDs.
 CDC is a bundled institution profile, `institutions/cdc.json`, not
 code: it lists the expected CSV header, the column roles and one rule per reported
 transaction kind (`single-in`, `single-out` or `exchange`). Kinds without a rule
-are flagged for review. Name it as `cdc` (alias `cdc`).
+are flagged for review. Name it `cdc`.
 
 Use the read-only inspector for CDC App transaction or card CSV exports:
 

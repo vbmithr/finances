@@ -150,8 +150,7 @@ let unregistered_import () =
              true
              (String.is_substring
                 (Option.value_exn report.message)
-                ~substring:
-                  "known institutions: boursobank, bunq, cdc, csv, revolut, wise");
+                ~substring:"known institutions: boursobank, bunq, cdc, csv, revolut, wise");
            Alcotest.(check int) "no events" 0 (List.length (ok (Ledger.events db)));
            Ok ())))
 ;;
