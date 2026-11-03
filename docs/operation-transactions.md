@@ -1,8 +1,8 @@
 # `fin operation` over operations
 
 Status: design agreed 2026-11-02; the command rename (2026-11-02) and step 1
-(2026-11-02) are implemented, steps 2–4 are not. Step 5 (pairing movements into
-transfers and exchanges) is a proposal of 2026-11-03. The operation and movement
+(2026-11-02) are implemented, steps 2–4 are not. Step 5 (grouping movements into
+operations) is a proposal of 2026-11-03. The operation and movement
 model described in [operations.md](operations.md) is the general layer.
 
 Step 1 as implemented: `fin operation list` calls `Store.operation_review`,
@@ -75,9 +75,9 @@ user-visible breaking change, recorded with an **Action required** entry in
    Confirmed exchanges and single-movement transfers are supported; general
    categorization and operations with fees or additional movements remain.
 4. **Move the bank importer onto the same pipeline**, so there are no two paths.
-5. **Pair movements across operations** into transfers and exchanges with one
-   candidate finder and one review workflow (proposal below). It does not depend
-   on step 4: bank operations already exist as operations with resolved movements.
+5. **Group movements into operations** by evidence strength, with one candidate
+   finder for what must be inferred (proposal below). It does not depend on step
+   4: bank operations already exist as operations with resolved movements.
 
 ## Transition policy
 
@@ -90,179 +90,168 @@ decision and journal projection. It requires a database rebuild. Decide after
 the general operation projection is proven against real data whether to drop
 the remaining bank tables entirely or retain them as a projection.
 
-## Pairing movements: one workflow for transfers and exchanges (proposal)
+## Grouping movements into operations (proposal)
+
+Replaces the pairing proposal of 2026-11-03, which modelled a transfer or exchange
+as a link with a kind between two operations.
 
 ### Problem
 
-Four mechanisms handle what is one kind of decision, "these movements are two
-sides of the same economic event":
-
-| Case | Source shape | Today |
-|---|---|---|
-| Bank to bank transfer | two bank rows, same commodity | `fin transfer candidates` and `review`, over the bank `movements` table |
-| Bank to wallet or exchange transfer | one bank row, one resolved CDC movement | manual `fin transfer link` |
-| CDC exchange | one row, two movements | `fin operation exchange confirm` |
-| Wise currency conversion | two bank rows, two currencies | none: typed `conversion`, never paired |
-
-A currency conversion at a bank and an exchange at a crypto venue are the same
-event (a custodian swaps one commodity for another); a transfer is the same event
-with one commodity moving between accounts. Only the commodity relation and the
-projection differ.
+Bank transfers, wallet transfers, CDC exchanges and Wise conversions are handled by
+different mechanisms, or by none. They are one question: which movements belong to
+one economic event? A confirmed transfer today is two operations grouped on read,
+a CDC exchange is one operation, and a Wise conversion is unrelated rows.
 
 ### Model
 
-A **pairing** is a decision over two movements, with a kind:
+- **Every movement belongs to exactly one operation.** An operation has any number
+  of movements. A movement exists independently of the grouping, with a stable
+  identity (source identity and role), so regrouping never rewrites evidence.
+- **One movement is a valid operation.** A card purchase, or one side of a transfer
+  seen by one institution, is an operation with a counterparty not yet explained.
+- **Grouping is decided by evidence strength:**
 
-- **Transfer**: equal and opposite quantities of the *same* commodity, different
-  accounts. Projection: direct postings between the two accounts (as today).
-- **Exchange**: opposite signs, *different* commodities, same custodian
-  (institution). Projection: the `equity:trading` postings fin already uses for
-  CDC exchanges.
+| Level | Evidence | Example | Effect |
+|---|---|---|---|
+| Same record | one source row states several movements | CDC exchange row | grouped on import |
+| Source-stated | the institution's own identifier links its records | Wise `BALANCE-n` rows and `FEE-BALANCE-n` | grouped automatically, visible, can be split |
+| Inferred | amounts, dates, IBAN, reference, shared hash | a transfer between two banks | proposed, then reviewed |
 
-The two movements may belong to one operation (a CDC exchange row) or to two (two
-Wise rows, two bank rows). A one-operation exchange is a pairing whose movements
-already share an operation; confirming it uses the same command as any other
-pairing, so `fin operation exchange confirm` is not a separate concept.
+The institution boundary matters only through identifier scope: an institution's
+reference proves a link among its own records and nothing about another
+institution's. It does not by itself decide completeness. CDC's `card_top_up` and
+`exchange_to_crypto_transfer` show one side within one institution, two accounts at
+one bank each report only their own side, and a transfer can cross institutions and
+commodities. A hash shared across institutions is strong evidence but stays
+reviewed, in line with [operations.md](operations.md).
 
-Pairing never changes source events or movements. A confirmed pairing is a
-persisted link between two movement identities (generalizing the schema 33
-movement-level transfer links with a kind), grouped on read as transfers are
-today, and undone by deleting the link.
+- **The shape is derived, never stored.** Set aside movements already explained
+  individually, such as a fee with its own counter-account, and sum the rest by
+  commodity. Nothing left is a transfer. Two commodities of opposite sign are an
+  exchange. One commodity left is an external flow to classify, or a transfer whose
+  other side is missing.
 
-### Candidates
+### Worked example: a Wise conversion
 
-Input: movements of any operation that are resolved (account and commodity
-known: bank movements via the account mapping, CDC movements after `fin operation
-resolve`), carry no category or other decision, and are not already paired. The
-candidate query moves from the bank `movements` table to operation movements.
+One real conversion, checked across the EUR and SGD exports, has three rows:
 
-Pair rules, before scoring:
+| `TransferWise ID` | Currency | Amount | `Exchange` columns |
+|---|---|---|---|
+| `FEE-BALANCE-n` | source | minus the fee | empty |
+| `BALANCE-n` | source | minus the net | from, to, rate, target amount |
+| `BALANCE-n` | target | plus the target amount | same values |
 
-- Transfer: same commodity, opposite sign, different accounts, booked within 7
-  days, quantities equal. A tolerance for fees comes in a later step (below).
-- Exchange: different commodities, opposite sign, same institution, booked
-  within one day, and at least one side typed `conversion` or already part of one
-  operation. Without the type requirement, any opposite-sign pair of different
-  currencies in one institution would qualify, which invites false positives.
+- The rows share the number `n`. The fee row's description also names `BALANCE-n`.
+- Both `BALANCE-n` rows have the same timestamp. The fee row is a millisecond apart.
+- The running balances show the account falling by net plus fee, across two rows.
+- `Total fees` on the debit row repeats the fee. It is a cross-check, and posting
+  from it would count the fee twice.
+- The fee row is also typed `CONVERSION`, so that type does not identify the
+  exchanging rows. A foreign-currency card row fills the `Exchange` columns without
+  any second row, so those columns do not identify a conversion either. The
+  `BALANCE-` prefix does, on the one export studied in
+  [statement-observations.md](statement-observations.md).
 
-Evidence extends `Transfer_ranking` (codes and weights are tuned on real data,
-not fixed here). Existing: `opposite_principal`, `booking_dates`,
-`counterparty_iban`, `shared_reference`, `bank_name`, `no_competing_pair`. New:
+Accounting: the net and target amounts post through `equity:trading`, as CDC
+exchanges do; the fee posts to its own counter-account. All three movements stay
+separate, each with its own source event.
 
-- `shared_hash`: both sides carry the same on-chain or provider transaction hash.
-  This is the strongest evidence for wallet transfers. CDC's `Transaction Hash`
-  column is not read today; the movement-CSV profile gains a `reference` column
-  role so it is stored as evidence (a profile format change).
-- `same_custodian` and `type_conversion` for exchanges.
-- `stated_counterpart`: the source itself states the other side. Wise's CSV rows
-  carry `Exchange From`, `Exchange To`, `Exchange Rate` and `Exchange To Amount`;
-  fin reads them today only to compare for conflicts. A row whose stated target
-  currency and amount equal another row's currency and amount (same day, same
-  institution) is strong evidence, and it needs no identifier. It applies only to
-  rows whose `Transaction Details Type` is `CONVERSION`: a foreign-currency card
-  payment fills the same columns for the merchant-side amount, and no second Wise
-  row exists to pair with it.
+### Source-stated grouping
 
-  Two real `CONVERSION` rows (a credit leg and a debit leg, from different
-  conversions) show how the legs relate. On the debit leg `Exchange To Amount` is
-  the counterpart's quantity; on the credit leg it equals the row's own amount;
-  so on both legs it is the credit quantity. The candidate key is therefore
-  structured and exact: the debit's currency equals the credit's `Exchange From`,
-  the credit's currency equals the debit's `Exchange To`, and the target amount
-  and rate agree, with timestamps close. No prose parsing and no identifier are
-  needed. Still to confirm on one real pair: that both legs carry identical
-  `Exchange From`, `Exchange To`, rate and `Exchange To Amount`.
-- `fee_explained`: the quantity difference equals a fee the source reports (for
-  Wise, `Total fees` on the debit leg).
+Grouping rules are data in the institution definition, like its type rules: for
+Wise, group by `reference` after removing a `FEE-` prefix, for `BALANCE-`
+references only. Other prefixes stay ungrouped until checked, because a reference
+may also be shared by a payment and its refund.
 
-Ranking is unchanged in kind: score each pair, then an exact maximum-weight
-matching decides which candidates are supported (`Transfer_ranking.assignments`).
-Scores are not probabilities.
+The `reference` comes from CAMT and is stored on the source event, so this does not
+need the CSV companion. `source_id` already includes the instant and direction, and
+the source account differs per balance, so rows sharing a reference do not collide.
 
-### Fees
+The group is a pure function of stored events, which makes it independent of import
+order and needs no completion step. If a currency's export was never imported, the
+group has one commodity and is reported as incomplete in `fin status` and the
+operation list; it is not posted as an exchange.
 
-Transfers and exchanges with fees need a third movement or a fee posting. The
-rule: a quantity difference is accepted only when evidence explains it
-(`fee_explained`, or a reported fee movement on the same operation), and the fee
-is posted explicitly to a fees account. Unexplained imbalances are refused, not
-absorbed into a generic account with a warning. A fee spread hidden in the
-exchange rate stays in the trading postings and is not separated out.
+### Inferred grouping: the candidate finder
 
-Wise conversions show why this matters. On the debit leg `Amount` is the net
-converted (`credit = net x rate`, to rounding), `Total fees` is the fee, and the
-description gives the gross (`net + fee`); the credit leg reports 0.00 fees. So
-the fee is read from the debit row, not derived, and the pairing posts it to the
-fees account in the debit's currency. The credit quantity is checked against
-`net x rate` within the rate's rounding, and a mismatch beyond that blocks the
-candidate. Whether the account balance moves by the net or by the gross is checked
-against consecutive `Running Balance` values before the projection is written.
+Candidates are movements of any operation with resolved account and commodity and
+no explanation yet, replacing the query over the bank `movements` table. A CDC
+movement becomes eligible after `fin operation resolve`.
+
+The evidence extends `Transfer_ranking`, and an exact maximum-weight matching still
+decides which candidates are supported. Its weights and date window are hand-set
+and are tuned on real data; scores are not probabilities. New evidence: `shared_hash`,
+reading CDC's `Transaction Hash` through a new movement-CSV `reference` role.
+
+A quantity difference is accepted only if a reported fee explains it, and the fee
+posts explicitly. An unexplained difference is refused.
+
+### Decisions and persistence
+
+Stored decisions are only those a person made: **merge** these movements and
+**split** this group, including a source-stated one. They are keyed on movement
+identities, because operation IDs do not survive a rebuild, and they are
+append-only and portable. Everything else is recomputed from stored events. The
+schema 33 link table is the two-movement case of a merge and migrates into it.
+
+A decision that conflicts with a new grouping is surfaced as a problem and never
+silently overridden. Example: a category already saved on a conversion row, which
+now belongs to an exchange.
 
 ### Commands
 
-One review workflow lists and decides both kinds, with a kind column in the
-output and `--kind transfer|exchange` to filter:
-`candidates`, `review` (interactive `c`/`r`/`s`, or a JSON decisions file),
-`link OPERATION-ID OPERATION-ID` for a pair the finder did not propose, and
-`undo`. Export and restore become one portable snapshot of pairings.
+`fin operation candidates`, `fin operation merge`, and `fin operation split`.
+`fin operation exchange confirm` remains the accounting review for any exchange,
+one row or several, so CDC and Wise share one path. `fin transfer` and the exchange
+export and restore are folded in as each step lands. Names are not final.
 
-Command naming is open. Recommendation: one group, `fin operation pair`, replacing
-the pairing commands in `fin transfer` and `fin operation exchange`. Under the
-beta policy the old commands are removed, with an **Action required** note and
-the portable snapshots migrated on restore. The alternative, keeping `fin
-transfer` as the group and adding exchanges to it, reads wrongly for a currency
-conversion.
+### Posting transfers
+
+Decided 2026-11-03. Each side of a confirmed transfer posts on its own date against
+a clearing account shared by the two sides, replacing the single entry on the
+earlier date. Balances are then right on every date, and the clearing account shows
+money in transit until the later side posts. Reversals already work this way. This
+applies even when both dates match, so there is one rule. The journal gains one
+account per transfer; its name is derived from movement identities, because row IDs
+do not survive a rebuild. A side with no confirmed match stays in
+`equity:unclassified`.
 
 ### Data to verify before building
 
-- One real Wise conversion as a pair: both legs should carry identical `Exchange
-  From`, `Exchange To`, rate and `Exchange To Amount` and near-identical
-  timestamps; this is the pairing key. Also check whether `Amount` on the debit
-  leg is always the net (the debit leg seen has `Amount` = net, `Total fees` = fee,
-  gross only in the description) and whether the balance moves by net or gross.
-  The rate is rounded (five decimals), so `net x rate` equals the credit only to
-  rounding, which is a tolerance, not a requirement of exact equality.
-- `TransferWise ID` is a record identity inside Wise, not a cross-institution key:
-  the test fixture shows `CARD-1` on both a purchase and its reversal, so it
-  groups related rows rather than naming one leg. A shared ID stays an optional
-  hint (the existing `shared_reference` evidence already scores it), never a
-  requirement. Foreign card rows fill the `Exchange` columns too (merchant-side
-  amount, which can differ from the amount in the row's description), so the
-  `CONVERSION` type gate stays.
-- Whether CDC deposits and withdrawals carry a hash that also appears on the
-  counterparty side (another exchange, a wallet export, or a bank reference).
-- Whether Revolut and bunq conversions have the same two-row shape.
+- That the CAMT `reference` of a conversion matches the CSV ID on all three rows.
+- That the pattern holds on other conversions; so far it is one fully checked
+  conversion and one other credit row.
+- Whether a conversion can have no fee row, or several rows per side.
+- Whether CDC hashes appear on the counterparty side.
+- Whether Revolut and bunq conversions have similar references.
 
 ### Steps
 
-1. Candidates over operation movements for transfers only, reproducing today's
-   bank results (the existing transfer fixtures must not change), then retire the
-   bank-table query.
-2. Add `kind` to the persisted link and migrate `link`, `unlink` and `undo` into
-   the one workflow. Schema bump; the database is rebuilt, and snapshots restore
-   through the version-aware importer.
-3. Read the CDC hash into evidence (`reference` role) and add `shared_hash`.
-4. Exchange candidates for bank conversions (Wise first, using
-   `stated_counterpart`), confirm through the same projection as CDC exchanges.
-5. Fee tolerance and explicit fee postings.
-6. Optional: record the implied rate of each confirmed exchange as an
-   observation, for valuing positions later.
+1. Derive operation membership from stored events and decisions, keeping today's
+   transfer grouping and every journal result unchanged.
+2. Post confirmed transfers through the clearing account, updating the journal
+   tests and the manual. This is a visible journal change.
+3. Add the source-stated rule for Wise, the incomplete state, and the conflict
+   report for existing decisions on grouped rows.
+4. Project a grouped Wise conversion through the exchange path, with the fee as its
+   own movement.
+5. Move candidates to operation movements, reproducing today's bank results on the
+   existing fixtures first.
+6. Merge and split decisions, migrating the existing links; schema bump and rebuild.
+7. Read the CDC hash, then explained fee differences on inferred groups.
 
 ### Not covered
 
-Partial fills, three or more movements in one event, spread across several days,
-and bank-side fees the source does not report. The bank importer migration
-(step 4 above) is independent: it changes where bank operations come from, not
-how they are paired.
+Partial fills, one payment split across several incoming rows when no source states
+it, and value or cost basis across an exchange.
 
 ### Prior art
 
-dledger (a double-entry app with CEX adapters) pairs imported entries in one pass
-across banks, exchanges and chains, scoring amount, date and a shared transaction
-hash, and treats trades uniformly through `Equity:Trading` postings. Taken from
-it: one cross-source finder, the hash as strong evidence, fee absorption (made
-explicit here), implied rates. Not taken: voiding and re-posting entries (fin
-links over unchanged evidence), suspense accounts (fin keeps movements
-unresolved) and fixed thresholds.
+dledger posts balanced entries at import with a suspense counterparty, then voids
+and re-posts matched pairs. Taken: one finder across all sources and a shared hash
+as strong evidence. Not taken: rewriting entries, since fin regroups over unchanged
+evidence, and automatic absorption of differences into a fee account. fin's
+`equity:unclassified` plays the same role as its suspense accounts.
 
 ## Display details to decide at implementation time
 

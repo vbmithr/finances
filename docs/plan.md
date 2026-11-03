@@ -487,10 +487,11 @@ position observations, derive positions from fills, or calculate funding.
   `fin db sources` instead of a separate `fin crypto` group.
 - [x] Describe CDC as data (`cdc.json`) interpreted by the generic
   `Movement_csv`, with no institution-specific OCaml.
-- [ ] One pairing workflow for transfers and exchanges (bank to bank, bank to
-  wallet, CDC exchanges, Wise conversions): design proposed 2026-11-03 in
-  [operation-transactions.md](operation-transactions.md#pairing-movements-one-workflow-for-transfers-and-exchanges-proposal),
-  with data checks (Wise leg identifiers, CDC hash) before building.
+- [ ] Group movements into operations by evidence strength, covering transfers,
+  CDC exchanges and Wise conversions: design proposed 2026-11-03 in
+  [operation-transactions.md](operation-transactions.md#grouping-movements-into-operations-proposal),
+  with data checks before building. Decided: each side of a transfer posts on its own
+  date through a clearing account.
 - [ ] [Unify `fin operation` over operations](operation-transactions.md) (design agreed
   2026-11-02; command rename and step 1 done): `fin operation list` and
   `fin operation show` read operations, one row per operation; review decisions
