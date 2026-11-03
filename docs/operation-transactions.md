@@ -162,6 +162,15 @@ not fixed here). Existing: `opposite_principal`, `booking_dates`,
   rows whose `Transaction Details Type` is `CONVERSION`: a foreign-currency card
   payment fills the same columns for the merchant-side amount, and no second Wise
   row exists to pair with it.
+
+  On a real `CONVERSION` row (the credit leg of EUR to IDR), `Exchange To Amount`
+  equals the row's own amount: it states this leg's quantity, not the other
+  leg's. The other currency is structured (`Exchange From`), but the other
+  quantity appears only in the description ("Converted A EUR to B IDR"). Working
+  hypothesis, to confirm on the debit row: both legs carry the same `Exchange
+  From`, `Exchange To`, rate and `Exchange To Amount`, and nearly the same
+  timestamp, which would make the pairing key `(from, to, rate, to amount,
+  second)` with no prose parsing.
 - `fee_explained`: the quantity difference equals a fee the source reports.
 
 Ranking is unchanged in kind: score each pair, then an exact maximum-weight
@@ -176,6 +185,13 @@ rule: a quantity difference is accepted only when evidence explains it
 is posted explicitly to a fees account. Unexplained imbalances are refused, not
 absorbed into a generic account with a warning. A fee spread hidden in the
 exchange rate stays in the trading postings and is not separated out.
+
+Wise conversions show why this matters. The debit is gross of a fee deducted
+before converting, so `credit = (debit - fee) x rate`, and `Total fees` on the
+credit row can read 0.00. The fee is derivable (`debit - credit / rate`, about
+half a percent on the sample seen) but not reported on that leg. The pairing
+therefore carries a derived fee in the source currency, shown in the candidate so
+it can be checked against the debit row's own `Total fees` before it is posted.
 
 ### Commands
 
