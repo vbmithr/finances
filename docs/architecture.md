@@ -139,7 +139,7 @@ foreign keys and indexes. There is no separately maintained SQL schema.
 Native strict-table generation is tracked in
 [Rel issue 5](https://github.com/dbuenzli/rel/issues/5).
 
-`Store` uses Rel's SQLite backend, generated inserts, updates and deletes, and
+The `finances.store` library uses Rel's SQLite backend, generated inserts, updates and deletes, and
 the query language for simple lookups. Query parameters are bound. Rel's curried
 query builder supplies predicate parameters in reverse order; lookup helpers
 keep their public arguments in key order. Raw SQL remains for ordered reads,

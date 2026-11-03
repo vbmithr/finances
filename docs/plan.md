@@ -27,9 +27,10 @@ provider observations before treating them as authoritative.
 
 ### Code
 
-- Persistence lives in the `finances.store` library (`store/`): `Store` re-exports
-  domain modules (sources, import, ledger, review, restore, transfers, accounts,
-  explain, operations) over a shared `Handle`.
+- Persistence lives in the `finances.store` library (`store/`), one module per
+  domain (`Sources`, `Import`, `Ledger`, `Review`, `Restore`, `Transfers`,
+  `Accounts`, `Explain`, `Operations`) over a shared `Handle`, each with an
+  interface; callers `open Finances_store`. There is no `Store` facade.
 - Import orchestration lives in `import/workflow.ml`, file and archive scanning
   in `import/files.ml`, institution definitions and adapters in `institutions/`,
   and reusable statement sources in `formats/statement/`. MT940 has its own

@@ -269,7 +269,7 @@ Notes:
 
 ## No migration
 
-Schema changes bump the version; `Store` refuses any other version without
+Schema changes bump the version; `Setup.with_open` refuses any other version without
 touching the file, and the database is rebuilt by importing the archived inboxes
 and importing the account settings snapshot again. Schema 11 replaced the 18
 bank-specific tables this way. Verification compares reports from a database
