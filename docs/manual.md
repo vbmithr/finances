@@ -26,7 +26,7 @@ commands such as `fin import --help`. The installed package also provides
 `account`; `inst` for `institution`; and `cat` for the top-level `category`
 catalog. Under `operation`, `cat` also abbreviates `category` for review
 commands. For example, `fin cat list` lists the catalog, and
-`fin operation category review EVENT-ID` reviews a movement. Help displays canonical names.
+`fin operation category review OPERATION-ID` reviews a movement. Help displays canonical names.
 
 From a development checkout, `make run ARGS='tx list'` runs the current code
 through Dune without installing. It uses the normal Fin database unless you pass
@@ -163,7 +163,7 @@ skips the question; without a terminal and without `--yes` it refuses.
 
 ### Rebuilding after a schema change
 
-This experimental release accepts schema version 32; it does not migrate older
+This experimental release accepts schema version 33; it does not migrate older
 databases and refuses them without changing the file. If upgrading from schema 21
 with customized institution typing profiles, use the old executable to save each
 profile with `fin institution typing show INSTITUTION > profile.json` before
@@ -176,14 +176,16 @@ you have decisions to recreate:
 fin account export -o ~/fin-accounts.json
 fin cat export > ~/fin-categories-portable.json
 fin operation export > ~/fin-transaction-decisions.json
+fin operation exchange export > ~/fin-exchanges-portable.json
 fin rule export > ~/fin-rules-portable.json
+fin transfer export > ~/fin-transfers-portable.json
 fin backup ~/fin-backups
 fin operation list --json > ~/fin-transactions-before-rebuild.json
-fin operation categoryegory history > ~/fin-categories-before-rebuild.json
+fin operation category history > ~/fin-categories-before-rebuild.json
 fin transfer history > ~/fin-transfers-before-rebuild.json
 ```
 
-Use an executable that supports the three export commands. Older executables may
+Use an executable that supports these export commands. Older executables may
 use `fin operation category export` for category decisions; `fin operation restore` accepts those
 files, but they do not contain type overrides. If the old executable only supports
 the combined `fin cat export`, save that file and pass it to each restore command
@@ -225,6 +227,10 @@ fin cat restore ~/fin-categories-portable.json
 fin cat restore ~/fin-categories-portable.json --apply
 fin operation restore ~/fin-transaction-decisions.json
 fin operation restore ~/fin-transaction-decisions.json --apply
+fin operation exchange restore ~/fin-exchanges-portable.json
+fin operation exchange restore ~/fin-exchanges-portable.json --apply
+fin transfer restore ~/fin-transfers-portable.json
+fin transfer restore ~/fin-transfers-portable.json --apply
 fin rule restore ~/fin-rules-portable.json
 fin rule restore ~/fin-rules-portable.json --apply
 ```
@@ -232,21 +238,22 @@ fin rule restore ~/fin-rules-portable.json --apply
 Each command previews first. `--apply` previews again and asks for confirmation;
 `--yes` skips the prompt. The catalog export contains category names only. The
 transaction export contains current category decisions, including explicit
-resets, and current manual type overrides. The rule export contains all stored rules, including institution-installed rules
+resets, current manual type overrides and resolved movement accounts and commodities.
+Restore it before the exchange export. The rule export contains all stored rules, including institution-installed rules
 and category, type, settlement and evidence actions. Restoring rules retypes
 existing movements where applicable; category rules do not retroactively classify
 transactions. Settlement rules require their target card to exist. Automatic rules
-may affect subsequent imports. The exports do not contain transfer, settlement,
-reversal decisions or audit history. Type resets are not exported: they leave no
+may affect subsequent imports. The transaction export does not contain transfer,
+settlement, reversal decisions or audit history. Type resets are not exported: they leave no
 manual override. Restore writes new type-history entries for restored overrides.
-Schema 32 recreates one preliminary operation for each imported bank event. The
+Schema 33 recreates one preliminary operation for each imported bank event. The
 portable transaction snapshot does not yet include independently created
 operations or their source links; retain a full database backup for those.
 New transaction exports identify bank decisions with the `primary` movement
-role. Version 1–3 category and transaction exports remain readable and imply
-that role. Other movement roles are refused rather than applied to the wrong leg;
-decisions on multi-movement operations are not yet supported.
-Older executables cannot read version 4 transaction exports; keep an older-format
+role. Version 1–4 category and transaction exports remain readable; versions 1–3
+imply `primary`. Resolved movement decisions carry explicit roles, original
+quantities and commodity identities, and verified source evidence.
+Older executables cannot read version 5 transaction exports; keep an older-format
 snapshot if you may return to an older Fin executable.
 
 Transaction and rule restore previews list missing target categories, which are
@@ -260,6 +267,20 @@ the original payload and source fields. It does not reuse database event IDs or
 guess a match. Duplicate indistinguishable source rows are reported as ambiguous.
 If identities or encoding changed, keep the original export, remove affected
 decisions from a copy, preview it again, and recreate those decisions manually.
+
+When statements are imported one institution at a time, select the institution
+to restore only its decisions:
+
+```sh
+fin operation restore ~/fin-transaction-decisions.json --institution boursobank
+fin operation restore ~/fin-transaction-decisions.json --institution boursobank --apply
+```
+
+The preview reports how many decisions for other institutions were skipped.
+Use the exact institution name in the snapshot; an unknown name is an error.
+All selected decisions must still pass the normal matching and conflict checks,
+and their restore is atomic. The snapshot is unchanged, so repeat with another
+institution after importing its statements.
 
 Version 1 combined exports remain usable: pass the same file to each restore
 command to restore its respective section. Each is a separate, previewed operation. New exports are version 2 and
@@ -323,10 +344,39 @@ rows or a file containing identical rows is refused as ambiguous. Review those
 exports before importing them.
 
 Imported legs are proposals, with unresolved account and commodity identities;
-unknown rows may have no proposed legs. They cannot yet be categorized or
-projected to hledger, and no balances are established. The transaction decision
-export does not contain these sources or operations: use a full database backup
-to preserve them. Treat backups and JSON output as private financial data.
+unknown rows may have no proposed legs. Only explicitly resolved and confirmed
+two-movement exchanges can currently be projected to hledger; other imported
+operations are not posted and no opening balances are established. Transaction
+decision exports do not contain the original CSV evidence: use a full database
+backup or keep the original exports. Treat backups and JSON output as private.
+
+For a recognized two-movement exchange, inspect its roles with
+`fin operation show ID`, then assign an account and canonical commodity to each
+movement. For example, using the roles `from` and `to`:
+
+```sh
+fin operation resolve 123 from assets:exchange:eur '{"kind":"fiat","code":"EUR"}'
+fin operation resolve 123 to assets:exchange:btc '{"kind":"onchain-native","network":"bitcoin"}' --symbol BTC
+fin operation exchange confirm 123
+fin journal export > journal.hledger
+```
+
+Fiat uses its ISO currency code. For crypto, choose a distinct hledger symbol
+with `--symbol`; the full network or token contract identity remains in Fin.
+An on-chain token uses `{"kind":"onchain-token","network":"...","contract":"..."}`
+and can optionally include `token_id`. Fin rejects reuse of a symbol for a
+different commodity. Confirm only after checking the source, both accounts and
+quantities. Confirmation previews the two movements and two `equity:trading`
+postings, then asks for approval. `--yes` skips the prompt. Use
+`fin operation exchange undo ID` before changing a confirmed resolution.
+
+The exchange workflow currently requires one source record, exactly two
+opposite-sign movements in distinct commodities, and both movements explicitly
+resolved. It does not infer fees, opening balances, cost basis or capital gains.
+Unknown records with no proposed movements and bank-side forex still require
+further review tooling. Save `fin operation export` for movement resolutions
+and `fin operation exchange export` for confirmations; restore those in that
+order after importing the original sources.
 
 Use `fin import INSTITUTION PATH...` to read exports. This replaces the former
 `fin bank sync` command; update existing scripts to use `fin import`.
@@ -807,7 +857,8 @@ identity fields unchanged. Save and exit the editor. Categorize individual card
 purchases as expenses, and treat the monthly repayment as settlement, so it is
 not counted as spending a second time.
 
-Find the bank debit's event ID with `fin operation list`, then replace `123`
+Find the bank debit in `fin operation list`, then use `fin operation show ID` to
+find its source event ID and replace `123`
 with that ID:
 
 ```sh
@@ -835,22 +886,22 @@ fin transfer candidates
 ```
 
 Unclassified movements initially use `equity:unclassified`. Imported bank
-categories are suggestions. To classify or re-review a movement interactively, find its event
-ID in `fin operation list`, then replace `123` below with that ID:
+categories are suggestions. To classify or re-review a movement interactively,
+find its operation ID in `fin operation list` and replace `123` below with it:
 
 ```sh
-fin operation categoryegory review 123
+fin operation category review 123
 ```
 
 To assign or change categories without the interactive batch review, put the
-account first, followed by one or more transaction event IDs:
+account first, followed by one or more operation IDs:
 
 ```sh
 fin operation category set expenses:food:restaurants 123 456
 ```
 
 To assign the transactions selected by any `fin operation list` filters, pipe its JSON
-output into `set` using `-` in place of an event ID:
+output into `set` using `-` in place of an operation ID:
 
 ```sh
 fin operation list --type withdrawal --decision unclassified --json |
@@ -858,7 +909,7 @@ fin operation list --type withdrawal --decision unclassified --json |
 ```
 
 Both commands must use the same database. You can combine `-` with explicit
-event IDs. An empty list makes no changes. Like `set` with explicit IDs, this
+operation IDs. An empty list makes no changes. Like `set` with explicit IDs, this
 replaces existing categories; include `--decision unclassified` if you only
 want to assign unclassified transactions. Invalid input or any invalid ID
 rejects the whole batch.
@@ -956,6 +1007,39 @@ reflect the two bank balances without a separate in-transit asset; the books may
 therefore appear temporarily unbalanced by date. Fin keeps both source movements
 and review history in SQLite. Regenerate the journal after confirming or undoing.
 
+For a transfer involving a wallet, resolve its movement first, then link the two
+single-movement operations:
+
+```sh
+fin transfer link FIRST-OPERATION-ID SECOND-OPERATION-ID
+fin transfer unlink OPERATION-ID
+```
+
+Use `--first-role` or `--second-role` if a movement's role is not `primary`.
+The movements must have equal and opposite quantities of the same resolved
+commodity, different accounts, and one source each. A bank movement must be
+unclassified and have no fee. Bank-to-bank pairs use `fin transfer review` and
+`fin transfer undo`. `--yes` skips the confirmation prompt.
+
+Save confirmed transfers separately before rebuilding:
+
+```sh
+fin transfer export > transfers.json
+fin transfer restore transfers.json
+fin transfer restore transfers.json --apply
+```
+
+Restore after importing the sources and restoring account mappings and movement
+resolutions. It matches
+each primary movement by source identity and checks occurrence, raw payload and
+fields, refusing missing, ambiguous or changed evidence. A conflict blocks the
+whole batch, and the final application rechecks the preview and existing bank
+transfer rules atomically. `--yes` skips confirmation. Matching confirmed links
+are left unchanged. The snapshot does not include rejected candidates or audit
+history; use a full database backup to retain those records. Exchange
+confirmations have a separate `fin operation exchange export` snapshot.
+Version 1 bank transfer snapshots remain readable.
+
 `fin transfer candidates` shows possible pairs of unclassified movements, their
 evidence and ranking. Categorized movements are excluded until returned to
 `equity:unclassified`; previously reviewed pairs remain visible with `--all` and
@@ -1008,10 +1092,10 @@ After preparing review JSON using the examples in the
 [README](../README.md), apply it with:
 
 ```sh
-fin operation categoryegory apply categories.json
+fin operation category apply categories.json
 fin transfer review transfers.json
 fin journal project
-fin operation categoryegory history
+fin operation category history
 fin transfer history
 ```
 
@@ -1019,8 +1103,8 @@ After categorizing a transaction, preview similar unclassified movements with
 its event ID (replace `123` with a reviewed transaction ID):
 
 ```sh
-fin operation categoryegory similar 123
-fin operation categoryegory similar 123 --json
+fin operation category similar 123
+fin operation category similar 123 --json
 ```
 
 The preview searches across institutions, comparing their effective descriptions.
@@ -1050,20 +1134,42 @@ categories. The movement-type breakdown includes manual type overrides and
 and reversals are counted per movement, not per pair. The top-level
 `fin status` separately summarizes account coverage and import progress.
 
-## List transactions
+## List operations
 
-`fin operation list` lists all imported movements, including reviewed ones,
-newest first, with the institution and account ID for each movement. The
-displayed event IDs can be used in review decisions; account IDs come from
-`fin account list`.
+`fin operation list` lists one row per stored operation, including reviewed
+ones, newest first. Each row has an operation ID, date, amounts, institution,
+account, type, counter-account, description and state. The `AMOUNTS` column
+shows each movement's amount and commodity together. Use `fin operation show ID`
+for individual movements and source event IDs used by transfer and settlement commands.
+The table shows calendar dates; timestamps use their UTC date. The detail view
+and JSON retain exact source times, and default sorting uses the full occurrence.
+Account IDs
+come from `fin account list` and are `-` when no bank account is mapped. The
+`ID` column is the database-local operation ID; it may change after a
+rebuild. `STATE` marks operations that cannot be posted yet: `unresolved` when
+a movement has no account, `unreviewed` when the operation has no bank review
+row at all, and `needs interpretation` when no movement was proposed. For
+CDC rows with no proposed movement, the amounts column shows
+the original source fields and mark the amount `reported`; these fields are not
+account movements. JSON exposes `reported_amount` and `reported_currency`
+separately from `amount` and `currency`.
 
-Use `fin db event operations EVENT-ID` to inspect the operation linked to an imported
-bank movement or CDC source; add `--json` for commodity identities and source references.
-Confirmed transfers show both movements and source events together. Undoing a
-transfer exposes the original operations again. An account shown as not
-assigned in the operation can still have a bank-to-ledger mapping, shown by
-`fin account list`; the operation does not duplicate that mapping yet. Operation
-IDs are database-local and may change after a rebuild.
+CDC movements can be inspected with `fin operation show` and resolved;
+confirmed two-movement exchanges are supported, while general categorization
+is not yet available. Date filters use each operation's occurrence date in UTC
+for timestamps.
+
+Confirmed bank transfers appear as one operation with both movements; account
+and institution filters match either movement. Undoing a transfer separates
+the original operations again.
+
+Use `fin db event operations EVENT-ID` to inspect the operation linked to an
+imported bank movement or CDC source; add `--json` for commodity
+identities and source references. Confirmed transfers show both movements and
+source events together. Undoing a transfer exposes the original operations
+again. An account shown as not assigned in the operation can still have a
+bank-to-ledger mapping, shown by `fin account list`; the operation does not
+duplicate that mapping yet.
 
 The table shows the movement type and the counter-account used in the exported
 journal. `-` means the movement remains unclassified (`equity:unclassified`).
@@ -1083,17 +1189,23 @@ fin operation list --type unknown --decision unclassified
 fin operation list --asc
 fin operation list --order-by currency,amount --asc
 fin operation list --order-by institution,date --desc
+fin operation list --institution cdc
 fin operation list --json
 ```
 
 Dates are inclusive booking dates. Use `--account ID` for one account or
-`--institution NAME` for a provider; `--search` matches the effective description
-using ASCII case-insensitive comparison. `--type` matches the displayed movement
-type, including provider-specific values; `--type unknown` selects movements
-without a type. `--decision` filters by accounting decision kind, not by
+`--institution NAME` for a provider; `--search` matches the operation description
+using ASCII case-insensitive comparison. `--type`, `--decision` and
+`--category` select an operation when any of its movements matches, so a
+CDC exchange is listed under either of its movement types. `--type`
+matches the displayed movement type, including provider-specific values;
+`--type unknown` selects movements without a type. `--decision` filters by
+accounting decision kind, not by
 counter-account. `--category ACCOUNT` (also spelled `--counter-account`) matches
 the exact counter-account, including `equity:unclassified` or a transfer account;
-it does not include subcategories. Filters combine and are applied before sorting
+it does not include subcategories. `--from` and `--to` compare a movement's
+booking date, so an operation with no bank movement (such as a CDC row)
+is excluded by any date filter. Filters combine and are applied before sorting
 and `--limit`.
 
 Without `--order-by`, sorting uses the source event date or timestamp in UTC,
@@ -1105,14 +1217,15 @@ names are `date` (booking date), `amount`, `currency`, `institution`, `account`,
 `account-id` / `account_id`, `movement_type`, `counter_account`, and `event-id` /
 `event_id` are also accepted. Text sorting is case-sensitive; missing types and
 unclassified counter-accounts sort as `-`. The selected direction applies to all
-columns, with event ID as the final tie-breaker. Sorting precedes `--limit`.
+columns, with operation ID as the final tie-breaker. Sorting precedes `--limit`.
 Amounts are compared exactly, but not converted between currencies; use
-`--order-by currency,amount` to group them by currency.
+`--order-by currency,amount` to group them by currency. Rows without a bank
+movement sort last on bank columns, since they have no booking date, amount or
+type.
 
-SQLite orders combinations of date, currency, institution, type and event ID.
-Other combinations are ordered in OCaml after computing the displayed values;
-Fin's SQLite connection does not currently load the optional decimal extension.
-The report still loads review data before applying filters and the limit.
+Sorting always happens in OCaml after computing the displayed values; Fin's
+SQLite connection does not currently load the optional decimal extension. The
+report loads review data before applying filters and the limit.
 A matched Wise CSV can provide the
 effective description; missing or conflicting values fall back to the primary
 description. JSON contains one effective `description`, `movement_type`, and
@@ -1124,17 +1237,20 @@ To list types and correct an individual movement's type:
 
 ```sh
 fin operation type list
-fin operation type show EVENT-ID
-fin operation type set fee EVENT-ID
-fin operation type set bonus EVENT-ID OTHER-EVENT-ID
+fin operation type show OPERATION-ID
+fin operation type set fee OPERATION-ID
+fin operation type set bonus OPERATION-ID OTHER-OPERATION-ID
 fin operation type history
-fin operation type reset EVENT-ID
+fin operation type reset OPERATION-ID
 ```
 
 `type list` shows common types and provider-specific types observed in imported
 data; use one of those values with `type set`. `unknown` is a list filter, not a
 type. `type set` applies all provided IDs atomically; if an ID is invalid, none
-are changed. Manual types are overrides: they do not change the source movement or its
+are changed. For a multi-movement operation, `type show`, `set` and `reset`
+require `--source-event EVENT-ID` to select the side shown in `fin operation
+show ID`; `set` accepts one operation ID when this option is used. Category
+and rule commands refuse multi-movement operations. Manual types are overrides: they do not change the source movement or its
 accounting classification, survive reimports and rule changes, and take
 precedence over derived types. `type show` and transaction-list
 JSON expose the imported type and any override. `type reset` removes the override
@@ -1210,7 +1326,7 @@ add`, or rebuilding.
 
 #### See everything stored about a transaction
 
-`fin operation show EVENT-ID` prints what fin knows about one transaction in plain text: its
+`fin operation show OPERATION-ID` prints what fin knows about one operation in plain text: its
 type, category and confirmed transfer; the source event (institution, account,
 kind, source identifier, occurrence and retrieval time); where it was imported from
 (the stored document with its hash and import time, every file it was read from,
@@ -1219,7 +1335,12 @@ and the statement with its period and balances); the source's own fields as stor
 header name, the match state and policy, the display name and tags it gave, and the
 value the type rules matched. It changes nothing. Companion rows include the
 personal columns of the file, such as a cardholder's name, so be careful when
-pasting the output. `fin rule explain EVENT-ID` shows how the type was decided.
+pasting the output. `fin rule explain OPERATION-ID` shows how the type was decided.
+The output identifies its source event for use with `fin db event operations`.
+A source event that has no bank movement, such as a
+CDC row, has no review detail; `fin operation show` then prints the
+operation's movements instead, marking any movement whose account is not
+assigned yet.
 
 #### What a type rule matches
 
@@ -1257,7 +1378,7 @@ exposed so far. `fin rule gaps` groups by the main description, like the rules.
 
 #### Explain a movement's type
 
-`fin rule explain EVENT-ID` (the event ID is in `fin operation list`) traces how one
+`fin rule explain OPERATION-ID` traces how one
 movement got its type, in the order fin applies the sources: a manual override, then the
 type rules over the transaction's fields, matched companion columns counting as
 fields, the first rule that matches deciding. Each stage shows the rule that decides and the text it matched, the later rules
@@ -1524,7 +1645,7 @@ belongs to hledger; `fin` tracks import evidence, account identity and review st
 ## Library and dependency changes
 
 This build uses Base, decimal, Ptime and Bos, with no Core or Bigdecimal
-dependency. Version 1 account snapshots remain compatible; databases use schema 32 and
+dependency. Version 1 account snapshots remain compatible; databases use schema 33 and
 are rebuilt from the original statements (see above).
 
 OCaml callers use `Quantity.t` (a `Decimal.t` alias) and `Date.t` (a `Ptime.date`

@@ -1,18 +1,24 @@
 # `fin operation` over operations
 
-Status: design agreed 2026-11-02; the command rename is implemented (2026-11-02),
-the rest is not. The operation and movement model described in
-[operations.md](operations.md) is the general layer; `fin operation list` still
-reads only the bank `movements` table, so CDC operations never appear in
-it. This document is the design for making the two meet.
+Status: design agreed 2026-11-02; the command rename (2026-11-02) and step 1
+(2026-11-02) are implemented, steps 2–4 are not. The operation and movement
+model described in [operations.md](operations.md) is the general layer.
 
-Verified starting point: `fin operation list` calls `list_transactions` in
-`bin/main.ml`, which reads `Store.bank_review`, which loads the `movements` table
-filtered by `Registry.is_movement`. Operation movements live in `operations` /
-`operation_movements` and are read only by `fin db event operations` and
-`fin db sources`. Category, type and review decisions are already keyed by
-movement identity (the primary movement's anchor event), so they can attach to
-crypto movements unchanged.
+Step 1 as implemented: `fin operation list` calls `Store.operation_review`,
+which reads `operations`, `operation_movements` and `operation_sources` and
+attaches each movement's bank review row by its anchor event. Each row shows
+the operation ID and amounts together; `fin operation show` displays movement
+and source-event details. `--type`,
+`--decision` and `--category` match when any movement matches, `--search` uses
+the operation description, and sorting is done in OCaml with the operation ID as
+the final tie-breaker. Date filters use the operation's occurrence date.
+`fin operation show` accepts an operation ID. Bank decisions are keyed by the
+primary movement; decisions for
+arbitrary CDC movements are not implemented yet.
+
+Confirmed bank transfers retain two records in the bank projection. The
+operation list groups them on read and the detail view shows each side; undo
+returns them to separate operations.
 
 ## Vocabulary
 
@@ -21,8 +27,7 @@ The model terms from [operations.md](operations.md) are authoritative:
 - **Source event**: one provider record — evidence, identity, occurrence, raw fields.
 - **Operation**: an interpretation of one or more source events.
 - **Movement**: one balance effect of an operation — one account, one commodity,
-  one exact signed quantity. This is what `--movements` expands to and what
-  review decisions attach to.
+  one exact signed quantity. Review decisions attach to movements.
 - **Leg role** (`from`/`to`): a component of a movement's identity, and the
   shape names used by movement-CSV rules (`single-in`, `single-out`,
   `exchange`). Do not use "leg" for an operation's movements.
@@ -48,29 +53,26 @@ user-visible breaking change, recorded with an **Action required** entry in
   account or commodity, in addition to the existing date, search, type,
   classification and counter-account filters.
 - **Display: one row per operation**, with its movements shown together, for
-  example `-2 EUR → +0.2 CRO`. A `--movements` flag expands the list to
-  individual movements. This is the agreed default; one row per movement remains
-  available through `--movements` because decisions attach to movement
-  identities.
+  example `-2 EUR → +0.2 CRO`. The detail view shows individual movements.
 - **Review follows the same path.** Unresolved wallets, commodities and kinds
   appear in the review queue, not in a separate command. Category, type and
   review decisions link to movement identities, so they attach to crypto
   movements without a new mechanism.
-- **The journal and hledger export read operations**, so crypto enters the books.
-  Today they read bank movements only.
+- **The journal and hledger export read operations**, so reviewed exchanges and
+  supported wallet transfers enter the books alongside bank movements.
 
 ## Order of work
 
-1. **Make `fin operation list` and `fin operation show` read operations.** Mostly
-   read-only,
-   so the risk is low. Bank rows keep their current shape (a one-movement
-   operation looks exactly like today's bank movement row); multi-movement
-   operations render as one row with the movements together, `--movements` to
-   expand.
+1. **Make `fin operation list` and `fin operation show` read operations.**
+   Done 2026-11-02. Multi-movement operations render as one row with the
+   movements together; `fin operation show` provides details.
 2. **Resolve wallets and commodities, then review them.** Account assignment and
    commodity resolution turn proposals into movements that can be reviewed;
-   unknown kinds stay reviewable and unposted.
+   unknown kinds without proposed movements remain unposted and need a way to
+   create movements. Resolution and exchange review are implemented.
 3. **Project operations to the journal** and the hledger export.
+   Confirmed exchanges and single-movement transfers are supported; general
+   categorization and operations with fees or additional movements remain.
 4. **Move the bank importer onto the same pipeline**, so there are no two paths.
 
 ## Transition policy
@@ -79,17 +81,16 @@ Keep the old bank tables (`movements`, `bank_categories`, transfer and
 settlement decisions) as a projection during the transition, so categories,
 rules and the export keep working while steps 1–3 land. The open question is how
 far to take step 4: a full migration is a bigger change and a schema rebuild.
-Fin is in beta and prefers a clean design, but the rebuild is deferred until
-after step 3, when the operation projection is proven against real data. Decide
-then whether to drop the bank tables entirely or keep them as a permanent
-projection.
+Schema 33 adds persisted movement-level transfer links while retaining the bank
+decision and journal projection. It requires a database rebuild. Decide after
+the general operation projection is proven against real data whether to drop
+the remaining bank tables entirely or retain them as a projection.
 
 ## Display details to decide at implementation time
 
 - Which existing filters apply to which movement (counter-account and
   classification are per-movement decisions; an operation row shows the primary
-  movement's decision, `--movements` shows each movement's own).
-- Sorting: by operation date and ID by default; per-movement sort columns under
-  `--movements`.
+  movement's decision; the detail view should show each movement's own).
+- Sorting: by operation date and ID by default.
 - How proposed (unresolved wallet/commodity) operations render: visible but
   marked unresolved, excluded from journal projection.

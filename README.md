@@ -46,7 +46,8 @@ infer opening balances. Those operations can be added around the core APIs.
 Inspect CDC App CSV rows without importing them with
 `fin import cdc --inspect --json wallet.csv`. Use `fin import cdc wallet.csv`
 to preview and `--apply` to store source evidence and proposals; `fin db sources --institution cdc`
-shows imported source IDs. Proposed legs are not reconciled or posted; see the
+shows imported source IDs. Proposed legs are not reconciled; resolved and
+explicitly confirmed two-movement exchanges can be posted. See the
 [manual](docs/manual.md#importing-statements) for limitations.
 
 Start with the [user manual](docs/manual.md) for setup, bank imports, account
@@ -327,7 +328,7 @@ or `Date of Date.t`.
 The `events` command prints an RFC 3339 `occurred_at` for instants, or
 `occurred_at: null` and a populated `occurred_on` for date-only OFX records.
 Wise records retain an instant and project using the local booking date.
-This experimental build supports schema 32. Fresh files initialize it atomically;
+This experimental build supports schema 33. Fresh files initialize it atomically;
 other schema versions are rejected without changes. There are no historical
 migrations. For a rebuild, export the category catalog, transaction decisions,
 rules and account settings separately, reimport original statements, and preview
@@ -557,11 +558,14 @@ Import every referenced source account before restoring a multi-bank snapshot.
 Existing version 1 JSON exports remain accepted by `fin account import FILE`.
 
 
-## List imported transactions
+## List imported operations
 
-Use `fin operation list` to see imported movements, including their accounting
-classification. Terminal output uses `$PAGER` (default `less -FRX`); redirected
-and JSON output is not paged.
+Use `fin operation list` to see imported operations, including their accounting
+classification: one row per operation, so a bank movement and a CDC
+exchange each take one row and a multi-movement operation shows its movements
+together. Use `fin operation show ID` for the individual movements and source
+events. Terminal output uses
+`$PAGER` (default `less -FRX`); redirected and JSON output is not paged.
 Filter by movement type or accounting decision with, for example,
 `fin operation list --type interest` or `fin operation list --decision settlement`.
 Inspect automatic and reviewed rules with `fin rule list`; evidence rules can
@@ -569,15 +573,15 @@ also record card references and withdrawal reversals at import. See the
 [manual](docs/manual.md#automatic-rules-at-import).
 
 Use `fin operation type list` to see available movement types, then run
-`fin operation type set TYPE EVENT-ID...` to record manual overrides atomically. The imported type
-remains available, and `fin operation type reset EVENT-ID` removes the override.
+`fin operation type set TYPE OPERATION-ID...` to record manual overrides atomically. The imported type
+remains available, and `fin operation type reset OPERATION-ID` removes the override.
 Types are derived from the type rules and recomputed whenever a rule, an institution
 definition or a matched companion file changes, without changing accounting
 decisions.
 Filter by `--account ID`, `--institution NAME`, inclusive `--from` and `--to`
 dates, `--search TEXT`, or `--limit COUNT`; sort with `--order-by currency,amount`
 and `--asc` / `--desc`, and add `--json` for scripts. See the
-[manual](docs/manual.md#list-transactions) for examples. Use `fin ledger balance expenses -Y` to run an hledger report against a fresh
+[manual](docs/manual.md#list-operations) for examples. Use `fin ledger balance expenses -Y` to run an hledger report against a fresh
 journal; hledger is installed separately. See the [manual](docs/manual.md#exporting-and-querying-accounting) for more examples.
 
 ## Review and categorize bank movements
@@ -611,9 +615,11 @@ Save separate portable snapshots before rebuilding:
 fin cat export > categories-portable.json
 fin operation export > transaction-decisions.json
 fin rule export > rules-portable.json
+fin transfer export > transfers-portable.json
 fin cat restore categories-portable.json                # preview
 fin operation restore transaction-decisions.json --apply        # confirm
 fin rule restore rules-portable.json --apply             # confirm
+fin transfer restore transfers-portable.json --apply      # confirm
 ```
 
 The transaction file contains current category decisions and manual type overrides,
@@ -623,14 +629,14 @@ Restoring assignments or rules creates missing target categories. Assignment
 restore requires matching source identity and evidence and refuses conflicts or
 ambiguity. See the [manual](docs/manual.md#rebuilding-after-a-schema-change) for
 the full restore workflow and limitations. Keep a full database backup as well.
-Use `fin rule from-category EVENT_ID NAME --contains TEXT` to preview a reusable
+Use `fin rule from-category OPERATION-ID NAME --contains TEXT` to preview a reusable
 review-mode rule from a categorized example; add `--save` to confirm and save it.
 
 Transfer candidates are shown by descending score and exclude movements already
 assigned an income or expense category. Reset a category to `equity:unclassified` before reviewing it as a
 transfer.
 
-Use `fin operation category set expenses:food EVENT_ID...` to assign or change categories;
+Use `fin operation category set expenses:food OPERATION-ID...` to assign or change categories;
 all provided transactions are updated atomically. Use `equity:unclassified`
 to return them to review.
 

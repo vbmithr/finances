@@ -298,6 +298,7 @@ type category_restore_preview =
   ; rules_to_add : Classification_rule.t list
   ; decisions_to_apply : Bank_category.t list
   ; types_to_apply : (int64 * Movement_type.t) list
+  ; resolutions_to_apply : (int64 * string * string * Commodity.t * string) list
   ; unchanged : int
   ; problems : string list
   }
@@ -375,6 +376,125 @@ val bank_review_ordered
   -> columns:bank_review_order_column list
   -> ascending:bool
   -> bank_review list Or_error.t
+
+(** One stored operation with the review row of each of its movements. A bank
+    movement is a one-movement operation and carries its bank review row; any
+    other movement carries only its identity, account, commodity and quantity.
+    A confirmed bank transfer is one operation with two movements. [review] is
+    the primary movement's bank review row, when the operation has one. *)
+type operation_movement_review =
+  { role : string
+  ; account : string option
+  ; commodity : Commodity.t
+  ; quantity : Quantity.t
+  ; anchor_event_id : int64
+  ; review : bank_review option
+  }
+
+type operation_review =
+  { operation_id : int64
+  ; occurred : Temporal.t
+  ; institution : string
+  ; description : string
+    (** The primary movement's review description, or the
+                            provider's own description column when there is none. *)
+  ; reported_amount : string option
+  ; reported_currency : string option
+  ; exchange_reviewed : bool
+  ; review : bank_review option
+  ; movements : operation_movement_review list
+  }
+
+(** A persisted reviewed transfer expressed using stable movement identities. *)
+type operation_transfer_link =
+  { first_operation_id : int64
+  ; second_operation_id : int64
+  ; first_event_id : int64
+  ; second_event_id : int64
+  ; first_movement : Movement_identity.t
+  ; second_movement : Movement_identity.t
+  ; reason : string
+  }
+
+val operation_transfer_links : t -> operation_transfer_link list Or_error.t
+
+type general_transfer_leg =
+  { operation_id : int64
+  ; movement_id : int64
+  ; event_id : int64
+  ; role : string
+  ; account : string
+  ; commodity : Commodity.t
+  ; symbol : string
+  ; quantity : Quantity.t
+  ; date : Date.t
+  ; bank : bool
+  }
+
+type general_transfer_preview =
+  { first : general_transfer_leg
+  ; second : general_transfer_leg
+  ; entry : Accounting.entry
+  }
+
+val preview_general_transfer
+  :  t
+  -> first_operation:int64
+  -> first_role:string
+  -> second_operation:int64
+  -> second_role:string
+  -> general_transfer_preview Or_error.t
+
+val general_transfer_entries : t -> general_transfer_preview list Or_error.t
+val confirm_general_transfer : t -> expected:general_transfer_preview -> unit Or_error.t
+val undo_general_transfer : t -> int64 -> unit Or_error.t
+val operation_exchange_preview : t -> int64 -> (int64 * Accounting.entry) Or_error.t
+
+val set_operation_exchange
+  :  t
+  -> operation_id:int64
+  -> confirm:bool
+  -> expected:(int64 * Accounting.entry) option
+  -> bool Or_error.t
+
+val operation_exchange_entries : t -> (int64 * string * Accounting.entry) list Or_error.t
+
+type exchange_restore_preview =
+  { exchange_decisions : (int64 * (int64 * Accounting.entry)) list
+  ; exchange_unchanged : int
+  ; exchange_problems : string list
+  }
+
+val exchange_snapshot : t -> Exchange_portable.t Or_error.t
+
+val preview_exchange_restore
+  :  t
+  -> Exchange_portable.t
+  -> exchange_restore_preview Or_error.t
+
+val restore_exchanges
+  :  t
+  -> expected:exchange_restore_preview
+  -> Exchange_portable.t
+  -> int Or_error.t
+
+(** The operation carrying each bank movement, from its primary movement anchor.
+    Unknown events are omitted. *)
+val operation_ids_for_events : t -> int64 list -> (int64 * int64) list Or_error.t
+
+(** Every stored operation, ordered by occurrence then operation ID. A bank
+    movement appears exactly once, as the movement of its one-movement
+    operation; a confirmed transfer appears once, with both movements. *)
+val operation_review : t -> operation_review list Or_error.t
+
+val resolve_operation_movement
+  :  t
+  -> operation_id:int64
+  -> role:string
+  -> account:string
+  -> commodity:Commodity.t
+  -> symbol:string
+  -> bool Or_error.t
 
 val observed_provider_movement_types : t -> string list Or_error.t
 
@@ -460,6 +580,26 @@ val set_bank_transfers
   -> int Or_error.t
 
 val bank_transfer_decisions : t -> Bank_transfer.decision list Or_error.t
+
+type portable_transfer_preview =
+  { decisions : Bank_transfer.decision list
+  ; general_decisions : general_transfer_preview list
+  ; unchanged : int
+  ; problems : string list
+  }
+
+val transfer_snapshot : t -> Transfer_portable.t Or_error.t
+
+val preview_transfer_restore
+  :  t
+  -> Transfer_portable.t
+  -> portable_transfer_preview Or_error.t
+
+val restore_transfers
+  :  t
+  -> expected:portable_transfer_preview
+  -> Transfer_portable.t
+  -> int Or_error.t
 
 type transfer_change =
   { id : int64

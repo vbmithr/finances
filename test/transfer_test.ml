@@ -314,6 +314,24 @@ let confirm_and_reject () =
       false
       (Int64.equal first_op second_op);
     check "confirm" 1 (ok (Store.set_bank_transfers db [ d ]));
+    let link = List.hd_exn (ok (Store.operation_transfer_links db)) in
+    Alcotest.(check int64) "link first operation" first_op link.first_operation_id;
+    Alcotest.(check int64) "link second operation" second_op link.second_operation_id;
+    Alcotest.(check string) "first stable role" "primary" link.first_movement.role;
+    Alcotest.(check string) "second stable role" "primary" link.second_movement.role;
+    let sources = ok (Store.events db) in
+    let first_source = List.Assoc.find_exn sources c.first_event_id ~equal:Int64.equal in
+    let second_source =
+      List.Assoc.find_exn sources c.second_event_id ~equal:Int64.equal
+    in
+    Alcotest.(check string)
+      "first stable source"
+      first_source.source_id
+      link.first_movement.source_id;
+    Alcotest.(check string)
+      "second stable source"
+      second_source.source_id
+      link.second_movement.source_id;
     let grouped_first = ok (Store.operations_for_event db c.first_event_id) in
     let grouped_second = ok (Store.operations_for_event db c.second_event_id) in
     let id, operation = List.hd_exn grouped_first in
@@ -439,6 +457,10 @@ let confirm_and_reject () =
       "undo confirmation"
       1
       (ok (Store.set_bank_transfers db [ decision ~state:Rejected c ]));
+    check
+      "undo removes operation link"
+      0
+      (List.length (ok (Store.operation_transfer_links db)));
     Alcotest.(check int64)
       "first operation restored"
       first_op

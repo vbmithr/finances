@@ -8,6 +8,82 @@ short line of their own.
 
 ## Unreleased
 
+- Add `fin transfer link` and `unlink` for reviewed transfers involving a
+  resolved wallet movement. Portable transfer snapshots version 2 also preserve
+  these links; version 1 bank snapshots remain readable. Restore movement
+  resolutions and account mappings before transfer links.
+
+- Add movement account and commodity resolution and explicit exchange review.
+  Confirmed two-movement exchanges project to hledger using `equity:trading`,
+  with explicit user-chosen crypto symbols. Operation exports version 5 include
+  movement resolutions; confirmed exchanges use a separate portable export.
+  **Action required:** older executables cannot read version 5 snapshots; keep
+  your previous exports. Schema 33 requires a rebuild as noted below.
+
+- Persist confirmed bank transfers as links between operation movements, with
+  membership constraints and atomic synchronization with bank review and undo.
+  **Action required:** schema 33 requires a database rebuild. Before upgrading,
+  export accounts, categories, rules, transaction decisions and confirmed
+  transfers, and keep a full database backup.
+
+- Persist a shared operation-transfer link for each confirmed bank transfer,
+  using the two stable movement identities. Operation list, detail grouping
+  and portable transfer export now consume that representation. The bank
+  decision and journal projection remain in place during the transition.
+
+- The operation list displays UTC calendar dates consistently; exact source
+  times remain in operation details and JSON and continue to determine sorting.
+
+- Add `fin transfer export` and `fin transfer restore` for confirmed
+  transfers. The portable links identify both primary movements using source
+  identities and evidence hashes. Restore previews and applies atomically;
+  rejected pairs and review history remain available only in a full backup.
+
+- Category set/review, type set/show/reset, and rule explain/from-category now
+  take operation IDs from `fin operation list`. Piped category input uses the
+  `operation_id` JSON field. **Action required:** update scripts that passed
+  source event IDs. For a multi-movement operation, type commands require
+  `--source-event EVENT-ID`; other single-movement commands refuse ambiguity.
+
+- Simplify `fin operation list` to one row per operation, with an `ID` and one
+  `AMOUNTS` column. Source event IDs appear in `fin operation show ID`.
+  **Action required:** replace use of the
+  removed `--movements` option and update scripts parsing the text table.
+
+- Add `fin operation restore --institution NAME` to restore decisions for an
+  imported institution while leaving other institutions' decisions for later.
+  The preview reports how many decisions were skipped; conflicts and missing
+  records within the selected institution still block the atomic restore.
+
+- CDC operations without interpreted movements show the source's
+  reported amount and currency, marked as reported, and the state `needs
+  interpretation`. JSON exposes `reported_amount` and `reported_currency`;
+  these fields do not imply an accounting movement.
+
+- `fin operation show` now accepts the operation ID shown in the `ID`
+  column instead of a source event ID. **Action required:** update scripts and
+  use `fin db event operations EVENT-ID` to inspect a source event.
+
+- `fin operation list` now reads stored operations instead of the bank
+  movements table: a bank movement is a one-movement operation and keeps its
+  previous columns and a CDC row appears as one operation. Confirmed
+  bank transfers appear as one operation with two movements. The `AMOUNTS`
+  column shows movements together. The `ID` and `STATE` columns show the
+  database-local operation ID and whether the operation is `unresolved` (a
+  movement has no account) or `unreviewed`. Date filters use
+  the operation's occurrence date. `--type`,
+  `--decision` and `--category` now match when any movement of the operation
+  matches; `--search` matches the operation description; sorting always happens
+  in OCaml with the operation ID as the final tie-breaker. `--json` rows gain
+  `operation_id`, `occurred`, `movements` and `movement_rows`; bank fields keep
+  their names and are `null` on operations without a bank movement. `fin
+  operation show` now prints the operation ID carrying the event, and shows the
+  operation's movements for a source event that has no bank movement (such as a
+  CDC row) instead of failing.
+  **Action required:** scripts that parse the `fin operation list` JSON must
+  tolerate `null` bank fields and the new keys; scripts that relied on event ID
+  ordering as the final tie-breaker should sort explicitly with
+  `--order-by event`.
 - Rename the `fin transaction` command group to `fin operation` (beta breaking
   change): `fin operation list`, `fin operation show`, `fin operation review`,
   `fin operation category ...`, `fin operation type ...`, `fin operation
@@ -45,16 +121,13 @@ short line of their own.
   exact commodity quantities; imported bank events get one operation each.
   Confirmed transfers group both operations on read, and undo restores the two
   original operation identities without rewriting source movements.
-  Inspect the result with `fin tx operation EVENT-ID` (or `--json`).
+  Inspect the result with `fin db event operations EVENT-ID` (or `--json`).
   Existing bank reviews and exports retain event-ID compatibility; category and
   type decisions and their histories are keyed by the primary movement.
-  **Action required:** schema 32 requires a database
-  rebuild; export settings and decisions and keep a full backup first.
   Portable transaction snapshots do not yet include independent operations.
 
-- Transaction decision exports use version 4 with an explicit `primary` movement
-  role. Restore continues to read versions 1–3 and refuses unsupported roles.
-  Older executables cannot read version 4 exports; keep the previous snapshot.
+- Transaction decision exports use explicit movement roles. Restore continues to
+  read versions 1–4; bank category decisions still require the `primary` role.
 
 - Define an operation model linking source references to multiple proposed
   balance movements; use it in CDC inspection and evidence import.

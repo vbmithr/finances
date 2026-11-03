@@ -3327,6 +3327,17 @@ let set_bank_categories_in_transaction ?(only_unclassified = false) db decisions
               ~error:(Error.of_string "unknown category event_id")
           in
           let* transfer = linked_transfer db d.event_id in
+          let linked_query =
+            Rel_sql.Stmt.(
+              func
+                "SELECT EXISTS(SELECT 1 FROM operation_movements m JOIN \
+                 operation_transfer_memberships t ON t.movement_id=m.id WHERE \
+                 m.anchor_event_id=?)"
+                (int64 @-> ret Row.(t1 (bool "linked"))))
+          in
+          let* operation_linked =
+            db_result (Db.first db.conn (linked_query d.event_id))
+          in
           let* settlement = card_settlement db d.event_id in
           let* reversal = linked_reversal db d.event_id in
           if Option.is_some reversal
@@ -3335,7 +3346,7 @@ let set_bank_categories_in_transaction ?(only_unclassified = false) db decisions
               "undo the confirmed reversal before changing its category"
           else if Option.is_some settlement
           then Or_error.error_string "transaction is a confirmed card settlement"
-          else if Option.is_some transfer
+          else if Option.is_some transfer || Option.value operation_linked ~default:false
           then
             Or_error.error_string
               "reject the confirmed transfer before changing its category"
@@ -3519,12 +3530,11 @@ let transaction_status db =
   let sql =
     "SELECT e.kind, CASE WHEN EXISTS (SELECT 1 FROM reversal_pairs r WHERE \
      r.original=m.event_id OR r.reversal=m.event_id) THEN 'reversal' WHEN EXISTS (SELECT \
-     1 FROM bank_transfer_memberships t JOIN bank_transfer_decisions d ON \
-     d.first_event_id=t.first_event_id AND d.second_event_id=t.second_event_id WHERE \
-     t.event_id=m.event_id AND d.state='confirmed') THEN 'transfer' WHEN EXISTS (SELECT \
-     1 FROM card_settlement_decisions s WHERE s.event_id=m.event_id) THEN 'settlement' \
-     WHEN c.account IS NOT NULL AND c.account <> 'equity:unclassified' THEN 'category' \
-     ELSE 'unclassified' END AS decision, coalesce(c.account,''), \
+     1 FROM operation_movements om JOIN operation_transfer_memberships t ON \
+     t.movement_id=om.id WHERE om.anchor_event_id=m.event_id) THEN 'transfer' WHEN \
+     EXISTS (SELECT 1 FROM card_settlement_decisions s WHERE s.event_id=m.event_id) THEN \
+     'settlement' WHEN c.account IS NOT NULL AND c.account <> 'equity:unclassified' THEN \
+     'category' ELSE 'unclassified' END AS decision, coalesce(c.account,''), \
      coalesce(o.movement_type,m.movement_type,'unknown'), count(*) FROM movements m JOIN \
      source_events e ON e.id=m.event_id LEFT JOIN bank_categories c ON \
      c.event_id=m.event_id LEFT JOIN movement_type_overrides o ON o.event_id=m.event_id \
@@ -3611,6 +3621,28 @@ let review_metadata db =
              (read_column Db_schema.Bank_transfer_memberships.second_event_id)
              (read_column Db_schema.Bank_transfer_decisions.reason)))
   in
+  let* general_transfers =
+    collect
+      db
+      (statement
+         "SELECT \
+          own.anchor_event_id,a.anchor_event_id,b.anchor_event_id,l.reason,r.account \
+          FROM operation_transfer_links l JOIN operation_movements a ON \
+          a.id=l.first_movement_id JOIN operation_movements b ON \
+          b.id=l.second_movement_id JOIN operation_movements own ON own.id IN \
+          (a.id,b.id) JOIN operations o ON o.id=own.operation_id AND \
+          o.bank_event_id=own.anchor_event_id JOIN operation_movements other ON \
+          other.id=CASE WHEN own.id=a.id THEN b.id ELSE a.id END JOIN operations oo ON \
+          oo.id=other.operation_id AND oo.bank_event_id IS NULL JOIN \
+          operation_movement_resolutions r ON r.movement_id=other.id"
+         Row.(
+           t5
+             (int64 "event_id")
+             (int64 "first_event_id")
+             (int64 "second_event_id")
+             (text "reason")
+             (text "account")))
+  in
   let* settlements =
     collect
       db
@@ -3640,7 +3672,9 @@ let review_metadata db =
     , Hashtbl.of_alist_exn
         (module Int64)
         (List.map transfers ~f:(fun (id, first, second, reason) ->
-           id, (first, second, reason)))
+           id, (first, second, reason, None))
+         @ List.map general_transfers ~f:(fun (id, first, second, reason, account) ->
+           id, (first, second, reason, Some account)))
     , Hashtbl.of_alist_exn
         (module Int64)
         (List.map settlements ~f:(fun (id, account, reason) -> id, (account, reason)))
@@ -3686,7 +3720,8 @@ let bank_review_from
        let* transfer_destination =
          match transfer with
          | None -> Ok None
-         | Some (first, second, _) ->
+         | Some (_, _, _, Some account) -> Ok (Some account)
+         | Some (first, second, _, None) ->
            let other = if Int64.equal event_id first then second else first in
            let* (other_event : Source_event.t) =
              Or_error.of_option
@@ -3742,7 +3777,7 @@ let bank_review_from
                  | None -> Option.value_map category ~default:"equity:unclassified" ~f:fst))
          ; reason =
              (match reversal, transfer with
-              | Some (_, _, reason), _ | None, Some (_, _, reason) -> Some reason
+              | Some (_, _, reason), _ | None, Some (_, _, reason, _) -> Some reason
               | None, None ->
                 (match settlement with
                  | Some (_, reason) -> Some reason
@@ -3825,11 +3860,425 @@ let bank_review_ordered db ~columns ~ascending =
   bank_review_with_order ~order:(columns, ascending) db
 ;;
 
+type operation_movement_review =
+  { role : string
+  ; account : string option
+  ; commodity : Commodity.t
+  ; quantity : Quantity.t
+  ; anchor_event_id : int64
+  ; review : bank_review option
+  }
+
+type operation_review =
+  { operation_id : int64
+  ; occurred : Temporal.t
+  ; institution : string
+  ; description : string
+  ; reported_amount : string option
+  ; reported_currency : string option
+  ; exchange_reviewed : bool
+  ; review : bank_review option
+  ; movements : operation_movement_review list
+  }
+
+type operation_transfer_link =
+  { first_operation_id : int64
+  ; second_operation_id : int64
+  ; first_event_id : int64
+  ; second_event_id : int64
+  ; first_movement : Movement_identity.t
+  ; second_movement : Movement_identity.t
+  ; reason : string
+  }
+
+(* Persisted links use local movement IDs; their public identities are derived
+   from the immutable anchor sources. *)
+let operation_transfer_links db =
+  let* events = events db in
+  let by_id = Hashtbl.of_alist_exn (module Int64) events in
+  let* rows =
+    collect
+      db
+      (statement
+         "SELECT \
+          a.anchor_event_id,b.anchor_event_id,a.operation_id,b.operation_id,l.reason, \
+          a.role,b.role FROM operation_transfer_links l JOIN operation_movements a ON \
+          a.id=l.first_movement_id JOIN operation_movements b ON \
+          b.id=l.second_movement_id JOIN operation_transfer_memberships x ON \
+          x.movement_id=a.id AND x.first_movement_id=l.first_movement_id AND \
+          x.second_movement_id=l.second_movement_id JOIN operation_transfer_memberships \
+          y ON y.movement_id=b.id AND y.first_movement_id=l.first_movement_id AND \
+          y.second_movement_id=l.second_movement_id ORDER BY \
+          l.first_movement_id,l.second_movement_id"
+         Row.(
+           unit (fun a b c d e f g -> a, b, c, d, e, f, g)
+           * int64 "first_event_id"
+           * int64 "second_event_id"
+           * int64 "first_operation_id"
+           * int64 "second_operation_id"
+           * text "reason"
+           * text "first_role"
+           * text "second_role"))
+  in
+  let* stored_count =
+    db_result
+      (Db.first
+         db.conn
+         (statement "SELECT count(*) FROM operation_transfer_links" integer))
+  in
+  let* () =
+    if Option.value stored_count ~default:(-1) = List.length rows
+    then Ok ()
+    else Or_error.error_string "operation transfer link has missing movement membership"
+  in
+  traverse
+    (fun ( first_event
+         , second_event
+         , first_operation_id
+         , second_operation_id
+         , reason
+         , first_role
+         , second_role ) ->
+       let* first =
+         Hashtbl.find by_id first_event
+         |> Or_error.of_option
+              ~error:(Error.of_string "confirmed transfer has no first source")
+       in
+       let* second =
+         Hashtbl.find by_id second_event
+         |> Or_error.of_option
+              ~error:(Error.of_string "confirmed transfer has no second source")
+       in
+       let* first_movement = Movement_identity.of_event first ~role:first_role in
+       let* second_movement = Movement_identity.of_event second ~role:second_role in
+       if Int64.equal first_operation_id second_operation_id
+       then
+         Or_error.error_string
+           "confirmed transfer movements share an underlying operation"
+       else
+         Ok
+           { first_operation_id
+           ; second_operation_id
+           ; first_event_id = first_event
+           ; second_event_id = second_event
+           ; first_movement
+           ; second_movement
+           ; reason
+           })
+    rows
+;;
+
+let operation_ids_for_events db event_ids =
+  let* rows =
+    collect
+      db
+      (statement
+         "SELECT m.anchor_event_id,o.id FROM operation_movements m JOIN operations o ON \
+          o.id=m.operation_id WHERE m.role='primary' AND m.anchor_event_id IS NOT NULL \
+          ORDER BY m.anchor_event_id"
+         Row.(t2 (int64 "anchor_event_id") (int64 "operation_id")))
+  in
+  let wanted = Set.of_list (module Int64) event_ids in
+  Ok (List.filter rows ~f:(fun (event_id, _) -> Set.mem wanted event_id))
+;;
+
+(* A provider row's own description, taken from its stored columns. The field
+   names are the provider's, so this is evidence, not a normalized fact. *)
+let operation_fields db operation_id =
+  let query =
+    Rel_sql.Stmt.(
+      func
+        "SELECT f.name,f.value FROM source_event_fields f JOIN operation_sources s ON \
+         s.event_id=f.event_id WHERE s.operation_id=? ORDER BY f.event_id,f.ordinal"
+        (int64 @-> ret Row.(t2 (text "name") (text "value"))))
+  in
+  collect db (query operation_id)
+;;
+
+let operation_review db =
+  let* reviews = bank_review db in
+  let* exchange_ids =
+    collect
+      db
+      (statement
+         "SELECT operation_id FROM operation_exchange_decisions ORDER BY operation_id"
+         Row.(t1 (int64 "operation_id")))
+  in
+  let exchange_ids = Set.of_list (module Int64) exchange_ids in
+  let review_by_event =
+    Hashtbl.of_alist_exn
+      (module Int64)
+      (List.map reviews ~f:(fun (r : bank_review) -> r.event_id, r))
+  in
+  let* stored =
+    collect
+      db
+      (statement
+         "SELECT id,occurred,bank_event_id,source_event_id FROM operations ORDER BY id"
+         Db_schema.Operations.row)
+  in
+  let* movement_rows =
+    collect
+      db
+      (statement
+         "SELECT \
+          m.id,m.operation_id,m.anchor_event_id,m.role,COALESCE(r.account,m.account) AS \
+          account, COALESCE(r.commodity,m.commodity) AS commodity,m.quantity FROM \
+          operation_movements m LEFT JOIN operation_movement_resolutions r ON \
+          r.movement_id=m.id ORDER BY m.operation_id,m.id"
+         Db_schema.Operation_movements.row)
+  in
+  let movements = Hashtbl.create (module Int64) in
+  List.iter movement_rows ~f:(fun (m : Db_schema.Operation_movements.t) ->
+    Hashtbl.add_multi movements ~key:m.operation_id ~data:m);
+  let* source_ids =
+    collect
+      db
+      (statement
+         "SELECT operation_id,event_id FROM operation_sources ORDER BY \
+          operation_id,event_id"
+         Db_schema.Operation_sources.row)
+  in
+  let sources = Hashtbl.create (module Int64) in
+  List.iter source_ids ~f:(fun (s : Db_schema.Operation_sources.t) ->
+    Hashtbl.add_multi sources ~key:s.operation_id ~data:s.event_id);
+  let* events =
+    collect
+      db
+      (statement
+         "SELECT id,venue FROM source_events ORDER BY id"
+         Row.(t2 (int64 "id") (text "venue")))
+  in
+  let venue = Hashtbl.of_alist_exn (module Int64) events in
+  let source_events operation_id =
+    Option.value (Hashtbl.find sources operation_id) ~default:[]
+    @ List.map
+        (Option.value (Hashtbl.find movements operation_id) ~default:[])
+        ~f:(fun (m : Db_schema.Operation_movements.t) -> m.anchor_event_id)
+  in
+  let institution_of operation_id =
+    List.filter_map (source_events operation_id) ~f:(Hashtbl.find venue)
+    |> List.dedup_and_sort ~compare:String.compare
+  in
+  let movement_of_row (m : Db_schema.Operation_movements.t) =
+    let* commodity = Json.decode Commodity.codec m.commodity in
+    let* quantity = Or_error.try_with (fun () -> Quantity.of_string m.quantity) in
+    Ok
+      { role = m.role
+      ; account = m.account
+      ; commodity
+      ; quantity
+      ; anchor_event_id = m.anchor_event_id
+      ; review = Hashtbl.find review_by_event m.anchor_event_id
+      }
+  in
+  let* rows =
+    traverse
+      (fun (o : Db_schema.Operations.t) ->
+         let* occurred =
+           Or_error.try_with (fun () -> Temporal.of_string_exn o.occurred)
+         in
+         let* movements =
+           traverse
+             movement_of_row
+             (Option.value (Hashtbl.find movements o.id) ~default:[])
+         in
+         let primary =
+           List.find movements ~f:(fun m -> String.equal m.role "primary")
+           |> Option.first_some (List.hd movements)
+         in
+         let review =
+           Option.bind primary ~f:(fun m ->
+             Hashtbl.find review_by_event m.anchor_event_id)
+         in
+         let institution =
+           match review with
+           | Some (r : bank_review) -> r.institution
+           | None ->
+             (match institution_of o.id with
+              | [ name ] -> name
+              | _ -> "")
+         in
+         let* fields =
+           match review with
+           | Some _ -> Ok []
+           | None -> operation_fields db o.id
+         in
+         let field name = List.Assoc.find fields name ~equal:String.equal in
+         let description =
+           match review with
+           | Some (r : bank_review) -> r.description
+           | None ->
+             List.find_map
+               [ "Transaction Description"; "Description"; "description" ]
+               ~f:field
+             |> Option.value ~default:""
+         in
+         let reported_amount, reported_currency =
+           if List.is_empty movements && String.equal institution "cdc"
+           then field "Amount", field "Currency"
+           else None, None
+         in
+         Ok
+           { operation_id = o.id
+           ; occurred
+           ; institution
+           ; description
+           ; reported_amount
+           ; reported_currency
+           ; exchange_reviewed = Set.mem exchange_ids o.id
+           ; review
+           ; movements
+           })
+      stored
+  in
+  let* transfers = operation_transfer_links db in
+  let by_id = Hashtbl.create (module Int64) in
+  List.iter rows ~f:(fun row -> Hashtbl.set by_id ~key:row.operation_id ~data:row);
+  let secondary = Hashtbl.create (module Int64) in
+  List.iter transfers ~f:(fun link ->
+    let first = link.first_operation_id
+    and second = link.second_operation_id in
+    match Hashtbl.find by_id first, Hashtbl.find by_id second with
+    | Some a, Some b ->
+      Hashtbl.set by_id ~key:first ~data:{ a with movements = a.movements @ b.movements };
+      Hashtbl.set secondary ~key:second ~data:()
+    | _ -> ());
+  Ok
+    (List.filter_map rows ~f:(fun row ->
+       if Hashtbl.mem secondary row.operation_id
+       then None
+       else Hashtbl.find by_id row.operation_id))
+;;
+
+let validate_commodity_symbol commodity symbol =
+  let* symbol = Validation.token "commodity symbol" symbol in
+  match commodity with
+  | Commodity.Reported _ ->
+    Or_error.error_string "choose a canonical commodity, not a provider-reported symbol"
+  | Commodity.Fiat currency
+    when not (String.equal symbol (Iso4217.to_alpha_code currency)) ->
+    Or_error.error_string "fiat commodity symbol must equal its ISO currency code"
+  | (Commodity.Onchain_native _ | Onchain_token _)
+    when Option.is_some (Iso4217.of_alpha_code (String.uppercase symbol)) ->
+    Or_error.error_string "crypto commodity symbol conflicts with an ISO currency code"
+  | _ -> Ok symbol
+;;
+
+let resolve_operation_movement_internal
+      ?(in_transaction = false)
+      db
+      ~operation_id
+      ~role
+      ~account
+      ~commodity
+      ~symbol
+  =
+  let* account = Validation.account account in
+  let* _ = Validation.token "movement role" role in
+  let* symbol = validate_commodity_symbol commodity symbol in
+  (if in_transaction then fun f -> f db else transaction db) (fun db ->
+    let query =
+      Rel_sql.Stmt.(
+        func
+          "SELECT m.id,o.bank_event_id,(EXISTS(SELECT 1 FROM \
+           operation_transfer_memberships t WHERE t.movement_id=m.id) OR EXISTS (SELECT \
+           1 FROM operation_exchange_decisions x WHERE x.operation_id=o.id)) FROM \
+           operation_movements m JOIN operations o ON o.id=m.operation_id WHERE o.id=? \
+           AND m.role=?"
+          (int64
+           @-> text
+           @-> ret
+                 Row.(
+                   t3 (int64 "id") (option Rel.Type.int64 "bank_event_id") (bool "linked"))
+          ))
+    in
+    let* movement = db_result (Db.first db.conn (query operation_id role)) in
+    let* movement_id, bank_event_id, linked =
+      Or_error.of_option
+        movement
+        ~error:(Error.of_string "operation has no movement with that role")
+    in
+    let* () =
+      if Option.is_some bank_event_id
+      then
+        Or_error.error_string
+          "bank movements use their account mapping and imported currency"
+      else if linked
+      then
+        Or_error.error_string
+          "undo the confirmed operation before changing its movement resolution"
+      else Ok ()
+    in
+    let commodity = Json.encode Commodity.codec commodity in
+    let symbol_query =
+      Rel_sql.Stmt.(
+        func
+          "SELECT commodity,symbol FROM commodity_symbols WHERE commodity=? OR symbol=?"
+          (text @-> text @-> ret Row.(t2 (text "commodity") (text "symbol"))))
+    in
+    let* mappings = collect db (symbol_query commodity symbol) in
+    let* () =
+      if
+        List.exists mappings ~f:(fun (existing_commodity, existing_symbol) ->
+          not
+            (String.equal existing_commodity commodity
+             && String.equal existing_symbol symbol))
+      then
+        Or_error.error_string
+          "commodity identity or journal symbol already has a different mapping"
+      else Ok ()
+    in
+    let insert_symbol =
+      Rel_sql.Stmt.(
+        func
+          "INSERT OR IGNORE INTO commodity_symbols(commodity,symbol) VALUES (?,?)"
+          (text @-> text @-> unit))
+    in
+    let* () = db_result (Db.exec db.conn (insert_symbol commodity symbol)) in
+    let previous =
+      Rel_sql.Stmt.(
+        func
+          "SELECT account,commodity FROM operation_movement_resolutions WHERE \
+           movement_id=?"
+          (int64 @-> ret Row.(t2 (text "account") (text "commodity"))))
+    in
+    let* current = db_result (Db.first db.conn (previous movement_id)) in
+    if
+      Option.exists current ~f:(fun (old_account, old_commodity) ->
+        String.equal old_account account && String.equal old_commodity commodity)
+    then Ok false
+    else (
+      let update =
+        Rel_sql.Stmt.(
+          func
+            "INSERT INTO operation_movement_resolutions(movement_id,account,commodity) \
+             VALUES (?,?,?) ON CONFLICT(movement_id) DO UPDATE SET \
+             account=excluded.account,commodity=excluded.commodity"
+            (int64 @-> text @-> text @-> unit))
+      in
+      let audit =
+        Rel_sql.Stmt.(
+          func
+            "INSERT INTO operation_resolution_changes(movement_id,account,commodity) \
+             VALUES (?,?,?)"
+            (int64 @-> text @-> text @-> unit))
+      in
+      let* () = db_result (Db.exec db.conn (update movement_id account commodity)) in
+      let* () = db_result (Db.exec db.conn (audit movement_id account commodity)) in
+      Ok true))
+;;
+
+let resolve_operation_movement db ~operation_id ~role ~account ~commodity ~symbol =
+  resolve_operation_movement_internal db ~operation_id ~role ~account ~commodity ~symbol
+;;
+
 type category_restore_preview =
   { categories_to_add : string list
   ; rules_to_add : Classification_rule.t list
   ; decisions_to_apply : Bank_category.t list
   ; types_to_apply : (int64 * Movement_type.t) list
+  ; resolutions_to_apply : (int64 * string * string * Commodity.t * string) list
   ; unchanged : int
   ; problems : string list
   }
@@ -3939,7 +4388,71 @@ let category_snapshot db =
                 Option.map r.movement_type_override ~f:Movement_type.to_string
             })
     in
-    Ok Category_portable.{ categories; rules; decisions })
+    let* saved =
+      collect
+        db
+        (statement
+           "SELECT m.anchor_event_id,m.role,r.account,r.commodity,m.quantity,m.commodity \
+            FROM operation_movement_resolutions r JOIN operation_movements m ON \
+            m.id=r.movement_id ORDER BY m.anchor_event_id,m.role"
+           Row.(
+             t6
+               (int64 "event_id")
+               (text "role")
+               (text "account")
+               (text "commodity")
+               (text "quantity")
+               (text "source_commodity")))
+    in
+    let* resolutions =
+      traverse
+        (fun (id, role, account, commodity, quantity, source_commodity) ->
+           let* event =
+             Hashtbl.find events_by_id id
+             |> Or_error.of_option
+                  ~error:(Error.of_string "resolved movement source missing")
+           in
+           let* commodity = Json.decode Commodity.codec commodity in
+           let symbol_query =
+             Rel_sql.Stmt.(
+               func
+                 "SELECT symbol FROM commodity_symbols WHERE commodity=?"
+                 (text @-> ret Row.(t1 (text "symbol"))))
+           in
+           let* symbol =
+             db_result
+               (Db.first db.conn (symbol_query (Json.encode Commodity.codec commodity)))
+           in
+           let* symbol =
+             Or_error.of_option
+               symbol
+               ~error:(Error.of_string "resolved commodity has no journal symbol")
+           in
+           let* source_commodity = Json.decode Commodity.codec source_commodity in
+           let* source_quantity =
+             Or_error.try_with (fun () -> Quantity.of_string quantity)
+           in
+           let source =
+             Category_portable.
+               { institution = event.venue
+               ; source_account = event.account
+               ; kind = event.kind
+               ; source_id = event.source_id
+               ; occurred = Temporal.to_string event.occurred
+               ; payload_sha256 = Digestif.SHA256.(to_hex (digest_string event.payload))
+               ; fields_sha256 = category_fields_hash event
+               ; movement_role = role
+               ; account = None
+               ; reason = None
+               ; type_override = None
+               }
+           in
+           Ok
+             Category_portable.
+               { source; source_quantity; source_commodity; account; commodity; symbol })
+        saved
+    in
+    Ok Category_portable.{ categories; rules; decisions; resolutions })
 ;;
 
 let preview_category_restore db (snapshot : Category_portable.t) =
@@ -4168,11 +4681,168 @@ let preview_category_restore db (snapshot : Category_portable.t) =
           problem ("ambiguous transaction identity: " ^ label);
           None))
   in
+  let resolution_ids =
+    List.map snapshot.resolutions ~f:(fun (r : Category_portable.resolution) ->
+      let d = r.source in
+      d.institution, d.source_account, d.kind, d.source_id, d.movement_role)
+  in
+  if
+    List.contains_dup
+      resolution_ids
+      ~compare:[%compare: string * string * string * string * string]
+  then problem "duplicate movement resolutions";
+  let* existing_symbols =
+    collect
+      db
+      (statement
+         "SELECT commodity,symbol FROM commodity_symbols"
+         Row.(t2 (text "commodity") (text "symbol")))
+  in
+  let proposed_symbols =
+    List.map snapshot.resolutions ~f:(fun (r : Category_portable.resolution) ->
+      Json.encode Commodity.codec r.commodity, r.symbol)
+  in
+  List.iter proposed_symbols ~f:(fun (commodity, symbol) ->
+    if
+      List.exists
+        (existing_symbols @ proposed_symbols)
+        ~f:(fun (other_commodity, other_symbol) ->
+          (String.equal commodity other_commodity
+           && not (String.equal symbol other_symbol))
+          || (String.equal symbol other_symbol
+              && not (String.equal commodity other_commodity)))
+    then problem ("commodity symbol mapping conflicts: " ^ symbol));
+  let lookup =
+    Rel_sql.Stmt.(
+      func
+        "SELECT \
+         m.operation_id,m.quantity,m.commodity,r.account,r.commodity,o.bank_event_id, \
+         EXISTS(SELECT 1 FROM operation_transfer_memberships t WHERE t.movement_id=m.id) \
+         FROM operation_movements m JOIN operations o ON o.id=m.operation_id LEFT JOIN \
+         operation_movement_resolutions r ON r.movement_id=m.id WHERE \
+         m.anchor_event_id=? AND m.role=? AND EXISTS (SELECT 1 FROM \
+         operation_movement_sources s WHERE s.movement_id=m.id AND \
+         s.event_id=m.anchor_event_id AND s.operation_id=m.operation_id)"
+        (int64
+         @-> text
+         @-> ret
+               Row.(
+                 unit (fun a b c d e f g -> a, b, c, d, e, f, g)
+                 * int64 "operation_id"
+                 * text "quantity"
+                 * text "source_commodity"
+                 * option Rel.Type.text "account"
+                 * option Rel.Type.text "commodity"
+                 * option Rel.Type.int64 "bank_event_id"
+                 * bool "linked")))
+  in
+  let* resolutions =
+    traverse
+      (fun (r : Category_portable.resolution) ->
+         let d = r.source in
+         let label = d.institution ^ "/" ^ d.source_id ^ "/" ^ d.movement_role in
+         let matches =
+           Option.value
+             (Hashtbl.find
+                by_identity
+                (d.institution, d.source_account, d.kind, d.source_id))
+             ~default:[]
+         in
+         match matches with
+         | [ (id, e, digest) ]
+           when String.equal (Temporal.to_string e.occurred) d.occurred
+                && String.equal digest d.payload_sha256
+                && String.equal (category_fields_hash e) d.fields_sha256 ->
+           let duplicate_count =
+             Option.value
+               (Hashtbl.find
+                  by_evidence
+                  ( d.institution
+                  , d.source_account
+                  , d.kind
+                  , d.occurred
+                  , if List.is_empty e.fields
+                    then "payload:" ^ d.payload_sha256
+                    else "fields:" ^ d.fields_sha256 ))
+               ~default:[]
+             |> List.length
+           in
+           if duplicate_count > 1
+           then (
+             problem ("ambiguous source evidence: " ^ label);
+             Ok None)
+           else
+             let* found = db_result (Db.first db.conn (lookup id d.movement_role)) in
+             (match found with
+              | None ->
+                problem ("movement not found: " ^ label);
+                Ok None
+              | Some
+                  ( op
+                  , quantity
+                  , original
+                  , current_account
+                  , current_commodity
+                  , bank
+                  , linked ) ->
+                let* original = Json.decode Commodity.codec original in
+                let* quantity =
+                  Or_error.try_with (fun () -> Quantity.of_string quantity)
+                in
+                if
+                  Option.is_some d.account
+                  || Option.is_some d.reason
+                  || Option.is_some d.type_override
+                  || (not (Quantity.equal quantity r.source_quantity))
+                  || not (Commodity.equal original r.source_commodity)
+                then (
+                  problem ("movement interpretation differs: " ^ label);
+                  Ok None)
+                else if
+                  Option.is_some bank
+                  || Result.is_error (Validation.account r.account)
+                  || Result.is_error (validate_commodity_symbol r.commodity r.symbol)
+                then (
+                  problem ("invalid movement resolution: " ^ label);
+                  Ok None)
+                else (
+                  let encoded = Json.encode Commodity.codec r.commodity in
+                  match current_account, current_commodity with
+                  | Some account, Some commodity
+                    when String.equal account r.account && String.equal commodity encoded
+                    ->
+                    if
+                      List.exists existing_symbols ~f:(fun (c, s) ->
+                        String.equal c encoded && String.equal s r.symbol)
+                    then Ok None
+                    else (
+                      problem ("resolved commodity symbol missing: " ^ label);
+                      Ok None)
+                  | Some _, Some _ ->
+                    problem ("existing movement resolution differs: " ^ label);
+                    Ok None
+                  | None, None when not linked ->
+                    Ok (Some (op, d.movement_role, r.account, r.commodity, r.symbol))
+                  | _ ->
+                    problem ("movement resolution conflicts with a transfer: " ^ label);
+                    Ok None))
+         | [] ->
+           problem ("transaction not found: " ^ label);
+           Ok None
+         | [ _ ] ->
+           problem ("source evidence differs: " ^ label);
+           Ok None
+         | _ ->
+           problem ("ambiguous transaction identity: " ^ label);
+           Ok None)
+      snapshot.resolutions
+  in
   Ok
     { categories_to_add
     ; rules_to_add
     ; decisions_to_apply
     ; types_to_apply = List.rev !types_to_apply
+    ; resolutions_to_apply = List.filter_opt resolutions
     ; unchanged = !unchanged
     ; problems = List.rev !problems
     }
@@ -4262,6 +4932,19 @@ let restore_categories db ~expected snapshot =
                ~movement_type:(Some kind)
                ~reason:"Restored transaction type override")
           current.types_to_apply
+      in
+      let* _ =
+        traverse
+          (fun (operation_id, role, account, commodity, symbol) ->
+             resolve_operation_movement_internal
+               ~in_transaction:true
+               db
+               ~operation_id
+               ~role
+               ~account
+               ~commodity
+               ~symbol)
+          current.resolutions_to_apply
       in
       Ok changed))
 ;;
@@ -4666,7 +5349,86 @@ let reversal_history db =
     rows
 ;;
 
-let set_bank_transfers ?(require_unreviewed = false) ?expected_previous db decisions =
+let sync_bank_transfer_link db ~first ~second ~confirming ~was_confirmed ~reason =
+  if not (confirming || was_confirmed)
+  then Ok ()
+  else
+    let* first_id = bank_primary_movement_id db first in
+    let* second_id = bank_primary_movement_id db second in
+    let upsert =
+      Rel_sql.Stmt.(
+        func
+          "INSERT INTO \
+           operation_transfer_links(first_movement_id,second_movement_id,reason) VALUES \
+           (?,?,?) ON CONFLICT(first_movement_id,second_movement_id) DO UPDATE SET \
+           reason=excluded.reason"
+          (int64 @-> int64 @-> text @-> unit))
+    in
+    let member =
+      Rel_sql.Stmt.(
+        func
+          "INSERT INTO \
+           operation_transfer_memberships(movement_id,first_movement_id,second_movement_id) \
+           VALUES (?,?,?) ON CONFLICT(movement_id) DO NOTHING"
+          (int64 @-> int64 @-> int64 @-> unit))
+    in
+    let check_member =
+      Rel_sql.Stmt.(
+        func
+          "SELECT EXISTS(SELECT 1 FROM operation_transfer_memberships WHERE \
+           movement_id=? AND first_movement_id=? AND second_movement_id=?)"
+          (int64 @-> int64 @-> int64 @-> ret Row.(t1 (bool "present"))))
+    in
+    let remove_members =
+      Rel_sql.Stmt.(
+        func
+          "DELETE FROM operation_transfer_memberships WHERE first_movement_id=? AND \
+           second_movement_id=?"
+          (int64 @-> int64 @-> unit))
+    in
+    let remove_link =
+      Rel_sql.Stmt.(
+        func
+          "DELETE FROM operation_transfer_links WHERE first_movement_id=? AND \
+           second_movement_id=?"
+          (int64 @-> int64 @-> unit))
+    in
+    let audit =
+      Rel_sql.Stmt.(
+        func
+          "INSERT INTO \
+           operation_transfer_changes(first_movement_id,second_movement_id,action) \
+           VALUES (?,?,?)"
+          (int64 @-> int64 @-> text @-> unit))
+    in
+    if confirming
+    then
+      let* () = db_result (Db.exec db.conn (upsert first_id second_id reason)) in
+      let* () = db_result (Db.exec db.conn (member first_id first_id second_id)) in
+      let* () = db_result (Db.exec db.conn (member second_id first_id second_id)) in
+      let* first_ok =
+        db_result (Db.first db.conn (check_member first_id first_id second_id))
+      in
+      let* second_ok =
+        db_result (Db.first db.conn (check_member second_id first_id second_id))
+      in
+      if Option.value first_ok ~default:false && Option.value second_ok ~default:false
+      then db_result (Db.exec db.conn (audit first_id second_id "confirmed"))
+      else
+        Or_error.error_string "a movement already belongs to another operation transfer"
+    else
+      let* () = db_result (Db.exec db.conn (remove_members first_id second_id)) in
+      let* () = db_result (Db.exec db.conn (remove_link first_id second_id)) in
+      db_result (Db.exec db.conn (audit first_id second_id "undone"))
+;;
+
+let set_bank_transfers_internal
+      ?(require_unreviewed = false)
+      ?expected_previous
+      ?(in_transaction = false)
+      db
+      decisions
+  =
   let* decisions =
     traverse
       (fun (d : Bank_transfer.decision) ->
@@ -4683,7 +5445,7 @@ let set_bank_transfers ?(require_unreviewed = false) ?expected_previous db decis
       ~compare:[%compare: int64 * int64]
   then Or_error.error_string "duplicate transfer pair in batch"
   else
-    transaction db (fun db ->
+    (if in_transaction then fun f -> f db else transaction db) (fun db ->
       let* source = events db in
       let get id =
         Or_error.of_option
@@ -4839,6 +5601,15 @@ let set_bank_transfers ?(require_unreviewed = false) ?expected_previous db decis
             in
             let* () = db_result (Db.exec db.conn (upsert first second state d.reason)) in
             let* () =
+              sync_bank_transfer_link
+                db
+                ~first
+                ~second
+                ~confirming
+                ~was_confirmed
+                ~reason:d.reason
+            in
+            let* () =
               if confirming
               then
                 let* _ =
@@ -4878,6 +5649,10 @@ let set_bank_transfers ?(require_unreviewed = false) ?expected_previous db decis
             apply (changed + 1) rest)
       in
       apply 0 decisions)
+;;
+
+let set_bank_transfers ?require_unreviewed ?expected_previous db decisions =
+  set_bank_transfers_internal ?require_unreviewed ?expected_previous db decisions
 ;;
 
 type transfer_change =
@@ -5148,13 +5923,12 @@ let status_summaries db source =
           WHEN t.event_id IS NULL AND s.event_id IS NULL AND r.original IS NULL AND \
           coalesce(c.account,'equity:unclassified')='equity:unclassified' THEN 1 ELSE 0 \
           END) FROM movements m JOIN source_events e ON e.id=m.event_id LEFT JOIN \
-          bank_categories c ON c.event_id=m.event_id LEFT JOIN (SELECT t.event_id FROM \
-          bank_transfer_memberships t JOIN bank_transfer_decisions d ON \
-          d.first_event_id=t.first_event_id AND d.second_event_id=t.second_event_id \
-          WHERE d.state='confirmed') t ON t.event_id=m.event_id LEFT JOIN \
-          card_settlement_decisions s ON s.event_id=m.event_id LEFT JOIN reversal_pairs \
-          r ON r.original=m.event_id OR r.reversal=m.event_id GROUP BY \
-          m.venue,m.account,e.kind"
+          bank_categories c ON c.event_id=m.event_id LEFT JOIN (SELECT \
+          om.anchor_event_id AS event_id FROM operation_movements om JOIN \
+          operation_transfer_memberships ot ON ot.movement_id=om.id) t ON \
+          t.event_id=m.event_id LEFT JOIN card_settlement_decisions s ON \
+          s.event_id=m.event_id LEFT JOIN reversal_pairs r ON r.original=m.event_id OR \
+          r.reversal=m.event_id GROUP BY m.venue,m.account,e.kind"
          Row.(
            unit (fun id venue account count first last unclassified ->
              id, venue, account, count, first, last, unclassified)
@@ -6403,6 +7177,15 @@ let delete_account ?(dry_run = false) db (mapping : Bank_account_mapping.t) =
            ^ events
            ^ ") OR second_event_id IN ("
            ^ events
+           ^ ")) + (SELECT count(*) FROM operation_transfer_memberships t JOIN \
+              operation_movements m ON m.id=t.movement_id WHERE m.anchor_event_id IN ("
+           ^ events
+           ^ ")) + (SELECT count(*) FROM operation_transfer_changes t JOIN \
+              operation_movements a ON a.id=t.first_movement_id JOIN operation_movements \
+              b ON b.id=t.second_movement_id WHERE a.anchor_event_id IN ("
+           ^ events
+           ^ ") OR b.anchor_event_id IN ("
+           ^ events
            ^ "))")
       in
       let* reference =
@@ -6497,6 +7280,8 @@ let delete_account ?(dry_run = false) db (mapping : Bank_account_mapping.t) =
           ; "bank_account_settlement_changes"
           ; "reversal_changes"
           ; "movement_type_changes"
+          ; "operation_resolution_changes"
+          ; "operation_exchange_changes"
           ]
         in
         let rec remove_triggers acc = function
@@ -6532,6 +7317,16 @@ let delete_account ?(dry_run = false) db (mapping : Bank_account_mapping.t) =
           ; "DELETE FROM bank_category_changes WHERE event_id IN (" ^ event_ids ^ ")"
           ; "DELETE FROM movement_type_overrides WHERE event_id IN (" ^ event_ids ^ ")"
           ; "DELETE FROM movement_type_changes WHERE event_id IN (" ^ event_ids ^ ")"
+          ; "DELETE FROM operation_exchange_changes WHERE operation_id IN (SELECT id \
+             FROM fin_delete_operations)"
+          ; "DELETE FROM operation_exchange_decisions WHERE operation_id IN (SELECT id \
+             FROM fin_delete_operations)"
+          ; "DELETE FROM operation_resolution_changes WHERE movement_id IN (SELECT id \
+             FROM operation_movements WHERE operation_id IN (SELECT id FROM \
+             fin_delete_operations))"
+          ; "DELETE FROM operation_movement_resolutions WHERE movement_id IN (SELECT id \
+             FROM operation_movements WHERE operation_id IN (SELECT id FROM \
+             fin_delete_operations))"
           ; "DELETE FROM operation_movement_sources WHERE movement_id IN (SELECT id FROM \
              operation_movements WHERE operation_id IN (SELECT id FROM \
              fin_delete_operations))"
@@ -7405,8 +8200,11 @@ let get_operation_in_transaction db operation_id =
   let rows =
     Rel_sql.Stmt.(
       func
-        "SELECT id,operation_id,anchor_event_id,role,account,commodity,quantity FROM \
-         operation_movements WHERE operation_id=? ORDER BY id"
+        "SELECT \
+         m.id,m.operation_id,m.anchor_event_id,m.role,COALESCE(r.account,m.account) AS \
+         account, COALESCE(r.commodity,m.commodity) AS commodity,m.quantity FROM \
+         operation_movements m LEFT JOIN operation_movement_resolutions r ON \
+         r.movement_id=m.id WHERE m.operation_id=? ORDER BY m.id"
         (int64 @-> ret Db_schema.Operation_movements.row))
   in
   let* rows = collect db (rows operation_id) in
@@ -7448,19 +8246,6 @@ let get_operation_in_transaction db operation_id =
     ~movements
 ;;
 
-let bank_operation_for_event db event_id =
-  let query =
-    Rel_sql.Stmt.(
-      func
-        "SELECT id FROM operations WHERE bank_event_id=?"
-        (int64 @-> ret Row.(t1 (int64 "id"))))
-  in
-  let* id = db_result (Db.first db.conn (query event_id)) in
-  Or_error.of_option
-    id
-    ~error:(Error.of_string "confirmed transfer is missing a bank operation")
-;;
-
 let operation_group db operation_id =
   let query =
     Rel_sql.Stmt.(
@@ -7469,17 +8254,15 @@ let operation_group db operation_id =
         (int64 @-> ret Row.(t1 (option Rel.Type.int64 "bank_event_id"))))
   in
   let* row = db_result (Db.first db.conn (query operation_id)) in
-  let* bank_event = Or_error.of_option row ~error:(Error.of_string "unknown operation") in
-  match bank_event with
+  let* _ = Or_error.of_option row ~error:(Error.of_string "unknown operation") in
+  let* links = operation_transfer_links db in
+  match
+    List.find links ~f:(fun link ->
+      Int64.equal link.first_operation_id operation_id
+      || Int64.equal link.second_operation_id operation_id)
+  with
   | None -> Ok (operation_id, None)
-  | Some event_id ->
-    let* link = linked_transfer db event_id in
-    (match link with
-     | None -> Ok (operation_id, None)
-     | Some (first, second, _) ->
-       let* first_op = bank_operation_for_event db first in
-       let* second_op = bank_operation_for_event db second in
-       Ok (first_op, Some second_op))
+  | Some link -> Ok (link.first_operation_id, Some link.second_operation_id)
 ;;
 
 let grouped_operation_in_transaction db operation_id =
@@ -7522,6 +8305,1019 @@ let operations_for_event db event_id =
       List.map groups ~f:fst |> List.dedup_and_sort ~compare:Int64.compare
     in
     traverse (grouped_operation_in_transaction db) canonical)
+;;
+
+type general_transfer_leg =
+  { operation_id : int64
+  ; movement_id : int64
+  ; event_id : int64
+  ; role : string
+  ; account : string
+  ; commodity : Commodity.t
+  ; symbol : string
+  ; quantity : Quantity.t
+  ; date : Date.t
+  ; bank : bool
+  }
+
+type general_transfer_preview =
+  { first : general_transfer_leg
+  ; second : general_transfer_leg
+  ; entry : Accounting.entry
+  }
+
+let general_transfer_leg ?(allow_linked = false) db ~operation_id ~role =
+  let query =
+    Rel_sql.Stmt.(
+      func
+        "SELECT m.id,m.anchor_event_id,o.bank_event_id, EXISTS(SELECT 1 FROM \
+         operation_transfer_memberships t WHERE t.movement_id=m.id), EXISTS(SELECT 1 \
+         FROM operation_exchange_decisions x WHERE x.operation_id=o.id) FROM \
+         operation_movements m JOIN operations o ON o.id=m.operation_id WHERE o.id=? AND \
+         m.role=?"
+        (int64
+         @-> text
+         @-> ret
+               Row.(
+                 t5
+                   (int64 "id")
+                   (int64 "event_id")
+                   (option Rel.Type.int64 "bank_event_id")
+                   (bool "linked")
+                   (bool "exchange"))))
+  in
+  let* found = db_result (Db.first db.conn (query operation_id role)) in
+  let* movement_id, event_id, bank_event_id, linked, exchange =
+    Or_error.of_option found ~error:(Error.of_string "operation movement not found")
+  in
+  let* () =
+    if (linked && not allow_linked) || exchange
+    then
+      Or_error.error_string "movement is already part of a reviewed transfer or exchange"
+    else Ok ()
+  in
+  let* operation = get_operation_in_transaction db operation_id in
+  let* proposal =
+    match operation.movements with
+    | [ movement ] -> Ok movement
+    | _ ->
+      Or_error.error_string
+        "transfer linking currently requires one movement per operation"
+  in
+  let* () =
+    match operation.evidence with
+    | [ Operation.Stored_event id ] when Int64.equal id event_id -> Ok ()
+    | _ ->
+      Or_error.error_string "transfer linking currently requires one source per operation"
+  in
+  let* date =
+    Or_error.try_with (fun () ->
+      Date.of_string (String.prefix (Temporal.to_string operation.occurred) 10))
+  in
+  let* account, symbol =
+    match bank_event_id with
+    | Some id ->
+      let* source = event_by_id db id in
+      let* movement = movement db id in
+      let* () =
+        if not (Quantity.is_zero movement.fee)
+        then Or_error.error_string "transfers with bank fees require separate review"
+        else Ok ()
+      in
+      let* reviews = bank_review db in
+      let* row =
+        List.find reviews ~f:(fun r -> Int64.equal r.event_id id)
+        |> Or_error.of_option ~error:(Error.of_string "bank movement review missing")
+      in
+      let* () =
+        if
+          Poly.equal row.classification Unclassified
+          || (allow_linked && linked && Poly.equal row.classification Transfer)
+        then Ok ()
+        else Or_error.error_string "bank movement is already classified"
+      in
+      let* mapping =
+        db_result (Db.first db.conn (find_mapping source.venue source.account))
+      in
+      let* account =
+        match mapping with
+        | Some account -> Ok account
+        | None ->
+          Bank_projection.ledger_account ~institution:source.venue movement.account
+      in
+      let* symbol =
+        match movement.account.currency with
+        | c -> Ok (Iso4217.to_alpha_code c)
+      in
+      Ok (account, symbol)
+    | None ->
+      let* account =
+        Or_error.of_option
+          proposal.account
+          ~error:(Error.of_string "resolve the movement account first")
+      in
+      let query =
+        Rel_sql.Stmt.(
+          func
+            "SELECT symbol FROM commodity_symbols WHERE commodity=?"
+            (text @-> ret Row.(t1 (text "symbol"))))
+      in
+      let* symbol =
+        db_result
+          (Db.first db.conn (query (Json.encode Commodity.codec proposal.commodity)))
+      in
+      let* symbol =
+        Or_error.of_option
+          symbol
+          ~error:(Error.of_string "resolve the movement commodity first")
+      in
+      Ok (account, symbol)
+  in
+  Ok
+    { operation_id
+    ; movement_id
+    ; event_id
+    ; role
+    ; account
+    ; commodity = proposal.commodity
+    ; symbol
+    ; quantity = proposal.quantity
+    ; date
+    ; bank = Option.is_some bank_event_id
+    }
+;;
+
+let preview_general_transfer_internal
+      ?(allow_linked = false)
+      db
+      ~first_operation
+      ~first_role
+      ~second_operation
+      ~second_role
+  =
+  let* () =
+    if Int64.equal first_operation second_operation
+    then Or_error.error_string "transfer requires different operations"
+    else Ok ()
+  in
+  let* first =
+    general_transfer_leg ~allow_linked db ~operation_id:first_operation ~role:first_role
+  in
+  let* second =
+    general_transfer_leg ~allow_linked db ~operation_id:second_operation ~role:second_role
+  in
+  let* () =
+    if first.bank && second.bank
+    then Or_error.error_string "use fin transfer review for bank-to-bank transfers"
+    else Ok ()
+  in
+  let date =
+    if Date.compare first.date second.date <= 0 then first.date else second.date
+  in
+  let* entry =
+    Operation_accounting.transfer
+      ~date
+      ~description:"Reviewed transfer"
+      [ first.account, first.commodity, first.symbol, first.quantity
+      ; second.account, second.commodity, second.symbol, second.quantity
+      ]
+  in
+  Ok { first; second; entry }
+;;
+
+let preview_general_transfer
+      db
+      ~first_operation
+      ~first_role
+      ~second_operation
+      ~second_role
+  =
+  preview_general_transfer_internal
+    db
+    ~first_operation
+    ~first_role
+    ~second_operation
+    ~second_role
+;;
+
+let general_transfer_entries db =
+  let* links = operation_transfer_links db in
+  let bank =
+    Rel_sql.Stmt.(
+      func
+        "SELECT bank_event_id FROM operations WHERE id=?"
+        (int64 @-> ret Row.(t1 (option Rel.Type.int64 "bank_event_id"))))
+  in
+  let* entries =
+    traverse
+      (fun link ->
+         let* first_bank = db_result (Db.first db.conn (bank link.first_operation_id)) in
+         let* second_bank =
+           db_result (Db.first db.conn (bank link.second_operation_id))
+         in
+         match first_bank, second_bank with
+         | Some (Some _), Some (Some _) -> Ok None
+         | Some _, Some _ ->
+           let* preview =
+             preview_general_transfer_internal
+               ~allow_linked:true
+               db
+               ~first_operation:link.first_operation_id
+               ~first_role:link.first_movement.role
+               ~second_operation:link.second_operation_id
+               ~second_role:link.second_movement.role
+           in
+           Ok (Some preview)
+         | _ -> Or_error.error_string "transfer operation is missing")
+      links
+  in
+  Ok (List.filter_opt entries)
+;;
+
+let confirm_general_transfer_internal ?(in_transaction = false) db ~expected =
+  (if in_transaction then fun f -> f db else transaction db) (fun db ->
+    let* current =
+      preview_general_transfer
+        db
+        ~first_operation:expected.first.operation_id
+        ~first_role:expected.first.role
+        ~second_operation:expected.second.operation_id
+        ~second_role:expected.second.role
+    in
+    if not (Poly.equal current expected)
+    then Or_error.error_string "transfer preview changed; review it again"
+    else (
+      let first = current.first.movement_id
+      and second = current.second.movement_id in
+      let insert =
+        Rel_sql.Stmt.(
+          func
+            "INSERT INTO \
+             operation_transfer_links(first_movement_id,second_movement_id,reason) \
+             VALUES (?,?,'Reviewed transfer')"
+            (int64 @-> int64 @-> unit))
+      in
+      let member =
+        Rel_sql.Stmt.(
+          func
+            "INSERT INTO \
+             operation_transfer_memberships(movement_id,first_movement_id,second_movement_id) \
+             VALUES (?,?,?)"
+            (int64 @-> int64 @-> int64 @-> unit))
+      in
+      let audit =
+        Rel_sql.Stmt.(
+          func
+            "INSERT INTO \
+             operation_transfer_changes(first_movement_id,second_movement_id,action) \
+             VALUES (?,?,'confirmed')"
+            (int64 @-> int64 @-> unit))
+      in
+      let* () = db_result (Db.exec db.conn (insert first second)) in
+      let* () = db_result (Db.exec db.conn (member first first second)) in
+      let* () = db_result (Db.exec db.conn (member second first second)) in
+      db_result (Db.exec db.conn (audit first second))))
+;;
+
+let confirm_general_transfer db ~expected = confirm_general_transfer_internal db ~expected
+
+let undo_general_transfer db operation_id =
+  transaction db (fun db ->
+    let* links = operation_transfer_links db in
+    let* link =
+      List.find links ~f:(fun l ->
+        Int64.equal l.first_operation_id operation_id
+        || Int64.equal l.second_operation_id operation_id)
+      |> Or_error.of_option
+           ~error:(Error.of_string "operation is not linked as a transfer")
+    in
+    let find =
+      Rel_sql.Stmt.(
+        func
+          "SELECT m.id,o.bank_event_id FROM operation_movements m JOIN operations o ON \
+           o.id=m.operation_id WHERE o.id=? AND m.role=?"
+          (int64
+           @-> text
+           @-> ret Row.(t2 (int64 "id") (option Rel.Type.int64 "bank_event_id"))))
+    in
+    let* first =
+      db_result (Db.first db.conn (find link.first_operation_id link.first_movement.role))
+    in
+    let* second =
+      db_result
+        (Db.first db.conn (find link.second_operation_id link.second_movement.role))
+    in
+    let* first_id, first_bank =
+      Or_error.of_option first ~error:(Error.of_string "first transfer movement missing")
+    in
+    let* second_id, second_bank =
+      Or_error.of_option
+        second
+        ~error:(Error.of_string "second transfer movement missing")
+    in
+    if Option.is_some first_bank && Option.is_some second_bank
+    then Or_error.error_string "use fin transfer undo for bank-to-bank transfers"
+    else (
+      let members =
+        Rel_sql.Stmt.(
+          func
+            "DELETE FROM operation_transfer_memberships WHERE first_movement_id=? AND \
+             second_movement_id=?"
+            (int64 @-> int64 @-> unit))
+      in
+      let remove =
+        Rel_sql.Stmt.(
+          func
+            "DELETE FROM operation_transfer_links WHERE first_movement_id=? AND \
+             second_movement_id=?"
+            (int64 @-> int64 @-> unit))
+      in
+      let audit =
+        Rel_sql.Stmt.(
+          func
+            "INSERT INTO \
+             operation_transfer_changes(first_movement_id,second_movement_id,action) \
+             VALUES (?,?,'undone')"
+            (int64 @-> int64 @-> unit))
+      in
+      let* () = db_result (Db.exec db.conn (members first_id second_id)) in
+      let* () = db_result (Db.exec db.conn (remove first_id second_id)) in
+      db_result (Db.exec db.conn (audit first_id second_id))))
+;;
+
+let exchange_projection_hash (entry : Accounting.entry) =
+  let postings =
+    List.map entry.postings ~f:(fun (p : Accounting.posting) ->
+      Json.encode
+        (Jsont.list Jsont.string)
+        [ p.account; p.commodity; Quantity.to_string p.quantity ])
+  in
+  Digestif.SHA256.(
+    to_hex
+      (digest_string
+         (Json.encode
+            (Jsont.list Jsont.string)
+            (Date.to_string entry.date :: entry.description :: postings))))
+;;
+
+let transfer_projection_hash (entry : Accounting.entry) =
+  let postings =
+    List.map entry.postings ~f:(fun (p : Accounting.posting) ->
+      Json.encode
+        (Jsont.list Jsont.string)
+        [ p.account; p.commodity; Quantity.to_string p.quantity ])
+    |> List.sort ~compare:String.compare
+  in
+  Digestif.SHA256.(
+    to_hex
+      (digest_string
+         (Json.encode (Jsont.list Jsont.string) (Date.to_string entry.date :: postings))))
+;;
+
+type portable_transfer_preview =
+  { decisions : Bank_transfer.decision list
+  ; general_decisions : general_transfer_preview list
+  ; unchanged : int
+  ; problems : string list
+  }
+
+let transfer_snapshot db =
+  transaction db (fun db ->
+    let* events = events db in
+    let* reviews = bank_review db in
+    let* anchors = bank_operation_anchors db in
+    let* operation_links = operation_transfer_links db in
+    let* general = general_transfer_entries db in
+    let reference (identity : Movement_identity.t) =
+      let matches =
+        List.filter events ~f:(fun (_, (event : Source_event.t)) ->
+          String.equal event.venue identity.venue
+          && String.equal event.account identity.source_account
+          && String.equal event.kind identity.source_kind
+          && String.equal event.source_id identity.source_id)
+      in
+      let* id, event =
+        match matches with
+        | [ entry ] -> Ok entry
+        | _ -> Or_error.error_string "transfer movement source is missing or ambiguous"
+      in
+      let* () =
+        match List.find reviews ~f:(fun r -> Int64.equal r.event_id id) with
+        | Some row -> verify_bank_operation_anchor anchors row
+        | None -> Ok ()
+      in
+      Ok
+        Category_portable.
+          { institution = event.venue
+          ; source_account = event.account
+          ; kind = event.kind
+          ; source_id = event.source_id
+          ; occurred = Temporal.to_string event.occurred
+          ; payload_sha256 = Digestif.SHA256.(to_hex (digest_string event.payload))
+          ; fields_sha256 = category_fields_hash event
+          ; movement_role = identity.role
+          ; account = None
+          ; reason = None
+          ; type_override = None
+          }
+    in
+    let* links =
+      operation_links
+      |> traverse (fun link ->
+        let* first = reference link.first_movement in
+        let* second = reference link.second_movement in
+        let reason = link.reason in
+        let projection_sha256 =
+          List.find general ~f:(fun p ->
+            Int64.equal p.first.operation_id link.first_operation_id
+            && Int64.equal p.second.operation_id link.second_operation_id)
+          |> Option.map ~f:(fun p -> transfer_projection_hash p.entry)
+        in
+        Ok Transfer_portable.{ first; second; reason; projection_sha256 })
+    in
+    Ok Transfer_portable.{ links })
+;;
+
+let preview_transfer_restore db (snapshot : Transfer_portable.t) =
+  let* events = events db in
+  let* reviews = bank_review db in
+  let* anchors = bank_operation_anchors db in
+  let* existing = bank_transfer_decisions db in
+  let* existing_links = operation_transfer_links db in
+  let* general_entries = general_transfer_entries db in
+  let* stored_movements =
+    collect
+      db
+      (statement
+         "SELECT m.anchor_event_id,m.role,m.operation_id,o.bank_event_id FROM \
+          operation_movements m JOIN operations o ON o.id=m.operation_id WHERE \
+          EXISTS(SELECT 1 FROM operation_movement_sources s WHERE s.movement_id=m.id AND \
+          s.operation_id=m.operation_id AND s.event_id=m.anchor_event_id)"
+         Row.(
+           t4
+             (int64 "event_id")
+             (text "role")
+             (int64 "operation_id")
+             (option Rel.Type.int64 "bank_event_id")))
+  in
+  let problems = ref []
+  and unchanged = ref 0 in
+  let problem message = problems := message :: !problems in
+  let identity (r : Category_portable.decision) =
+    r.institution, r.source_account, r.kind, r.source_id, r.movement_role
+  in
+  let all_movements =
+    List.concat_map snapshot.links ~f:(fun link ->
+      [ identity link.first; identity link.second ])
+  in
+  if
+    List.contains_dup
+      all_movements
+      ~compare:[%compare: string * string * string * string * string]
+  then problem "a movement occurs in more than one transfer link";
+  let resolve (r : Category_portable.decision) =
+    let label = r.institution ^ "/" ^ r.source_id in
+    let matches =
+      List.filter events ~f:(fun (_, e) ->
+        String.equal e.Source_event.venue r.institution
+        && String.equal e.account r.source_account
+        && String.equal e.kind r.kind
+        && String.equal e.source_id r.source_id)
+    in
+    if
+      Option.is_some r.account
+      || Option.is_some r.reason
+      || Option.is_some r.type_override
+    then (
+      problem ("unsupported movement reference: " ^ label);
+      None)
+    else (
+      match matches with
+      | [ (id, e) ] ->
+        let evidence_count =
+          List.count events ~f:(fun (_, other) ->
+            String.equal other.Source_event.venue e.venue
+            && String.equal other.account e.account
+            && String.equal other.kind e.kind
+            && String.equal
+                 (Temporal.to_string other.occurred)
+                 (Temporal.to_string e.occurred)
+            &&
+            if List.is_empty e.fields
+            then String.equal other.payload e.payload
+            else String.equal (category_fields_hash other) (category_fields_hash e))
+        in
+        if
+          not
+            (String.equal (Temporal.to_string e.occurred) r.occurred
+             && String.equal
+                  Digestif.SHA256.(to_hex (digest_string e.payload))
+                  r.payload_sha256
+             && String.equal (category_fields_hash e) r.fields_sha256)
+        then (
+          problem ("source evidence differs: " ^ label);
+          None)
+        else if evidence_count > 1
+        then (
+          problem ("ambiguous source evidence: " ^ label);
+          None)
+        else (
+          match
+            List.find stored_movements ~f:(fun (event, role, _, _) ->
+              Int64.equal event id && String.equal role r.movement_role)
+          with
+          | None ->
+            problem ("movement not found: " ^ label);
+            None
+          | Some (_, _, operation_id, bank_event_id) ->
+            (match bank_event_id with
+             | Some _ ->
+               (match List.find reviews ~f:(fun row -> Int64.equal row.event_id id) with
+                | None ->
+                  problem ("bank movement missing: " ^ label);
+                  None
+                | Some row ->
+                  (match verify_bank_operation_anchor anchors row with
+                   | Error e ->
+                     problem (label ^ ": " ^ Error.to_string_hum e);
+                     None
+                   | Ok () -> Some (id, operation_id, true)))
+             | None -> Some (id, operation_id, false)))
+      | [] ->
+        problem ("source not found: " ^ label);
+        None
+      | _ ->
+        problem ("ambiguous source identity: " ^ label);
+        None)
+  in
+  let matched =
+    List.filter_map snapshot.links ~f:(fun link ->
+      let first = resolve link.first
+      and second = resolve link.second in
+      match first, second with
+      | Some (first_event_id, _, true), Some (second_event_id, _, true) ->
+        (match
+           Bank_transfer.create
+             ~first_event_id
+             ~second_event_id
+             ~state:Confirmed
+             ~reason:link.reason
+         with
+         | Error e ->
+           problem (Error.to_string_hum e);
+           None
+         | Ok d ->
+           (match
+              List.find existing ~f:(fun old ->
+                Int64.equal old.first_event_id d.first_event_id
+                && Int64.equal old.second_event_id d.second_event_id)
+            with
+            | Some old
+              when Poly.equal old.state d.state && String.equal old.reason d.reason ->
+              Int.incr unchanged;
+              None
+            | Some _ ->
+              problem "existing transfer decision differs";
+              None
+            | None -> Some (`Bank d)))
+      | Some (_, first_operation, _), Some (_, second_operation, _) ->
+        let existing_link =
+          List.find existing_links ~f:(fun l ->
+            (Int64.equal l.first_operation_id first_operation
+             && Int64.equal l.second_operation_id second_operation)
+            || (Int64.equal l.first_operation_id second_operation
+                && Int64.equal l.second_operation_id first_operation))
+        in
+        (match existing_link with
+         | Some current ->
+           (match
+              ( List.find general_entries ~f:(fun p ->
+                  (Int64.equal p.first.operation_id first_operation
+                   && Int64.equal p.second.operation_id second_operation)
+                  || (Int64.equal p.first.operation_id second_operation
+                      && Int64.equal p.second.operation_id first_operation))
+              , link.projection_sha256 )
+            with
+            | Some p, Some hash
+              when String.equal (transfer_projection_hash p.entry) hash
+                   && String.equal current.reason link.reason ->
+              Int.incr unchanged;
+              None
+            | _ ->
+              problem "existing general transfer differs";
+              None)
+         | None ->
+           (match
+              ( preview_general_transfer
+                  db
+                  ~first_operation
+                  ~first_role:link.first.movement_role
+                  ~second_operation
+                  ~second_role:link.second.movement_role
+              , link.projection_sha256 )
+            with
+            | Ok preview, Some hash
+              when String.equal (transfer_projection_hash preview.entry) hash ->
+              Some (`General preview)
+            | Error e, _ ->
+              problem (Error.to_string_hum e);
+              None
+            | _ ->
+              problem "general transfer projection differs or is missing";
+              None))
+      | _ -> None)
+  in
+  let decisions =
+    List.filter_map matched ~f:(function
+      | `Bank d -> Some d
+      | _ -> None)
+  in
+  let general_decisions =
+    List.filter_map matched ~f:(function
+      | `General d -> Some d
+      | _ -> None)
+  in
+  let pairs =
+    List.map decisions ~f:(fun d -> d.Bank_transfer.first_event_id, d.second_event_id)
+  in
+  if List.contains_dup pairs ~compare:[%compare: int64 * int64]
+  then problem "duplicate transfer links";
+  Ok
+    { decisions
+    ; general_decisions
+    ; unchanged = !unchanged
+    ; problems = List.rev !problems
+    }
+;;
+
+let restore_transfers db ~expected snapshot =
+  transaction db (fun db ->
+    let* current = preview_transfer_restore db snapshot in
+    if not (Poly.equal current expected)
+    then Or_error.error_string "restore preview changed; review it again"
+    else if not (List.is_empty current.problems)
+    then Or_error.error_string "resolve transfer restore problems before applying"
+    else
+      let* bank_changes =
+        set_bank_transfers_internal
+          ~require_unreviewed:true
+          ~in_transaction:true
+          db
+          current.decisions
+      in
+      let* _ =
+        traverse
+          (fun expected ->
+             confirm_general_transfer_internal ~in_transaction:true db ~expected)
+          current.general_decisions
+      in
+      Ok (bank_changes + List.length current.general_decisions))
+;;
+
+let exchange_projection db operation_id =
+  let query =
+    Rel_sql.Stmt.(
+      func
+        "SELECT o.bank_event_id,o.source_event_id, (SELECT count(*) FROM \
+         operation_movements m JOIN operation_movement_resolutions r ON \
+         r.movement_id=m.id WHERE m.operation_id=o.id), EXISTS(SELECT 1 FROM \
+         operation_movements m JOIN operation_transfer_memberships t ON \
+         t.movement_id=m.id WHERE m.operation_id=o.id) FROM operations o WHERE o.id=?"
+        (int64
+         @-> ret
+               Row.(
+                 t4
+                   (option Rel.Type.int64 "bank_event_id")
+                   (option Rel.Type.int64 "source_event_id")
+                   (int "resolved")
+                   (bool "linked"))))
+  in
+  let* metadata = db_result (Db.first db.conn (query operation_id)) in
+  let* bank, source, resolved, linked =
+    Or_error.of_option metadata ~error:(Error.of_string "unknown operation")
+  in
+  let* source =
+    Or_error.of_option source ~error:(Error.of_string "exchange needs one stored source")
+  in
+  let* () =
+    if Option.is_some bank
+    then Or_error.error_string "bank movement exchange review is not supported yet"
+    else if linked
+    then Or_error.error_string "operation is already linked as a transfer"
+    else if resolved <> 2
+    then Or_error.error_string "resolve both exchange movements first"
+    else Ok ()
+  in
+  let* operation = get_operation_in_transaction db operation_id in
+  let* () =
+    match operation.evidence with
+    | [ Operation.Stored_event id ] when Int64.equal id source -> Ok ()
+    | _ -> Or_error.error_string "exchange needs exactly one matching source record"
+  in
+  let* movements =
+    traverse
+      (fun (m : Operation.movement) ->
+         let* account =
+           Or_error.of_option
+             m.account
+             ~error:(Error.of_string "exchange movement has no account")
+         in
+         let symbol_query =
+           Rel_sql.Stmt.(
+             func
+               "SELECT symbol FROM commodity_symbols WHERE commodity=?"
+               (text @-> ret Row.(t1 (text "symbol"))))
+         in
+         let* symbol =
+           db_result
+             (Db.first db.conn (symbol_query (Json.encode Commodity.codec m.commodity)))
+         in
+         let* symbol =
+           Or_error.of_option
+             symbol
+             ~error:(Error.of_string "resolved commodity has no journal symbol")
+         in
+         let* _ = validate_commodity_symbol m.commodity symbol in
+         Ok (account, m.commodity, symbol, m.quantity))
+      operation.movements
+  in
+  let* fields = operation_fields db operation_id in
+  let description =
+    List.find_map
+      [ "Transaction Description"; "Description"; "description" ]
+      ~f:(fun name -> List.Assoc.find fields name ~equal:String.equal)
+    |> Option.filter ~f:(fun text -> not (String.is_empty (String.strip text)))
+    |> Option.value ~default:"Exchange"
+  in
+  let* date =
+    Or_error.try_with (fun () ->
+      Date.of_string (String.prefix (Temporal.to_string operation.occurred) 10))
+  in
+  let* entry = Operation_accounting.exchange ~date ~description movements in
+  Ok (source, entry)
+;;
+
+let operation_exchange_preview db operation_id = exchange_projection db operation_id
+
+let set_operation_exchange_internal
+      ?(in_transaction = false)
+      db
+      ~operation_id
+      ~confirm
+      ~expected
+  =
+  (if in_transaction then fun f -> f db else transaction db) (fun db ->
+    let query =
+      Rel_sql.Stmt.(
+        func
+          "SELECT reason FROM operation_exchange_decisions WHERE operation_id=?"
+          (int64 @-> ret Row.(t1 (text "reason"))))
+    in
+    let* existing = db_result (Db.first db.conn (query operation_id)) in
+    if Bool.equal confirm (Option.is_some existing)
+    then Ok false
+    else
+      let* () =
+        if confirm
+        then
+          let* current = exchange_projection db operation_id in
+          if Option.exists expected ~f:(fun expected -> Poly.equal current expected)
+          then Ok ()
+          else Or_error.error_string "exchange preview changed; review it again"
+        else Ok ()
+      in
+      let change =
+        if confirm
+        then
+          Rel_sql.Stmt.(
+            func
+              "INSERT INTO operation_exchange_decisions(operation_id,reason) VALUES \
+               (?,'Reviewed exchange')"
+              (int64 @-> unit))
+        else
+          Rel_sql.Stmt.(
+            func
+              "DELETE FROM operation_exchange_decisions WHERE operation_id=?"
+              (int64 @-> unit))
+      in
+      let audit =
+        Rel_sql.Stmt.(
+          func
+            "INSERT INTO operation_exchange_changes(operation_id,action) VALUES (?,?)"
+            (int64 @-> text @-> unit))
+      in
+      let* () = db_result (Db.exec db.conn (change operation_id)) in
+      let* () =
+        db_result
+          (Db.exec
+             db.conn
+             (audit operation_id (if confirm then "confirmed" else "undone")))
+      in
+      Ok true)
+;;
+
+let set_operation_exchange db ~operation_id ~confirm ~expected =
+  set_operation_exchange_internal db ~operation_id ~confirm ~expected
+;;
+
+let operation_exchange_entries db =
+  let* ids =
+    collect
+      db
+      (statement
+         "SELECT operation_id FROM operation_exchange_decisions ORDER BY operation_id"
+         Row.(t1 (int64 "operation_id")))
+  in
+  traverse
+    (fun id ->
+       let* source, entry = exchange_projection db id in
+       Ok (source, "operation:exchange", entry))
+    ids
+;;
+
+let exchange_snapshot db =
+  transaction db (fun db ->
+    let query =
+      statement
+        "SELECT o.id,o.source_event_id,m.role FROM operation_exchange_decisions d JOIN \
+         operations o ON o.id=d.operation_id JOIN operation_movements m ON m.id=(SELECT \
+         min(m2.id) FROM operation_movements m2 WHERE m2.operation_id=o.id) ORDER BY \
+         o.id"
+        Row.(
+          t3
+            (int64 "operation_id")
+            (option Rel.Type.int64 "source_event_id")
+            (text "role"))
+    in
+    let* rows = collect db query in
+    let* source_events = events db in
+    let* exchanges =
+      traverse
+        (fun (operation_id, source, role) ->
+           let* source =
+             Or_error.of_option source ~error:(Error.of_string "exchange source missing")
+           in
+           let* checked_source, entry = exchange_projection db operation_id in
+           let* () =
+             if Int64.equal source checked_source
+             then Ok ()
+             else Or_error.error_string "exchange source changed"
+           in
+           let* event =
+             List.Assoc.find source_events source ~equal:Int64.equal
+             |> Or_error.of_option ~error:(Error.of_string "exchange source missing")
+           in
+           let source =
+             Category_portable.
+               { institution = event.venue
+               ; source_account = event.account
+               ; kind = event.kind
+               ; source_id = event.source_id
+               ; occurred = Temporal.to_string event.occurred
+               ; payload_sha256 = Digestif.SHA256.(to_hex (digest_string event.payload))
+               ; fields_sha256 = category_fields_hash event
+               ; movement_role = role
+               ; account = None
+               ; reason = None
+               ; type_override = None
+               }
+           in
+           Ok
+             Exchange_portable.
+               { source; projection_sha256 = exchange_projection_hash entry })
+        rows
+    in
+    Ok Exchange_portable.{ exchanges })
+;;
+
+type exchange_restore_preview =
+  { exchange_decisions : (int64 * (int64 * Accounting.entry)) list
+  ; exchange_unchanged : int
+  ; exchange_problems : string list
+  }
+
+let preview_exchange_restore db (snapshot : Exchange_portable.t) =
+  let* source_events = events db in
+  let problems = ref []
+  and unchanged = ref 0 in
+  let problem s = problems := s :: !problems in
+  let identities =
+    List.map snapshot.exchanges ~f:(fun (x : Exchange_portable.exchange) ->
+      let d = x.source in
+      d.institution, d.source_account, d.kind, d.source_id)
+  in
+  if List.contains_dup identities ~compare:[%compare: string * string * string * string]
+  then problem "duplicate exchange source";
+  let lookup =
+    Rel_sql.Stmt.(
+      func
+        "SELECT o.id,EXISTS(SELECT 1 FROM operation_exchange_decisions d WHERE \
+         d.operation_id=o.id) FROM operations o JOIN operation_movements m ON \
+         m.operation_id=o.id WHERE o.source_event_id=? AND m.anchor_event_id=? AND \
+         m.role=?"
+        (int64 @-> int64 @-> text @-> ret Row.(t2 (int64 "id") (bool "reviewed"))))
+  in
+  let* decisions =
+    traverse
+      (fun (x : Exchange_portable.exchange) ->
+         let d = x.source in
+         let label = d.institution ^ "/" ^ d.source_id in
+         let matches =
+           List.filter source_events ~f:(fun (_, e) ->
+             String.equal e.Source_event.venue d.institution
+             && String.equal e.account d.source_account
+             && String.equal e.kind d.kind
+             && String.equal e.source_id d.source_id)
+         in
+         match matches with
+         | [ (id, event) ]
+           when String.equal (Temporal.to_string event.occurred) d.occurred
+                && String.equal
+                     Digestif.SHA256.(to_hex (digest_string event.payload))
+                     d.payload_sha256
+                && String.equal (category_fields_hash event) d.fields_sha256 ->
+           let duplicate =
+             List.count source_events ~f:(fun (_, e) ->
+               String.equal e.Source_event.venue event.venue
+               && String.equal e.account event.account
+               && String.equal e.kind event.kind
+               && String.equal (Temporal.to_string e.occurred) d.occurred
+               &&
+               if List.is_empty event.fields
+               then String.equal e.payload event.payload
+               else String.equal (category_fields_hash e) d.fields_sha256)
+             > 1
+           in
+           if
+             duplicate
+             || Option.is_some d.account
+             || Option.is_some d.reason
+             || Option.is_some d.type_override
+           then (
+             problem ("ambiguous or invalid exchange source: " ^ label);
+             Ok None)
+           else
+             let* found = db_result (Db.first db.conn (lookup id id d.movement_role)) in
+             (match found with
+              | None ->
+                problem ("exchange movement not found: " ^ label);
+                Ok None
+              | Some (operation_id, reviewed) ->
+                (match exchange_projection db operation_id with
+                 | Error e ->
+                   problem (label ^ ": " ^ Error.to_string_hum e);
+                   Ok None
+                 | Ok (_, entry)
+                   when not
+                          (String.equal
+                             (exchange_projection_hash entry)
+                             x.projection_sha256) ->
+                   problem ("exchange projection differs: " ^ label);
+                   Ok None
+                 | Ok projection ->
+                   if reviewed
+                   then (
+                     Int.incr unchanged;
+                     Ok None)
+                   else Ok (Some (operation_id, projection))))
+         | [] ->
+           problem ("exchange source not found: " ^ label);
+           Ok None
+         | [ _ ] ->
+           problem ("exchange source evidence differs: " ^ label);
+           Ok None
+         | _ ->
+           problem ("ambiguous exchange source: " ^ label);
+           Ok None)
+      snapshot.exchanges
+  in
+  Ok
+    { exchange_decisions = List.filter_opt decisions
+    ; exchange_unchanged = !unchanged
+    ; exchange_problems = List.rev !problems
+    }
+;;
+
+let restore_exchanges db ~expected snapshot =
+  transaction db (fun db ->
+    let* current = preview_exchange_restore db snapshot in
+    if not (Poly.equal current expected)
+    then Or_error.error_string "exchange restore preview changed; review it again"
+    else if not (List.is_empty current.exchange_problems)
+    then Or_error.error_string "resolve exchange restore problems before applying"
+    else
+      let* changes =
+        traverse
+          (fun (operation_id, projection) ->
+             set_operation_exchange_internal
+               ~in_transaction:true
+               db
+               ~operation_id
+               ~confirm:true
+               ~expected:(Some projection))
+          current.exchange_decisions
+      in
+      Ok (List.count changes ~f:Fn.id))
 ;;
 
 type operation_document_preview =

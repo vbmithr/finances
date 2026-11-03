@@ -14,11 +14,23 @@ type decision =
   ; type_override : string option
   }
 
+type resolution =
+  { source : decision
+  ; source_quantity : Quantity.t
+  ; source_commodity : Commodity.t
+  ; account : string
+  ; commodity : Commodity.t
+  ; symbol : string
+  }
+
 type t =
   { categories : string list
   ; rules : Classification_rule.t list
   ; decisions : decision list
+  ; resolutions : resolution list
   }
+
+val decision : legacy:bool -> decision Jsont.t
 
 (** Version 1 combined backup, retained for restoring existing exports. *)
 val codec : t Jsont.t
@@ -26,5 +38,6 @@ val codec : t Jsont.t
 val categories_codec : t Jsont.t
 val rules_codec : t Jsont.t
 val decisions_codec : t Jsont.t
+val version4_decisions_codec : t Jsont.t
 val legacy_decisions_codec : t Jsont.t
 val previous_decisions_codec : t Jsont.t

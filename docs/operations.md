@@ -1,6 +1,6 @@
 # Operations, movements and evidence
 
-Status: implementation in progress, 2026-11-02. Schema 32 stores operations and
+Status: implementation in progress, 2026-11-03. Schema 33 stores operations and
 source-linked movements alongside the existing bank tables. Ordinary bank imports
 also create one operation per source event. Operation reads group confirmed bank
 transfers using their persistent review decision; undo exposes the original
@@ -41,9 +41,15 @@ connected to that kernel or journal storage.
 
 The current bank bridge retains both underlying operations and movements when a
 transfer is confirmed. Operation reads combine them under the first source
-event's operation ID. This grouping is derived from the persistent confirmation,
+event's operation ID. This grouping uses a persisted movement-level link,
 so undo restores the two original operation IDs without rewriting either source
 or movement. It is not yet a general-purpose persisted operation merge.
+The operation layer persists each confirmed bank pair as a link between two
+movements. Both operation reads and `fin transfer export` consume the link.
+The export saves stable references with occurrence and evidence hashes; restore
+checks them before invoking the bank confirmation path. Bank confirmation and
+undo update both representations atomically. Linking crypto accounts remains
+to be implemented.
 - A CDC conversion may have one source row with a negative movement in one
   commodity and a positive movement in another. If the wallets are not known,
   the movements remain proposals. The entry may use trading postings to balance
@@ -80,14 +86,15 @@ proof of an unchanged transaction: restore must also verify occurrence and sourc
 evidence, and refuse ambiguous duplicate records. The role must be stable across
 parser versions; a transient row position is not a portable identity. Linking a
 second source must not silently replace the existing movement identity. These
-rules are partly implemented by version 4 portable bank decisions: each record
-names the `primary` role and verifies the source occurrence and evidence.
-Versions 1–3 imply that role. Other roles are refused for now. Persisted
+version 5 portable decisions: bank reviews name the `primary` role; movement
+resolutions record their actual role and original amount and commodity, and
+verify the source occurrence and evidence. Versions 1–3 imply the primary role
+for bank reviews. Persisted
 movement anchors are unique per source event and role, and every anchor must be
 among that movement's source references. Database IDs remain local to each rebuild.
 
-Before supporting reviews of arbitrary legs, finish portable movement decisions
-without silently applying one decision to the wrong leg. Compare bank imports, reviews,
+Unknown rows with no proposed movements still need a way to create reviewed
+movements without silently applying a decision to the wrong leg. Compare bank imports, reviews,
 transfers, and hledger exports before and after the change. Fin does not migrate
 databases automatically; document exports, rebuilding and restore for each schema.
 
@@ -103,7 +110,10 @@ from a price difference. Unknown kinds remain reviewable and unposted.
 CDC imports retain the original file and source fields, with provider-scoped
 symbols and unassigned accounts. Replay of an identical document checks its
 stored proposals; ambiguous overlapping documents and identical rows are
-rejected. Projection needs account assignment, commodity resolution and review.
+rejected. Two-movement exchanges can be resolved, confirmed and projected with
+commodity-specific trading postings. Resolved single-movement operations can be
+linked as transfers to a bank or another wallet when their quantities and
+commodities match. Other non-bank operations remain unposted.
 Realized
 gains, cost basis, market prices and derivative positions are further questions;
 an exchange rate inferred from a trade is not a current market valuation.

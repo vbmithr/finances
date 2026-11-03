@@ -99,16 +99,21 @@ let export db =
   let%bind observations = Store.journal_companions db in
   let%bind category_history = Store.bank_category_history db in
   let%bind movements = Store.journal_movements db in
-  let%bind transfer_decisions = Store.bank_transfer_decisions db in
+  let%bind transfer_links = Store.operation_transfer_links db in
+  let%bind general_transfers = Store.general_transfer_entries db in
+  let%bind exchange_entries = Store.operation_exchange_entries db in
   let posting_dates = Hashtbl.create (module Int64) in
   let pairs = Hashtbl.create (module Int64) in
   let by_event = Hashtbl.create (module Int64) in
   List.iter entries ~f:(fun (id, key, entry) ->
     if String.equal key Bank_projection.key then Hashtbl.set by_event ~key:id ~data:entry);
   let%bind () =
-    List.filter transfer_decisions ~f:(fun d ->
-      Poly.equal d.Bank_transfer.state Confirmed)
-    |> List.map ~f:(fun (d : Bank_transfer.decision) ->
+    List.filter transfer_links ~f:(fun link ->
+      not
+        (List.exists general_transfers ~f:(fun t ->
+           Int64.equal t.Store.first.event_id link.first_event_id
+           && Int64.equal t.second.event_id link.second_event_id)))
+    |> List.map ~f:(fun (d : Store.operation_transfer_link) ->
       match
         Hashtbl.find by_event d.first_event_id, Hashtbl.find by_event d.second_event_id
       with
@@ -144,6 +149,47 @@ let export db =
           "confirmed transfer has only one projected movement; run fin journal project")
     |> Or_error.combine_errors_unit
   in
+  let%bind synthetic_transfers =
+    general_transfers
+    |> List.map ~f:(fun (t : Store.general_transfer_preview) ->
+      let bank_leg =
+        if t.first.bank
+        then Some t.first
+        else if t.second.bank
+        then Some t.second
+        else None
+      in
+      match bank_leg with
+      | None -> Ok (Some (t.first.event_id, "operation:transfer", t.entry))
+      | Some leg ->
+        (match Hashtbl.find by_event leg.event_id with
+         | None ->
+           Or_error.error_string
+             "confirmed transfer bank movement is not projected; run fin journal project"
+         | Some original ->
+           (match original.postings with
+            | [ bank_posting; _counter ]
+              when String.equal bank_posting.account leg.account
+                   && String.equal bank_posting.commodity leg.symbol
+                   && Quantity.equal bank_posting.quantity leg.quantity ->
+              let%bind combined =
+                Accounting.entry
+                  ~date:t.entry.date
+                  ~description:original.description
+                  t.entry.postings
+              in
+              Hashtbl.set pairs ~key:leg.event_id ~data:(Some combined);
+              Hashtbl.set
+                posting_dates
+                ~key:leg.event_id
+                ~data:[ t.first.date; t.second.date ];
+              Ok None
+            | _ ->
+              Or_error.error_string
+                "bank transfer projection differs from reviewed movement")))
+    |> Or_error.combine_errors
+    |> Result.map ~f:List.filter_opt
+  in
   let entries =
     List.filter_map entries ~f:(fun (id, key, entry) ->
       if not (String.equal key Bank_projection.key)
@@ -153,6 +199,19 @@ let export db =
         | None -> Some (id, key, entry)
         | Some None -> None
         | Some (Some combined) -> Some (id, key, combined)))
+  in
+  let entries =
+    List.stable_sort
+      (entries @ exchange_entries @ synthetic_transfers)
+      ~compare:
+        (fun
+          (id_a, key_a, (a : Accounting.entry)) (id_b, key_b, (b : Accounting.entry)) ->
+        match Date.compare a.date b.date with
+        | 0 ->
+          (match Int64.compare id_a id_b with
+           | 0 -> String.compare key_a key_b
+           | n -> n)
+        | n -> n)
   in
   let companions =
     List.map
@@ -179,24 +238,22 @@ let export db =
     Option.iter movement.value_on ~f:(fun date ->
       Hashtbl.set secondary_dates ~key:movement.event_id ~data:date));
   let extra_metadata = Hashtbl.create (module Int64) in
-  List.iter transfer_decisions ~f:(fun (decision : Bank_transfer.decision) ->
-    if Poly.equal decision.state Confirmed
-    then
-      List.iter [ decision.first_event_id; decision.second_event_id ] ~f:(fun event_id ->
-        let tags =
-          [ Printf.sprintf
-              "source-event-ids: %Ld %Ld"
-              decision.first_event_id
-              decision.second_event_id
-          ; Printf.sprintf
-              "transfer-pair: %Ld %Ld"
-              decision.first_event_id
-              decision.second_event_id
-          ; "transfer-review-reason: " ^ tag_text decision.reason
-          ]
-        in
-        Hashtbl.update extra_metadata event_id ~f:(fun previous ->
-          Option.value previous ~default:[] @ tags)));
+  List.iter transfer_links ~f:(fun (decision : Store.operation_transfer_link) ->
+    List.iter [ decision.first_event_id; decision.second_event_id ] ~f:(fun event_id ->
+      let tags =
+        [ Printf.sprintf
+            "source-event-ids: %Ld %Ld"
+            decision.first_event_id
+            decision.second_event_id
+        ; Printf.sprintf
+            "transfer-pair: %Ld %Ld"
+            decision.first_event_id
+            decision.second_event_id
+        ; "transfer-review-reason: " ^ tag_text decision.reason
+        ]
+      in
+      Hashtbl.update extra_metadata event_id ~f:(fun previous ->
+        Option.value previous ~default:[] @ tags)));
   let latest_categories = Hashtbl.create (module Int64) in
   List.iter category_history ~f:(fun (decision : Store.category_change) ->
     Hashtbl.set latest_categories ~key:decision.event_id ~data:decision);
@@ -221,8 +278,8 @@ let export db =
       descriptions
       ~key:movement.event_id
       ~data:(Store.effective_description movement.description annotations));
-  List.iter transfer_decisions ~f:(fun (d : Bank_transfer.decision) ->
-    if Poly.equal d.state Confirmed && Hashtbl.mem pairs d.first_event_id
+  List.iter transfer_links ~f:(fun (d : Store.operation_transfer_link) ->
+    if Hashtbl.mem pairs d.first_event_id
     then (
       let combined =
         Option.value (Hashtbl.find metadata d.first_event_id) ~default:[]

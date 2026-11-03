@@ -404,6 +404,124 @@ let transaction =
   |> Jsont.Object.finish
 ;;
 
+let decision_name (r : Store.bank_review) =
+  match r.classification with
+  | Store.Unclassified -> "unclassified"
+  | Category -> "category"
+  | Transfer -> "transfer"
+  | Settlement -> "settlement"
+  | Reversal -> "reversal"
+;;
+
+let operation_row_movement =
+  let field name codec (enc : Store.operation_movement_review -> _) map =
+    Jsont.Object.mem name codec ~enc map
+  in
+  Jsont.Object.enc_only ()
+  |> field "role" Jsont.string (fun m -> m.role)
+  |> field "account" (Jsont.option Jsont.string) (fun m -> m.account)
+  |> field "commodity" Commodity.codec (fun m -> m.commodity)
+  |> field "quantity" Json.quantity (fun m -> m.quantity)
+  |> field "anchor_event_id" Json.int64_codec (fun m -> m.anchor_event_id)
+  |> field "description" (Jsont.option Jsont.string) (fun m ->
+    Option.map m.review ~f:(fun r -> r.description))
+  |> field "counter_account" (Jsont.option Jsont.string) (fun m ->
+    Option.map m.review ~f:(fun r -> r.counter_account))
+  |> field "decision" (Jsont.option Jsont.string) (fun m ->
+    Option.map m.review ~f:decision_name)
+  |> Jsont.Object.finish
+;;
+
+type operation_row =
+  { account_id : string option
+  ; operation : Store.operation_review
+  ; movement_rows : transaction list
+  }
+
+(* The one movement of a single-movement operation. Its amount and commodity are
+   what a bank row reports, so they fill the flat fields when there is no bank
+   review row. *)
+let single_movement (operation : Store.operation_review) =
+  match operation.movements with
+  | [ m ] -> Some m
+  | _ -> None
+;;
+
+(* A one-movement operation with a fiat commodity reports that currency in the
+   flat field, as a bank row always did. Crypto symbols stay in [movements]. *)
+let single_currency (operation : Store.operation_review) =
+  match operation.movements with
+  | [ m ] ->
+    (match m.Store.commodity with
+     | Commodity.Fiat currency -> Some currency
+     | _ -> None)
+  | _ -> None
+;;
+
+let operation_row =
+  let field name codec (enc : operation_row -> _) map =
+    Jsont.Object.mem name codec ~enc map
+  in
+  Jsont.Object.enc_only ()
+  |> field "operation_id" Json.int64_codec (fun r -> r.operation.operation_id)
+  |> field "occurred" temporal (fun r -> r.operation.occurred)
+  |> field "institution" Jsont.string (fun r -> r.operation.institution)
+  |> field "event_id" (Jsont.option Json.int64_codec) (fun r ->
+    Option.map r.operation.review ~f:(fun review -> review.event_id))
+  |> field "account_id" (Jsont.option Jsont.string) (fun r -> r.account_id)
+  |> field "booked_on" (Jsont.option Json.date) (fun r ->
+    Option.map r.operation.review ~f:(fun review -> review.transaction.booked_on))
+  |> field "amount" (Jsont.option Json.quantity) (fun r ->
+    Option.first_some
+      (Option.map r.operation.review ~f:(fun review -> review.transaction.amount))
+      (Option.map (single_movement r.operation) ~f:(fun m -> m.Store.quantity)))
+  |> field "fee" (Jsont.option Json.quantity) (fun r ->
+    Option.map r.operation.review ~f:(fun review -> review.transaction.fee))
+  |> field "currency" (Jsont.option Json.currency) (fun r ->
+    let from_review =
+      Option.map r.operation.review ~f:(fun review -> review.transaction.account.currency)
+    in
+    let from_movement = single_currency r.operation in
+    Option.first_some from_review from_movement)
+  |> field "description" Jsont.string (fun r -> r.operation.description)
+  |> field "reported_amount" (Jsont.option Jsont.string) (fun r ->
+    r.operation.reported_amount)
+  |> field "reported_currency" (Jsont.option Jsont.string) (fun r ->
+    r.operation.reported_currency)
+  |> field "exchange_reviewed" Jsont.bool (fun r -> r.operation.exchange_reviewed)
+  |> field "movement_type" (Jsont.option Jsont.string) (fun r ->
+    Option.bind r.operation.review ~f:(fun review ->
+      Option.map review.movement_type ~f:Movement_type.to_string))
+  |> field "imported_movement_type" (Jsont.option Jsont.string) (fun r ->
+    Option.bind r.operation.review ~f:(fun review ->
+      Option.map review.imported_movement_type ~f:Movement_type.to_string))
+  |> field "movement_type_override" (Jsont.option Jsont.string) (fun r ->
+    Option.bind r.operation.review ~f:(fun review ->
+      Option.map review.movement_type_override ~f:Movement_type.to_string))
+  |> field "source_card_reference" (Jsont.option Jsont.string) (fun r ->
+    Option.bind r.operation.review ~f:(fun review ->
+      review.source_evidence.card_reference))
+  |> field "source_withdrawal_reversal" (Jsont.option Jsont.bool) (fun r ->
+    Option.map r.operation.review ~f:(fun review ->
+      review.source_evidence.withdrawal_reversal))
+  |> field
+       "detail_sources"
+       (Jsont.option (Jsont.list Json.int64_codec))
+       (fun r -> Option.map r.operation.review ~f:(fun review -> review.detail_sources))
+  |> field "source_account" (Jsont.option Jsont.string) (fun r ->
+    Option.map r.operation.review ~f:(fun review -> review.transaction.account.account_id))
+  |> field "counter_account" (Jsont.option Jsont.string) (fun r ->
+    Option.map r.operation.review ~f:(fun review -> review.counter_account))
+  |> field "decision" (Jsont.option Jsont.string) (fun r ->
+    Option.map r.operation.review ~f:decision_name)
+  |> field "reason" (Jsont.option Jsont.string) (fun r ->
+    Option.bind r.operation.review ~f:(fun review -> review.reason))
+  |> field "movements" (Jsont.list operation_row_movement) (fun r ->
+    r.operation.movements)
+  |> field "movement_rows" (Jsont.list transaction) (fun r -> r.movement_rows)
+  |> Jsont.Object.finish
+;;
+
 let movement_type_change =
   let field name codec (enc : Store.movement_type_history_entry -> _) map =
     Jsont.Object.mem name codec ~enc map

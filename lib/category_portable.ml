@@ -14,10 +14,20 @@ type decision =
   ; type_override : string option
   }
 
+type resolution =
+  { source : decision
+  ; source_quantity : Quantity.t
+  ; source_commodity : Commodity.t
+  ; account : string
+  ; commodity : Commodity.t
+  ; symbol : string
+  }
+
 type t =
   { categories : string list
   ; rules : Classification_rule.t list
   ; decisions : decision list
+  ; resolutions : resolution list
   }
 
 let decision ~legacy =
@@ -68,7 +78,7 @@ let decision ~legacy =
     else Jsont.Object.mem "movement_role" Jsont.string ~enc:(fun r -> r.movement_role) map
   in
   map
-  |> Jsont.Object.opt_mem "account" Jsont.string ~enc:(fun r -> r.account)
+  |> Jsont.Object.opt_mem "account" Jsont.string ~enc:(fun (r : decision) -> r.account)
   |> Jsont.Object.opt_mem "reason" Jsont.string ~enc:(fun r -> r.reason)
   |> Jsont.Object.opt_mem "type_override" Jsont.string ~enc:(fun r -> r.type_override)
   |> Jsont.Object.error_unknown
@@ -163,7 +173,8 @@ let rule =
 ;;
 
 let codec =
-  Jsont.Object.map (fun () categories rules decisions -> { categories; rules; decisions })
+  Jsont.Object.map (fun () categories rules decisions ->
+    { categories; rules; decisions; resolutions = [] })
   |> Jsont.Object.mem "version" (Json.version 1) ~enc:(fun _ -> ())
   |> Jsont.Object.mem "categories" (Jsont.list Jsont.string) ~enc:(fun r -> r.categories)
   |> Jsont.Object.mem "rules" (Jsont.list rule) ~enc:(fun r -> r.rules)
@@ -178,7 +189,8 @@ let codec =
 (* Scoped version 2 exports deliberately have distinct fields.  The combined
    version 1 codec remains available to read existing backups. *)
 let categories_codec =
-  Jsont.Object.map (fun () categories -> { categories; rules = []; decisions = [] })
+  Jsont.Object.map (fun () categories ->
+    { categories; rules = []; decisions = []; resolutions = [] })
   |> Jsont.Object.mem "version" (Json.version 2) ~enc:(fun _ -> ())
   |> Jsont.Object.mem "categories" (Jsont.list Jsont.string) ~enc:(fun r -> r.categories)
   |> Jsont.Object.error_unknown
@@ -186,7 +198,8 @@ let categories_codec =
 ;;
 
 let rules_codec =
-  Jsont.Object.map (fun () rules -> { categories = []; rules; decisions = [] })
+  Jsont.Object.map (fun () rules ->
+    { categories = []; rules; decisions = []; resolutions = [] })
   |> Jsont.Object.mem "version" (Json.version 2) ~enc:(fun _ -> ())
   |> Jsont.Object.mem "rules" (Jsont.list rule) ~enc:(fun r -> r.rules)
   |> Jsont.Object.error_unknown
@@ -194,7 +207,8 @@ let rules_codec =
 ;;
 
 let decisions_codec_for ~legacy version =
-  Jsont.Object.map (fun () decisions -> { categories = []; rules = []; decisions })
+  Jsont.Object.map (fun () decisions ->
+    { categories = []; rules = []; decisions; resolutions = [] })
   |> Jsont.Object.mem "version" (Json.version version) ~enc:(fun _ -> ())
   |> Jsont.Object.mem
        "decisions"
@@ -204,6 +218,34 @@ let decisions_codec_for ~legacy version =
   |> Jsont.Object.finish
 ;;
 
-let decisions_codec = decisions_codec_for ~legacy:false 4
+let resolution =
+  Jsont.Object.map
+    (fun source source_quantity source_commodity account commodity symbol ->
+       { source; source_quantity; source_commodity; account; commodity; symbol })
+  |> Jsont.Object.mem "source" (decision ~legacy:false) ~enc:(fun r -> r.source)
+  |> Jsont.Object.mem "source_quantity" Json.quantity ~enc:(fun r -> r.source_quantity)
+  |> Jsont.Object.mem "source_commodity" Commodity.codec ~enc:(fun r ->
+    r.source_commodity)
+  |> Jsont.Object.mem "account" Jsont.string ~enc:(fun r -> r.account)
+  |> Jsont.Object.mem "commodity" Commodity.codec ~enc:(fun r -> r.commodity)
+  |> Jsont.Object.mem "symbol" Jsont.string ~enc:(fun r -> r.symbol)
+  |> Jsont.Object.error_unknown
+  |> Jsont.Object.finish
+;;
+
+let decisions_codec =
+  Jsont.Object.map (fun () decisions resolutions ->
+    { categories = []; rules = []; decisions; resolutions })
+  |> Jsont.Object.mem "version" (Json.version 5) ~enc:(fun _ -> ())
+  |> Jsont.Object.mem
+       "decisions"
+       (Jsont.list (decision ~legacy:false))
+       ~enc:(fun r -> r.decisions)
+  |> Jsont.Object.mem "resolutions" (Jsont.list resolution) ~enc:(fun r -> r.resolutions)
+  |> Jsont.Object.error_unknown
+  |> Jsont.Object.finish
+;;
+
+let version4_decisions_codec = decisions_codec_for ~legacy:false 4
 let previous_decisions_codec = decisions_codec_for ~legacy:true 3
 let legacy_decisions_codec = decisions_codec_for ~legacy:true 2

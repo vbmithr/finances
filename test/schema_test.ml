@@ -44,10 +44,10 @@ let initialize () =
          check "fresh database empty" 0 (List.length (ok (Store.events db)));
          Ok ()));
     raw path (fun db ->
-      check "latest baseline" 32 (scalar db "PRAGMA user_version");
+      check "latest baseline" 33 (scalar db "PRAGMA user_version");
       check
         "all tables are strict"
-        41
+        49
         (scalar
            db
            "SELECT count(*) FROM pragma_table_list WHERE schema='main' AND name NOT LIKE \
@@ -166,6 +166,17 @@ let sqlite_constraints () =
         db
         "INSERT INTO operation_movement_sources(movement_id,operation_id,event_id) \
          VALUES (1,1,1)";
+      sql
+        db
+        "INSERT INTO \
+         operation_movements(id,operation_id,anchor_event_id,role,account,commodity,quantity) \
+         VALUES (2,2,2,'primary',NULL,'{}','-1')";
+      rejected "INSERT INTO operation_transfer_links VALUES (1,1,'self')";
+      rejected "INSERT INTO operation_transfer_links VALUES (1,99,'missing')";
+      sql db "INSERT INTO operation_transfer_links VALUES (1,2,'reviewed')";
+      sql db "INSERT INTO operation_transfer_memberships VALUES (1,1,2)";
+      rejected "INSERT INTO operation_transfer_memberships VALUES (3,1,2)";
+      rejected "INSERT INTO operation_transfer_memberships VALUES (1,1,2)";
       rejected
         "INSERT INTO bank_categories(movement_id,event_id,account,reason) VALUES \
          (1,2,'expenses:test','test')";

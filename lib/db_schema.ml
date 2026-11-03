@@ -3,7 +3,7 @@ open Rel
 
 (** One current experimental baseline; older databases must be reimported. Banks
     have no tables of their own. *)
-let version = 32
+let version = 33
 
 let timestamp = `Expr "(strftime('%Y-%m-%dT%H:%M:%f','now') || '000000000Z')"
 
@@ -499,6 +499,382 @@ module Operation_movement_sources = struct
   ;;
 
   let definition = Sqlite_schema.table table
+end
+
+module Operation_transfer_links = struct
+  type t =
+    { first_movement_id : int64
+    ; second_movement_id : int64
+    ; reason : string
+    }
+
+  let first_movement_id =
+    Col.make "first_movement_id" Type.int64 (fun (r : t) -> r.first_movement_id)
+  ;;
+
+  let second_movement_id =
+    Col.make "second_movement_id" Type.int64 (fun (r : t) -> r.second_movement_id)
+  ;;
+
+  let reason = Col.make "reason" Type.text (fun (r : t) -> r.reason)
+
+  let row =
+    Row.(
+      unit (fun first_movement_id second_movement_id reason ->
+        { first_movement_id; second_movement_id; reason })
+      * first_movement_id
+      * second_movement_id
+      * reason)
+  ;;
+
+  let table =
+    Table.make
+      ~primary_key:
+        (Table.Primary_key.make [ Col.Def first_movement_id; Col.Def second_movement_id ])
+      ~foreign_keys:
+        [ Table.Foreign_key.make
+            ~cols:[ Col.Def first_movement_id ]
+            ~parent:
+              (Table.Foreign_key.Table
+                 (Operation_movements.table, [ Col.Def Operation_movements.id ]))
+            ()
+        ; Table.Foreign_key.make
+            ~cols:[ Col.Def second_movement_id ]
+            ~parent:
+              (Table.Foreign_key.Table
+                 (Operation_movements.table, [ Col.Def Operation_movements.id ]))
+            ()
+        ]
+      "operation_transfer_links"
+      row
+  ;;
+
+  let definition =
+    Sqlite_schema.table
+      ~checks:
+        Sqlite_schema.Check.
+          [ different
+              (same first_movement_id second_movement_id)
+              (same first_movement_id first_movement_id)
+          ]
+      table
+  ;;
+end
+
+module Operation_movement_resolutions = struct
+  type t =
+    { movement_id : int64
+    ; account : string
+    ; commodity : string
+    }
+
+  let movement_id = Col.make "movement_id" Type.int64 (fun (r : t) -> r.movement_id)
+  let account = Col.make "account" Type.text (fun (r : t) -> r.account)
+  let commodity = Col.make "commodity" Type.text (fun (r : t) -> r.commodity)
+
+  let row =
+    Row.(
+      unit (fun movement_id account commodity -> { movement_id; account; commodity })
+      * movement_id
+      * account
+      * commodity)
+  ;;
+
+  let table =
+    Table.make
+      ~primary_key:(Table.Primary_key.make [ Col.Def movement_id ])
+      ~foreign_keys:
+        [ Table.Foreign_key.make
+            ~cols:[ Col.Def movement_id ]
+            ~parent:
+              (Table.Foreign_key.Table
+                 (Operation_movements.table, [ Col.Def Operation_movements.id ]))
+            ()
+        ]
+      "operation_movement_resolutions"
+      row
+  ;;
+
+  let definition = Sqlite_schema.table table
+end
+
+module Commodity_symbols = struct
+  type t =
+    { commodity : string
+    ; symbol : string
+    }
+
+  let commodity = Col.make "commodity" Type.text (fun (r : t) -> r.commodity)
+  let symbol = Col.make "symbol" Type.text (fun (r : t) -> r.symbol)
+
+  let row =
+    Row.(unit (fun commodity symbol -> { commodity; symbol }) * commodity * symbol)
+  ;;
+
+  let table =
+    Table.make
+      ~primary_key:(Table.Primary_key.make [ Col.Def commodity ])
+      ~unique_keys:[ Table.Unique_key.make [ Col.Def symbol ] ]
+      "commodity_symbols"
+      row
+  ;;
+
+  let definition = Sqlite_schema.table table
+end
+
+module Operation_resolution_changes = struct
+  type t =
+    { id : int64
+    ; movement_id : int64
+    ; account : string
+    ; commodity : string
+    ; changed_at : Ptime.t
+    }
+
+  let id = Col.make "id" Type.int64 (fun (r : t) -> r.id)
+  let movement_id = Col.make "movement_id" Type.int64 (fun (r : t) -> r.movement_id)
+  let account = Col.make "account" Type.text (fun (r : t) -> r.account)
+  let commodity = Col.make "commodity" Type.text (fun (r : t) -> r.commodity)
+
+  let changed_at =
+    Col.make ~default:timestamp "changed_at" instant (fun (r : t) -> r.changed_at)
+  ;;
+
+  let row =
+    Row.(
+      unit (fun id movement_id account commodity changed_at ->
+        { id; movement_id; account; commodity; changed_at })
+      * id
+      * movement_id
+      * account
+      * commodity
+      * changed_at)
+  ;;
+
+  let table =
+    Table.make
+      ~primary_key:(Table.Primary_key.make [ Col.Def id ])
+      ~foreign_keys:
+        [ Table.Foreign_key.make
+            ~cols:[ Col.Def movement_id ]
+            ~parent:
+              (Table.Foreign_key.Table
+                 (Operation_movements.table, [ Col.Def Operation_movements.id ]))
+            ()
+        ]
+      "operation_resolution_changes"
+      row
+  ;;
+
+  let definition =
+    Sqlite_schema.table ~immutable:"movement resolution history is append-only" table
+  ;;
+end
+
+module Operation_transfer_memberships = struct
+  type t =
+    { movement_id : int64
+    ; first_movement_id : int64
+    ; second_movement_id : int64
+    }
+
+  let movement_id = Col.make "movement_id" Type.int64 (fun (r : t) -> r.movement_id)
+
+  let first_movement_id =
+    Col.make "first_movement_id" Type.int64 (fun (r : t) -> r.first_movement_id)
+  ;;
+
+  let second_movement_id =
+    Col.make "second_movement_id" Type.int64 (fun (r : t) -> r.second_movement_id)
+  ;;
+
+  let row =
+    Row.(
+      unit (fun movement_id first_movement_id second_movement_id ->
+        { movement_id; first_movement_id; second_movement_id })
+      * movement_id
+      * first_movement_id
+      * second_movement_id)
+  ;;
+
+  let table =
+    Table.make
+      ~primary_key:(Table.Primary_key.make [ Col.Def movement_id ])
+      ~foreign_keys:
+        [ Table.Foreign_key.make
+            ~cols:[ Col.Def movement_id ]
+            ~parent:
+              (Table.Foreign_key.Table
+                 (Operation_movements.table, [ Col.Def Operation_movements.id ]))
+            ()
+        ; Table.Foreign_key.make
+            ~cols:[ Col.Def first_movement_id; Col.Def second_movement_id ]
+            ~parent:
+              (Table.Foreign_key.Table
+                 ( Operation_transfer_links.table
+                 , [ Col.Def Operation_transfer_links.first_movement_id
+                   ; Col.Def Operation_transfer_links.second_movement_id
+                   ] ))
+            ()
+        ]
+      "operation_transfer_memberships"
+      row
+  ;;
+
+  let definition =
+    Sqlite_schema.table
+      ~checks:
+        Sqlite_schema.Check.
+          [ either
+              (same movement_id first_movement_id)
+              (same movement_id second_movement_id)
+          ]
+      table
+  ;;
+end
+
+module Operation_transfer_changes = struct
+  type t =
+    { id : int64
+    ; first_movement_id : int64
+    ; second_movement_id : int64
+    ; action : string
+    ; changed_at : Ptime.t
+    }
+
+  let id = Col.make "id" Type.int64 (fun (r : t) -> r.id)
+
+  let first_movement_id =
+    Col.make "first_movement_id" Type.int64 (fun (r : t) -> r.first_movement_id)
+  ;;
+
+  let second_movement_id =
+    Col.make "second_movement_id" Type.int64 (fun (r : t) -> r.second_movement_id)
+  ;;
+
+  let action = Col.make "action" Type.text (fun (r : t) -> r.action)
+
+  let changed_at =
+    Col.make ~default:timestamp "changed_at" instant (fun (r : t) -> r.changed_at)
+  ;;
+
+  let row =
+    Row.(
+      unit (fun id first_movement_id second_movement_id action changed_at ->
+        { id; first_movement_id; second_movement_id; action; changed_at })
+      * id
+      * first_movement_id
+      * second_movement_id
+      * action
+      * changed_at)
+  ;;
+
+  let table =
+    Table.make
+      ~primary_key:(Table.Primary_key.make [ Col.Def id ])
+      ~foreign_keys:
+        [ Table.Foreign_key.make
+            ~cols:[ Col.Def first_movement_id ]
+            ~parent:
+              (Table.Foreign_key.Table
+                 (Operation_movements.table, [ Col.Def Operation_movements.id ]))
+            ()
+        ; Table.Foreign_key.make
+            ~cols:[ Col.Def second_movement_id ]
+            ~parent:
+              (Table.Foreign_key.Table
+                 (Operation_movements.table, [ Col.Def Operation_movements.id ]))
+            ()
+        ]
+      "operation_transfer_changes"
+      row
+  ;;
+
+  let definition =
+    Sqlite_schema.table
+      ~checks:Sqlite_schema.Check.[ one_of action [ "confirmed"; "undone" ] ]
+      ~immutable:"operation transfer history is append-only"
+      table
+  ;;
+end
+
+module Operation_exchange_decisions = struct
+  type t =
+    { operation_id : int64
+    ; reason : string
+    }
+
+  let operation_id = Col.make "operation_id" Type.int64 (fun (r : t) -> r.operation_id)
+  let reason = Col.make "reason" Type.text (fun (r : t) -> r.reason)
+
+  let row =
+    Row.(
+      unit (fun operation_id reason -> { operation_id; reason }) * operation_id * reason)
+  ;;
+
+  let table =
+    Table.make
+      ~primary_key:(Table.Primary_key.make [ Col.Def operation_id ])
+      ~foreign_keys:
+        [ Table.Foreign_key.make
+            ~cols:[ Col.Def operation_id ]
+            ~parent:
+              (Table.Foreign_key.Table (Operations.table, [ Col.Def Operations.id ]))
+            ()
+        ]
+      "operation_exchange_decisions"
+      row
+  ;;
+
+  let definition = Sqlite_schema.table table
+end
+
+module Operation_exchange_changes = struct
+  type t =
+    { id : int64
+    ; operation_id : int64
+    ; action : string
+    ; changed_at : Ptime.t
+    }
+
+  let id = Col.make "id" Type.int64 (fun (r : t) -> r.id)
+  let operation_id = Col.make "operation_id" Type.int64 (fun (r : t) -> r.operation_id)
+  let action = Col.make "action" Type.text (fun (r : t) -> r.action)
+
+  let changed_at =
+    Col.make ~default:timestamp "changed_at" instant (fun (r : t) -> r.changed_at)
+  ;;
+
+  let row =
+    Row.(
+      unit (fun id operation_id action changed_at ->
+        { id; operation_id; action; changed_at })
+      * id
+      * operation_id
+      * action
+      * changed_at)
+  ;;
+
+  let table =
+    Table.make
+      ~primary_key:(Table.Primary_key.make [ Col.Def id ])
+      ~foreign_keys:
+        [ Table.Foreign_key.make
+            ~cols:[ Col.Def operation_id ]
+            ~parent:
+              (Table.Foreign_key.Table (Operations.table, [ Col.Def Operations.id ]))
+            ()
+        ]
+      "operation_exchange_changes"
+      row
+  ;;
+
+  let definition =
+    Sqlite_schema.table
+      ~checks:Sqlite_schema.Check.[ one_of action [ "confirmed"; "undone" ] ]
+      ~immutable:"operation exchange history is append-only"
+      table
+  ;;
 end
 
 module Source_event_fields = struct
@@ -2457,6 +2833,14 @@ let definitions =
   ; Operation_sources.definition
   ; Operation_movements.definition
   ; Operation_movement_sources.definition
+  ; Operation_transfer_links.definition
+  ; Operation_transfer_memberships.definition
+  ; Operation_movement_resolutions.definition
+  ; Operation_resolution_changes.definition
+  ; Commodity_symbols.definition
+  ; Operation_exchange_decisions.definition
+  ; Operation_exchange_changes.definition
+  ; Operation_transfer_changes.definition
   ; Source_event_fields.definition
   ; Movement_evidence.definition
   ; Journal_entries.definition

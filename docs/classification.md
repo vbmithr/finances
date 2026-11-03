@@ -430,11 +430,11 @@ fork keeps its upstream history and local compatibility fix. Extend
 and evaluate the interface for classification; noninteractive commands and JSON
 workflows must remain available for scripts.
 
-The initial `fin operation categoryegory review EVENT_ID` workflow presents an
+The `fin operation category review OPERATION-ID` workflow presents an
 unclassified or categorized movement, offers catalog categories or a new category name,
 and lets the user select exact matches and confirm a transactional batch. It
 shows conflicting classifications and leaves cancellation without changes. The
-event ID can be found with `fin operation list`. This first interface uses
+operation ID can be found with `fin operation list`. This interface uses
 terminal prompts, including repeated substring searches and selectable results; it
 does not yet provide tags or category search. Separately,
 `fin rule` saves conditions and actions for automatic import or explicit preview

@@ -149,6 +149,87 @@ let transactions ?(out = stdout) rows =
          ]))
 ;;
 
+(* Timestamped operations are shown by their UTC calendar date. *)
+let occurrence (t : Temporal.t) =
+  match t with
+  | Temporal.Date date -> Date.to_string date
+  | Instant time -> String.prefix (Timestamp.to_rfc3339 time) 10
+;;
+
+(* A one-movement operation keeps the amount and currency columns a bank row
+   always had. A multi-movement operation has no single amount or currency, so
+   both read "-" and MOVEMENTS carries the pair, for example "-2 CRO 0.2 EUR". *)
+let operation_amounts (row : Report_json.operation_row) =
+  match row.operation.movements with
+  | [] ->
+    (match row.operation.reported_amount, row.operation.reported_currency with
+     | Some amount, Some currency -> text amount ^ " " ^ text currency ^ " (reported)"
+     | Some amount, None -> text amount ^ " (reported)"
+     | _ -> "-")
+  | movements ->
+    String.concat
+      ~sep:" → "
+      (List.map movements ~f:(fun (m : Store.operation_movement_review) ->
+         Printf.sprintf
+           "%s %s"
+           (Quantity.to_string m.quantity)
+           (text (Commodity.display m.commodity))))
+;;
+
+let operation_counter_account (row : Report_json.operation_row) =
+  match row.operation.review with
+  | Some r when not (String.equal r.counter_account "equity:unclassified") ->
+    r.counter_account
+  | _ -> "-"
+;;
+
+let operation_state (row : Report_json.operation_row) =
+  if row.operation.exchange_reviewed
+  then "exchange"
+  else (
+    match row.operation.review, row.operation.movements with
+    | _, [] -> "needs interpretation"
+    | Some _, _ -> ""
+    | None, _ ->
+      if
+        List.exists
+          row.operation.movements
+          ~f:(fun (m : Store.operation_movement_review) -> Option.is_none m.account)
+      then "unresolved"
+      else "unreviewed")
+;;
+
+let operations ?(out = stdout) rows =
+  if List.is_empty rows
+  then Out_channel.output_string out "No operations found.\n"
+  else
+    table
+      ~out
+      [ "ID"
+      ; "DATE"
+      ; "AMOUNTS"
+      ; "INSTITUTION"
+      ; "ACCOUNT ID"
+      ; "TYPE"
+      ; "COUNTER-ACCOUNT"
+      ; "DESCRIPTION"
+      ; "STATE"
+      ]
+      (List.map rows ~f:(fun (row : Report_json.operation_row) ->
+         let operation = row.operation in
+         [ Int64.to_string operation.operation_id
+         ; occurrence operation.occurred
+         ; operation_amounts row
+         ; operation.institution
+         ; Option.value row.account_id ~default:"-"
+         ; Option.value_map operation.review ~default:"-" ~f:(fun r ->
+             Option.value_map r.movement_type ~default:"-" ~f:Movement_type.to_string)
+         ; operation_counter_account row
+         ; operation.description
+         ; operation_state row
+         ]))
+;;
+
 let transfer (c : Store.transfer_candidate) =
   Stdio.printf
     "%Ld <-> %Ld  principal %s %s  (%d days apart)\n"

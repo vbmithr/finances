@@ -649,6 +649,98 @@ let operation_document_safety () =
            ~expected:preview)))
 ;;
 
+let exchange_accounting () =
+  let eur = Commodity.fiat (Option.value_exn (Iso4217.of_alpha_code "EUR")) in
+  let usd = Commodity.fiat (Option.value_exn (Iso4217.of_alpha_code "USD")) in
+  let btc = ok (Commodity.onchain_native ~network:"bitcoin") in
+  let date = Date.of_string "2026-11-03" in
+  let example first second second_symbol =
+    ok
+      (Operation_accounting.exchange
+         ~date
+         ~description:"Exchange"
+         [ "assets:wallet", first, "EUR", decimal "-100.1234567890123456789"
+         ; "assets:wallet", second, second_symbol, decimal "0.00000000000012345678"
+         ])
+  in
+  List.iter
+    [ example eur usd "USD"; example eur btc "BTC" ]
+    ~f:(fun entry ->
+      Alcotest.(check int)
+        "two movements and two trading postings"
+        4
+        (List.length entry.Accounting.postings);
+      let a, b, c, d =
+        match entry.postings with
+        | [ a; b; c; d ] -> a, b, c, d
+        | _ -> assert false
+      in
+      equal_decimal "-100.1234567890123456789" a.quantity;
+      equal_decimal "0.00000000000012345678" b.quantity;
+      Alcotest.(check string) "trading account" "equity:trading" c.account;
+      Alcotest.(check bool)
+        "first commodity balances"
+        true
+        (Quantity.is_zero (Quantity.add a.quantity c.quantity));
+      Alcotest.(check bool)
+        "second commodity balances"
+        true
+        (Quantity.is_zero (Quantity.add b.quantity d.quantity)));
+  error
+    (Operation_accounting.exchange
+       ~date
+       ~description:"bad"
+       [ "assets:a", eur, "EUR", decimal "-1"; "assets:b", eur, "EUR", decimal "1" ]);
+  error
+    (Operation_accounting.exchange
+       ~date
+       ~description:"bad"
+       [ "assets:a", eur, "EUR", decimal "-1"; "assets:b", usd, "USD", decimal "-2" ]);
+  error
+    (Operation_accounting.exchange
+       ~date
+       ~description:"bad"
+       [ "assets:a", eur, "EUR", decimal "-1"
+       ; ( "assets:b"
+         , ok (Commodity.reported ~provider:"example" ~symbol:"BTC")
+         , "BTC"
+         , decimal "1" )
+       ])
+;;
+
+let transfer_accounting () =
+  let eur = Commodity.fiat (Option.value_exn (Iso4217.of_alpha_code "EUR")) in
+  let btc = ok (Commodity.onchain_native ~network:"bitcoin") in
+  let other_btc = ok (Commodity.onchain_native ~network:"other") in
+  let date = Date.of_string "2026-11-03" in
+  let make commodity symbol =
+    [ "assets:bank", commodity, symbol, decimal "-0.00000000000001"
+    ; "assets:wallet", commodity, symbol, decimal "0.00000000000001"
+    ]
+  in
+  List.iter
+    [ make eur "EUR"; make btc "BTC" ]
+    ~f:(fun movements ->
+      let entry =
+        ok (Operation_accounting.transfer ~date ~description:"Transfer" movements)
+      in
+      Alcotest.(check int) "direct postings" 2 (List.length entry.Accounting.postings));
+  error
+    (Operation_accounting.transfer
+       ~date
+       ~description:"Transfer"
+       [ "assets:bank", btc, "BTC", decimal "-1"
+       ; "assets:wallet", other_btc, "BTC", decimal "1"
+       ]);
+  error
+    (Operation_accounting.transfer
+       ~date
+       ~description:"Transfer"
+       [ "assets:bank", btc, "BTC", decimal "-1"
+       ; "assets:wallet", btc, "BTC", decimal "0.9"
+       ])
+;;
+
 let () =
   Alcotest.run
     "finances kernel"
@@ -672,6 +764,14 @@ let () =
         ; Alcotest.test_case "commodity identity" `Quick commodity_identity
         ; Alcotest.test_case "multi-movement operations" `Quick operation_model
         ; Alcotest.test_case "accounting invariants" `Quick accounting_invariants
+        ; Alcotest.test_case
+            "fiat and crypto exchange accounting"
+            `Quick
+            exchange_accounting
+        ; Alcotest.test_case
+            "fiat and crypto transfer accounting"
+            `Quick
+            transfer_accounting
         ; Alcotest.test_case "linear perpetual valuation" `Quick linear_perpetual
         ] )
     ]
