@@ -341,7 +341,11 @@ journal is published. `fin db sources --institution cdc --json` includes the
 original fields and source event IDs. The complete CSV is archived in the database.
 Reimporting the identical file is reported as unchanged, but a different file
 containing already imported rows or a file containing identical rows is rejected
-as ambiguous. Review those exports before importing them.
+as ambiguous. Review those exports before importing them. A file with only the
+header and no transaction rows is rejected, and a reimport that finds a stored
+operation differing from the importer's interpretation (movement roles,
+commodities, quantities or source links) is refused without changing the stored
+decisions.
 
 Imported legs are proposals, with unresolved account and commodity identities;
 unknown rows may have no proposed legs. Only explicitly resolved and confirmed

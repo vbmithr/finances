@@ -704,6 +704,23 @@ let cdc_import_unified () =
            (match report.Bank_import.outcome with
             | Bank_import.Rejected -> true
             | _ -> false));
+      (* A header with no transaction rows is not a successful import. *)
+      let header_only =
+        Store.import_bank_file
+          db
+          ~institution:"cdc"
+          ~path:"empty.csv"
+          ~contents:cdc_header
+      in
+      Alcotest.(check bool)
+        "header-only file refused"
+        true
+        (match header_only with
+         | Error _ -> true
+         | Ok report ->
+           (match report.Bank_import.outcome with
+            | Bank_import.Rejected -> true
+            | _ -> false));
       (* A file the adapter does not recognize is unsupported. *)
       let foreign = "a,b\n1,2\n" in
       let unsupported =
@@ -722,6 +739,40 @@ let cdc_import_unified () =
            (match report.Bank_import.outcome with
             | Bank_import.Unsupported -> true
             | _ -> false))))
+;;
+
+let cdc_reimport_validates_movements () =
+  with_database (fun path ->
+    let contents = cdc_header ^ cdc_row 2 "crypto_viban_exchange" "-2" "EUR" "0.20" in
+    with_store path (fun db ->
+      ignore
+        (ok (Store.import_bank_file db ~institution:"cdc" ~path:"a.csv" ~contents)));
+    raw path (fun conn ->
+      sql conn "UPDATE operation_movements SET quantity='-999' WHERE quantity='-2'");
+    with_store path (fun db ->
+      let replay =
+        Store.import_bank_file db ~institution:"cdc" ~path:"a.csv" ~contents
+      in
+      Alcotest.(check bool)
+        "tampered movement refused"
+        true
+        (match replay with
+         | Error _ -> true
+         | Ok report ->
+           (match report.Bank_import.outcome with
+            | Bank_import.Rejected -> true
+            | _ -> false)));
+    with_store path (fun db ->
+      let events = ok (Store.events db) in
+      let operations = ok (Store.operations_for_event db (fst (List.hd_exn events))) in
+      let quantities =
+        List.concat_map operations ~f:(fun (_, (o : Operation.t)) ->
+          List.map o.movements ~f:(fun m -> Quantity.to_string m.Operation.quantity))
+      in
+      Alcotest.(check bool)
+        "stored quantity left untouched"
+        true
+        (List.mem quantities "-999" ~equal:String.equal)))
 ;;
 
 let exchange_accounting () =
@@ -832,6 +883,8 @@ let () =
           ; "future schema", future_schema
           ; "operation storage and rollback", operation_storage
           ; "cdc imports through the unified path", cdc_import_unified
+          ; ( "cdc reimport validates stored movements"
+            , cdc_reimport_validates_movements )
           ]
           ~f:(fun (name, f) -> Alcotest.test_case name `Quick f) )
     ; ( "model"

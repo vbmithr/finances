@@ -1121,14 +1121,17 @@ let add_operation_with_sources ?source_event_id db by_id (operation : Operation.
   Ok operation_id
 ;;
 
-(* A non-movement event whose adapter interprets it as an operation with
-   role-labelled movements: decode the proposal from the stored event and
-   persist it like any other operation. *)
-let persist_operation_event db ~event_id (event : Source_event.t) =
+let collect db stmt =
+  let* rows = db_result (Db.fold db.conn stmt (fun row rows -> row :: rows) []) in
+  Ok (List.rev rows)
+;;
+
+(* The operation an adapter proposes for a non-movement event, decoded from
+   the stored event alone. *)
+let derive_operation_event db ~event_id (event : Source_event.t) =
   let* rows = Registry.operation_rows db.registry event in
   match rows with
   | [ row ] ->
-    let by_id = Hashtbl.of_alist_exn (module Int64) [ event_id, event ] in
     let evidence = [ Operation.Stored_event event_id ] in
     let* movements =
       traverse
@@ -1147,9 +1150,102 @@ let persist_operation_event db ~event_id (event : Source_event.t) =
     let* operation =
       Operation.create ~occurred:row.source.occurred ~evidence ~movements
     in
-    let* _ = add_operation_with_sources ~source_event_id:event_id db by_id operation in
-    Ok ()
+    Ok (row, operation)
   | _ -> Or_error.error_string "operation adapters must propose one row per event"
+;;
+
+(* A non-movement event whose adapter interprets it as an operation with
+   role-labelled movements: decode the proposal from the stored event and
+   persist it like any other operation. *)
+let persist_operation_event db ~event_id (event : Source_event.t) =
+  let* _, operation = derive_operation_event db ~event_id event in
+  let by_id = Hashtbl.of_alist_exn (module Int64) [ event_id, event ] in
+  let* _ = add_operation_with_sources ~source_event_id:event_id db by_id operation in
+  Ok ()
+;;
+
+(* A replayed operation event must still match what is stored for it: the
+   occurrence, and each movement's role, commodity, quantity and source link.
+   Stored decisions are never touched; a discrepancy is an error. *)
+let verify_stored_operation_event db ~event_id (event : Source_event.t) =
+  let* _, derived = derive_operation_event db ~event_id event in
+  let mismatch what =
+    Or_error.errorf
+      "stored operation for this source row differs from the importer's interpretation \
+       (%s); the database or the importer changed, rebuild or review the stored \
+       operation before reimporting"
+      what
+  in
+  let* operations =
+    collect
+      db
+      (Rel_sql.Stmt.(
+         func
+           "SELECT id,occurred FROM operations WHERE source_event_id=?"
+           (int64 @-> ret Row.(t2 (int64 "id") (text "occurred"))))
+         event_id)
+  in
+  match operations with
+  | [ (operation_id, occurred) ] ->
+    if not (String.equal occurred (Temporal.to_string derived.Operation.occurred))
+    then mismatch "occurrence"
+    else
+      let* stored =
+        collect
+          db
+          (Rel_sql.Stmt.(
+             func
+               "SELECT m.id,m.role,m.commodity,m.quantity FROM operation_movements m \
+                WHERE m.operation_id=? ORDER BY m.id"
+               (int64
+                @-> ret
+                      Row.(
+                        t4 (int64 "id") (text "role") (text "commodity") (text "quantity"))
+               ))
+             operation_id)
+      in
+      let* stored =
+        traverse
+          (fun (id, role, commodity, quantity) ->
+             let* commodity = Json.decode Commodity.codec commodity in
+             let* quantity = Or_error.try_with (fun () -> Quantity.of_string quantity) in
+             let* sources =
+               collect
+                 db
+                 (Rel_sql.Stmt.(
+                    func
+                      "SELECT event_id FROM operation_movement_sources WHERE \
+                       movement_id=? ORDER BY event_id"
+                      (int64 @-> ret Row.(t1 (int64 "event_id"))))
+                    id)
+             in
+             Ok (role, commodity, quantity, sources))
+          stored
+      in
+      let* expected =
+        traverse
+          (fun (m : Operation.movement) ->
+             let* identity =
+               Or_error.of_option
+                 m.identity
+                 ~error:(Error.of_string "derived movement lacks an identity")
+             in
+             Ok (identity.role, m.commodity, m.quantity, [ event_id ]))
+          derived.movements
+      in
+      let normalize =
+        List.sort ~compare:(fun (a, _, _, _) (b, _, _, _) -> String.compare a b)
+      in
+      let equal (r1, c1, q1, s1) (r2, c2, q2, s2) =
+        String.equal r1 r2
+        && Commodity.equal c1 c2
+        && Quantity.equal q1 q2
+        && List.equal Int64.equal s1 s2
+      in
+      if List.equal equal (normalize stored) (normalize expected)
+      then Ok ()
+      else mismatch "movements"
+  | _ -> mismatch "operation is missing or duplicated"
 ;;
 
 let ingest_in_transaction db (e : Source_event.t) =
@@ -1163,7 +1259,13 @@ let ingest_in_transaction db (e : Source_event.t) =
       Option.equal Ptime.equal at previous.occurred_at
       && Option.equal String.equal on previous.occurred_on
       && String.equal previous.payload e.payload
-    then Ok (Existing previous.id)
+    then
+      let* () =
+        if Registry.is_operation_kind db.registry e.kind
+        then verify_stored_operation_event db ~event_id:previous.id e
+        else Ok ()
+      in
+      Ok (Existing previous.id)
     else
       Or_error.error_string
         "source identity already exists with different timestamp/date or payload"
@@ -1198,11 +1300,6 @@ let ingest_in_transaction db (e : Source_event.t) =
 ;;
 
 let ingest db e = transaction db (fun db -> ingest_in_transaction db e)
-
-let collect db stmt =
-  let* rows = db_result (Db.fold db.conn stmt (fun row rows -> row :: rows) []) in
-  Ok (List.rev rows)
-;;
 
 let document_contexts db ~institution =
   let query =

@@ -40,7 +40,8 @@ provider observations before treating them as authoritative.
   and provider-scoped symbols; a read-only CDC CSV inspector proposes
   legs and highlights identical rows without posting them. CDC CSV
   evidence and proposed operations can also be imported and listed; ambiguous
-  overlapping records are refused.
+  overlapping records are refused. Reimports verify stored operations against the
+  importer's interpretation, and header-only files are rejected.
 - The [operation model](operations.md) persists source links and multiple
   movements; bank imports create a corresponding operation. Confirmed transfer
   operations group on read, including in the operation list. Bank category and type decisions are keyed by the
