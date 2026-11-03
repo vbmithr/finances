@@ -154,6 +154,11 @@ not fixed here). Existing: `opposite_principal`, `booking_dates`,
   column is not read today; the movement-CSV profile gains a `reference` column
   role so it is stored as evidence (a profile format change).
 - `same_custodian` and `type_conversion` for exchanges.
+- `stated_counterpart`: the source itself states the other side. Wise's CSV rows
+  carry `Exchange From`, `Exchange To`, `Exchange Rate` and `Exchange To Amount`;
+  fin reads them today only to compare for conflicts. A row whose stated target
+  currency and amount equal another row's currency and amount (same day, same
+  institution) is strong evidence, and it needs no identifier.
 - `fee_explained`: the quantity difference equals a fee the source reports.
 
 Ranking is unchanged in kind: score each pair, then an exact maximum-weight
@@ -186,10 +191,14 @@ conversion.
 
 ### Data to verify before building
 
-- Whether the two Wise rows of one conversion share an identifier. The rules read
-  the prefix of `TransferWise ID`; if both legs carry the same ID, pairing is
-  exact and needs no heuristics. If not, date plus amounts is ambiguous when two
-  conversions happen on one day, and such cases stay manual.
+- Which Wise row of a conversion carries the `Exchange To` columns (one leg or
+  both), and whether the two legs share a `TransferWise ID`. The ID is a record
+  identity inside Wise and not a cross-institution key: the test fixture shows
+  `CARD-1` on both a purchase and its reversal, so it groups related rows rather
+  than naming one leg. Treat a shared ID as an optional hint (the existing
+  `shared_reference` evidence already scores it), never as a requirement. Without
+  either, date plus amounts is ambiguous when two conversions happen on one day,
+  and such cases stay manual.
 - Whether CDC deposits and withdrawals carry a hash that also appears on the
   counterparty side (another exchange, a wallet export, or a bank reference).
 - Whether Revolut and bunq conversions have the same two-row shape.
@@ -203,8 +212,8 @@ conversion.
    the one workflow. Schema bump; the database is rebuilt, and snapshots restore
    through the version-aware importer.
 3. Read the CDC hash into evidence (`reference` role) and add `shared_hash`.
-4. Exchange candidates for bank conversions (Wise first), confirm through the
-   same projection as CDC exchanges.
+4. Exchange candidates for bank conversions (Wise first, using
+   `stated_counterpart`), confirm through the same projection as CDC exchanges.
 5. Fee tolerance and explicit fee postings.
 6. Optional: record the implied rate of each confirmed exchange as an
    observation, for valuing positions later.
