@@ -14,8 +14,11 @@ is the command and storage reference.
 Building from a Git checkout requires the pinned Notty submodule. Run
 `git submodule update --init --recursive` after cloning or updating the checkout.
 
-Confirmation prompts use `[Y/n]`: press Enter or enter `y` to accept, or `n`
-to decline. This also applies to deletion and restore prompts.
+A command that changes data shows what it will change and then asks. The prompt is
+`[Y/n]` (Enter accepts) for changes you can redo, and `[y/N]` (Enter declines) for
+commands that delete data or replace state, such as `fin delete` and `fin restore`.
+`--yes` skips the question in scripts; without a terminal and without `--yes`, the
+command prints what it would change and fails. Answering `n` is the way to preview.
 
 Run `fin` for a short welcome, or `fin --help` for the command reference. Neither
 command creates a database. Every command supports `--help`, including nested
@@ -225,23 +228,20 @@ preview and restore the three independent snapshots:
 
 ```sh
 fin cat restore ~/fin-categories-portable.json
-fin cat restore ~/fin-categories-portable.json --apply
 fin operation restore ~/fin-transaction-decisions.json
-fin operation restore ~/fin-transaction-decisions.json --apply
 fin operation exchange restore ~/fin-exchanges-portable.json
-fin operation exchange restore ~/fin-exchanges-portable.json --apply
 fin transfer restore ~/fin-transfers-portable.json
-fin transfer restore ~/fin-transfers-portable.json --apply
 fin rule restore ~/fin-rules-portable.json
-fin rule restore ~/fin-rules-portable.json --apply
 ```
 
 `fin operation export` and `fin operation restore` handle decisions only: they never
 import or create operations, which come from `fin import`, and a decision that
-matches no imported operation is a preview problem that blocks `--apply`.
+matches no imported operation is a problem that blocks the restore.
 
-Each command previews first. `--apply` previews again and asks for confirmation;
-`--yes` skips the prompt. The catalog export contains category names only. The
+Each command shows what it would change and then asks `[Y/n]`; answering `n` leaves
+everything as it was, which makes it a preview. `--yes` skips the question for
+scripts; without a terminal the command prints the changes and fails unless you
+pass `--yes`. The catalog export contains category names only. The
 transaction export contains current category decisions, including explicit
 resets, current manual type overrides and resolved movement accounts and commodities.
 Restore it before the exchange export. The rule export contains all stored rules, including institution-installed rules
@@ -278,7 +278,6 @@ to restore only its decisions:
 
 ```sh
 fin operation restore ~/fin-transaction-decisions.json --institution boursobank
-fin operation restore ~/fin-transaction-decisions.json --institution boursobank --apply
 ```
 
 The preview reports how many decisions for other institutions were skipped.
@@ -331,7 +330,7 @@ values as candidates, including rows within one file. Identical rows may be
 distinct activity; different rows can still overlap. No duplicates are removed.
 
 To retain an export and its proposed operations in the database, import it like
-any other venue — there is no separate preview or `--apply` step:
+any other venue — there is no separate preview step:
 
 ```sh
 fin import cdc wallet.csv
@@ -1041,7 +1040,7 @@ Save confirmed transfers separately before rebuilding:
 ```sh
 fin transfer export > transfers.json
 fin transfer restore transfers.json
-fin transfer restore transfers.json --apply
+fin transfer restore transfers.json
 ```
 
 Restore after importing the sources and restoring account mappings and movement
@@ -1529,7 +1528,7 @@ To draft a reusable personal rule from an already categorized transaction:
 
 ```sh
 fin rule from-category 123 cafes --contains 'Coffee Shop'
-fin rule from-category 123 cafes --contains 'Coffee Shop' --save
+fin rule from-category 123 cafes --contains 'Coffee Shop'
 fin rule preview cafes
 fin rule apply cafes
 ```
@@ -1537,7 +1536,7 @@ fin rule apply cafes
 Replace the ID, name and text with your own. The text must appear in the example's
 effective description and is treated literally, not as a regular expression. Omit
 `--contains` to use the whole description, or use `--institution NAME` to restrict
-scope. The draft displays matches without changing anything; `--save` asks before
+scope. The draft displays matches without changing anything; fin then asks before
 saving a review-mode rule, and `--yes` skips that confirmation. Saving a rule does
 not classify transactions or enable automatic application. Use `fin rule mode`
 to opt into automatic behavior, noting import-time rules see the primary source

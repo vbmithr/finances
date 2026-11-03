@@ -14,6 +14,34 @@ let confirm_default_no value =
   List.mem [ "y"; "yes" ] (String.lowercase (String.strip value)) ~equal:String.equal
 ;;
 
+let prompt text =
+  Out_channel.flush stdout;
+  Out_channel.output_string stderr text;
+  Out_channel.flush stderr;
+  In_channel.input_line In_channel.stdin
+;;
+
+(* The one way fin asks before changing anything, after showing what would change.
+   [--yes] skips the question; without a terminal it is required. The default
+   answer is yes ([Y/n]), except for [~destructive] actions that delete data or
+   replace state, which default to no ([y/N]). *)
+let confirm ~yes ~destructive question =
+  if yes
+  then Ok true
+  else if Unix.isatty Unix.stdin
+  then (
+    let suffix = if destructive then "[y/N]" else "[Y/n]" in
+    Ok
+      (Option.value_map
+         (prompt (Printf.sprintf "%s %s: " question suffix))
+         ~default:false
+         ~f:(if destructive then confirm_default_no else confirm_default_yes)))
+  else
+    Or_error.errorf
+      "cannot ask \"%s\" without a terminal; pass --yes to confirm it"
+      question
+;;
+
 let paths =
   let home =
     match Sys.getenv "HOME" with
@@ -328,19 +356,7 @@ let restore database backup yes =
         "This replaces the database and discards its generated journal and pending \
          account edit draft:";
       List.iter existing ~f:(fun path -> printf "  %s\n" path);
-      if Unix.isatty Unix.stdin
-      then (
-        Out_channel.output_string stdout "Restore? [Y/n]: ";
-        Out_channel.flush stdout;
-        Ok
-          (Option.value_map
-             (In_channel.input_line In_channel.stdin)
-             ~default:false
-             ~f:confirm_default_yes))
-      else
-        Or_error.error_string
-          "refusing to replace existing state without confirmation: run fin restore in a \
-           terminal, or pass --yes")
+      confirm ~yes ~destructive:true "Restore?")
   in
   if not confirmed
   then (
@@ -395,23 +411,7 @@ let delete database yes =
     print_endline
       "Your statement folders are not touched. Run fin backup first if you may need this \
        data.";
-    let%bind confirmed =
-      if yes
-      then Ok true
-      else if Unix.isatty Unix.stdin
-      then (
-        Out_channel.output_string stdout "Delete these files? [y/N]: ";
-        Out_channel.flush stdout;
-        Ok
-          (Option.value_map
-             (In_channel.input_line In_channel.stdin)
-             ~default:false
-             ~f:confirm_default_no))
-      else
-        Or_error.error_string
-          "refusing to delete without confirmation: run fin delete in a terminal, or \
-           pass --yes"
-    in
+    let%bind confirmed = confirm ~yes ~destructive:true "Delete these files?" in
     if confirmed
     then (
       let%map () = Fin_state.delete files in
@@ -742,13 +742,6 @@ let import_history_cmd =
 
 (* Prompts live at the CLI boundary; library callers and redirected stdin never
    need a terminal. EOF has the same meaning as skipping an optional IBAN. *)
-let prompt text =
-  Out_channel.flush stdout;
-  Out_channel.output_string stderr text;
-  Out_channel.flush stderr;
-  In_channel.input_line In_channel.stdin
-;;
-
 let import_account_label registry institution account_id =
   let validate = Validation.token "account label" in
   match Registry.find registry institution with
@@ -2335,16 +2328,7 @@ let refresh_transaction_evidence database institution yes =
           (describe change.after)
           (Terminal.text change.description));
       let%bind confirmed =
-        if yes
-        then Ok true
-        else if Unix.isatty Unix.stdin
-        then
-          Ok
-            (Option.value_map
-               (prompt "Apply these source evidence changes? [Y/n]: ")
-               ~default:false
-               ~f:confirm_default_yes)
-        else Or_error.error_string "evidence refresh requires a terminal or --yes"
+        confirm ~yes ~destructive:false "Apply these source evidence changes?"
       in
       if not confirmed
       then (
@@ -3169,18 +3153,7 @@ let set_institution_definition database name path yes =
             (Terminal.text (Classification_rule.action_target r.action)));
         List.iter retained ~f:(fun r ->
           printf "  retain existing %s\n" (Terminal.text r.name));
-        let%bind confirmed =
-          if yes
-          then Ok true
-          else if Unix.isatty Unix.stdin
-          then
-            Ok
-              (Option.value_map
-                 (prompt "Attach this definition? [Y/n]: ")
-                 ~default:false
-                 ~f:confirm_default_yes)
-          else Or_error.error_string "attaching a definition requires a terminal or --yes"
-        in
+        let%bind confirmed = confirm ~yes ~destructive:false "Attach this definition?" in
         if not confirmed
         then (
           print_endline "Nothing changed.";
@@ -3264,19 +3237,7 @@ let institution_companion_set database name path yes =
     print_endline
       "CSV rows will enrich matching OFX movements. Previously imported rows keep their \
        original layout.";
-    let%bind confirmed =
-      if yes
-      then Ok true
-      else if Unix.isatty Unix.stdin
-      then
-        Ok
-          (Option.value_map
-             (prompt "Save this companion profile? [Y/n]: ")
-             ~default:false
-             ~f:confirm_default_yes)
-      else
-        Or_error.error_string "profile changes require confirmation; use --yes in scripts"
-    in
+    let%bind confirmed = confirm ~yes ~destructive:false "Save this companion profile?" in
     if not confirmed
     then (
       print_endline "Nothing changed.";
@@ -3313,18 +3274,7 @@ let institution_companion_clear database name yes =
     in
     printf "Remove the CSV companion profile for %s?\n" (Terminal.text name);
     let%bind confirmed =
-      if yes
-      then Ok true
-      else if Unix.isatty Unix.stdin
-      then
-        Ok
-          (Option.value_map
-             (prompt "Remove this companion profile? [Y/n]: ")
-             ~default:false
-             ~f:confirm_default_yes)
-      else
-        Or_error.error_string
-          "profile removal requires confirmation; use --yes in scripts"
+      confirm ~yes ~destructive:true "Remove this companion profile?"
     in
     if not confirmed
     then (
@@ -3350,18 +3300,7 @@ let institution_delete database name yes =
   with_database database (fun db ->
     let%bind () = Setup.delete_institution ~dry_run:true db name in
     printf "Delete institution %s and its saved CSV layout?\n" (Terminal.text name);
-    let%bind confirmed =
-      if yes
-      then Ok true
-      else if Unix.isatty Unix.stdin
-      then
-        Ok
-          (Option.value_map
-             (prompt "Delete this institution? [Y/n]: ")
-             ~default:false
-             ~f:confirm_default_yes)
-      else Or_error.error_string "deletion requires confirmation; use --yes in scripts"
-    in
+    let%bind confirmed = confirm ~yes ~destructive:true "Delete this institution?" in
     if not confirmed
     then (
       print_endline "Nothing deleted.";
@@ -3552,13 +3491,7 @@ let setup_card
         "  Pay from: %s / %s\n"
         (Terminal.text bank.mapping.institution)
         (Terminal.text bank.mapping.account_id);
-    let confirmed =
-      yes
-      || Option.value_map
-           (prompt "Apply this card setup? [Y/n]: ")
-           ~default:false
-           ~f:confirm_default_yes
-    in
+    let%bind confirmed = confirm ~yes ~destructive:false "Apply this card setup?" in
     if not confirmed
     then Ok false
     else (
@@ -3764,20 +3697,12 @@ let settlement_review database requested_event card_id yes tui =
           "If the card statement already includes this payment, review it as a transfer \
            instead.";
         let%bind confirmed =
-          if yes
-          then Ok true
-          else if Unix.isatty Unix.stdin
-          then
-            Ok
-              (Option.value_map
-                 (prompt
-                    (if Option.is_some planned
-                     then "Apply this setup and record this one settlement? [Y/n]: "
-                     else "Record this card settlement? [Y/n]: "))
-                 ~default:false
-                 ~f:confirm_default_yes)
-          else
-            Or_error.error_string "settlement requires confirmation; use --yes in scripts"
+          confirm
+            ~yes
+            ~destructive:false
+            (if Option.is_some planned
+             then "Apply this setup and record this one settlement?"
+             else "Record this card settlement?")
         in
         if not confirmed
         then (
@@ -3836,18 +3761,7 @@ let settlement_review_cmd =
 
 let settlement_undo database event_id yes =
   with_database database (fun db ->
-    let%bind confirmed =
-      if yes
-      then Ok true
-      else if Unix.isatty Unix.stdin
-      then
-        Ok
-          (Option.value_map
-             (prompt "Undo this card settlement? [Y/n]: ")
-             ~default:false
-             ~f:confirm_default_yes)
-      else Or_error.error_string "undo requires confirmation; use --yes in scripts"
-    in
+    let%bind confirmed = confirm ~yes ~destructive:false "Undo this card settlement?" in
     if not confirmed
     then (
       print_endline "Nothing changed.";
@@ -4362,7 +4276,7 @@ let print_rule_preview (rule : Classification_rule.t) matches =
         (Terminal.text (Option.value m.explanation ~default:"ineligible"))))
 ;;
 
-let rule_from_category database operation_id name contains institution save yes =
+let rule_from_category database operation_id name contains institution yes =
   with_database database (fun db ->
     let%bind event_id =
       bank_event_ids_for_operations db [ operation_id ] |> Result.map ~f:List.hd_exn
@@ -4415,32 +4329,22 @@ let rule_from_category database operation_id name contains institution save yes 
     in
     let%bind matches = Accounts.preview_classification_rule db rule in
     print_rule_preview rule matches;
-    if not save
+    let%bind confirmed = confirm ~yes ~destructive:false "Save this review-mode rule?" in
+    if not confirmed
     then (
-      print_endline "Draft only; pass --save to add this review-mode rule.";
+      print_endline "Rule not saved.";
       Ok ())
     else (
-      let confirmed =
-        yes
-        || Option.value_map
-             (prompt "Save this review-mode rule? [y/N]: ")
-             ~default:false
-             ~f:confirm_default_no
-      in
-      if not confirmed
-      then (
-        print_endline "Rule not saved.";
-        Ok ())
-      else (
-        let%bind () = Ledger.add_classification_rule db rule in
-        printf "Saved review rule %s.\n" (Terminal.text name);
-        Ok ())))
+      let%bind () = Ledger.add_classification_rule db rule in
+      printf "Saved review rule %s.\n" (Terminal.text name);
+      Ok ()))
 ;;
 
 let rule_from_category_cmd =
   command
     "from-category"
-    "Preview a literal description rule from a categorized transaction."
+    "Draft a literal description rule from a categorized transaction, show its matches \
+     and ask before saving it."
     Term.(
       const rule_from_category
       $ database
@@ -4456,11 +4360,7 @@ let rule_from_category_cmd =
                 "Literal text from the example description; defaults to its full \
                  description.")
       $ institution_filter
-      $ Arg.(
-          value
-          & flag
-          & info [ "save" ] ~doc:"Save the previewed review-mode rule after confirmation.")
-      $ Arg.(value & flag & info [ "yes" ] ~doc:"With --save, skip confirmation."))
+      $ Arg.(value & flag & info [ "yes" ] ~doc:"Save without asking, for scripts."))
 ;;
 
 let rule_preview database name force json_output =
@@ -4524,16 +4424,7 @@ let rule_apply database name force yes =
       Ok ())
     else (
       let%bind confirmed =
-        if yes
-        then Ok true
-        else if Unix.isatty Unix.stdin
-        then
-          Ok
-            (Option.value_map
-               (prompt "Apply to these transactions? [Y/n]: ")
-               ~default:false
-               ~f:confirm_default_yes)
-        else Or_error.error_string "rule application requires a terminal or --yes"
+        confirm ~yes ~destructive:false "Apply to these transactions?"
       in
       if not confirmed
       then (
@@ -4568,18 +4459,7 @@ let rule_apply_cmd =
 let rule_delete database name yes =
   with_database database (fun db ->
     let%bind _ = find_rule db name in
-    let%bind confirmed =
-      if yes
-      then Ok true
-      else if Unix.isatty Unix.stdin
-      then
-        Ok
-          (Option.value_map
-             (prompt "Delete this rule? [Y/n]: ")
-             ~default:false
-             ~f:confirm_default_yes)
-      else Or_error.error_string "rule deletion requires a terminal or --yes"
-    in
+    let%bind confirmed = confirm ~yes ~destructive:true "Delete this rule?" in
     if not confirmed
     then (
       print_endline "Nothing deleted.";
@@ -5170,13 +5050,11 @@ let operation_exchange_review database operation_id undo yes =
             (Terminal.text p.commodity));
         Some (source, entry))
     in
-    let confirmed =
-      yes
-      || Option.value_map
-           (prompt
-              (if undo then "Undo exchange? [y/N]: " else "Confirm exchange? [y/N]: "))
-           ~default:false
-           ~f:confirm_default_no
+    let%bind confirmed =
+      confirm
+        ~yes
+        ~destructive:false
+        (if undo then "Undo exchange?" else "Confirm exchange?")
     in
     if not confirmed
     then (
@@ -5221,7 +5099,7 @@ let operation_exchange_export_cmd =
     Term.(const operation_exchange_export $ database)
 ;;
 
-let operation_exchange_restore database path apply yes =
+let operation_exchange_restore database path yes =
   let%bind contents = read_file path in
   let%bind snapshot = Json.decode Exchange_portable.codec contents in
   with_database database (fun db ->
@@ -5234,31 +5112,28 @@ let operation_exchange_restore database path apply yes =
     then (
       print_endline "Problems (restore is blocked):";
       List.iter preview.exchange_problems ~f:(fun p -> printf "  %s\n" (Terminal.text p)));
-    if not apply
-    then (
-      print_endline "Preview only; pass --apply to restore.";
-      Ok ())
-    else if not (List.is_empty preview.exchange_problems)
+    if not (List.is_empty preview.exchange_problems)
     then Or_error.error_string "resolve exchange restore problems before applying"
-    else if
-      not
-        (yes
-         || Option.value_map
-              (prompt "Restore these exchanges? [y/N]: ")
-              ~default:false
-              ~f:confirm_default_no)
+    else if List.is_empty preview.exchange_decisions
     then (
-      print_endline "Nothing restored.";
+      print_endline "exchange_changes=0";
       Ok ())
     else (
-      let%map changed = Operations.restore_exchanges db ~expected:preview snapshot in
-      printf "exchange_changes=%d\n" changed))
+      let%bind confirmed = confirm ~yes ~destructive:false "Restore these exchanges?" in
+      if not confirmed
+      then (
+        print_endline "Nothing restored.";
+        Ok ())
+      else (
+        let%map changed = Operations.restore_exchanges db ~expected:preview snapshot in
+        printf "exchange_changes=%d\n" changed)))
 ;;
 
 let operation_exchange_restore_cmd =
   command
     "restore"
-    "Preview or restore confirmed exchanges after restoring movement resolutions."
+    "Restore confirmed exchanges after restoring movement resolutions; shows the changes \
+     and asks first."
     Term.(
       const operation_exchange_restore
       $ database
@@ -5266,8 +5141,7 @@ let operation_exchange_restore_cmd =
           required
           & pos 0 (some string) None
           & info [] ~docv:"FILE" ~doc:"Portable exchange snapshot.")
-      $ Arg.(value & flag & info [ "apply" ] ~doc:"Apply after reviewing the preview.")
-      $ Arg.(value & flag & info [ "yes" ] ~doc:"With --apply, skip confirmation."))
+      $ Arg.(value & flag & info [ "yes" ] ~doc:"Restore without asking, for scripts."))
 ;;
 
 let transaction_operations database event_id json_output =
@@ -5582,7 +5456,7 @@ let category_decisions_export_cmd =
 
 let rules_export_cmd = portable_export_cmd Rules "Export stored rules as portable JSON."
 
-let portable_restore scope database path apply yes institution =
+let portable_restore scope database path yes institution =
   let%bind contents = read_file path in
   let%bind snapshot =
     match Json.decode (portable_codec scope) contents with
@@ -5656,20 +5530,19 @@ let portable_restore scope database path apply yes institution =
     then (
       print_endline "Problems (restore is blocked):";
       List.iter preview.problems ~f:(fun p -> printf "  %s\n" (Terminal.text p)));
-    if not apply
-    then (
-      print_endline "Preview only; pass --apply to restore.";
-      Ok ())
-    else if not (List.is_empty preview.problems)
+    if not (List.is_empty preview.problems)
     then Or_error.error_string "resolve restore problems before applying"
+    else if
+      List.is_empty preview.categories_to_add
+      && List.is_empty preview.rules_to_add
+      && List.is_empty preview.decisions_to_apply
+      && List.is_empty preview.types_to_apply
+      && List.is_empty preview.resolutions_to_apply
+    then (
+      print_endline "categories_added=0 rules_added=0 category_changes=0 type_changes=0";
+      Ok ())
     else (
-      let confirmed =
-        yes
-        || Option.value_map
-             (prompt "Restore this snapshot? [y/N]: ")
-             ~default:false
-             ~f:confirm_default_no
-      in
+      let%bind confirmed = confirm ~yes ~destructive:false "Restore this snapshot?" in
       if not confirmed
       then (
         print_endline "Nothing restored.";
@@ -5710,25 +5583,21 @@ let portable_restore_cmd ?man scope doc =
           required
           & pos 0 (some string) None
           & info [] ~docv:"FILE" ~doc:"Portable JSON export.")
-      $ Arg.(
-          value
-          & flag
-          & info
-              [ "apply" ]
-              ~doc:"Apply the preview after confirmation; otherwise only preview.")
-      $ Arg.(value & flag & info [ "yes" ] ~doc:"With --apply, skip confirmation.")
+      $ Arg.(value & flag & info [ "yes" ] ~doc:"Restore without asking, for scripts.")
       $ institution)
 ;;
 
 let category_restore_cmd =
-  portable_restore_cmd Catalog "Preview or restore a category catalog export."
+  portable_restore_cmd
+    Catalog
+    "Restore a category catalog export; shows the changes and asks first."
 ;;
 
 let category_decisions_restore_cmd =
   portable_restore_cmd
     Category_decisions
-    "Preview or re-apply saved decisions (categories, manual types, resolved accounts) \
-     to imported operations."
+    "Re-apply saved decisions (categories, manual types, resolved accounts) to imported \
+     operations; shows the changes and asks first."
     ~man:
       [ `S Manpage.s_description
       ; `P
@@ -5740,8 +5609,9 @@ let category_decisions_restore_cmd =
           "It never imports statements or creates operations; those come only from \
            $(b,fin import), so run that first. Each decision is matched to its operation \
            by source identity. A decision that matches nothing is reported as a problem \
-           in the preview and blocks $(b,--apply); it is never created. Without \
-           $(b,--apply) it only previews."
+           and blocks the restore; it is never created. fin shows what it would change \
+           and asks first; answer $(b,n) to leave everything as it was, or pass \
+           $(b,--yes) in scripts."
       ; `P
           "Transfers, exchanges, rules and the category catalog have their own restore \
            commands: $(b,fin transfer restore), $(b,fin operation exchange restore), \
@@ -5749,7 +5619,9 @@ let category_decisions_restore_cmd =
       ]
 ;;
 
-let rules_restore_cmd = portable_restore_cmd Rules "Preview or restore stored rules."
+let rules_restore_cmd =
+  portable_restore_cmd Rules "Restore stored rules; shows the changes and asks first."
+;;
 
 let category_list database json_output =
   with_database database (fun db ->
@@ -5884,14 +5756,17 @@ let category_init database =
         | Some selected ->
           print_endline "Categories to add:";
           List.iter selected ~f:(fun name -> printf "  %s\n" name);
-          (match prompt "Add these categories? [Y/n]: " with
-           | Some answer when confirm_default_yes answer ->
-             let%bind () = Setup.add_categories db selected in
-             printf "categories_added=%d\n" (List.length selected);
-             Ok ()
-           | _ ->
-             print_endline "No categories added.";
-             Ok ())))
+          let%bind confirmed =
+            confirm ~yes:false ~destructive:false "Add these categories?"
+          in
+          if confirmed
+          then (
+            let%bind () = Setup.add_categories db selected in
+            printf "categories_added=%d\n" (List.length selected);
+            Ok ())
+          else (
+            print_endline "No categories added.";
+            Ok ())))
 ;;
 
 let category_init_cmd =
@@ -6150,13 +6025,11 @@ let category_review database operation_id =
                Terminal.review
                  (List.map chosen ~f:(fun r ->
                     { r with Review.counter_account = category; reason = None }));
-               printf "Apply to %d transaction(s)? [Y/n]: " (List.length chosen);
-               Out_channel.flush stdout;
-               let confirmed =
-                 Option.value_map
-                   (In_channel.input_line In_channel.stdin)
-                   ~default:false
-                   ~f:confirm_default_yes
+               let%bind confirmed =
+                 confirm
+                   ~yes:false
+                   ~destructive:false
+                   (Printf.sprintf "Apply to %d transaction(s)?" (List.length chosen))
                in
                if not confirmed
                then (
@@ -6490,13 +6363,10 @@ let review_transfers database path =
                 d.first_event_id
                 d.second_event_id
                 (Bank_transfer.state_name d.state));
-            if
-              Option.value_map
-                (prompt "Apply these decisions? [Y/n]: ")
-                ~default:false
-                ~f:confirm_default_yes
-            then Ok decisions
-            else Ok [])
+            let%bind apply =
+              confirm ~yes:false ~destructive:false "Apply these decisions?"
+            in
+            if apply then Ok decisions else Ok [])
     in
     if List.is_empty decisions
     then (
@@ -6555,13 +6425,8 @@ let transfer_link database first_operation second_operation first_role second_ro
           (Quantity.to_string leg.quantity)
           (Terminal.text leg.symbol)
           (Terminal.text leg.account));
-    if
-      not
-        (yes
-         || Option.value_map
-              (prompt "Confirm transfer? [y/N]: ")
-              ~default:false
-              ~f:confirm_default_no)
+    let%bind confirmed = confirm ~yes ~destructive:false "Confirm transfer?" in
+    if not confirmed
     then (
       print_endline "Nothing changed.";
       Ok ())
@@ -6613,13 +6478,8 @@ let transfer_unlink database operation_id yes =
       "Transfer: operation #%Ld <-> #%Ld\n"
       link.first_operation_id
       link.second_operation_id;
-    if
-      not
-        (yes
-         || Option.value_map
-              (prompt "Undo transfer? [y/N]: ")
-              ~default:false
-              ~f:confirm_default_no)
+    let%bind confirmed = confirm ~yes ~destructive:false "Undo transfer?" in
+    if not confirmed
     then (
       print_endline "Nothing changed.";
       Ok ())
@@ -6647,7 +6507,7 @@ let transfer_export_cmd =
     Term.(const transfer_export $ database)
 ;;
 
-let transfer_restore database path apply yes =
+let transfer_restore database path yes =
   let%bind contents = read_file path in
   let%bind snapshot =
     match Json.decode Transfer_portable.codec contents with
@@ -6669,31 +6529,27 @@ let transfer_restore database path apply yes =
     then (
       print_endline "Problems (restore is blocked):";
       List.iter preview.problems ~f:(fun p -> printf "  %s\n" (Terminal.text p)));
-    if not apply
-    then (
-      print_endline "Preview only; pass --apply to restore.";
-      Ok ())
-    else if not (List.is_empty preview.problems)
+    if not (List.is_empty preview.problems)
     then Or_error.error_string "resolve transfer restore problems before applying"
-    else if
-      not
-        (yes
-         || Option.value_map
-              (prompt "Restore these transfers? [y/N]: ")
-              ~default:false
-              ~f:confirm_default_no)
+    else if List.is_empty preview.decisions && List.is_empty preview.general_decisions
     then (
-      print_endline "Nothing restored.";
+      print_endline "transfer_changes=0";
       Ok ())
     else (
-      let%map changed = Operations.restore_transfers db ~expected:preview snapshot in
-      printf "transfer_changes=%d\n" changed))
+      let%bind confirmed = confirm ~yes ~destructive:false "Restore these transfers?" in
+      if not confirmed
+      then (
+        print_endline "Nothing restored.";
+        Ok ())
+      else (
+        let%map changed = Operations.restore_transfers db ~expected:preview snapshot in
+        printf "transfer_changes=%d\n" changed)))
 ;;
 
 let transfer_restore_cmd =
   command
     "restore"
-    "Preview or restore confirmed transfer links."
+    "Restore confirmed transfer links; shows the changes and asks first."
     Term.(
       const transfer_restore
       $ database
@@ -6701,8 +6557,7 @@ let transfer_restore_cmd =
           required
           & pos 0 (some string) None
           & info [] ~docv:"FILE" ~doc:"Portable transfer snapshot.")
-      $ Arg.(value & flag & info [ "apply" ] ~doc:"Apply after reviewing the preview.")
-      $ Arg.(value & flag & info [ "yes" ] ~doc:"With --apply, skip confirmation."))
+      $ Arg.(value & flag & info [ "yes" ] ~doc:"Restore without asking, for scripts."))
 ;;
 
 let transfer_undo database first second yes =
@@ -6728,18 +6583,7 @@ let transfer_undo database first second yes =
       print_endline
         "Undo this confirmed transfer? Both movements will return to unclassified.";
       Terminal.review pair;
-      let%bind confirmed =
-        if yes
-        then Ok true
-        else if Unix.isatty Unix.stdin
-        then
-          Ok
-            (Option.value_map
-               (prompt "Undo this transfer? [Y/n]: ")
-               ~default:false
-               ~f:confirm_default_yes)
-        else Or_error.error_string "undo requires a terminal or --yes"
-      in
+      let%bind confirmed = confirm ~yes ~destructive:false "Undo this transfer?" in
       if not confirmed
       then (
         print_endline "Nothing changed.";
@@ -6810,18 +6654,7 @@ let reversal_review database original reversal undo yes =
     else (
       print_endline "Undo this confirmed reversal?";
       Terminal.review [ first; second ]);
-    let%bind confirmed =
-      if yes
-      then Ok true
-      else if Unix.isatty Unix.stdin
-      then
-        Ok
-          (Option.value_map
-             (prompt "Apply this decision? [Y/n]: ")
-             ~default:false
-             ~f:confirm_default_yes)
-      else Or_error.error_string "reversal review requires a terminal or --yes"
-    in
+    let%bind confirmed = confirm ~yes ~destructive:false "Apply this decision?" in
     if not confirmed
     then (
       print_endline "Nothing changed.";
@@ -7032,20 +6865,7 @@ let accounts_delete database account_id dry_run yes =
       Ok ())
     else (
       let%bind confirmed =
-        if yes
-        then Ok true
-        else if Unix.isatty Unix.stdin
-        then (
-          Out_channel.output_string stdout "Delete this account and its records? [Y/n]: ";
-          Out_channel.flush stdout;
-          Ok
-            (Option.value_map
-               (In_channel.input_line In_channel.stdin)
-               ~default:false
-               ~f:confirm_default_yes))
-        else
-          Or_error.error_string
-            "refusing to delete without confirmation; use --yes in scripts"
+        confirm ~yes ~destructive:true "Delete this account and its records?"
       in
       if not confirmed
       then (

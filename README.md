@@ -617,10 +617,10 @@ fin cat export > categories-portable.json
 fin operation export > transaction-decisions.json
 fin rule export > rules-portable.json
 fin transfer export > transfers-portable.json
-fin cat restore categories-portable.json                # preview
-fin operation restore transaction-decisions.json --apply        # confirm
-fin rule restore rules-portable.json --apply             # confirm
-fin transfer restore transfers-portable.json --apply      # confirm
+fin cat restore categories-portable.json                # shows changes, asks [Y/n]
+fin operation restore transaction-decisions.json
+fin rule restore rules-portable.json
+fin transfer restore transfers-portable.json
 ```
 
 The transaction file contains current category decisions and manual type overrides,
@@ -631,7 +631,7 @@ restore requires matching source identity and evidence and refuses conflicts or
 ambiguity. See the [manual](docs/manual.md#rebuilding-after-a-schema-change) for
 the full restore workflow and limitations. Keep a full database backup as well.
 Use `fin rule from-category OPERATION-ID NAME --contains TEXT` to preview a reusable
-review-mode rule from a categorized example; add `--save` to confirm and save it.
+review-mode rule from a categorized example; fin asks before saving it.
 
 Transfer candidates are shown by descending score and exclude movements already
 assigned an income or expense category. Reset a category to `equity:unclassified` before reviewing it as a

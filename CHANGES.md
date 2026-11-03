@@ -8,6 +8,17 @@ short line of their own.
 
 ## Unreleased
 
+- One confirmation convention everywhere: a command that changes data shows what
+  it will change, then asks `[Y/n]`, or `[y/N]` when it deletes data or replaces
+  state (`fin delete`, `fin restore`, deleting an institution, rule, account or
+  companion profile). `--yes` skips the question; without a terminal and without
+  `--yes` the command prints what it would change and fails. Answering `n` is the
+  way to preview. **Action required:** `fin operation restore`, `fin category
+  restore`, `fin rule restore`, `fin transfer restore` and `fin operation exchange
+  restore` no longer take `--apply`, and `fin rule from-category` no longer takes
+  `--save`; drop those flags from scripts and keep `--yes`. Confirming an
+  exchange or transfer and undoing a transfer now default to yes. A restore with
+  nothing to change skips the question and prints its summary with zero counts.
 - `fin operation export` and `fin operation restore` now say what they cover: the
   decisions on imported operations (categories, manual types, resolved accounts),
   never the operations themselves. Help text and manual only; behavior is unchanged.
