@@ -163,15 +163,17 @@ not fixed here). Existing: `opposite_principal`, `booking_dates`,
   payment fills the same columns for the merchant-side amount, and no second Wise
   row exists to pair with it.
 
-  On a real `CONVERSION` row (the credit leg of EUR to IDR), `Exchange To Amount`
-  equals the row's own amount: it states this leg's quantity, not the other
-  leg's. The other currency is structured (`Exchange From`), but the other
-  quantity appears only in the description ("Converted A EUR to B IDR"). Working
-  hypothesis, to confirm on the debit row: both legs carry the same `Exchange
-  From`, `Exchange To`, rate and `Exchange To Amount`, and nearly the same
-  timestamp, which would make the pairing key `(from, to, rate, to amount,
-  second)` with no prose parsing.
-- `fee_explained`: the quantity difference equals a fee the source reports.
+  Two real `CONVERSION` rows (a credit leg and a debit leg, from different
+  conversions) show how the legs relate. On the debit leg `Exchange To Amount` is
+  the counterpart's quantity; on the credit leg it equals the row's own amount;
+  so on both legs it is the credit quantity. The candidate key is therefore
+  structured and exact: the debit's currency equals the credit's `Exchange From`,
+  the credit's currency equals the debit's `Exchange To`, and the target amount
+  and rate agree, with timestamps close. No prose parsing and no identifier are
+  needed. Still to confirm on one real pair: that both legs carry identical
+  `Exchange From`, `Exchange To`, rate and `Exchange To Amount`.
+- `fee_explained`: the quantity difference equals a fee the source reports (for
+  Wise, `Total fees` on the debit leg).
 
 Ranking is unchanged in kind: score each pair, then an exact maximum-weight
 matching decides which candidates are supported (`Transfer_ranking.assignments`).
@@ -186,12 +188,14 @@ is posted explicitly to a fees account. Unexplained imbalances are refused, not
 absorbed into a generic account with a warning. A fee spread hidden in the
 exchange rate stays in the trading postings and is not separated out.
 
-Wise conversions show why this matters. The debit is gross of a fee deducted
-before converting, so `credit = (debit - fee) x rate`, and `Total fees` on the
-credit row can read 0.00. The fee is derivable (`debit - credit / rate`, about
-half a percent on the sample seen) but not reported on that leg. The pairing
-therefore carries a derived fee in the source currency, shown in the candidate so
-it can be checked against the debit row's own `Total fees` before it is posted.
+Wise conversions show why this matters. On the debit leg `Amount` is the net
+converted (`credit = net x rate`, to rounding), `Total fees` is the fee, and the
+description gives the gross (`net + fee`); the credit leg reports 0.00 fees. So
+the fee is read from the debit row, not derived, and the pairing posts it to the
+fees account in the debit's currency. The credit quantity is checked against
+`net x rate` within the rate's rounding, and a mismatch beyond that blocks the
+candidate. Whether the account balance moves by the net or by the gross is checked
+against consecutive `Running Balance` values before the projection is written.
 
 ### Commands
 
@@ -210,17 +214,20 @@ conversion.
 
 ### Data to verify before building
 
-- Which Wise row of a conversion carries the `Exchange To` columns (one leg or
-  both), and how exact `Exchange To Amount` is: a real foreign card row shows a
-  target amount that differs from the amount in its own description and a rate
-  rounded to five decimals, so treat it as approximate evidence, not as the
-  quantity to post, and whether the two legs share a `TransferWise ID`. The ID is a record
-  identity inside Wise and not a cross-institution key: the test fixture shows
-  `CARD-1` on both a purchase and its reversal, so it groups related rows rather
-  than naming one leg. Treat a shared ID as an optional hint (the existing
-  `shared_reference` evidence already scores it), never as a requirement. Without
-  either, date plus amounts is ambiguous when two conversions happen on one day,
-  and such cases stay manual.
+- One real Wise conversion as a pair: both legs should carry identical `Exchange
+  From`, `Exchange To`, rate and `Exchange To Amount` and near-identical
+  timestamps; this is the pairing key. Also check whether `Amount` on the debit
+  leg is always the net (the debit leg seen has `Amount` = net, `Total fees` = fee,
+  gross only in the description) and whether the balance moves by net or gross.
+  The rate is rounded (five decimals), so `net x rate` equals the credit only to
+  rounding, which is a tolerance, not a requirement of exact equality.
+- `TransferWise ID` is a record identity inside Wise, not a cross-institution key:
+  the test fixture shows `CARD-1` on both a purchase and its reversal, so it
+  groups related rows rather than naming one leg. A shared ID stays an optional
+  hint (the existing `shared_reference` evidence already scores it), never a
+  requirement. Foreign card rows fill the `Exchange` columns too (merchant-side
+  amount, which can differ from the amount in the row's description), so the
+  `CONVERSION` type gate stays.
 - Whether CDC deposits and withdrawals carry a hash that also appears on the
   counterparty side (another exchange, a wallet export, or a bank reference).
 - Whether Revolut and bunq conversions have the same two-row shape.
