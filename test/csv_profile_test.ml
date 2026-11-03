@@ -170,9 +170,9 @@ let integration () =
     "Merchant,Date,USD\nShop,2026-10-01,12.50\nShop,2026-10-01,12.50\nTotal,,25.00\n"
   in
   Or_error.ok_exn
-    (Finances.Store.with_open ~registry ":memory:" (fun db ->
+    (Finances_store.Store.with_open ~registry ":memory:" (fun db ->
        let import account content =
-         Finances.Store.import_bank_file
+         Finances_store.Store.import_bank_file
            ~account_label:account
            db
            ~institution:"csv"

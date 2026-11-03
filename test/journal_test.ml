@@ -1,6 +1,7 @@
 open Base
 open Stdio
 open Finances
+open Finances_store
 
 let ok = Or_error.ok_exn
 let error result = Alcotest.(check bool) "rejected" true (Result.is_error result)

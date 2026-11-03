@@ -1,5 +1,6 @@
 open Base
 open Finances
+open Finances_store
 
 (** Import and review progress. Counts are movements and candidate pairs, not
     monetary balances. Account date ranges describe observed records only. *)

@@ -1,6 +1,7 @@
 open Base
 open Stdio
 open Finances
+open Finances_store
 
 module Revolut_csv = Csv_running_source.Make (struct
     let profile = Option.value_exn (Builtin.running_profile "revolut")

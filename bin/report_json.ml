@@ -1,5 +1,6 @@
 open Base
 open Finances
+open Finances_store
 
 let timestamp =
   Jsont.map Jsont.string ~dec:Timestamp.of_rfc3339_exn ~enc:Timestamp.to_rfc3339

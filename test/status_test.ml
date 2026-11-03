@@ -1,6 +1,7 @@
 open Base
 open Stdio
 open Finances
+open Finances_store
 module Status = Finances_import.Bank_status
 
 let ok = Or_error.ok_exn

@@ -1,6 +1,7 @@
 open Base
 open Stdio
 open Finances
+open Finances_store
 
 type ignored =
   { path : string

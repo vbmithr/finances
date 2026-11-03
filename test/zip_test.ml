@@ -1,6 +1,6 @@
 open Base
 open Stdio
-open Finances
+open Finances_store
 
 let ok = Or_error.ok_exn
 let join = Stdlib.Filename.concat

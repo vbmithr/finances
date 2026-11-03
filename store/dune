@@ -1,0 +1,27 @@
+; The persistence layer: schema, ingest, review and projection over SQLite.
+; It reaches banks only through the registry it is given.
+
+(library
+ (name finances_store)
+ (public_name finances.store)
+ (private_modules db_schema sqlite_schema)
+ (flags
+  (:standard -open Finances_core -open Finances))
+ (libraries
+  finances
+  finances.core
+  base
+  stdio
+  bos
+  fpath
+  decimal
+  ptime
+  rel
+  rel.sqlite3
+  jsont
+  re
+  digestif
+  iban
+  iso4217)
+ (preprocess
+  (pps ppx_sexp_conv ppx_compare ppx_let)))

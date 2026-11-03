@@ -1,6 +1,7 @@
 open Base
 open Stdio
 open Finances
+open Finances_store
 
 let ok = Or_error.ok_exn
 let bos r = Result.map_error r ~f:(fun (`Msg m) -> Error.of_string m) |> ok

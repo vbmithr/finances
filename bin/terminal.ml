@@ -1,6 +1,7 @@
 open Base
 open Stdio
 open Finances
+open Finances_store
 
 (* Bank descriptions may contain newlines or terminal control characters. Keep
    them on one line without changing the source evidence or JSON representation. *)

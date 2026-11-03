@@ -1,5 +1,6 @@
 open Base
 open Finances
+open Finances_store
 
 let ok = Or_error.ok_exn
 let decimal = Quantity.of_string

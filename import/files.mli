@@ -30,7 +30,7 @@ val scan
   :  ?account_id:string
   -> ?max_file_bytes:int64
   -> ?exclude:string list
-  -> Finances.Store.t
+  -> Finances_store.Store.t
   -> institution:string
   -> paths:string list
   -> report Or_error.t

@@ -340,7 +340,7 @@ before upgrading, while the old executable can still read its database.
 Banks have no tables of their own: statements, companion observations, daily
 inventories and import contexts share generic tables keyed by institution and
 format.
-Tables are created from typed Rel definitions in `lib/db_schema.ml`. The same
+Tables are created from typed Rel definitions in `store/db_schema.ml`. The same
 columns supply Store's inserts and read projections. SQLite checks, strictness
 and immutability are declared alongside those tables through `Sqlite_schema`;
 there is no separate SQL schema to keep synchronized. See

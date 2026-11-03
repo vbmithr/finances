@@ -1,6 +1,7 @@
 open Base
 open Stdio
 open Finances
+open Finances_store
 
 let bunq_profile = Option.value_exn (Builtin.mt940_profile "bunq")
 let bunq_engine = Mt940_transaction.make bunq_profile

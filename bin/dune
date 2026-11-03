@@ -5,6 +5,7 @@
   (:standard -open Finances_core -open Finances_institutions))
  (libraries
   finances
+  finances.store
   finances.institutions
   finances.core
   finances.hledger

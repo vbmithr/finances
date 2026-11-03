@@ -6,7 +6,6 @@
 (library
  (name finances)
  (public_name finances)
- (private_modules db_schema sqlite_schema)
  (flags
   (:standard -open Finances_core))
  (libraries

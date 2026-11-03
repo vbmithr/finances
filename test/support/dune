@@ -2,6 +2,6 @@
  (name test_support)
  (flags
   (:standard -open Finances_core -open Finances_institutions))
- (libraries finances finances.core finances.institutions base)
+ (libraries finances finances.store finances.core finances.institutions base)
  (preprocess
   (pps ppx_let)))

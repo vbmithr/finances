@@ -1,5 +1,6 @@
 open Base
 open Finances
+open Finances_store
 
 (** A second OFX institution, registered only in tests, to check that
     identities are scoped by institution. *)

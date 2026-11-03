@@ -1,5 +1,6 @@
 open Base
 open Finances
+open Finances_store
 
 let header_text text =
   text

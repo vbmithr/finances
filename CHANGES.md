@@ -8,6 +8,12 @@ short line of their own.
 
 ## Unreleased
 
+- Internal: the 9,500-line `lib/store.ml` is now the `finances.store` library
+  (`store/`), split by domain into `Handle`, `Setup`, `Sources`, `Import`,
+  `Ledger`, `Review`, `Restore`, `Transfers`, `Accounts`, `Explain` and
+  `Operations`, with `Store` re-exporting them unchanged. `Db_schema`,
+  `Transfer_ranking` and `Category_similarity` moved with it. Library users
+  `open Finances_store` for `Store`; no user-visible change.
 - Reimporting a CDC file now checks each already-stored row's operation
   (occurrence, movement roles, commodities, quantities and source links) against
   the importer's interpretation and refuses a discrepancy with an error, leaving

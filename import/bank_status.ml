@@ -1,5 +1,6 @@
 open Base
 open Finances
+open Finances_store
 open Or_error.Let_syntax
 
 type t =
