@@ -386,9 +386,9 @@ order after importing the original sources.
 Use `fin import INSTITUTION PATH...` to read exports. This replaces the former
 `fin bank sync` command; update existing scripts to use `fin import`.
 Run `fin institution list` to list built-in and user-added institutions with their
-type: `bank` or `crypto exchange` (brokers are not modelled yet). Statement
-definitions are banks; a movement-CSV profile such as CDC declares its `type` in its
-JSON file (`bank` or `crypto-exchange`). `fin institution show`, without an
+type: `bank` or `crypto exchange` (brokers are not modelled yet). Every definition
+file, including the bundled ones, declares it with `"type": "bank"` or
+`"type": "crypto-exchange"`; it defaults to `bank` when omitted. `fin institution show`, without an
 argument, gives an overview of every institution: type, origin, how many movements
 and operations are imported, how many operations are still unresolved, and the
 first and last observed dates.

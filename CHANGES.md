@@ -9,9 +9,9 @@ short line of their own.
 ## Unreleased
 
 - Institutions have a type, `bank` or `crypto exchange`, shown by `fin institution
-  list` and `fin institution show`. Movement-CSV profiles declare it as `"type"`
-  (`bank` or `crypto-exchange`; required, so custom profiles need the field);
-  statement definitions are banks.
+  list` and `fin institution show`. Institution definitions and movement-CSV
+  profiles declare it as `"type"` (`bank` or `crypto-exchange`, default `bank`);
+  the bundled definitions state it explicitly.
 - `fin institution show` without an argument gives an overview of every
   institution (type, origin, movements, operations, unresolved, first and last
   dates), and `fin institution show cdc` now describes the CDC profile instead of

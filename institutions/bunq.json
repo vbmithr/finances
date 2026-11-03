@@ -1,6 +1,7 @@
 {
   "version": 1,
   "kind": "mt940-csv",
+  "type": "bank",
   "mt940": {
     "version": 1,
     "institution": "bunq",

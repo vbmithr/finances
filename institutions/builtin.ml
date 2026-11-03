@@ -25,16 +25,17 @@ let movement_profile name =
     List.mem (Movement_csv.names p) name ~equal:String.equal)
 ;;
 
-(** The type of a bundled institution: that of its movement profile, else a bank. *)
-let institution_type name =
-  match movement_profile name with
-  | Some profile -> profile.Movement_csv.institution_type
-  | None -> Institution_type.Bank
-;;
-
 let definition name =
   List.find definitions ~f:(fun d ->
     List.mem (Institution_definition.names d) name ~equal:String.equal)
+;;
+
+(** The type a bundled institution declares in its definition or movement profile. *)
+let institution_type name =
+  match definition name, movement_profile name with
+  | Some d, _ -> Some (Institution_definition.institution_type d)
+  | None, Some profile -> Some profile.Movement_csv.institution_type
+  | None, None -> None
 ;;
 
 (* Typed accessors for tests and tools that need one bundled profile. *)

@@ -1,6 +1,7 @@
 {
   "version": 1,
   "kind": "running-csv",
+  "type": "bank",
   "running": {
     "version": 1,
     "institution": "revolut",

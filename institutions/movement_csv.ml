@@ -198,7 +198,11 @@ let profile_codec =
   |> Jsont.Object.mem "version" (Json.version 1) ~enc:(fun _ -> ())
   |> Jsont.Object.mem "kind" (Json.tag "movement-csv") ~enc:(fun _ -> ())
   |> Jsont.Object.mem "institution" Jsont.string ~enc:(fun p -> p.institution)
-  |> Jsont.Object.mem "type" Institution_type.jsont ~enc:(fun p -> p.institution_type)
+  |> Jsont.Object.mem
+       "type"
+       Institution_type.jsont
+       ~dec_absent:Institution_type.Bank
+       ~enc:(fun p -> p.institution_type)
   |> Jsont.Object.mem "aliases" (Jsont.list Jsont.string) ~enc:(fun p -> p.aliases)
   |> Jsont.Object.mem "payload_tag" Jsont.string ~enc:(fun p -> p.payload_tag)
   |> Jsont.Object.mem "account" Jsont.string ~enc:(fun p -> p.account)

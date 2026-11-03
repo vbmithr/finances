@@ -2537,7 +2537,9 @@ let institution_entries database =
       else
         Some
           ( institution
-          , Builtin.institution_type institution
+          , Option.value
+              (Builtin.institution_type institution)
+              ~default:Institution_type.Bank
           , Built_in (List.tl_exn (Registry.aliases Builtin.registry institution)) ))
   in
   let defined =

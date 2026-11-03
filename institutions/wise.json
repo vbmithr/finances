@@ -1,6 +1,7 @@
 {
   "version": 1,
   "kind": "camt-csv",
+  "type": "bank",
   "camt": {
     "institution": "wise",
     "aliases": [],

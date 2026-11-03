@@ -32,6 +32,7 @@ type rule =
 
 type t =
   { source : source
+  ; institution_type : Institution_type.t
   ; rules : rule list
   }
 
@@ -174,13 +175,17 @@ let csv_codec =
 ;;
 
 let codec =
-  Jsont.Object.map (fun () kind ofx camt csv running mt940 rules ->
+  Jsont.Object.map (fun () kind institution_type ofx camt csv running mt940 rules ->
     match kind, ofx, camt, csv, running, mt940 with
-    | "ofx-csv", Some p, None, None, None, None -> { source = Ofx_csv p; rules }
-    | "camt-csv", None, Some p, None, None, None -> { source = Camt_csv p; rules }
-    | "csv", None, None, Some p, None, None -> { source = Csv p; rules }
-    | "running-csv", None, None, None, Some p, None -> { source = Running_csv p; rules }
-    | "mt940-csv", None, None, None, None, Some p -> { source = Mt940_csv p; rules }
+    | "ofx-csv", Some p, None, None, None, None ->
+      { source = Ofx_csv p; institution_type; rules }
+    | "camt-csv", None, Some p, None, None, None ->
+      { source = Camt_csv p; institution_type; rules }
+    | "csv", None, None, Some p, None, None -> { source = Csv p; institution_type; rules }
+    | "running-csv", None, None, None, Some p, None ->
+      { source = Running_csv p; institution_type; rules }
+    | "mt940-csv", None, None, None, None, Some p ->
+      { source = Mt940_csv p; institution_type; rules }
     | _ -> failwith "definition kind and source profile do not agree")
   |> Jsont.Object.mem "version" (Json.version 1) ~enc:(fun _ -> ())
   |> Jsont.Object.mem "kind" Jsont.string ~enc:(fun p ->
@@ -190,6 +195,11 @@ let codec =
     | Csv _ -> "csv"
     | Running_csv _ -> "running-csv"
     | Mt940_csv _ -> "mt940-csv")
+  |> Jsont.Object.mem
+       "type"
+       Institution_type.jsont
+       ~dec_absent:Institution_type.Bank
+       ~enc:(fun p -> p.institution_type)
   |> Jsont.Object.opt_mem "ofx" Institution_preset.codec ~enc:(fun p ->
     match p.source with
     | Ofx_csv p -> Some p
@@ -268,10 +278,7 @@ let aliases t =
 ;;
 
 let names t = institution t :: aliases t
-
-(* Every statement-based definition describes a bank account; an institution of
-   another type reads its files through a movement CSV profile instead. *)
-let institution_type (_ : t) = Institution_type.Bank
+let institution_type t = t.institution_type
 
 (* Default rules, in the shapes the registry and the store consume. A bundled
    definition's [Type] rules are named [INSTITUTION-default-NN] with priority

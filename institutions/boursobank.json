@@ -1,6 +1,7 @@
 {
   "version": 1,
   "kind": "ofx-csv",
+  "type": "bank",
   "ofx": {
     "institution": "boursobank",
     "aliases": [
