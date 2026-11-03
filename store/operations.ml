@@ -88,47 +88,33 @@ let get_operation_in_transaction db operation_id =
     ~movements
 ;;
 
-let operation_group db operation_id =
-  let query =
-    Rel_sql.Stmt.(
-      func
-        "SELECT bank_event_id FROM operations WHERE id=?"
-        (int64 @-> ret Row.(t1 (option Rel.Type.int64 "bank_event_id"))))
+let grouped_operation_in_transaction db groups operation_id =
+  let canonical = Operation_groups.canonical groups operation_id in
+  let* operations =
+    traverse
+      (get_operation_in_transaction db)
+      (Operation_groups.members groups operation_id)
   in
-  let* row = db_result (Db.first db.conn (query operation_id)) in
-  let* _ = Or_error.of_option row ~error:(Error.of_string "unknown operation") in
-  let* links = operation_transfer_links db in
-  match
-    List.find links ~f:(fun link ->
-      Int64.equal link.first_operation_id operation_id
-      || Int64.equal link.second_operation_id operation_id)
-  with
-  | None -> Ok (operation_id, None)
-  | Some link -> Ok (link.first_operation_id, Some link.second_operation_id)
-;;
-
-let grouped_operation_in_transaction db operation_id =
-  let* first_id, other = operation_group db operation_id in
-  let* first = get_operation_in_transaction db first_id in
-  match other with
-  | None -> Ok (first_id, first)
-  | Some other_id ->
-    let* second = get_operation_in_transaction db other_id in
-    let evidence =
-      List.dedup_and_sort (first.evidence @ second.evidence) ~compare:Poly.compare
-    in
+  match operations with
+  | [ only ] -> Ok (canonical, only)
+  | operations ->
+    let first = List.hd_exn operations in
     let* operation =
       Operation.create
         ~occurred:first.occurred
-        ~evidence
-        ~movements:(first.movements @ second.movements)
+        ~evidence:
+          (List.dedup_and_sort
+             (List.concat_map operations ~f:(fun o -> o.evidence))
+             ~compare:Poly.compare)
+        ~movements:(List.concat_map operations ~f:(fun o -> o.movements))
     in
-    Ok (first_id, operation)
+    Ok (canonical, operation)
 ;;
 
 let get_operation db operation_id =
   transaction db (fun db ->
-    let* _, operation = grouped_operation_in_transaction db operation_id in
+    let* groups = operation_groups db in
+    let* _, operation = grouped_operation_in_transaction db groups operation_id in
     Ok operation)
 ;;
 
@@ -142,11 +128,12 @@ let operations_for_event db event_id =
           (int64 @-> ret Row.(t1 (int64 "operation_id"))))
     in
     let* ids = collect db (query event_id) in
-    let* groups = traverse (operation_group db) ids in
+    let* groups = operation_groups db in
     let canonical =
-      List.map groups ~f:fst |> List.dedup_and_sort ~compare:Int64.compare
+      List.map ids ~f:(Operation_groups.canonical groups)
+      |> List.dedup_and_sort ~compare:Int64.compare
     in
-    traverse (grouped_operation_in_transaction db) canonical)
+    traverse (grouped_operation_in_transaction db groups) canonical)
 ;;
 
 type general_transfer_leg =

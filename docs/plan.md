@@ -491,7 +491,9 @@ position observations, derive positions from fills, or calculate funding.
   CDC exchanges and Wise conversions: design proposed 2026-11-03 in
   [operation-transactions.md](operation-transactions.md#grouping-movements-into-operations-proposal),
   with data checks before building. Decided: each side of a transfer posts on its own
-  date through a clearing account.
+  date through a clearing account. Step 1 done (2026-11-03): `Operation_groups` is the
+  single grouping decision, still fed only by confirmed transfer links. Next: post
+  confirmed transfers through the clearing account.
 - [ ] [Unify `fin operation` over operations](operation-transactions.md) (design agreed
   2026-11-02; command rename and step 1 done): `fin operation list` and
   `fin operation show` read operations, one row per operation; review decisions

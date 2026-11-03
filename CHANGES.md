@@ -8,6 +8,10 @@ short line of their own.
 
 ## Unreleased
 
+- Internal: one module, `Operation_groups`, now decides which stored operations read
+  as one; the operation list and operation lookups both use it. No user-visible
+  change. A database where an operation is named by two transfer links now reports
+  an error instead of hiding movements; fin does not create that state.
 - One confirmation convention everywhere: a command that changes data shows what
   it will change, then asks `[Y/n]`, or `[y/N]` when it deletes data or replaces
   state (`fin delete`, `fin restore`, deleting an institution, rule, account or

@@ -790,6 +790,12 @@ let operation_transfer_links db =
     rows
 ;;
 
+let operation_groups db =
+  let* links = operation_transfer_links db in
+  Operation_groups.of_links
+    (List.map links ~f:(fun link -> link.first_operation_id, link.second_operation_id))
+;;
+
 let operation_ids_for_events db event_ids =
   let* rows =
     collect
@@ -954,23 +960,23 @@ let operation_review db =
            })
       stored
   in
-  let* transfers = operation_transfer_links db in
+  let* groups = operation_groups db in
   let by_id = Hashtbl.create (module Int64) in
   List.iter rows ~f:(fun row -> Hashtbl.set by_id ~key:row.operation_id ~data:row);
-  let secondary = Hashtbl.create (module Int64) in
-  List.iter transfers ~f:(fun link ->
-    let first = link.first_operation_id
-    and second = link.second_operation_id in
-    match Hashtbl.find by_id first, Hashtbl.find by_id second with
-    | Some a, Some b ->
-      Hashtbl.set by_id ~key:first ~data:{ a with movements = a.movements @ b.movements };
-      Hashtbl.set secondary ~key:second ~data:()
-    | _ -> ());
   Ok
     (List.filter_map rows ~f:(fun row ->
-       if Hashtbl.mem secondary row.operation_id
-       then None
-       else Hashtbl.find by_id row.operation_id))
+       Option.some_if
+         (Int64.equal
+            (Operation_groups.canonical groups row.operation_id)
+            row.operation_id)
+         { row with
+           movements =
+             List.concat_map
+               (Operation_groups.members groups row.operation_id)
+               ~f:(fun id ->
+                 Option.value_map (Hashtbl.find by_id id) ~default:[] ~f:(fun r ->
+                   r.movements))
+         }))
 ;;
 
 let validate_commodity_symbol commodity symbol =

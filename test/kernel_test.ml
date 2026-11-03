@@ -769,6 +769,27 @@ let cdc_reimport_validates_movements () =
         (List.mem quantities "-999" ~equal:String.equal)))
 ;;
 
+let operation_groups () =
+  let groups = ok (Operation_groups.of_links [ 9L, 4L; 2L, 3L ]) in
+  let check = Alcotest.(check (list int64)) in
+  check "an unlinked operation is alone" [ 7L ] (Operation_groups.members groups 7L);
+  Alcotest.(check int64) "alone reads as itself" 7L (Operation_groups.canonical groups 7L);
+  (* The canonical ID is the link's first, even when it is not the smallest. *)
+  Alcotest.(check int64) "member reads as first" 9L (Operation_groups.canonical groups 4L);
+  check "first comes first" [ 9L; 4L ] (Operation_groups.members groups 4L);
+  check "same group from either side" [ 9L; 4L ] (Operation_groups.members groups 9L);
+  let refused links =
+    Alcotest.(check bool)
+      "an operation belongs to one group"
+      true
+      (Result.is_error (Operation_groups.of_links links))
+  in
+  refused [ 1L, 2L; 2L, 3L ];
+  refused [ 1L, 2L; 3L, 2L ];
+  refused [ 1L, 2L; 1L, 3L ];
+  refused [ 1L, 1L ]
+;;
+
 let exchange_accounting () =
   let eur = Commodity.fiat (Option.value_exn (Iso4217.of_alpha_code "EUR")) in
   let usd = Commodity.fiat (Option.value_exn (Iso4217.of_alpha_code "USD")) in
@@ -881,7 +902,8 @@ let () =
           ]
           ~f:(fun (name, f) -> Alcotest.test_case name `Quick f) )
     ; ( "model"
-      , [ Alcotest.test_case "shared temporal codec" `Quick temporal_codec
+      , [ Alcotest.test_case "operation groups" `Quick operation_groups
+        ; Alcotest.test_case "shared temporal codec" `Quick temporal_codec
         ; Alcotest.test_case "commodity identity" `Quick commodity_identity
         ; Alcotest.test_case "multi-movement operations" `Quick operation_model
         ; Alcotest.test_case "accounting invariants" `Quick accounting_invariants
