@@ -236,6 +236,10 @@ fin rule restore ~/fin-rules-portable.json
 fin rule restore ~/fin-rules-portable.json --apply
 ```
 
+`fin operation export` and `fin operation restore` handle decisions only: they never
+import or create operations, which come from `fin import`, and a decision that
+matches no imported operation is a preview problem that blocks `--apply`.
+
 Each command previews first. `--apply` previews again and asks for confirmation;
 `--yes` skips the prompt. The catalog export contains category names only. The
 transaction export contains current category decisions, including explicit

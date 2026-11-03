@@ -8,6 +8,9 @@ short line of their own.
 
 ## Unreleased
 
+- `fin operation export` and `fin operation restore` now say what they cover: the
+  decisions on imported operations (categories, manual types, resolved accounts),
+  never the operations themselves. Help text and manual only; behavior is unchanged.
 - Institutions have a type, `bank` or `crypto exchange`, shown by `fin institution
   list` and `fin institution show`. Institution definitions and movement-CSV
   profiles declare it as `"type"` (`bank` or `crypto-exchange`, default `bank`);

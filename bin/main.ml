@@ -5552,8 +5552,8 @@ let portable_export scope database =
     Ok ())
 ;;
 
-let portable_export_cmd scope doc =
-  command "export" doc Term.(const (portable_export scope) $ database)
+let portable_export_cmd ?man scope doc =
+  command ?man "export" doc Term.(const (portable_export scope) $ database)
 ;;
 
 let category_export_cmd =
@@ -5563,7 +5563,21 @@ let category_export_cmd =
 let category_decisions_export_cmd =
   portable_export_cmd
     Category_decisions
-    "Export transaction categories and manual type overrides as portable JSON."
+    "Export your decisions on operations (categories, manual types, resolved accounts) \
+     as JSON."
+    ~man:
+      [ `S Manpage.s_description
+      ; `P
+          "Writes the decisions you made on imported operations: transaction categories \
+           (including explicit resets), manual movement-type overrides and the accounts \
+           and commodities you resolved for movements. The operations themselves are not \
+           exported; they come back from $(b,fin import). Use $(b,fin operation restore) \
+           to re-apply the file to a rebuilt database."
+      ; `P
+          "Transfers, exchanges, rules and the category catalog have their own export \
+           commands: $(b,fin transfer export), $(b,fin operation exchange export), \
+           $(b,fin rule export) and $(b,fin category export)."
+      ]
 ;;
 
 let rules_export_cmd = portable_export_cmd Rules "Export stored rules as portable JSON."
@@ -5671,7 +5685,7 @@ let portable_restore scope database path apply yes institution =
         Ok ())))
 ;;
 
-let portable_restore_cmd scope doc =
+let portable_restore_cmd ?man scope doc =
   let institution =
     match scope with
     | Category_decisions ->
@@ -5686,6 +5700,7 @@ let portable_restore_cmd scope doc =
     | Catalog | Rules -> Term.const None
   in
   command
+    ?man
     "restore"
     doc
     Term.(
@@ -5712,7 +5727,26 @@ let category_restore_cmd =
 let category_decisions_restore_cmd =
   portable_restore_cmd
     Category_decisions
-    "Preview or restore transaction categories and manual type overrides."
+    "Preview or re-apply saved decisions (categories, manual types, resolved accounts) \
+     to imported operations."
+    ~man:
+      [ `S Manpage.s_description
+      ; `P
+          "Reads a file written by $(b,fin operation export) and re-applies the \
+           decisions it holds to operations that are already imported: transaction \
+           categories (including explicit resets), manual movement-type overrides and \
+           the accounts and commodities you resolved for movements."
+      ; `P
+          "It never imports statements or creates operations; those come only from \
+           $(b,fin import), so run that first. Each decision is matched to its operation \
+           by source identity. A decision that matches nothing is reported as a problem \
+           in the preview and blocks $(b,--apply); it is never created. Without \
+           $(b,--apply) it only previews."
+      ; `P
+          "Transfers, exchanges, rules and the category catalog have their own restore \
+           commands: $(b,fin transfer restore), $(b,fin operation exchange restore), \
+           $(b,fin rule restore) and $(b,fin category restore)."
+      ]
 ;;
 
 let rules_restore_cmd = portable_restore_cmd Rules "Preview or restore stored rules."
