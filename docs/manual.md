@@ -1040,7 +1040,6 @@ Save confirmed transfers separately before rebuilding:
 ```sh
 fin transfer export > transfers.json
 fin transfer restore transfers.json
-fin transfer restore transfers.json
 ```
 
 Restore after importing the sources and restoring account mappings and movement
@@ -1527,7 +1526,6 @@ fin rule list
 To draft a reusable personal rule from an already categorized transaction:
 
 ```sh
-fin rule from-category 123 cafes --contains 'Coffee Shop'
 fin rule from-category 123 cafes --contains 'Coffee Shop'
 fin rule preview cafes
 fin rule apply cafes
