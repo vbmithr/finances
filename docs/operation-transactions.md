@@ -158,7 +158,10 @@ not fixed here). Existing: `opposite_principal`, `booking_dates`,
   carry `Exchange From`, `Exchange To`, `Exchange Rate` and `Exchange To Amount`;
   fin reads them today only to compare for conflicts. A row whose stated target
   currency and amount equal another row's currency and amount (same day, same
-  institution) is strong evidence, and it needs no identifier.
+  institution) is strong evidence, and it needs no identifier. It applies only to
+  rows whose `Transaction Details Type` is `CONVERSION`: a foreign-currency card
+  payment fills the same columns for the merchant-side amount, and no second Wise
+  row exists to pair with it.
 - `fee_explained`: the quantity difference equals a fee the source reports.
 
 Ranking is unchanged in kind: score each pair, then an exact maximum-weight
@@ -192,7 +195,10 @@ conversion.
 ### Data to verify before building
 
 - Which Wise row of a conversion carries the `Exchange To` columns (one leg or
-  both), and whether the two legs share a `TransferWise ID`. The ID is a record
+  both), and how exact `Exchange To Amount` is: a real foreign card row shows a
+  target amount that differs from the amount in its own description and a rate
+  rounded to five decimals, so treat it as approximate evidence, not as the
+  quantity to post, and whether the two legs share a `TransferWise ID`. The ID is a record
   identity inside Wise and not a cross-institution key: the test fixture shows
   `CARD-1` on both a purchase and its reversal, so it groups related rows rather
   than naming one leg. Treat a shared ID as an optional hint (the existing
