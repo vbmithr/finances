@@ -22,7 +22,7 @@ let workspace f =
     ~finally:(fun () -> remove root)
     ~f:(fun () ->
       ok
-        (Store.with_open ~registry:Builtin.registry (join root "fin.sqlite3") (fun db ->
+        (Setup.with_open ~registry:Builtin.registry (join root "fin.sqlite3") (fun db ->
            f root db;
            Ok ())))
 ;;
@@ -54,7 +54,7 @@ let count report outcome =
 ;;
 
 let check label expected actual = Alcotest.(check int) label expected actual
-let events db = List.length (ok (Store.events db))
+let events db = List.length (ok (Ledger.events db))
 
 let import_and_replay () =
   List.iter [ false; true ] ~f:(fun compress ->
@@ -74,7 +74,7 @@ let import_and_replay () =
       write extracted contents;
       check "extracted copy unchanged" 1 (count (scan db [ extracted ]) Unchanged);
       check "movements unchanged" n (events db);
-      ignore (ok (Store.project_bank db));
+      ignore (ok (Ledger.project_bank db));
       let journal = ok (Finances_hledger.export db) in
       ignore (scan db [ path; extracted ]);
       Alcotest.(check string) "journal stable" journal (ok (Finances_hledger.export db))))
@@ -96,8 +96,8 @@ let companions_and_filters () =
     check "primary and companion imported" 2 (count report Imported);
     check "unrelated member bytes reported" 1 (count report Unsupported);
     check "hidden and partial members ignored" 2 (List.length report.ignored);
-    ignore (ok (Store.match_companions db));
-    ignore (ok (Store.project_bank db));
+    ignore (ok (Ledger.match_companions db));
+    ignore (ok (Ledger.project_bank db));
     let journal = ok (Finances_hledger.export db) in
     Alcotest.(check bool)
       "companion enrichment retained"

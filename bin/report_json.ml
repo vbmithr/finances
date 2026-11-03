@@ -165,7 +165,7 @@ let source_event =
 ;;
 
 let account =
-  let field name codec (enc : Store.bank_account_info -> _) map =
+  let field name codec (enc : Transfers.bank_account_info -> _) map =
     Jsont.Object.mem name codec ~enc map
   in
   Jsont.Object.enc_only ()
@@ -200,7 +200,7 @@ let named_count field_name =
 ;;
 
 let transaction_status =
-  let field name codec (enc : Store.transaction_status -> _) map =
+  let field name codec (enc : Review.transaction_status -> _) map =
     Jsont.Object.mem name codec ~enc map
   in
   Jsont.Object.enc_only ()
@@ -282,7 +282,7 @@ let import =
 ;;
 
 let statement =
-  let field name codec (enc : Store.statement_reconciliation -> _) map =
+  let field name codec (enc : Review.statement_reconciliation -> _) map =
     Jsont.Object.mem name codec ~enc map
   in
   Jsont.Object.enc_only ()
@@ -304,7 +304,7 @@ let statement =
 ;;
 
 let statements =
-  let field name codec (enc : Store.statement_reconciliation list -> _) map =
+  let field name codec (enc : Review.statement_reconciliation list -> _) map =
     Jsont.Object.mem name codec ~enc map
   in
   Jsont.Object.enc_only ()
@@ -313,7 +313,7 @@ let statements =
 ;;
 
 let review =
-  let field name codec (enc : Store.bank_review -> _) map =
+  let field name codec (enc : Review.bank_review -> _) map =
     Jsont.Object.mem name codec ~enc map
   in
   Jsont.Object.enc_only ()
@@ -339,7 +339,7 @@ let review =
   |> field "account" Jsont.string (fun r -> r.counter_account)
   |> field "decision" Jsont.string (fun r ->
     match r.classification with
-    | Store.Unclassified -> "unclassified"
+    | Review.Unclassified -> "unclassified"
     | Category -> "category"
     | Transfer -> "transfer"
     | Settlement -> "settlement"
@@ -363,7 +363,7 @@ let category_similar =
 
 type transaction =
   { account_id : string
-  ; review : Store.bank_review
+  ; review : Review.bank_review
   }
 
 let transaction =
@@ -396,7 +396,7 @@ let transaction =
   |> field "counter_account" Jsont.string (fun r -> r.review.counter_account)
   |> field "decision" Jsont.string (fun r ->
     match r.review.classification with
-    | Store.Unclassified -> "unclassified"
+    | Review.Unclassified -> "unclassified"
     | Category -> "category"
     | Transfer -> "transfer"
     | Settlement -> "settlement"
@@ -405,9 +405,9 @@ let transaction =
   |> Jsont.Object.finish
 ;;
 
-let decision_name (r : Store.bank_review) =
+let decision_name (r : Review.bank_review) =
   match r.classification with
-  | Store.Unclassified -> "unclassified"
+  | Review.Unclassified -> "unclassified"
   | Category -> "category"
   | Transfer -> "transfer"
   | Settlement -> "settlement"
@@ -415,7 +415,7 @@ let decision_name (r : Store.bank_review) =
 ;;
 
 let operation_row_movement =
-  let field name codec (enc : Store.operation_movement_review -> _) map =
+  let field name codec (enc : Review.operation_movement_review -> _) map =
     Jsont.Object.mem name codec ~enc map
   in
   Jsont.Object.enc_only ()
@@ -435,14 +435,14 @@ let operation_row_movement =
 
 type operation_row =
   { account_id : string option
-  ; operation : Store.operation_review
+  ; operation : Review.operation_review
   ; movement_rows : transaction list
   }
 
 (* The one movement of a single-movement operation. Its amount and commodity are
    what a bank row reports, so they fill the flat fields when there is no bank
    review row. *)
-let single_movement (operation : Store.operation_review) =
+let single_movement (operation : Review.operation_review) =
   match operation.movements with
   | [ m ] -> Some m
   | _ -> None
@@ -450,10 +450,10 @@ let single_movement (operation : Store.operation_review) =
 
 (* A one-movement operation with a fiat commodity reports that currency in the
    flat field, as a bank row always did. Crypto symbols stay in [movements]. *)
-let single_currency (operation : Store.operation_review) =
+let single_currency (operation : Review.operation_review) =
   match operation.movements with
   | [ m ] ->
-    (match m.Store.commodity with
+    (match m.Review.commodity with
      | Commodity.Fiat currency -> Some currency
      | _ -> None)
   | _ -> None
@@ -475,7 +475,7 @@ let operation_row =
   |> field "amount" (Jsont.option Json.quantity) (fun r ->
     Option.first_some
       (Option.map r.operation.review ~f:(fun review -> review.transaction.amount))
-      (Option.map (single_movement r.operation) ~f:(fun m -> m.Store.quantity)))
+      (Option.map (single_movement r.operation) ~f:(fun m -> m.Review.quantity)))
   |> field "fee" (Jsont.option Json.quantity) (fun r ->
     Option.map r.operation.review ~f:(fun review -> review.transaction.fee))
   |> field "currency" (Jsont.option Json.currency) (fun r ->
@@ -524,7 +524,7 @@ let operation_row =
 ;;
 
 let movement_type_change =
-  let field name codec (enc : Store.movement_type_history_entry -> _) map =
+  let field name codec (enc : Restore.movement_type_history_entry -> _) map =
     Jsont.Object.mem name codec ~enc map
   in
   Jsont.Object.enc_only ()
@@ -540,7 +540,7 @@ let movement_type_change =
 ;;
 
 let card_settlement_change =
-  let field name codec (enc : Store.card_settlement_change -> _) map =
+  let field name codec (enc : Transfers.card_settlement_change -> _) map =
     Jsont.Object.mem name codec ~enc map
   in
   Jsont.Object.enc_only ()
@@ -584,7 +584,7 @@ let classification_rule =
 ;;
 
 let classification_rule_match =
-  let field name codec (enc : Store.classification_rule_match -> _) map =
+  let field name codec (enc : Accounts.classification_rule_match -> _) map =
     Jsont.Object.mem name codec ~enc map
   in
   Jsont.Object.enc_only ()
@@ -598,7 +598,7 @@ let classification_rule_match =
 ;;
 
 let category_change =
-  let field name codec (enc : Store.category_change -> _) map =
+  let field name codec (enc : Review.category_change -> _) map =
     Jsont.Object.mem name codec ~enc map
   in
   Jsont.Object.enc_only ()
@@ -647,7 +647,7 @@ let leg =
 ;;
 
 let candidate =
-  let field name codec (enc : Store.transfer_candidate -> _) map =
+  let field name codec (enc : Transfers.transfer_candidate -> _) map =
     Jsont.Object.mem name codec ~enc map
   in
   Jsont.Object.enc_only ()
@@ -665,7 +665,7 @@ let candidate =
 ;;
 
 let transfer_change =
-  let field name codec (enc : Store.transfer_change -> _) map =
+  let field name codec (enc : Transfers.transfer_change -> _) map =
     Jsont.Object.mem name codec ~enc map
   in
   Jsont.Object.enc_only ()
@@ -718,7 +718,7 @@ let ranked =
 ;;
 
 let excluded =
-  let field name codec (enc : Store.transfer_candidate -> _) map =
+  let field name codec (enc : Transfers.transfer_candidate -> _) map =
     Jsont.Object.mem name codec ~enc map
   in
   Jsont.Object.enc_only ()
@@ -744,7 +744,7 @@ let preview =
   let field
         name
         codec
-        (enc : Transfer_ranking.ranked list * Store.transfer_candidate list -> _)
+        (enc : Transfer_ranking.ranked list * Transfers.transfer_candidate list -> _)
         map
     =
     Jsont.Object.mem name codec ~enc map
@@ -758,7 +758,7 @@ let preview =
   |> field "component_vertex_limit" Json.integer (fun _r ->
     Transfer_ranking.max_component_vertices)
   |> field "excluded_pairs" (Jsont.list excluded) (fun r ->
-    List.filter (snd r) ~f:(fun c -> not c.Store.iban_compatible))
+    List.filter (snd r) ~f:(fun c -> not c.Transfers.iban_compatible))
   |> field "all_pairs" (Jsont.list candidate) snd
   |> field "proposed_pairs" (Jsont.list proposed) (fun r ->
     List.filter (fst r) ~f:(fun r ->
@@ -797,7 +797,7 @@ let change_value =
     ()
 ;;
 
-let change_value_of_text (r : Store.account_change) value =
+let change_value_of_text (r : Accounts.account_change) value =
   Option.map value ~f:(fun text ->
     if String.equal r.kind "settlement_account"
     then
@@ -806,7 +806,7 @@ let change_value_of_text (r : Store.account_change) value =
 ;;
 
 let account_change =
-  let field name codec (enc : Store.account_change -> _) map =
+  let field name codec (enc : Accounts.account_change -> _) map =
     Jsont.Object.mem name codec ~enc map
   in
   Jsont.Object.enc_only ()
@@ -822,7 +822,7 @@ let account_change =
 ;;
 
 let account_config =
-  let field name codec (enc : bool * Store.account_config_report -> _) map =
+  let field name codec (enc : bool * Accounts.account_config_report -> _) map =
     Jsont.Object.mem name codec ~enc map
   in
   Jsont.Object.enc_only ()
@@ -846,26 +846,26 @@ let paths =
 
 let companion =
   Jsont.Object.enc_only ()
-  |> Jsont.Object.mem "row_id" Json.int64_codec ~enc:(fun (o, _) -> o.Store.row.row_id)
+  |> Jsont.Object.mem "row_id" Json.int64_codec ~enc:(fun (o, _) -> o.Ledger.row.row_id)
   |> Jsont.Object.mem "document_id" Json.int64_codec ~enc:(fun (o, _) ->
-    o.Store.row.document_id)
+    o.Ledger.row.document_id)
   |> Jsont.Object.mem "row_number" Json.integer ~enc:(fun (o, _) ->
-    o.Store.row.row_number)
+    o.Ledger.row.row_number)
   |> Jsont.Object.mem "institution" Jsont.string ~enc:(fun (o, _) ->
-    o.Store.row.institution)
-  |> Jsont.Object.mem "format" Jsont.string ~enc:(fun (o, _) -> o.Store.row.format)
+    o.Ledger.row.institution)
+  |> Jsont.Object.mem "format" Jsont.string ~enc:(fun (o, _) -> o.Ledger.row.format)
   |> Jsont.Object.mem "event_id" (Jsont.option Json.int64_codec) ~enc:(fun (o, _) ->
-    Option.bind o.Store.matching ~f:(fun m -> m.event_id))
+    Option.bind o.Ledger.matching ~f:(fun m -> m.event_id))
   |> Jsont.Object.mem "state" Jsont.string ~enc:(fun (o, _) ->
-    Option.value_map o.Store.matching ~default:"pending" ~f:(fun m ->
+    Option.value_map o.Ledger.matching ~default:"pending" ~f:(fun m ->
       Bank_match.state_name m.state))
   |> Jsont.Object.mem "reason" (Jsont.option Jsont.string) ~enc:(fun (o, _) ->
-    Option.map o.Store.matching ~f:(fun m -> m.reason))
+    Option.map o.Ledger.matching ~f:(fun m -> m.reason))
   |> Jsont.Object.mem
        "candidate_event_ids"
        (Jsont.list Json.int64_codec)
        ~enc:(fun (o, _) ->
-         Option.value_map o.Store.matching ~default:[] ~f:(fun m -> m.candidates))
+         Option.value_map o.Ledger.matching ~default:[] ~f:(fun m -> m.candidates))
   |> Jsont.Object.keep_unknown (Json.members (Jsont.option Jsont.string)) ~enc:snd
   |> Jsont.Object.finish
 ;;
@@ -877,7 +877,7 @@ let type_rule_outcome =
     Jsont.string
     ~dec:(fun _ -> failwith "report encoding only")
     ~enc:(function
-      | Store.Newly_typed -> "newly-typed"
+      | Explain.Newly_typed -> "newly-typed"
       | Changed -> "changed"
       | Unchanged -> "unchanged"
       | Shadowed _ -> "shadowed"
@@ -885,7 +885,7 @@ let type_rule_outcome =
 ;;
 
 let type_rule_row =
-  let field name codec (enc : Store.type_rule_row -> _) map =
+  let field name codec (enc : Explain.type_rule_row -> _) map =
     Jsont.Object.mem name codec ~enc map
   in
   Jsont.Object.enc_only ()
@@ -905,7 +905,7 @@ let type_rule_row =
 ;;
 
 let type_rule_test =
-  let field name codec (enc : Store.type_rule_test -> _) map =
+  let field name codec (enc : Explain.type_rule_test -> _) map =
     Jsont.Object.mem name codec ~enc map
   in
   Jsont.Object.enc_only ()
@@ -917,7 +917,7 @@ let type_rule_test =
 ;;
 
 let description_gap =
-  let field name codec (enc : Store.description_gap -> _) map =
+  let field name codec (enc : Explain.description_gap -> _) map =
     Jsont.Object.mem name codec ~enc map
   in
   Jsont.Object.enc_only ()

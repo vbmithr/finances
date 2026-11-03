@@ -19,7 +19,7 @@ let with_database f =
 
 let with_store path f =
   ok
-    (Store.with_open ~registry:Test_support.registry path (fun db ->
+    (Setup.with_open ~registry:Test_support.registry path (fun db ->
        f db;
        Ok ()))
 ;;
@@ -56,13 +56,13 @@ let event
 ;;
 
 let inserted = function
-  | Store.Inserted id -> id
-  | Store.Existing _ -> failwith "expected a new record"
+  | Handle.Inserted id -> id
+  | Handle.Existing _ -> failwith "expected a new record"
 ;;
 
 let existing expected = function
-  | Store.Existing id -> Alcotest.(check int64) "same record" expected id
-  | Store.Inserted _ -> failwith "expected an existing record"
+  | Handle.Existing id -> Alcotest.(check int64) "same record" expected id
+  | Handle.Inserted _ -> failwith "expected an existing record"
 ;;
 
 let posting ?(commodity = "USDC") account quantity =
@@ -84,15 +84,15 @@ let replay () =
     let original = event ~payload:"raw\000payload\n" "deposit-1" in
     let id =
       ok
-        (Store.with_open ~registry:Test_support.registry path (fun db ->
-           Store.ingest db original))
+        (Setup.with_open ~registry:Test_support.registry path (fun db ->
+           Sources.ingest db original))
       |> inserted
     in
     with_store path (fun db ->
-      existing id (ok (Store.ingest db original));
-      error (Store.ingest db (event ~payload:"changed" "deposit-1"));
-      error (Store.ingest db (event ~at:2L "deposit-1"));
-      let stored_id, stored = List.hd_exn (ok (Store.events db)) in
+      existing id (ok (Sources.ingest db original));
+      error (Sources.ingest db (event ~payload:"changed" "deposit-1"));
+      error (Sources.ingest db (event ~at:2L "deposit-1"));
+      let stored_id, stored = List.hd_exn (ok (Ledger.events db)) in
       Alcotest.(check int64) "identity survived reopening" id stored_id;
       Alcotest.(check string)
         "payload preserved byte for byte"
@@ -105,11 +105,11 @@ let source_scoping () =
     with_store path (fun db ->
       List.iter
         [ event "same"; event ~account:"subaccount" "same"; event ~kind:"funding" "same" ]
-        ~f:(fun e -> ignore (inserted (ok (Store.ingest db e))));
+        ~f:(fun e -> ignore (inserted (ok (Sources.ingest db e))));
       Alcotest.(check int)
         "three distinct identities"
         3
-        (List.length (ok (Store.events db)))))
+        (List.length (ok (Ledger.events db)))))
 ;;
 
 let chronology () =
@@ -117,11 +117,11 @@ let chronology () =
     with_store path (fun db ->
       List.iter
         [ event ~at:9L "later"; event ~at:1L "earlier" ]
-        ~f:(fun e -> ignore (ok (Store.ingest db e)));
+        ~f:(fun e -> ignore (ok (Sources.ingest db e)));
       Alcotest.(check (list string))
         "event time ordering"
         [ "earlier"; "later" ]
-        (List.map (ok (Store.events db)) ~f:(fun (_, e) -> e.source_id))))
+        (List.map (ok (Ledger.events db)) ~f:(fun (_, e) -> e.source_id))))
 ;;
 
 let accounting_invariants () =
@@ -150,28 +150,28 @@ let journal_replay () =
   with_database (fun path ->
     let event_id =
       ok
-        (Store.with_open ~registry:Test_support.registry path (fun db ->
-           Store.ingest db (event "deposit")))
+        (Setup.with_open ~registry:Test_support.registry path (fun db ->
+           Sources.ingest db (event "deposit")))
       |> inserted
     in
     let original = entry () in
     let entry_id =
       ok
-        (Store.with_open ~registry:Test_support.registry path (fun db ->
-           Store.record_entry db ~event_id ~key:"collateral:v1" original))
+        (Setup.with_open ~registry:Test_support.registry path (fun db ->
+           Ledger.record_entry db ~event_id ~key:"collateral:v1" original))
       |> inserted
     in
     with_store path (fun db ->
       existing
         entry_id
-        (ok (Store.record_entry db ~event_id ~key:"collateral:v1" original));
+        (ok (Ledger.record_entry db ~event_id ~key:"collateral:v1" original));
       error
-        (Store.record_entry
+        (Ledger.record_entry
            db
            ~event_id
            ~key:"collateral:v1"
            (entry ~description:"Changed" ()));
-      let entries = ok (Store.entries db) in
+      let entries = ok (Ledger.entries db) in
       Alcotest.(check int) "one journal entry" 1 (List.length entries);
       let _, _, stored = List.hd_exn entries in
       List.iter2_exn original.postings stored.postings ~f:(fun a b ->
@@ -184,16 +184,16 @@ let journal_replay () =
 let foreign_keys () =
   with_database (fun path ->
     with_store path (fun db ->
-      error (Store.record_entry db ~event_id:999L ~key:"missing" (entry ()));
-      Alcotest.(check int) "no orphaned entry" 0 (List.length (ok (Store.entries db)))))
+      error (Ledger.record_entry db ~event_id:999L ~key:"missing" (entry ()));
+      Alcotest.(check int) "no orphaned entry" 0 (List.length (ok (Ledger.entries db)))))
 ;;
 
 let rollback () =
   with_database (fun path ->
     let event_id =
       ok
-        (Store.with_open ~registry:Test_support.registry path (fun db ->
-           Store.ingest db (event "deposit")))
+        (Setup.with_open ~registry:Test_support.registry path (fun db ->
+           Sources.ingest db (event "deposit")))
       |> inserted
     in
     raw path (fun db ->
@@ -204,32 +204,32 @@ CREATE TRIGGER reject_second BEFORE INSERT ON postings WHEN NEW.ordinal = 1
 BEGIN SELECT RAISE(ABORT, 'injected failure'); END;
 |});
     with_store path (fun db ->
-      error (Store.record_entry db ~event_id ~key:"collateral:v1" (entry ()));
+      error (Ledger.record_entry db ~event_id ~key:"collateral:v1" (entry ()));
       Alcotest.(check int)
         "header and postings rolled back"
         0
-        (List.length (ok (Store.entries db))));
+        (List.length (ok (Ledger.entries db))));
     raw path (fun db -> sql db "DROP TRIGGER reject_second");
     with_store path (fun db ->
       ignore
-        (inserted (ok (Store.record_entry db ~event_id ~key:"collateral:v1" (entry ()))))))
+        (inserted (ok (Ledger.record_entry db ~event_id ~key:"collateral:v1" (entry ()))))))
 ;;
 
 let immutable_evidence () =
   with_database (fun path ->
-    with_store path (fun db -> ignore (ok (Store.ingest db (event "deposit"))));
+    with_store path (fun db -> ignore (ok (Sources.ingest db (event "deposit"))));
     raw path (fun db ->
       error (Rel_sqlite3.exec_sql db "UPDATE source_events SET payload=x'00'");
       error (Rel_sqlite3.exec_sql db "DELETE FROM source_events"));
     with_store path (fun db ->
-      Alcotest.(check int) "evidence survives" 1 (List.length (ok (Store.events db)))))
+      Alcotest.(check int) "evidence survives" 1 (List.length (ok (Ledger.events db)))))
 ;;
 
 let future_schema () =
   with_database (fun path ->
     with_store path ignore;
     raw path (fun db -> sql db "PRAGMA user_version=99");
-    error (Store.with_open ~registry:Test_support.registry path (fun _ -> Ok ())))
+    error (Setup.with_open ~registry:Test_support.registry path (fun _ -> Ok ())))
 ;;
 
 let linear_perpetual () =
@@ -286,14 +286,14 @@ let precise_timestamps () =
     in
     with_store path (fun db ->
       List.iter samples ~f:(fun (id, text) ->
-        ignore (ok (Store.ingest db (make id text))));
+        ignore (ok (Sources.ingest db (make id text))));
       let equivalent = make "first" "2026-10-27T01:00:00.000000000001+01:00" in
-      (match ok (Store.ingest db equivalent) with
+      (match ok (Sources.ingest db equivalent) with
        | Existing _ -> ()
        | Inserted _ -> Alcotest.fail "equivalent offset duplicated an instant");
-      error (Store.ingest db (make "first" "2026-10-27T00:00:00.000000000002Z")));
+      error (Sources.ingest db (make "first" "2026-10-27T00:00:00.000000000002Z")));
     with_store path (fun db ->
-      let rows = ok (Store.events db) in
+      let rows = ok (Ledger.events db) in
       Alcotest.(check (list string))
         "SQL chronology preserves picoseconds"
         [ "before_epoch"; "first"; "second"; "latest" ]
@@ -492,8 +492,8 @@ let operation_storage () =
     with_store path (fun db ->
       let from_event = event "conversion" in
       let second_event = event "confirmation" in
-      let first = inserted (ok (Store.ingest db from_event)) in
-      let second = inserted (ok (Store.ingest db second_event)) in
+      let first = inserted (ok (Sources.ingest db from_event)) in
+      let second = inserted (ok (Sources.ingest db second_event)) in
       let evidence = [ Operation.Stored_event first; Operation.Stored_event second ] in
       let from = ok (Movement_identity.of_event from_event ~role:"from") in
       let into = ok (Movement_identity.of_event from_event ~role:"to") in
@@ -525,8 +525,8 @@ let operation_storage () =
              ~evidence
              ~movements:[ from_leg; to_leg ])
       in
-      operation_id := ok (Store.add_operation db op);
-      error (Store.add_operation db op);
+      operation_id := ok (Operations.add_operation db op);
+      error (Operations.add_operation db op);
       let bad_id = ok (Movement_identity.of_event second_event ~role:"wrong") in
       let bad_leg =
         ok
@@ -544,7 +544,7 @@ let operation_storage () =
              ~evidence
              ~movements:[ bad_leg ])
       in
-      error (Store.add_operation db bad);
+      error (Operations.add_operation db bad);
       let temporary =
         ok
           (Operation.create
@@ -552,9 +552,9 @@ let operation_storage () =
              ~evidence:[ Operation.File_row { document = "sample.csv"; row = 1 } ]
              ~movements:[])
       in
-      error (Store.add_operation db temporary));
+      error (Operations.add_operation db temporary));
     with_store path (fun db ->
-      let restored = ok (Store.get_operation db !operation_id) in
+      let restored = ok (Operations.get_operation db !operation_id) in
       Alcotest.(check int) "both sources survive reopen" 2 (List.length restored.evidence);
       Alcotest.(check int) "both legs survive reopen" 2 (List.length restored.movements);
       let incoming = List.nth_exn restored.movements 1 in
@@ -567,7 +567,7 @@ let operation_storage () =
         "reported asset survives"
         "BTC"
         (Commodity.display incoming.commodity);
-      error (Store.get_operation db 999999L));
+      error (Operations.get_operation db 999999L));
     raw path (fun db ->
       Alcotest.(check bool)
         "failed operations rolled back"
@@ -612,7 +612,7 @@ let cdc_import_unified () =
     in
     with_store path (fun db ->
       let report =
-        ok (Store.import_bank_file db ~institution:"cdc" ~path:"cdc.csv" ~contents)
+        ok (Import.import_bank_file db ~institution:"cdc" ~path:"cdc.csv" ~contents)
       in
       Alcotest.(check bool)
         "imported"
@@ -621,7 +621,7 @@ let cdc_import_unified () =
          | Bank_import.Imported -> true
          | _ -> false);
       Alcotest.(check int) "two rows inserted" 2 report.inserted;
-      let events = ok (Store.events db) in
+      let events = ok (Ledger.events db) in
       Alcotest.(check int) "two source events" 2 (List.length events);
       List.iter events ~f:(fun (_, (e : Source_event.t)) ->
         Alcotest.(check string) "venue" "cdc" e.venue;
@@ -635,7 +635,7 @@ let cdc_import_unified () =
                ~equal:String.equal)
             "crypto_viban_exchange")
       in
-      let operations = ok (Store.operations_for_event db (fst exchange)) in
+      let operations = ok (Operations.operations_for_event db (fst exchange)) in
       Alcotest.(check int) "one proposed operation" 1 (List.length operations);
       let operation = snd (List.hd_exn operations) in
       Alcotest.(check int)
@@ -651,7 +651,7 @@ let cdc_import_unified () =
       Alcotest.(check (list string)) "roles" [ "from"; "to" ] roles;
       (* Reimporting the identical file is unchanged. *)
       let again =
-        ok (Store.import_bank_file db ~institution:"cdc" ~path:"cdc.csv" ~contents)
+        ok (Import.import_bank_file db ~institution:"cdc" ~path:"cdc.csv" ~contents)
       in
       Alcotest.(check bool)
         "unchanged"
@@ -668,7 +668,7 @@ let cdc_import_unified () =
         ^ cdc_row 3 "crypto_deposit" "9" "" ""
       in
       let blocked =
-        Store.import_bank_file
+        Import.import_bank_file
           db
           ~institution:"cdc"
           ~path:"overlap.csv"
@@ -690,7 +690,7 @@ let cdc_import_unified () =
         ^ cdc_row 1 "crypto_deposit" "1.5" "" ""
       in
       let ambiguous =
-        Store.import_bank_file
+        Import.import_bank_file
           db
           ~institution:"cdc"
           ~path:"dup.csv"
@@ -707,7 +707,7 @@ let cdc_import_unified () =
             | _ -> false));
       (* A header with no transaction rows is not a successful import. *)
       let header_only =
-        Store.import_bank_file
+        Import.import_bank_file
           db
           ~institution:"cdc"
           ~path:"empty.csv"
@@ -725,7 +725,7 @@ let cdc_import_unified () =
       (* A file the adapter does not recognize is unsupported. *)
       let foreign = "a,b\n1,2\n" in
       let unsupported =
-        Store.import_bank_file
+        Import.import_bank_file
           db
           ~institution:"cdc"
           ~path:"other.csv"
@@ -747,12 +747,12 @@ let cdc_reimport_validates_movements () =
     let contents = cdc_header ^ cdc_row 2 "crypto_viban_exchange" "-2" "EUR" "0.20" in
     with_store path (fun db ->
       ignore
-        (ok (Store.import_bank_file db ~institution:"cdc" ~path:"a.csv" ~contents)));
+        (ok (Import.import_bank_file db ~institution:"cdc" ~path:"a.csv" ~contents)));
     raw path (fun conn ->
       sql conn "UPDATE operation_movements SET quantity='-999' WHERE quantity='-2'");
     with_store path (fun db ->
       let replay =
-        Store.import_bank_file db ~institution:"cdc" ~path:"a.csv" ~contents
+        Import.import_bank_file db ~institution:"cdc" ~path:"a.csv" ~contents
       in
       Alcotest.(check bool)
         "tampered movement refused"
@@ -764,8 +764,10 @@ let cdc_reimport_validates_movements () =
             | Bank_import.Rejected -> true
             | _ -> false)));
     with_store path (fun db ->
-      let events = ok (Store.events db) in
-      let operations = ok (Store.operations_for_event db (fst (List.hd_exn events))) in
+      let events = ok (Ledger.events db) in
+      let operations =
+        ok (Operations.operations_for_event db (fst (List.hd_exn events)))
+      in
       let quantities =
         List.concat_map operations ~f:(fun (_, (o : Operation.t)) ->
           List.map o.movements ~f:(fun m -> Quantity.to_string m.Operation.quantity))

@@ -132,10 +132,10 @@ let unregistered_import () =
     ~finally:(fun () -> Stdlib.Sys.remove path)
     ~f:(fun () ->
       ok
-        (Store.with_open ~registry:Builtin.registry path (fun db ->
+        (Setup.with_open ~registry:Builtin.registry path (fun db ->
            let report =
              ok
-               (Store.import_bank_file
+               (Import.import_bank_file
                   db
                   ~institution:"elsewhere"
                   ~path:"bank.ofx"
@@ -152,7 +152,7 @@ let unregistered_import () =
                 (Option.value_exn report.message)
                 ~substring:
                   "known institutions: boursobank, bunq, cdc, csv, revolut, wise");
-           Alcotest.(check int) "no events" 0 (List.length (ok (Store.events db)));
+           Alcotest.(check int) "no events" 0 (List.length (ok (Ledger.events db)));
            Ok ())))
 ;;
 

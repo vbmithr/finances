@@ -81,7 +81,7 @@ let scan ?account_id ?(max_file_bytes = 67108864L) ?(exclude = []) db ~instituti
   in
   let record_error path error =
     let%map report =
-      Store.record_bank_read_error
+      Import.record_bank_read_error
         db
         ~institution
         ~path
@@ -91,7 +91,7 @@ let scan ?account_id ?(max_file_bytes = 67108864L) ?(exclude = []) db ~instituti
   in
   let import_contents path contents =
     let%map report =
-      Store.import_bank_file ?account_label:account_id db ~institution ~path ~contents
+      Import.import_bank_file ?account_label:account_id db ~institution ~path ~contents
     in
     files := report :: !files;
     report

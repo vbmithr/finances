@@ -32,13 +32,13 @@ let replace s a b = String.substr_replace_all s ~pattern:a ~with_:b
 
 let memory f =
   ok
-    (Store.with_open ~registry:Test_support.registry ":memory:" (fun db ->
+    (Setup.with_open ~registry:Test_support.registry ":memory:" (fun db ->
        f db;
        Ok ()))
 ;;
 
 let import ?(institution = "bunq") db path contents =
-  ok (Store.import_bank_file db ~institution ~path ~contents)
+  ok (Import.import_bank_file db ~institution ~path ~contents)
 ;;
 
 let accepted report =
@@ -144,24 +144,24 @@ let reusable_profile () =
 let workflow () =
   memory (fun db ->
     accepted (import db "early.csv" (csv ()));
-    check "CSV creates no events" 0 (List.length (ok (Store.events db)));
-    check "CSV pending" 4 (ok (Store.match_companions ~institution:"bunq" db)).unmatched;
+    check "CSV creates no events" 0 (List.length (ok (Ledger.events db)));
+    check "CSV pending" 4 (ok (Ledger.match_companions ~institution:"bunq" db)).unmatched;
     accepted (import db "extensionless" (mt ()));
     check
       "matched all occurrences"
       4
-      (ok (Store.match_companions ~institution:"bunq" db)).matched;
-    check "generated movements" 4 (ok (Store.project_bank db)).inserted;
-    let statements = ok (Store.statement_reconciliations ~institution:"bunq" db) in
+      (ok (Ledger.match_companions ~institution:"bunq" db)).matched;
+    check "generated movements" 4 (ok (Ledger.project_bank db)).inserted;
+    let statements = ok (Review.statement_reconciliations ~institution:"bunq" db) in
     Alcotest.(check (list int))
       "one statement listing every movement"
       [ 4 ]
-      (List.map statements ~f:(fun r -> r.Store.entries));
+      (List.map statements ~f:(fun r -> r.Review.entries));
     List.iter statements ~f:(fun r ->
       Alcotest.(check bool)
         "persisted statement reconciles"
         true
-        (Quantity.is_zero r.Store.difference));
+        (Quantity.is_zero r.Review.difference));
     let journal = ok (Finances_hledger.export db) in
     Alcotest.(check bool)
       "CSV provenance"
@@ -179,23 +179,23 @@ let workflow () =
          db
          "overlap.mt940"
          (replace (mt ()) "synthetic-statement" "overlapping-statement"));
-    check "no duplicate projections" 0 (ok (Store.project_bank db)).inserted;
+    check "no duplicate projections" 0 (ok (Ledger.project_bank db)).inserted;
     check
       "no match changes"
       0
-      (ok (Store.match_companions ~institution:"bunq" db)).changed;
-    check "still four events" 4 (List.length (ok (Store.events db)));
+      (ok (Ledger.match_companions ~institution:"bunq" db)).changed;
+    check "still four events" 4 (List.length (ok (Ledger.events db)));
     let category =
       ok
         (Bank_category.create
            ~event_id:
-             (let id, _, _ = List.hd_exn (ok (Store.movements db)) in
+             (let id, _, _ = List.hd_exn (ok (Ledger.movements db)) in
               id)
            ~account:"expenses:food"
            ~reason:"Reviewed")
     in
-    ignore (ok (Store.set_bank_categories db [ category ]));
-    let a = List.hd_exn (ok (Store.bank_accounts db)) in
+    ignore (ok (Review.set_bank_categories db [ category ]));
+    let a = List.hd_exn (ok (Ledger.bank_accounts db)) in
     let mapping =
       ok
         (Bank_account_mapping.create
@@ -205,8 +205,8 @@ let workflow () =
            ~account_type:a.account_type
            ~ledger_account:"assets:bank:bunq:daily")
     in
-    ignore (ok (Store.set_bank_account_mappings db [ mapping ]));
-    check "replay reviewed mapped entries" 0 (ok (Store.project_bank db)).inserted)
+    ignore (ok (Ledger.set_bank_account_mappings db [ mapping ]));
+    check "replay reviewed mapped entries" 0 (ok (Ledger.project_bank db)).inserted)
 ;;
 
 let conflicts () =
@@ -224,11 +224,11 @@ let conflicts () =
       |> fun s -> replace s "EUR175,00" "EUR185,00"
     in
     rejected (import db "partial.mt940" partial);
-    check "atomic source rollback" 4 (List.length (ok (Store.events db)));
+    check "atomic source rollback" 4 (List.length (ok (Ledger.events db)));
     check
       "statement observations unchanged"
       1
-      (List.length (ok (Store.statement_reconciliations ~institution:"bunq" db)));
+      (List.length (ok (Review.statement_reconciliations ~institution:"bunq" db)));
     rejected (import ~institution:"boursobank" db "wrong.mt940" (mt ()));
     rejected (import ~institution:"wise" db "wrong.csv" (csv ())))
 ;;
@@ -244,7 +244,7 @@ let ambiguity () =
     in
     let transactions =
       List.map
-        (ok (Store.events db))
+        (ok (Ledger.events db))
         ~f:(fun (id, event) -> id, ok (Bunq_transaction.source_transaction event))
     in
     let results = Bunq_csv.match_rows partial transactions in
@@ -258,12 +258,12 @@ let ambiguity () =
     check
       "account matching isolates movements"
       4
-      (ok (Store.match_companions ~institution:"bunq" db)).matched;
+      (ok (Ledger.match_companions ~institution:"bunq" db)).matched;
     accepted (import db "usd.mt940" (replace (mt ()) "EUR" "USD"));
     check
       "currency-free CSV cannot guess currency"
       4
-      (ok (Store.match_companions ~institution:"bunq" db)).ambiguous)
+      (ok (Ledger.match_companions ~institution:"bunq" db)).ambiguous)
 ;;
 
 let multibank () =
@@ -277,13 +277,13 @@ let multibank () =
          db
          "bank.ofx"
          (In_channel.read_all "fixtures/bank.ofx"));
-    check "three banks ten movements" 10 (List.length (ok (Store.events db)));
-    check "ten projections" 10 (ok (Store.project_bank db)).inserted;
+    check "three banks ten movements" 10 (List.length (ok (Ledger.events db)));
+    check "ten projections" 10 (ok (Ledger.project_bank db)).inserted;
     check
       "three institutions"
       3
       (List.map
-         (ok (Store.bank_accounts db))
+         (ok (Ledger.bank_accounts db))
          ~f:(fun a -> a.Bank_account_mapping.institution)
        |> List.dedup_and_sort ~compare:String.compare
        |> List.length))

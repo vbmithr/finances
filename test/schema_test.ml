@@ -41,8 +41,8 @@ let scalar db s =
 let initialize () =
   workspace (fun path ->
     ok
-      (Store.with_open ~registry:Test_support.registry path (fun db ->
-         check "fresh database empty" 0 (List.length (ok (Store.events db)));
+      (Setup.with_open ~registry:Test_support.registry path (fun db ->
+         check "fresh database empty" 0 (List.length (ok (Ledger.events db)));
          Ok ()));
     raw path (fun db ->
       check "latest baseline" 33 (scalar db "PRAGMA user_version");
@@ -76,7 +76,7 @@ let initialize () =
 
 let sqlite_constraints () =
   workspace (fun path ->
-    ok (Store.with_open ~registry:Test_support.registry path (fun _ -> Ok ()));
+    ok (Setup.with_open ~registry:Test_support.registry path (fun _ -> Ok ()));
     raw path (fun db ->
       let rejected s =
         Alcotest.(check bool) s true (Result.is_error (Rel_sqlite3.exec_sql db s))
@@ -236,18 +236,18 @@ let generated_queries () =
       ]
     in
     ok
-      (Store.with_open ~registry:Test_support.registry path (fun db ->
+      (Setup.with_open ~registry:Test_support.registry path (fun db ->
          let id =
-           match ok (Store.ingest db first) with
+           match ok (Sources.ingest db first) with
            | Inserted id -> id
            | Existing _ -> failwith "fresh event expected"
          in
-         List.iter others ~f:(fun e -> ignore (ok (Store.ingest db e)));
-         (match ok (Store.ingest db first) with
+         List.iter others ~f:(fun e -> ignore (ok (Sources.ingest db e)));
+         (match ok (Sources.ingest db first) with
           | Existing existing ->
             Alcotest.(check int64) "four bound keys keep their order" id existing
           | Inserted _ -> failwith "replay inserted a duplicate");
-         let events = ok (Store.events db) in
+         let events = ok (Ledger.events db) in
          check "distinct keys preserved" 4 (List.length events);
          List.iter events ~f:(fun (_, e) ->
            Alcotest.(check bool)
@@ -260,7 +260,7 @@ let generated_queries () =
 
 let large_rowid () =
   workspace (fun path ->
-    ok (Store.with_open ~registry:Test_support.registry path (fun _ -> Ok ()));
+    ok (Setup.with_open ~registry:Test_support.registry path (fun _ -> Ok ()));
     raw path (fun db ->
       sql
         db
@@ -268,10 +268,10 @@ let large_rowid () =
          VALUES \
          (9223372036854775807,'bank','main','test','large-id','1970-01-01T00:00:00.001000000000Z',X'00')");
     ok
-      (Store.with_open ~registry:Test_support.registry path (fun db ->
-         let id, event = List.hd_exn (ok (Store.events db)) in
+      (Setup.with_open ~registry:Test_support.registry path (fun db ->
+         let id, event = List.hd_exn (ok (Ledger.events db)) in
          Alcotest.(check int64) "full SQLite rowid range" Int64.max_value id;
-         (match ok (Store.ingest db event) with
+         (match ok (Sources.ingest db event) with
           | Existing id ->
             Alcotest.(check int64) "generated lookup keeps rowid" Int64.max_value id
           | Inserted _ -> failwith "large rowid replay inserted a duplicate");
@@ -287,7 +287,7 @@ let rejects_old () =
           (Printf.sprintf
              "CREATE TABLE experimental_marker(value TEXT); PRAGMA user_version=%d"
              version));
-      error (Store.with_open ~registry:Test_support.registry path (fun _ -> Ok ()));
+      error (Setup.with_open ~registry:Test_support.registry path (fun _ -> Ok ()));
       raw path (fun db ->
         check "old version left intact" version (scalar db "PRAGMA user_version");
         check
@@ -299,7 +299,7 @@ let rejects_old () =
 let initialization_rollback () =
   workspace (fun path ->
     raw path (fun db -> sql db "CREATE TABLE bank_account_settlements(collision TEXT)");
-    error (Store.with_open ~registry:Test_support.registry path (fun _ -> Ok ()));
+    error (Setup.with_open ~registry:Test_support.registry path (fun _ -> Ok ()));
     raw path (fun db ->
       check
         "failed initialization remains unversioned"
@@ -314,7 +314,7 @@ let initialization_rollback () =
 let persistent_state () =
   workspace (fun path ->
     ok
-      (Store.with_open ~registry:Test_support.registry path (fun db ->
+      (Setup.with_open ~registry:Test_support.registry path (fun db ->
          let ofx =
            In_channel.read_all "fixtures/bank.ofx"
            |> fun s ->
@@ -329,15 +329,15 @@ let persistent_state () =
            ~f:(fun (institution, file) ->
              ignore
                (ok
-                  (Store.import_bank_file
+                  (Import.import_bank_file
                      ?account_label:
                        (Option.some_if (String.equal institution "revolut") "main")
                      db
                      ~institution
                      ~path:file
                      ~contents:(In_channel.read_all file))));
-         ignore (ok (Store.project_bank db));
-         let rows = ok (Store.export_bank_accounts db) in
+         ignore (ok (Ledger.project_bank db));
+         let rows = ok (Accounts.export_bank_accounts db) in
          let checking =
            List.find_exn rows ~f:(fun r ->
              String.equal r.Bank_account_config.reference.account_type "CHECKING")
@@ -354,16 +354,16 @@ let persistent_state () =
                }
              else r)
          in
-         ignore (ok (Store.apply_bank_accounts db rows));
+         ignore (ok (Accounts.apply_bank_accounts db rows));
          let reviewed =
            List.find_exn
-             (ok (Store.bank_review db))
+             (ok (Review.bank_review db))
              ~f:(fun r ->
-               String.equal r.Store.transaction.account.account_type "CHECKING")
+               String.equal r.Review.transaction.account.account_type "CHECKING")
          in
          ignore
            (ok
-              (Store.set_bank_categories
+              (Review.set_bank_categories
                  db
                  [ ok
                      (Bank_category.create
@@ -372,11 +372,13 @@ let persistent_state () =
                         ~reason:"Reviewed")
                  ]));
          let pair =
-           List.find_exn (ok (Store.transfer_candidates db)) ~f:(fun c -> c.Store.unique)
+           List.find_exn
+             (ok (Transfers.transfer_candidates db))
+             ~f:(fun c -> c.Transfers.unique)
          in
          ignore
            (ok
-              (Store.set_bank_transfers
+              (Transfers.set_bank_transfers
                  db
                  [ ok
                      (Bank_transfer.create
@@ -387,15 +389,18 @@ let persistent_state () =
                  ]));
          Ok ()));
     ok
-      (Store.with_open ~registry:Test_support.registry path (fun db ->
-         check "source evidence retained" 11 (List.length (ok (Store.events db)));
-         check "entries retained" 11 (List.length (ok (Store.entries db)));
-         check "category retained" 1 (List.length (ok (Store.bank_category_history db)));
-         check "transfer retained" 1 (List.length (ok (Store.bank_transfer_history db)));
-         let accounts = ok (Store.bank_account_info db) in
+      (Setup.with_open ~registry:Test_support.registry path (fun db ->
+         check "source evidence retained" 11 (List.length (ok (Ledger.events db)));
+         check "entries retained" 11 (List.length (ok (Ledger.entries db)));
+         check "category retained" 1 (List.length (ok (Review.bank_category_history db)));
+         check
+           "transfer retained"
+           1
+           (List.length (ok (Transfers.bank_transfer_history db)));
+         let accounts = ok (Transfers.bank_account_info db) in
          let card =
            List.find_exn accounts ~f:(fun a ->
-             String.equal a.Store.mapping.account_type "CREDITCRD")
+             String.equal a.Transfers.mapping.account_type "CREDITCRD")
          in
          Alcotest.(check bool)
            "settlement link retained"
@@ -403,13 +408,13 @@ let persistent_state () =
            (Option.is_some card.settlement_account);
          let revolut =
            List.find_exn accounts ~f:(fun a ->
-             String.equal a.Store.mapping.institution "revolut")
+             String.equal a.Transfers.mapping.institution "revolut")
          in
          Alcotest.(check string)
            "IBAN retained"
            "BE68539007547034"
            (Iban.to_string (Option.value_exn revolut.iban));
-         check "projection remains idempotent" 0 (ok (Store.project_bank db)).inserted;
+         check "projection remains idempotent" 0 (ok (Ledger.project_bank db)).inserted;
          Ok ()));
     raw path (fun db ->
       List.iter
@@ -428,7 +433,7 @@ let persistent_state () =
 (* Banks have no tables or columns of their own: adding one never adds DDL. *)
 let no_bank_schema () =
   workspace (fun path ->
-    ok (Store.with_open ~registry:Test_support.registry path (fun _ -> Ok ()));
+    ok (Setup.with_open ~registry:Test_support.registry path (fun _ -> Ok ()));
     raw path (fun db ->
       let names =
         Rel_sqlite3.fold

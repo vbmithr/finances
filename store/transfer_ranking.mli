@@ -22,7 +22,7 @@ type evidence =
   }
 
 type ranked =
-  { candidate : Store.transfer_candidate
+  { candidate : Transfers.transfer_candidate
   ; score : int
   ; evidence : evidence list
   ; assignment : assignment
@@ -39,4 +39,4 @@ val assignments : edge list -> assignment list Or_error.t
 
 (** Bank-name evidence uses the registry's institution aliases. Results are
     ordered by descending score, then ascending event IDs. *)
-val analyze : Registry.t -> Store.transfer_candidate list -> ranked list Or_error.t
+val analyze : Registry.t -> Transfers.transfer_candidate list -> ranked list Or_error.t

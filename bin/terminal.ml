@@ -33,7 +33,7 @@ let table ?(out = stdout) headers rows =
     Out_channel.output_char out '\n')
 ;;
 
-let account (a : Store.bank_account_info) =
+let account (a : Transfers.bank_account_info) =
   Stdio.printf "%s  %s\n" (text a.mapping.institution) (text a.mapping.ledger_account);
   Stdio.printf "  ID: %s\n" (Bank_account_mapping.id a.mapping);
   Stdio.printf
@@ -87,7 +87,7 @@ let review rows =
   if List.is_empty rows
   then print_endline "No movements to review."
   else
-    List.iter rows ~f:(fun (r : Store.bank_review) ->
+    List.iter rows ~f:(fun (r : Review.bank_review) ->
       let tx = r.transaction in
       Stdio.printf
         "#%Ld  %s  %s / %s\n"
@@ -170,7 +170,7 @@ let operation_amounts (row : Report_json.operation_row) =
   | movements ->
     String.concat
       ~sep:" → "
-      (List.map movements ~f:(fun (m : Store.operation_movement_review) ->
+      (List.map movements ~f:(fun (m : Review.operation_movement_review) ->
          Printf.sprintf
            "%s %s"
            (Quantity.to_string m.quantity)
@@ -195,7 +195,7 @@ let operation_state (row : Report_json.operation_row) =
       if
         List.exists
           row.operation.movements
-          ~f:(fun (m : Store.operation_movement_review) -> Option.is_none m.account)
+          ~f:(fun (m : Review.operation_movement_review) -> Option.is_none m.account)
       then "unresolved"
       else "unreviewed")
 ;;
@@ -231,7 +231,7 @@ let operations ?(out = stdout) rows =
          ]))
 ;;
 
-let transfer (c : Store.transfer_candidate) =
+let transfer (c : Transfers.transfer_candidate) =
   Stdio.printf
     "%Ld <-> %Ld  principal %s %s  (%d days apart)\n"
     c.first_event_id

@@ -53,28 +53,28 @@ let backup () =
   let root = Fpath.to_string (bos (Bos.OS.Dir.tmp "fin-backup-%s")) in
   let database = join root "fin.sqlite3"
   and copy = join root "copy.sqlite3" in
-  let count db = List.length (ok (Store.events db)) in
+  let count db = List.length (ok (Ledger.events db)) in
   let original =
     ok
-      (Store.with_open ~registry:Test_support.registry database (fun db ->
+      (Setup.with_open ~registry:Test_support.registry database (fun db ->
          ignore
            (ok
               (Test_support.import_ofx
                  db
                  ~institution:"boursobank"
                  (In_channel.read_all "fixtures/bank.ofx")));
-         let%map.Or_error () = Store.backup database copy in
+         let%map.Or_error () = Setup.backup database copy in
          Alcotest.(check bool)
            "never overwrites"
            true
-           (Result.is_error (Store.backup database copy));
+           (Result.is_error (Setup.backup database copy));
          count db))
   in
   Alcotest.(check bool) "events imported" true (original > 0);
   Alcotest.(check int)
     "same events in the copy"
     original
-    (ok (Store.with_open ~registry:Test_support.registry copy (fun db -> Ok (count db))))
+    (ok (Setup.with_open ~registry:Test_support.registry copy (fun db -> Ok (count db))))
 ;;
 
 let raw path f =
@@ -94,7 +94,7 @@ let sql db text =
 
 let seed path =
   ok
-    (Store.with_open ~registry:Test_support.registry path (fun db ->
+    (Setup.with_open ~registry:Test_support.registry path (fun db ->
        let%map.Or_error _ =
          Test_support.import_ofx
            db
@@ -114,8 +114,8 @@ let backup_old_schema () =
     "build cannot open it"
     true
     (Result.is_error
-       (Store.with_open ~registry:Test_support.registry database (fun _ -> Ok ())));
-  ok (Store.backup database copy);
+       (Setup.with_open ~registry:Test_support.registry database (fun _ -> Ok ())));
+  ok (Setup.backup database copy);
   raw copy (fun db -> sql db "SELECT 1")
 ;;
 
@@ -125,15 +125,15 @@ let restore () =
   seed source;
   let bytes = In_channel.read_all source in
   let target = join root "new/nested/fin.sqlite3" in
-  ok (Store.restore ~source ~destination:target);
+  ok (Setup.restore ~source ~destination:target);
   Alcotest.(check int)
     "private restored file"
     0o600
     ((Unix.stat target).st_perm land 0o777);
   let count path =
     ok
-      (Store.with_open ~registry:Test_support.registry path (fun db ->
-         Result.map (Store.events db) ~f:List.length))
+      (Setup.with_open ~registry:Test_support.registry path (fun db ->
+         Result.map (Ledger.events db) ~f:List.length))
   in
   Alcotest.(check int) "restored evidence" (count source) (count target);
   Alcotest.(check string) "source unchanged" bytes (In_channel.read_all source);
@@ -141,7 +141,7 @@ let restore () =
     Alcotest.(check bool)
       "refused"
       true
-      (Result.is_error (Store.restore ~source ~destination))
+      (Result.is_error (Setup.restore ~source ~destination))
   in
   rejected source source;
   let alias = join root "alias.sqlite3" in
@@ -193,7 +193,7 @@ let restore_wal () =
   raw target (fun db -> sql db "PRAGMA page_size=4096; VACUUM");
   seed target;
   raw source (fun db -> sql db "PRAGMA page_size=8192; VACUUM");
-  ok (Store.with_open ~registry:Test_support.registry source (fun _ -> Ok ()));
+  ok (Setup.with_open ~registry:Test_support.registry source (fun _ -> Ok ()));
   raw target (fun db ->
     sql db "PRAGMA journal_mode=WAL";
     let count () =
@@ -212,11 +212,11 @@ let restore_wal () =
     Alcotest.(check bool)
       "page-size mismatch rejected"
       true
-      (Result.is_error (Store.restore ~source ~destination:target));
+      (Result.is_error (Setup.restore ~source ~destination:target));
     Alcotest.(check int) "failed copy rolls back" original (count ());
     (* Match the page sizes, then restore through a live WAL connection. *)
     raw source (fun db -> sql db "PRAGMA page_size=4096; VACUUM");
-    ok (Store.restore ~source ~destination:target);
+    ok (Setup.restore ~source ~destination:target);
     Alcotest.(check int) "open connection sees restored database" 0 (count ()))
 ;;
 

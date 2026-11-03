@@ -1,10 +1,11 @@
+open Finances_store
 open Base
 
 type report =
   { inputs : Files.report
   ; identity_changes : int
-  ; projection : Finances_store.Store.projection_report
-  ; companions : Finances_store.Store.companion_report
+  ; projection : Ledger.projection_report
+  ; companions : Ledger.companion_report
   ; journal : string
   }
 
@@ -16,9 +17,7 @@ val run
   :  registry:Finances_core.Registry.t
   -> ?account_id:string
   -> ?configure_new_accounts:
-       (Finances_store.Store.t
-        -> Finances_store.Store.bank_account_info list
-        -> int Or_error.t)
+       (Handle.t -> Transfers.bank_account_info list -> int Or_error.t)
        (** Called after import, before projection, with only accounts
       first seen in this run. Returns the number of audited IBAN registrations. *)
   -> ?max_file_bytes:int64

@@ -96,13 +96,13 @@ let transaction
 
 let export db =
   let open Or_error.Let_syntax in
-  let%bind entries = Store.entries db in
-  let%bind observations = Store.journal_companions db in
-  let%bind category_history = Store.bank_category_history db in
-  let%bind movements = Store.journal_movements db in
-  let%bind transfer_links = Store.operation_transfer_links db in
-  let%bind general_transfers = Store.general_transfer_entries db in
-  let%bind exchange_entries = Store.operation_exchange_entries db in
+  let%bind entries = Ledger.entries db in
+  let%bind observations = Ledger.journal_companions db in
+  let%bind category_history = Review.bank_category_history db in
+  let%bind movements = Ledger.journal_movements db in
+  let%bind transfer_links = Review.operation_transfer_links db in
+  let%bind general_transfers = Operations.general_transfer_entries db in
+  let%bind exchange_entries = Operations.operation_exchange_entries db in
   let posting_dates = Hashtbl.create (module Int64) in
   let pairs = Hashtbl.create (module Int64) in
   let by_event = Hashtbl.create (module Int64) in
@@ -112,9 +112,9 @@ let export db =
     List.filter transfer_links ~f:(fun link ->
       not
         (List.exists general_transfers ~f:(fun t ->
-           Int64.equal t.Store.first.event_id link.first_event_id
+           Int64.equal t.Operations.first.event_id link.first_event_id
            && Int64.equal t.second.event_id link.second_event_id)))
-    |> List.map ~f:(fun (d : Store.operation_transfer_link) ->
+    |> List.map ~f:(fun (d : Review.operation_transfer_link) ->
       match
         Hashtbl.find by_event d.first_event_id, Hashtbl.find by_event d.second_event_id
       with
@@ -152,7 +152,7 @@ let export db =
   in
   let%bind synthetic_transfers =
     general_transfers
-    |> List.map ~f:(fun (t : Store.general_transfer_preview) ->
+    |> List.map ~f:(fun (t : Operations.general_transfer_preview) ->
       let bank_leg =
         if t.first.bank
         then Some t.first
@@ -216,7 +216,7 @@ let export db =
   in
   let companions =
     List.map
-      (Registry.companions (Store.registry db))
+      (Registry.companions (Accounts.registry db))
       ~f:(fun (owner, c) -> (owner, c.Companion.format), c)
   in
   let%map annotated =
@@ -235,11 +235,11 @@ let export db =
     |> Or_error.combine_errors
   in
   let secondary_dates = Hashtbl.create (module Int64) in
-  List.iter movements ~f:(fun (movement : Store.journal_movement) ->
+  List.iter movements ~f:(fun (movement : Ledger.journal_movement) ->
     Option.iter movement.value_on ~f:(fun date ->
       Hashtbl.set secondary_dates ~key:movement.event_id ~data:date));
   let extra_metadata = Hashtbl.create (module Int64) in
-  List.iter transfer_links ~f:(fun (decision : Store.operation_transfer_link) ->
+  List.iter transfer_links ~f:(fun (decision : Review.operation_transfer_link) ->
     List.iter [ decision.first_event_id; decision.second_event_id ] ~f:(fun event_id ->
       let tags =
         [ Printf.sprintf
@@ -256,7 +256,7 @@ let export db =
       Hashtbl.update extra_metadata event_id ~f:(fun previous ->
         Option.value previous ~default:[] @ tags)));
   let latest_categories = Hashtbl.create (module Int64) in
-  List.iter category_history ~f:(fun (decision : Store.category_change) ->
+  List.iter category_history ~f:(fun (decision : Review.category_change) ->
     Hashtbl.set latest_categories ~key:decision.event_id ~data:decision);
   Hashtbl.iteri latest_categories ~f:(fun ~key:event_id ~data:decision ->
     let tags =
@@ -270,7 +270,7 @@ let export db =
   List.iter annotated ~f:(fun (event_id, annotation) ->
     Hashtbl.add_multi metadata ~key:event_id ~data:annotation);
   let descriptions = Hashtbl.create (module Int64) in
-  List.iter movements ~f:(fun (movement : Store.journal_movement) ->
+  List.iter movements ~f:(fun (movement : Ledger.journal_movement) ->
     let annotations =
       Option.value (Hashtbl.find metadata movement.event_id) ~default:[]
       |> List.map ~f:snd
@@ -278,8 +278,8 @@ let export db =
     Hashtbl.set
       descriptions
       ~key:movement.event_id
-      ~data:(Store.effective_description movement.description annotations));
-  List.iter transfer_links ~f:(fun (d : Store.operation_transfer_link) ->
+      ~data:(Review.effective_description movement.description annotations));
+  List.iter transfer_links ~f:(fun (d : Review.operation_transfer_link) ->
     if Hashtbl.mem pairs d.first_event_id
     then (
       let combined =

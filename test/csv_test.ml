@@ -57,40 +57,40 @@ let database root = Stdlib.Filename.concat root "bank.sqlite3"
 
 let with_store root f =
   ok
-    (Store.with_open ~registry:Test_support.registry (database root) (fun db ->
+    (Setup.with_open ~registry:Test_support.registry (database root) (fun db ->
        f db;
        Ok ()))
 ;;
 
 let import_ofx ?(institution = "boursobank") root contents =
   ok
-    (Store.with_open ~registry:Test_support.registry (database root) (fun db ->
+    (Setup.with_open ~registry:Test_support.registry (database root) (fun db ->
        Test_support.import_ofx db ~institution contents))
 ;;
 
 let import_csv root contents =
   ok
-    (Store.with_open ~registry:Test_support.registry (database root) (fun db ->
-       Store.import_bank_file db ~institution:"boursobank" ~path:"export.csv" ~contents))
+    (Setup.with_open ~registry:Test_support.registry (database root) (fun db ->
+       Import.import_bank_file db ~institution:"boursobank" ~path:"export.csv" ~contents))
 ;;
 
 let match_csv root =
   ok
-    (Store.with_open
+    (Setup.with_open
        ~registry:Test_support.registry
        (database root)
-       (Store.match_companions ~institution:"boursobank"))
+       (Ledger.match_companions ~institution:"boursobank"))
 ;;
 
 let export root =
   ignore
     (ok
-       (Store.with_open
+       (Setup.with_open
           ~registry:Test_support.registry
           (database root)
-          Store.project_bank));
+          Ledger.project_bank));
   ok
-    (Store.with_open
+    (Setup.with_open
        ~registry:Test_support.registry
        (database root)
        Finances_hledger.export)
@@ -117,7 +117,7 @@ let count_sources root expected =
     Alcotest.(check int)
       "only OFX creates movements"
       expected
-      (List.length (ok (Store.events db))))
+      (List.length (ok (Ledger.events db))))
 ;;
 
 let transactions journal =
@@ -359,7 +359,7 @@ let overlap_and_scope () =
     Alcotest.(check int) "balance observations do not conflict" 0 report.conflicts;
     with_store root (fun db ->
       List.iter
-        (ok (Store.companion_observations ~institution:"boursobank" db))
+        (ok (Ledger.companion_observations ~institution:"boursobank" db))
         ~f:(fun row ->
           let matching = Option.value_exn row.matching in
           Alcotest.(check bool)

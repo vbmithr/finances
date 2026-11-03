@@ -25,7 +25,7 @@ let with_database f =
 
 let with_store path f =
   ok
-    (Store.with_open ~registry:Test_support.registry path (fun db ->
+    (Setup.with_open ~registry:Test_support.registry path (fun db ->
        f db;
        Ok ()))
 ;;
@@ -60,7 +60,7 @@ let check_counts path documents events links =
 
 let import path ?(institution = "boursobank") contents =
   ok
-    (Store.with_open ~registry:Test_support.registry path (fun db ->
+    (Setup.with_open ~registry:Test_support.registry path (fun db ->
        Test_support.import_ofx db ~institution contents))
 ;;
 
@@ -149,13 +149,13 @@ let replay_and_archive () =
       first.document_id
       second.document_id;
     with_store path (fun db ->
-      let events = ok (Store.events db) in
+      let events = ok (Ledger.events db) in
       List.iter events ~f:(fun (_, e) ->
         match e.occurred with
         | Temporal.Date _ -> ()
         | Temporal.Instant _ -> failwith "bank date became a fabricated instant");
       List.iter events ~f:(fun (id, _) ->
-        let operations = ok (Store.operations_for_event db id) in
+        let operations = ok (Operations.operations_for_event db id) in
         Alcotest.(check int) "one operation after reimport" 1 (List.length operations);
         let _, operation = List.hd_exn operations in
         Alcotest.(check int) "one bank movement" 1 (List.length operation.movements);
@@ -171,7 +171,7 @@ let replay_and_archive () =
       Alcotest.(check int)
         "no automatic accounting classification"
         0
-        (List.length (ok (Store.entries db))));
+        (List.length (ok (Ledger.entries db))));
     with_raw path (fun db ->
       let stmt =
         Rel_sql.Stmt.v
@@ -223,7 +223,7 @@ let atomic_conflict () =
       |> fun s -> replace s "<TRNAMT>-0.10</TRNAMT>" "<TRNAMT>-0.11</TRNAMT>"
     in
     error
-      (Store.with_open ~registry:Test_support.registry path (fun db ->
+      (Setup.with_open ~registry:Test_support.registry path (fun db ->
          Test_support.import_ofx db ~institution:"boursobank" changed));
     (* The rejected file is archived with its attempt; no event or link from
        it survives. *)
@@ -242,7 +242,7 @@ let shared_operation_blocks_account_deletion () =
   with_database (fun path ->
     ignore (import path (fixture ()));
     with_store path (fun db ->
-      let events = ok (Store.events db) in
+      let events = ok (Ledger.events db) in
       let first_id, first_event = List.hd_exn events in
       let second_id, _ =
         List.find_exn events ~f:(fun (_, event) ->
@@ -256,19 +256,19 @@ let shared_operation_blocks_account_deletion () =
                [ Operation.Stored_event first_id; Operation.Stored_event second_id ]
              ~movements:[])
       in
-      ignore (ok (Store.add_operation db operation) : int64);
+      ignore (ok (Operations.add_operation db operation) : int64);
       let account =
-        ok (Store.bank_account_info db)
+        ok (Transfers.bank_account_info db)
         |> List.find_exn ~f:(fun info ->
           String.equal
-            (Bank_account_mapping.source_account info.Store.mapping)
+            (Bank_account_mapping.source_account info.Transfers.mapping)
             first_event.account)
       in
-      error (Store.delete_account db account.mapping);
+      error (Accounts.delete_account db account.mapping);
       Alcotest.(check int)
         "source events are preserved"
         3
-        (List.length (ok (Store.events db)))))
+        (List.length (ok (Ledger.events db)))))
 ;;
 
 let balance_times () =

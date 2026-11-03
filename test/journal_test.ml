@@ -19,14 +19,14 @@ let with_database f =
 
 let with_store path f =
   ok
-    (Store.with_open ~registry:Test_support.registry path (fun db ->
+    (Setup.with_open ~registry:Test_support.registry path (fun db ->
        f db;
        Ok ()))
 ;;
 
 let import path contents =
   ok
-    (Store.with_open ~registry:Test_support.registry path (fun db ->
+    (Setup.with_open ~registry:Test_support.registry path (fun db ->
        Test_support.import_ofx db ~institution:"boursobank" contents))
 ;;
 
@@ -34,13 +34,13 @@ let journal_replay () =
   with_database (fun path ->
     ignore (import path (fixture ()));
     with_store path (fun db ->
-      let all = ok (Store.movements db) in
-      let journal_movements = ok (Store.journal_movements db) in
+      let all = ok (Ledger.movements db) in
+      let journal_movements = ok (Ledger.journal_movements db) in
       Alcotest.(check int)
         "same movement count"
         (List.length all)
         (List.length journal_movements);
-      List.iter journal_movements ~f:(fun (movement : Store.journal_movement) ->
+      List.iter journal_movements ~f:(fun (movement : Ledger.journal_movement) ->
         let _, _, original =
           List.find_exn all ~f:(fun (id, _, _) -> Int64.equal id movement.event_id)
         in
@@ -53,19 +53,19 @@ let journal_replay () =
           true
           (Option.equal Date.equal original.value_on movement.value_on)));
     let first =
-      ok (Store.with_open ~registry:Test_support.registry path Store.project_bank)
+      ok (Setup.with_open ~registry:Test_support.registry path Ledger.project_bank)
     in
     Alcotest.(check int) "all bank events projected" 3 first.inserted;
     let journal =
-      ok (Store.with_open ~registry:Test_support.registry path Finances_hledger.export)
+      ok (Setup.with_open ~registry:Test_support.registry path Finances_hledger.export)
     in
     let second =
-      ok (Store.with_open ~registry:Test_support.registry path Store.project_bank)
+      ok (Setup.with_open ~registry:Test_support.registry path Ledger.project_bank)
     in
     Alcotest.(check int) "replay creates no postings" 0 second.inserted;
     Alcotest.(check int) "replay recognizes all entries" 3 second.existing;
     let repeated =
-      ok (Store.with_open ~registry:Test_support.registry path Finances_hledger.export)
+      ok (Setup.with_open ~registry:Test_support.registry path Finances_hledger.export)
     in
     Alcotest.(check string) "byte-identical export" journal repeated;
     let transactions =
@@ -112,9 +112,9 @@ let descriptions () =
         ~with_:"(code) * ; note&#10;2026-01-01 | more"
     in
     ignore (import path contents);
-    ignore (ok (Store.with_open ~registry:Test_support.registry path Store.project_bank));
+    ignore (ok (Setup.with_open ~registry:Test_support.registry path Ledger.project_bank));
     let journal =
-      ok (Store.with_open ~registry:Test_support.registry path Finances_hledger.export)
+      ok (Setup.with_open ~registry:Test_support.registry path Finances_hledger.export)
     in
     let transactions =
       Hledger.Parse.journal_exn journal |> Hledger.Journal.transactions
@@ -142,7 +142,7 @@ let malformed_source_rollback () =
   with_database (fun path ->
     ignore (import path (fixture ()));
     with_store path (fun db ->
-      let _, last = List.last_exn (ok (Store.events db)) in
+      let _, last = List.last_exn (ok (Ledger.events db)) in
       let fake =
         ok
           (Source_event.create_dated
@@ -154,26 +154,26 @@ let malformed_source_rollback () =
              ~payload:last.payload
              ())
       in
-      let before = List.length (ok (Store.events db)) in
+      let before = List.length (ok (Ledger.events db)) in
       (* Movements are decoded when they are stored, so an event whose payload
          disagrees with its identity never enters the database. *)
-      error (Store.ingest db fake);
+      error (Sources.ingest db fake);
       Alcotest.(check int)
         "inconsistent event not stored"
         before
-        (List.length (ok (Store.events db)));
-      ignore (ok (Store.project_bank db));
+        (List.length (ok (Ledger.events db)));
+      ignore (ok (Ledger.project_bank db));
       Alcotest.(check bool)
         "projection unaffected"
         true
-        (not (List.is_empty (ok (Store.entries db))))))
+        (not (List.is_empty (ok (Ledger.entries db))))))
 ;;
 
 let existing_conflict_rollback () =
   with_database (fun path ->
     ignore (import path (fixture ()));
     with_store path (fun db ->
-      let event_id, event = List.last_exn (ok (Store.events db)) in
+      let event_id, event = List.last_exn (ok (Ledger.events db)) in
       let movement = ok (Registry.movement Builtin.registry event) in
       let expected = ok (Bank_projection.entry ~institution:event.venue movement) in
       let wrong =
@@ -183,12 +183,12 @@ let existing_conflict_rollback () =
              ~description:"conflicting policy"
              expected.postings)
       in
-      ignore (ok (Store.record_entry db ~event_id ~key:Bank_projection.key wrong));
-      error (Store.project_bank db);
+      ignore (ok (Ledger.record_entry db ~event_id ~key:Bank_projection.key wrong));
+      error (Ledger.project_bank db);
       Alcotest.(check int)
         "previous entry retained, no partial new entries"
         1
-        (List.length (ok (Store.entries db)))))
+        (List.length (ok (Ledger.entries db)))))
 ;;
 
 let masked_accounts () =

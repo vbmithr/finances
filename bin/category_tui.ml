@@ -77,7 +77,7 @@ let run db rows categories specifications =
   let mode = ref Normal in
   let message = ref "" in
   let terminal = Notty_unix.Term.create ~mouse:false ~bpaste:false () in
-  let exact_matches (row : Store.bank_review) =
+  let exact_matches (row : Review.bank_review) =
     if String.is_empty (String.strip row.description)
     then []
     else List.filter (List.tl_exn !pending) ~f:(Category_similarity.exact_match row)
@@ -85,15 +85,15 @@ let run db rows categories specifications =
   let assign category =
     match !pending with
     | [] -> ()
-    | (row : Store.bank_review) :: _ ->
+    | (row : Review.bank_review) :: _ ->
       let matches = if !match_exact then exact_matches row else [] in
       let selected = row :: matches in
       let reason = "Classified in category queue" in
       let selected_ids =
-        Set.of_list (module Int64) (List.map selected ~f:(fun r -> r.Store.event_id))
+        Set.of_list (module Int64) (List.map selected ~f:(fun r -> r.Review.event_id))
       in
       pending
-      := List.filter !pending ~f:(fun r -> not (Set.mem selected_ids r.Store.event_id));
+      := List.filter !pending ~f:(fun r -> not (Set.mem selected_ids r.Review.event_id));
       applied := (selected, category, reason) :: !applied;
       message
       := Printf.sprintf "Staged %s (%d transaction(s))" category (List.length selected);
@@ -111,17 +111,17 @@ let run db rows categories specifications =
     let batches = List.rev !applied in
     let expected =
       List.concat_map batches ~f:(fun (rows, _, _) ->
-        List.map rows ~f:(fun (row : Store.bank_review) ->
+        List.map rows ~f:(fun (row : Review.bank_review) ->
           ( row.event_id
           , Option.map row.reason ~f:(fun reason -> row.counter_account, reason) )))
     in
     let%bind decisions =
       List.concat_map batches ~f:(fun (rows, category, reason) ->
-        List.map rows ~f:(fun (row : Store.bank_review) ->
+        List.map rows ~f:(fun (row : Review.bank_review) ->
           Bank_category.create ~event_id:row.event_id ~account:category ~reason))
       |> Or_error.combine_errors
     in
-    Store.review_bank_categories ~categories:!new_categories db ~expected decisions
+    Review.review_bank_categories ~categories:!new_categories db ~expected decisions
   in
   let filtered query =
     List.filter !categories ~f:(fun category ->
@@ -173,7 +173,7 @@ let run db rows categories specifications =
                   "Queue complete. Undo or quit; skipped transactions remain \
                    unclassified."
               ]
-            | (row : Store.bank_review) :: _ ->
+            | (row : Review.bank_review) :: _ ->
               let m = row.transaction in
               wrap
                 (Printf.sprintf

@@ -29,7 +29,7 @@ let registry =
 let import ?account_label db ~institution ~path contents =
   let open Or_error.Let_syntax in
   let%bind (report : Bank_import.file_report) =
-    Store.import_bank_file ?account_label db ~institution ~path ~contents
+    Import.import_bank_file ?account_label db ~institution ~path ~contents
   in
   match report.outcome with
   | Imported | Unchanged -> Ok report

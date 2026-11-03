@@ -1,3 +1,4 @@
+open Finances_store
 open Base
 
 type ignored =
@@ -30,7 +31,7 @@ val scan
   :  ?account_id:string
   -> ?max_file_bytes:int64
   -> ?exclude:string list
-  -> Finances_store.Store.t
+  -> Handle.t
   -> institution:string
   -> paths:string list
   -> report Or_error.t

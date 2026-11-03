@@ -51,12 +51,12 @@ let require_database path =
 
 let create_database path f =
   let%bind () = ensure_database_parent path in
-  Store.with_open ~registry:Builtin.registry path f
+  Setup.with_open ~registry:Builtin.registry path f
 ;;
 
 let companion_profiles path =
   let%bind profiles =
-    Store.with_open ~registry:Builtin.registry path Store.institution_companion_profiles
+    Setup.with_open ~registry:Builtin.registry path Setup.institution_companion_profiles
   in
   profiles
   |> List.map ~f:(fun (institution, json) ->
@@ -67,7 +67,7 @@ let companion_profiles path =
 
 let institution_definitions path =
   let%bind rows =
-    Store.with_open ~registry:Builtin.registry path Store.institution_definitions
+    Setup.with_open ~registry:Builtin.registry path Setup.institution_definitions
   in
   rows
   |> List.map ~f:(fun (name, json) ->
@@ -87,7 +87,7 @@ let registry_for path =
 let with_database path f =
   let%bind () = require_database path in
   let%bind registry = registry_for path in
-  Store.with_open ~registry path f
+  Setup.with_open ~registry path f
 ;;
 
 let write_file path contents =
@@ -116,10 +116,10 @@ let ingest database venue account kind source_id at path =
     Source_event.create ~venue ~account ~kind ~source_id ~occurred_at ~payload ()
   in
   with_database database (fun db ->
-    let%bind result = Store.ingest db event in
+    let%bind result = Sources.ingest db event in
     let status, id =
       match result with
-      | Store.Inserted id -> "inserted", id
+      | Handle.Inserted id -> "inserted", id
       | Existing id -> "existing", id
     in
     Stdio.printf "%s %Ld\n" status id;
@@ -128,7 +128,7 @@ let ingest database venue account kind source_id at path =
 
 let list_events database =
   with_database database (fun db ->
-    let%bind events = Store.events db in
+    let%bind events = Ledger.events db in
     Report_json.print (Jsont.list Report_json.event) events;
     Ok ())
 ;;
@@ -255,7 +255,7 @@ let backup database directory =
       | false -> Or_error.errorf "%s already exists" target)
   in
   let copy = Stdlib.Filename.concat target in
-  let%bind () = Store.backup database (copy "fin.sqlite3") in
+  let%bind () = Setup.backup database (copy "fin.sqlite3") in
   let%map () = Or_error.try_with (fun () -> Unix.chmod (copy "fin.sqlite3") 0o600) in
   printf "Backed up to %s:\n  fin.sqlite3    from %s\n" target database;
   printf
@@ -347,7 +347,7 @@ let restore database backup yes =
     print_endline "Nothing restored.";
     Ok ())
   else (
-    let%bind () = Store.restore ~source ~destination:database in
+    let%bind () = Setup.restore ~source ~destination:database in
     let%bind () =
       Fin_state.delete stale
       |> Or_error.tag ~tag:"database restored; clearing stale generated files"
@@ -534,7 +534,7 @@ let ingest_cmd =
 
 let project_bank database =
   with_database database (fun db ->
-    let%bind report = Store.project_bank db in
+    let%bind report = Ledger.project_bank db in
     printf "inserted=%d existing=%d\n" report.inserted report.existing;
     Ok ())
 ;;
@@ -632,7 +632,7 @@ let ledger_cmd =
 
 let list_bank_accounts database json_output =
   with_database database (fun db ->
-    let%bind accounts = Store.bank_account_info db in
+    let%bind accounts = Transfers.bank_account_info db in
     if json_output
     then Report_json.print (Jsont.list Report_json.account) accounts
     else if List.is_empty accounts
@@ -647,7 +647,7 @@ let status database json_output =
   let module Status = Finances_import.Bank_status in
   let%bind report = with_database database Status.read in
   let banks =
-    List.map report.accounts ~f:(fun a -> a.Store.mapping.institution)
+    List.map report.accounts ~f:(fun a -> a.Transfers.mapping.institution)
     |> List.dedup_and_sort ~compare:String.compare
     |> List.length
   in
@@ -666,7 +666,7 @@ let status database json_output =
       Terminal.table
         [ "Bank"; "Account"; "Currency"; "Movements"; "First observed"; "Last observed" ]
         (List.map report.accounts ~f:(fun a ->
-           [ a.Store.mapping.institution
+           [ a.Transfers.mapping.institution
            ; a.mapping.ledger_account
            ; Iso4217.to_alpha_code a.currency
            ; Int.to_string a.movements
@@ -706,7 +706,7 @@ let status_cmd =
 
 let import_history database limit json_output =
   with_database database (fun db ->
-    let%bind attempts = Store.bank_import_history ~limit db in
+    let%bind attempts = Import.bank_import_history ~limit db in
     if json_output
     then Report_json.print (Jsont.list Report_json.import) attempts
     else Terminal.import_history attempts;
@@ -773,14 +773,15 @@ let configure_new_accounts db fresh =
   let rec groups remaining =
     match remaining with
     | [] -> Ok 0
-    | (first : Store.bank_account_info) :: rest ->
+    | (first : Transfers.bank_account_info) :: rest ->
       let siblings, rest =
         List.partition_tf rest ~f:(fun info ->
-          same_group first.mapping info.Store.mapping)
+          same_group first.mapping info.Transfers.mapping)
       in
       let group = first :: siblings in
       let missing =
-        List.filter group ~f:(fun info -> String.equal info.Store.iban_source "missing")
+        List.filter group ~f:(fun info ->
+          String.equal info.Transfers.iban_source "missing")
       in
       let%bind count =
         match missing with
@@ -792,15 +793,15 @@ let configure_new_accounts db fresh =
             first.mapping.account_id
             (String.concat
                ~sep:", "
-               (List.map missing ~f:(fun i -> i.Store.mapping.account_type)))
-            (List.sum (module Int) missing ~f:(fun i -> i.Store.movements))
+               (List.map missing ~f:(fun i -> i.Transfers.mapping.account_type)))
+            (List.sum (module Int) missing ~f:(fun i -> i.Transfers.movements))
             (Date.to_string
                (List.reduce_exn
-                  (List.map missing ~f:(fun i -> i.Store.first_on))
+                  (List.map missing ~f:(fun i -> i.Transfers.first_on))
                   ~f:(fun a b -> if Date.compare a b <= 0 then a else b)))
             (Date.to_string
                (List.reduce_exn
-                  (List.map missing ~f:(fun i -> i.Store.last_on))
+                  (List.map missing ~f:(fun i -> i.Transfers.last_on))
                   ~f:(fun a b -> if Date.compare a b >= 0 then a else b)));
           let rec read () =
             match
@@ -818,21 +819,21 @@ let configure_new_accounts db fresh =
           (match iban with
            | None -> Ok 0
            | Some iban ->
-             let%bind current = Store.export_bank_accounts db in
+             let%bind current = Accounts.export_bank_accounts db in
              let updates =
                List.filter_map current ~f:(fun row ->
                  if
                    List.exists missing ~f:(fun info ->
                      String.equal
                        row.Bank_account_config.reference.institution
-                       info.Store.mapping.institution
+                       info.Transfers.mapping.institution
                      && String.equal
                           (Bank_account_config.source_account row.reference)
                           (Bank_account_mapping.source_account info.mapping))
                  then Some { row with iban = Set iban }
                  else None)
              in
-             let%map result = Store.apply_bank_accounts db updates in
+             let%map result = Accounts.apply_bank_accounts db updates in
              result.identity_changes)
       in
       let%map remaining = groups rest in
@@ -852,7 +853,7 @@ let csv_import_profile ?(setup_only = false) database path max_mib ~institution 
       In_channel.read_all path)
   in
   let%bind contexts =
-    with_database database (fun db -> Store.document_contexts db ~institution)
+    with_database database (fun db -> Import.document_contexts db ~institution)
   in
   let%bind profiles =
     List.map contexts ~f:(fun context ->
@@ -865,7 +866,7 @@ let csv_import_profile ?(setup_only = false) database path max_mib ~institution 
     |> Or_error.combine_errors
   in
   let%bind configured =
-    with_database database (fun db -> Store.institution_profile db institution)
+    with_database database (fun db -> Setup.institution_profile db institution)
   in
   let%bind configured =
     match configured with
@@ -1186,7 +1187,7 @@ let builtin_institution_name registry name =
 
 let ensure_generic_source database institution expected_kind =
   with_database database (fun db ->
-    let%bind companion = Store.institution_companion_profile db institution in
+    let%bind companion = Setup.institution_companion_profile db institution in
     let%bind () =
       if String.equal expected_kind "csv-movement" && Option.is_some companion
       then
@@ -1195,7 +1196,7 @@ let ensure_generic_source database institution expected_kind =
            PATH"
       else Ok ()
     in
-    let%bind events = Store.events db in
+    let%bind events = Ledger.events db in
     if
       List.exists events ~f:(fun (_, event) ->
         String.equal event.Source_event.venue institution
@@ -1304,14 +1305,14 @@ let import_bank database institution paths journal max_mib account_id provider =
       then Ok ()
       else
         with_database database (fun db ->
-          let%bind existing = Store.institutions db in
+          let%bind existing = Setup.institutions db in
           if List.mem existing institution ~equal:String.equal
           then (
             match !selected_profile with
             | None -> Ok ()
             | Some profile ->
-              Store.set_institution_profile_if_missing db institution profile)
-          else Store.add_institution ?profile:!selected_profile db institution)
+              Setup.set_institution_profile_if_missing db institution profile)
+          else Setup.add_institution ?profile:!selected_profile db institution)
     in
     List.iter report.inputs.files ~f:(fun row ->
       printf
@@ -1489,7 +1490,7 @@ let import_bank_cmd =
                  if
                    List.is_empty institutions
                    && ((not (Stdlib.Sys.file_exists first)) || not (List.is_empty paths))
-                 then with_database database Store.institutions
+                 then with_database database Setup.institutions
                  else Ok []
                in
                match institutions with
@@ -1519,7 +1520,7 @@ let import_bank_cmd =
                    let%bind files = generic_statement_files paths in
                    let%bind companion =
                      with_database database (fun db ->
-                       Store.institution_companion_profile db first)
+                       Setup.institution_companion_profile db first)
                    in
                    if Option.is_some companion
                    then import_bank database first files journal max_mib account_id None
@@ -1656,7 +1657,7 @@ let institution_filter =
 
 let statements database institution =
   with_database database (fun db ->
-    let%bind statements = Store.statement_reconciliations ?institution db in
+    let%bind statements = Review.statement_reconciliations ?institution db in
     Report_json.print Report_json.statements statements;
     Ok ())
 ;;
@@ -1670,19 +1671,19 @@ let statements_cmd =
 
 let companions database institution review =
   with_database database (fun db ->
-    let%bind observations = Store.companion_observations ?institution db in
+    let%bind observations = Ledger.companion_observations ?institution db in
     let observations =
       if not review
       then observations
       else
         List.filter observations ~f:(fun o ->
           not
-            (Option.exists o.Store.matching ~f:(fun m ->
+            (Option.exists o.Ledger.matching ~f:(fun m ->
                Poly.equal m.state Bank_match.Matched)))
     in
-    let describers = Registry.companions (Store.registry db) in
+    let describers = Registry.companions (Accounts.registry db) in
     let%map rows =
-      List.map observations ~f:(fun (o : Store.companion_observation) ->
+      List.map observations ~f:(fun (o : Ledger.companion_observation) ->
         let row = o.row in
         let%bind (companion : Companion.t) =
           Or_error.of_option
@@ -1719,7 +1720,7 @@ let companions_cmd =
 
 let match_companions database institution =
   with_database database (fun db ->
-    let%bind result = Store.match_companions ?institution db in
+    let%bind result = Ledger.match_companions ?institution db in
     printf
       "matched=%d unmatched=%d ambiguous=%d conflicts=%d changed=%d\n"
       result.matched
@@ -1741,13 +1742,13 @@ let categorize_bank database path =
   let%bind contents = read_file path in
   let%bind decisions = Bank_category.of_json contents in
   with_database database (fun db ->
-    let%bind changed = Store.set_bank_categories db decisions in
+    let%bind changed = Review.set_bank_categories db decisions in
     printf "category_changes=%d\n" changed;
     Ok ())
 ;;
 
 let bank_event_ids_for_operations ?source_event_id db operation_ids =
-  let%bind operations = Store.operation_review db in
+  let%bind operations = Review.operation_review db in
   let%bind () =
     if Option.is_some source_event_id && List.length operation_ids <> 1
     then Or_error.error_string "--source-event requires exactly one operation ID"
@@ -1755,7 +1756,7 @@ let bank_event_ids_for_operations ?source_event_id db operation_ids =
   in
   List.map operation_ids ~f:(fun operation_id ->
     match
-      List.find operations ~f:(fun (o : Store.operation_review) ->
+      List.find operations ~f:(fun (o : Review.operation_review) ->
         Int64.equal o.operation_id operation_id)
     with
     | None -> Or_error.errorf "unknown operation ID: %Ld" operation_id
@@ -1763,7 +1764,7 @@ let bank_event_ids_for_operations ?source_event_id db operation_ids =
       (match source_event_id, operation.movements with
        | Some id, movements ->
          (match
-            List.find movements ~f:(fun m -> Int64.equal m.Store.anchor_event_id id)
+            List.find movements ~f:(fun m -> Int64.equal m.Review.anchor_event_id id)
           with
           | Some m when Option.is_some m.review -> Ok id
           | _ ->
@@ -1831,7 +1832,7 @@ let category_set database account inputs =
             ~reason:"Set with fin operation category set")
         |> Or_error.combine_errors
       in
-      let%bind changed = Store.set_bank_categories db decisions in
+      let%bind changed = Review.set_bank_categories db decisions in
       printf "category_changes=%d\n" changed;
       Ok ()))
 ;;
@@ -1967,8 +1968,8 @@ let operation_matches
   =
   let any_movement f =
     List.exists
-      row.operation.Store.movements
-      ~f:(fun (m : Store.operation_movement_review) ->
+      row.operation.Review.movements
+      ~f:(fun (m : Review.operation_movement_review) ->
         Option.value_map m.review ~default:false ~f)
   in
   let occurred_date =
@@ -1978,14 +1979,14 @@ let operation_matches
     List.exists row.movement_rows ~f:(fun m -> String.equal m.account_id id))
   && Option.value_map institution ~default:true ~f:(fun name ->
     String.equal name row.operation.institution
-    || any_movement (fun (r : Store.bank_review) -> String.equal name r.institution))
+    || any_movement (fun (r : Review.bank_review) -> String.equal name r.institution))
   && Option.value_map movement_type ~default:true ~f:(fun filter ->
-    any_movement (fun (r : Store.bank_review) ->
+    any_movement (fun (r : Review.bank_review) ->
       matches_movement_type_filter filter r.movement_type))
   && Option.value_map classification ~default:true ~f:(fun wanted ->
-    any_movement (fun (r : Store.bank_review) -> Poly.equal r.classification wanted))
+    any_movement (fun (r : Review.bank_review) -> Poly.equal r.classification wanted))
   && Option.value_map counter_account ~default:true ~f:(fun account ->
-    any_movement (fun (r : Store.bank_review) -> String.equal r.counter_account account))
+    any_movement (fun (r : Review.bank_review) -> String.equal r.counter_account account))
   && Option.value_map from_date ~default:true ~f:(fun date ->
     Date.compare occurred_date date >= 0)
   && Option.value_map to_date ~default:true ~f:(fun date ->
@@ -2000,7 +2001,7 @@ let compare_operation_column
       (b : Report_json.operation_row)
   =
   let compare_reviews f =
-    match a.operation.Store.review, b.operation.Store.review with
+    match a.operation.Review.review, b.operation.Review.review with
     | Some ar, Some br -> f ar br
     | Some _, None -> -1
     | None, Some _ -> 1
@@ -2009,19 +2010,19 @@ let compare_operation_column
   match column with
   | Sort_occurrence ->
     String.compare
-      (Temporal.to_string a.operation.Store.occurred)
-      (Temporal.to_string b.operation.Store.occurred)
+      (Temporal.to_string a.operation.Review.occurred)
+      (Temporal.to_string b.operation.Review.occurred)
   | Sort_date ->
     compare_reviews (fun ar br ->
-      Date.compare ar.Store.transaction.booked_on br.Store.transaction.booked_on)
+      Date.compare ar.Review.transaction.booked_on br.Review.transaction.booked_on)
   | Sort_amount ->
     compare_reviews (fun ar br ->
-      Quantity.compare ar.Store.transaction.amount br.Store.transaction.amount)
+      Quantity.compare ar.Review.transaction.amount br.Review.transaction.amount)
   | Sort_currency ->
     compare_reviews (fun ar br ->
       String.compare
-        (Iso4217.to_alpha_code ar.Store.transaction.account.currency)
-        (Iso4217.to_alpha_code br.Store.transaction.account.currency))
+        (Iso4217.to_alpha_code ar.Review.transaction.account.currency)
+        (Iso4217.to_alpha_code br.Review.transaction.account.currency))
   | Sort_institution -> String.compare a.operation.institution b.operation.institution
   | Sort_account ->
     String.compare
@@ -2029,26 +2030,26 @@ let compare_operation_column
       (Option.value b.account_id ~default:"")
   | Sort_type ->
     let name (row : Report_json.operation_row) =
-      Option.bind row.operation.Store.review ~f:(fun r ->
-        Option.map r.Store.movement_type ~f:Movement_type.to_string)
+      Option.bind row.operation.Review.review ~f:(fun r ->
+        Option.map r.Review.movement_type ~f:Movement_type.to_string)
       |> Option.value ~default:"-"
     in
     String.compare (name a) (name b)
   | Sort_counter_account ->
     let name (row : Report_json.operation_row) =
-      Option.bind row.operation.Store.review ~f:(fun r ->
-        if String.equal r.Store.counter_account "equity:unclassified"
+      Option.bind row.operation.Review.review ~f:(fun r ->
+        if String.equal r.Review.counter_account "equity:unclassified"
         then None
-        else Some r.Store.counter_account)
+        else Some r.Review.counter_account)
       |> Option.value ~default:"-"
     in
     String.compare (name a) (name b)
   | Sort_description ->
     compare_reviews (fun ar br ->
-      String.compare ar.Store.description br.Store.description)
+      String.compare ar.Review.description br.Review.description)
   | Sort_event ->
     let event (row : Report_json.operation_row) =
-      Option.map row.operation.Store.review ~f:(fun r -> r.Store.event_id)
+      Option.map row.operation.Review.review ~f:(fun r -> r.Review.event_id)
       |> Option.value ~default:Int64.max_value
     in
     Int64.compare (event a) (event b)
@@ -2085,14 +2086,14 @@ let list_transactions
     | _ -> Ok ()
   in
   with_database database (fun db ->
-    let%bind accounts = Store.bank_account_info db in
+    let%bind accounts = Transfers.bank_account_info db in
     let%bind () =
       match account_id with
       | None -> Ok ()
       | Some id ->
         (match
            List.count accounts ~f:(fun a ->
-             String.equal (Bank_account_mapping.id a.Store.mapping) id)
+             String.equal (Bank_account_mapping.id a.Transfers.mapping) id)
          with
          | 1 -> Ok ()
          | 0 -> Or_error.error_string "unknown account ID; see fin account list"
@@ -2102,11 +2103,12 @@ let list_transactions
     List.iter accounts ~f:(fun a ->
       Hashtbl.set
         ids
-        ~key:(a.Store.mapping.institution, Bank_account_mapping.source_account a.mapping)
+        ~key:
+          (a.Transfers.mapping.institution, Bank_account_mapping.source_account a.mapping)
         ~data:(Bank_account_mapping.id a.mapping));
-    let%bind operations = Store.operation_review db in
+    let%bind operations = Review.operation_review db in
     let%bind rows =
-      List.map operations ~f:(fun (operation : Store.operation_review) ->
+      List.map operations ~f:(fun (operation : Review.operation_review) ->
         let%map account_id =
           match operation.review with
           | None -> Ok None
@@ -2123,8 +2125,8 @@ let list_transactions
         in
         let movement_rows =
           List.filter_map operation.movements ~f:(fun m ->
-            Option.map m.Store.review ~f:(fun review ->
-              let account = review.Store.transaction.account in
+            Option.map m.Review.review ~f:(fun review ->
+              let account = review.Review.transaction.account in
               let source =
                 Json.encode
                   (Jsont.list Jsont.string)
@@ -2248,7 +2250,7 @@ let transaction_list_cmd =
           & opt
               (some
                  (enum
-                    [ "unclassified", Store.Unclassified
+                    [ "unclassified", Review.Unclassified
                     ; "category", Category
                     ; "transfer", Transfer
                     ; "settlement", Settlement
@@ -2296,7 +2298,7 @@ let transaction_list_cmd =
 
 let refresh_transaction_evidence database institution yes =
   with_database database (fun db ->
-    let%bind changes = Store.preview_source_evidence ?institution db in
+    let%bind changes = Ledger.preview_source_evidence ?institution db in
     let describe (e : Source_evidence.t) =
       Printf.sprintf
         "card=%s reversal=%s"
@@ -2309,7 +2311,7 @@ let refresh_transaction_evidence database institution yes =
       Ok ())
     else (
       printf "Proposed source evidence changes: %d\n" (List.length changes);
-      List.iter changes ~f:(fun (change : Store.source_evidence_change) ->
+      List.iter changes ~f:(fun (change : Ledger.source_evidence_change) ->
         printf
           "  #%Ld  %s  %s -> %s  %s\n"
           change.event_id
@@ -2334,7 +2336,9 @@ let refresh_transaction_evidence database institution yes =
         print_endline "Nothing changed.";
         Ok ())
       else (
-        let%map count = Store.refresh_source_evidence ?institution db ~expected:changes in
+        let%map count =
+          Ledger.refresh_source_evidence ?institution db ~expected:changes
+        in
         printf "source_evidence_changed=%d\n" count)))
 ;;
 
@@ -2351,7 +2355,7 @@ let refresh_transaction_evidence_cmd =
 
 let transaction_type_list database =
   with_database database (fun db ->
-    let%map provider_types = Store.observed_provider_movement_types db in
+    let%map provider_types = Restore.observed_provider_movement_types db in
     print_endline "Common movement types:";
     List.iter Movement_type.common ~f:(fun (kind, description) ->
       printf "  %-18s %s\n" (Movement_type.to_string kind) description);
@@ -2394,7 +2398,7 @@ let transaction_type_set database value operation_ids source_event_id =
       bank_event_ids_for_operations ?source_event_id db operation_ids
     in
     let%map changed =
-      Store.set_movement_type_overrides db ~event_ids ~movement_type:(Some kind)
+      Restore.set_movement_type_overrides db ~event_ids ~movement_type:(Some kind)
     in
     printf "type_changes=%d\n" changed)
 ;;
@@ -2423,7 +2427,9 @@ let transaction_type_reset database operation_id source_event_id =
       bank_event_ids_for_operations ?source_event_id db [ operation_id ]
       |> Result.map ~f:List.hd_exn
     in
-    let%map changed = Store.set_movement_type_override db ~event_id ~movement_type:None in
+    let%map changed =
+      Restore.set_movement_type_override db ~event_id ~movement_type:None
+    in
     print_endline
       (if changed then "Movement type override removed." else "No movement type override."))
 ;;
@@ -2448,9 +2454,9 @@ let transaction_type_show database operation_id source_event_id =
       bank_event_ids_for_operations ?source_event_id db [ operation_id ]
       |> Result.map ~f:List.hd_exn
     in
-    let%bind rows = Store.bank_review db in
+    let%bind rows = Review.bank_review db in
     let%map row =
-      List.find rows ~f:(fun r -> Int64.equal r.Store.event_id event_id)
+      List.find rows ~f:(fun r -> Int64.equal r.Review.event_id event_id)
       |> Or_error.of_option ~error:(Error.of_string "unknown transaction event ID")
     in
     Terminal.review [ row ];
@@ -2474,13 +2480,13 @@ let transaction_type_show_cmd =
 
 let transaction_type_history database json_output =
   with_database database (fun db ->
-    let%map rows = Store.movement_type_history db in
+    let%map rows = Restore.movement_type_history db in
     if json_output
     then Report_json.print (Jsont.list Report_json.movement_type_change) rows
     else if List.is_empty rows
     then print_endline "No movement type changes."
     else
-      List.iter rows ~f:(fun (r : Store.movement_type_history_entry) ->
+      List.iter rows ~f:(fun (r : Restore.movement_type_history_entry) ->
         let name = Option.value_map ~default:"no override" ~f:Movement_type.to_string in
         printf
           "#%Ld  event #%Ld  %s -> %s  %s  %s\n"
@@ -2518,7 +2524,7 @@ let institution_list database =
     if not (Registry.is_registered Builtin.registry name)
     then printf "%s (definition)\n" (Terminal.text name));
   with_database database (fun db ->
-    let%map names = Store.institutions db in
+    let%map names = Setup.institutions db in
     List.iter names ~f:(fun name ->
       if
         not
@@ -2574,7 +2580,7 @@ let print_institution_rules (definition : Institution_definition.t) =
 ;;
 
 let print_institution_data db institution =
-  let%map summary = Store.institution_summary db institution in
+  let%map summary = Explain.institution_summary db institution in
   match summary.first_on, summary.last_on with
   | Some first, Some last ->
     printf
@@ -2647,7 +2653,7 @@ let institution_add database name sample =
   if reserved
   then Or_error.error_string "institution name is reserved for a built-in importer"
   else (
-    let%bind existing = with_database database Store.institutions in
+    let%bind existing = with_database database Setup.institutions in
     if List.mem existing name ~equal:String.equal
     then Or_error.errorf "institution already exists: %s" name
     else (
@@ -2673,7 +2679,7 @@ let institution_add database name sample =
           Some (Json.encode Csv_profile.codec profile)
       in
       with_database database (fun db ->
-        let%bind () = Store.add_institution ?profile db name in
+        let%bind () = Setup.add_institution ?profile db name in
         printf
           "Added %s.%s\n"
           (Terminal.text name)
@@ -2904,7 +2910,7 @@ let set_institution_definition database name path yes =
     Or_error.error_string "definition institution does not match the selected institution"
   else (
     let%bind registry = registry_for database in
-    let%bind generic = with_database database Store.institutions in
+    let%bind generic = with_database database Setup.institutions in
     if
       not
         (Registry.is_registered registry name || List.mem generic name ~equal:String.equal)
@@ -2927,8 +2933,8 @@ let set_institution_definition database name path yes =
         let json = Json.encode Institution_definition.codec definition in
         let%bind expected, expected_rules =
           with_database database (fun db ->
-            let%bind definitions = Store.institution_definitions db in
-            let%map rules = Store.classification_rules db in
+            let%bind definitions = Setup.institution_definitions db in
+            let%map rules = Import.classification_rules db in
             List.Assoc.find definitions name ~equal:String.equal, rules)
         in
         let%bind source_unchanged =
@@ -2940,7 +2946,7 @@ let set_institution_definition database name path yes =
         in
         let%bind _ =
           with_database database (fun db ->
-            Store.set_institution_definition
+            Ledger.set_institution_definition
               ~dry_run:true
               db
               ~name
@@ -2987,7 +2993,7 @@ let set_institution_definition database name path yes =
         else
           with_database database (fun db ->
             let%map count =
-              Store.set_institution_definition
+              Ledger.set_institution_definition
                 db
                 ~name
                 ~definition:json
@@ -3022,7 +3028,7 @@ let institution_companion_show database name =
     Ok ()
   | None ->
     with_database database (fun db ->
-      let%bind profile = Store.institution_companion_profile db name in
+      let%bind profile = Setup.institution_companion_profile db name in
       match profile with
       | None ->
         Or_error.error_string "no companion profile configured for this institution"
@@ -3052,9 +3058,9 @@ let institution_companion_set database name path yes =
   in
   let json = Json.encode Csv_companion_layout.codec profile in
   with_database database (fun db ->
-    let%bind current = Store.institution_companion_profile db name in
+    let%bind current = Setup.institution_companion_profile db name in
     let%bind () =
-      Store.set_institution_companion_profile ~dry_run:true db name ~expected:current json
+      Setup.set_institution_companion_profile ~dry_run:true db name ~expected:current json
     in
     printf
       "CSV companion profile for %s:\n%s\n"
@@ -3082,7 +3088,7 @@ let institution_companion_set database name path yes =
       Ok ())
     else (
       let%map () =
-        Store.set_institution_companion_profile db name ~expected:current json
+        Setup.set_institution_companion_profile db name ~expected:current json
       in
       printf "Saved companion profile for %s.\n" (Terminal.text name)))
 ;;
@@ -3102,13 +3108,13 @@ let institution_companion_set_cmd =
 let institution_companion_clear database name yes =
   with_database database (fun db ->
     let%bind expected =
-      Store.institution_companion_profile db name
+      Setup.institution_companion_profile db name
       |> Or_error.bind ~f:(function
         | Some profile -> Ok profile
         | None -> Or_error.error_string "no companion profile configured")
     in
     let%bind () =
-      Store.clear_institution_companion_profile ~dry_run:true db name ~expected
+      Setup.clear_institution_companion_profile ~dry_run:true db name ~expected
     in
     printf "Remove the CSV companion profile for %s?\n" (Terminal.text name);
     let%bind confirmed =
@@ -3130,7 +3136,7 @@ let institution_companion_clear database name yes =
       print_endline "Nothing changed.";
       Ok ())
     else (
-      let%map () = Store.clear_institution_companion_profile db name ~expected in
+      let%map () = Setup.clear_institution_companion_profile db name ~expected in
       printf "Removed companion profile for %s.\n" (Terminal.text name)))
 ;;
 
@@ -3147,7 +3153,7 @@ let institution_companion_clear_cmd =
 
 let institution_delete database name yes =
   with_database database (fun db ->
-    let%bind () = Store.delete_institution ~dry_run:true db name in
+    let%bind () = Setup.delete_institution ~dry_run:true db name in
     printf "Delete institution %s and its saved CSV layout?\n" (Terminal.text name);
     let%bind confirmed =
       if yes
@@ -3166,7 +3172,7 @@ let institution_delete database name yes =
       print_endline "Nothing deleted.";
       Ok ())
     else (
-      let%bind () = Store.delete_institution db name in
+      let%bind () = Setup.delete_institution db name in
       print_endline "Institution deleted.";
       Ok ()))
 ;;
@@ -3187,9 +3193,9 @@ let institution_delete_cmd =
 ;;
 
 type settlement_suggestion =
-  { transaction : Store.bank_review
-  ; card : Store.bank_account_info
-  ; bank : Store.bank_account_info
+  { transaction : Review.bank_review
+  ; card : Transfers.bank_account_info
+  ; bank : Transfers.bank_account_info
   }
 
 let account_reference (mapping : Bank_account_mapping.t) =
@@ -3201,10 +3207,10 @@ let account_reference (mapping : Bank_account_mapping.t) =
 ;;
 
 let settlement_suggestions db =
-  let%bind rows = Store.bank_review db in
-  let%bind accounts = Store.bank_account_info db in
+  let%bind rows = Review.bank_review db in
+  let%bind accounts = Transfers.bank_account_info db in
   let suggestions =
-    List.filter_map rows ~f:(fun (row : Store.bank_review) ->
+    List.filter_map rows ~f:(fun (row : Review.bank_review) ->
       let movement = row.transaction in
       let hint = row.source_evidence.card_reference in
       Option.bind hint ~f:(fun hint ->
@@ -3217,7 +3223,7 @@ let settlement_suggestions db =
         else (
           let banks =
             List.filter accounts ~f:(fun a ->
-              String.equal a.Store.mapping.institution row.institution
+              String.equal a.Transfers.mapping.institution row.institution
               && String.equal a.mapping.bank_id movement.account.bank_id
               && String.equal a.mapping.account_id movement.account.account_id
               && String.equal a.mapping.account_type movement.account.account_type)
@@ -3227,7 +3233,7 @@ let settlement_suggestions db =
             let parent = account_reference bank.mapping in
             let cards =
               List.filter accounts ~f:(fun card ->
-                String.equal card.Store.mapping.institution row.institution
+                String.equal card.Transfers.mapping.institution row.institution
                 && String.equal card.mapping.bank_id movement.account.bank_id
                 && String.equal card.mapping.account_id hint
                 && String.equal card.mapping.account_type "CREDITCRD"
@@ -3242,7 +3248,7 @@ let settlement_suggestions db =
              | [ card ] ->
                let card_has_payment =
                  List.exists rows ~f:(fun other ->
-                   let tx = other.Store.transaction in
+                   let tx = other.Review.transaction in
                    String.equal other.institution card.mapping.institution
                    && String.equal tx.account.bank_id card.mapping.bank_id
                    && String.equal tx.account.account_id card.mapping.account_id
@@ -3286,7 +3292,10 @@ let settlement_candidates_cmd =
       $ database)
 ;;
 
-let card_setup_plan ~(card : Store.bank_account_info) ~(bank : Store.bank_account_info) =
+let card_setup_plan
+      ~(card : Transfers.bank_account_info)
+      ~(bank : Transfers.bank_account_info)
+  =
   let proposed =
     if String.is_prefix card.mapping.ledger_account ~prefix:"liabilities:"
     then card.mapping.ledger_account
@@ -3319,8 +3328,8 @@ let card_setup_plan ~(card : Store.bank_account_info) ~(bank : Store.bank_accoun
 
 let setup_card
       db
-      ~(card : Store.bank_account_info)
-      ~(bank : Store.bank_account_info)
+      ~(card : Transfers.bank_account_info)
+      ~(bank : Transfers.bank_account_info)
       ~yes
       ~allow_yes
   =
@@ -3358,7 +3367,7 @@ let setup_card
     if not confirmed
     then Ok false
     else (
-      let%map _ = Store.apply_bank_accounts db [ update ] in
+      let%map _ = Accounts.apply_bank_accounts db [ update ] in
       true))
 ;;
 
@@ -3417,7 +3426,7 @@ let settlement_tui db suggestions =
       let%bind () =
         if needs_link || needs_mapping
         then
-          Store.confirm_card_settlement_with_setup
+          Accounts.confirm_card_settlement_with_setup
             db
             ~event_id:s.transaction.event_id
             ~card_id:(Bank_account_mapping.id s.card.mapping)
@@ -3425,7 +3434,7 @@ let settlement_tui db suggestions =
             ~expected_link:s.card.settlement_account
             ~setup
         else
-          Store.confirm_card_settlement
+          Transfers.confirm_card_settlement
             db
             s.transaction.event_id
             ~card_id:(Bank_account_mapping.id s.card.mapping)
@@ -3506,7 +3515,7 @@ let settlement_review database requested_event card_id yes tui =
         let%bind row, card, planned =
           match suggestion with
           | None ->
-            let%map row, card = Store.card_settlement_preview ?card_id db event_id in
+            let%map row, card = Transfers.card_settlement_preview ?card_id db event_id in
             row, card, None
           | Some s ->
             let proposed, needs_link, needs_mapping, update =
@@ -3514,7 +3523,9 @@ let settlement_review database requested_event card_id yes tui =
             in
             if (not needs_link) && not needs_mapping
             then (
-              let%map row, card = Store.card_settlement_preview ?card_id db event_id in
+              let%map row, card =
+                Transfers.card_settlement_preview ?card_id db event_id
+              in
               row, card, None)
             else if yes
             then Or_error.error_string "card setup requires interactive confirmation"
@@ -3581,13 +3592,13 @@ let settlement_review database requested_event card_id yes tui =
           let%bind () =
             match planned with
             | None ->
-              Store.confirm_card_settlement
+              Transfers.confirm_card_settlement
                 ~card_id:(Bank_account_mapping.id card.mapping)
                 ~expected_ledger:card.mapping.ledger_account
                 db
                 event_id
             | Some (s, _, _, _, setup) ->
-              Store.confirm_card_settlement_with_setup
+              Accounts.confirm_card_settlement_with_setup
                 db
                 ~event_id
                 ~card_id:(Bank_account_mapping.id s.card.mapping)
@@ -3647,7 +3658,7 @@ let settlement_undo database event_id yes =
       print_endline "Nothing changed.";
       Ok ())
     else (
-      let%bind () = Store.undo_card_settlement db event_id in
+      let%bind () = Transfers.undo_card_settlement db event_id in
       print_endline
         "Card settlement undone. Use fin journal export for an updated journal.";
       Ok ()))
@@ -3674,13 +3685,13 @@ let settlement_history_cmd =
     Term.(
       const (fun database ->
         with_database database (fun db ->
-          let%map rows = Store.card_settlement_history db in
+          let%map rows = Transfers.card_settlement_history db in
           Report_json.print (Jsont.list Report_json.card_settlement_change) rows))
       $ database)
 ;;
 
 let find_rule db name =
-  let%bind rules = Store.classification_rules db in
+  let%bind rules = Import.classification_rules db in
   List.find rules ~f:(fun r -> String.equal r.Classification_rule.name name)
   |> Or_error.of_option ~error:(Error.of_string ("unknown rule: " ^ name))
 ;;
@@ -3766,7 +3777,7 @@ let rule_add
       ()
   in
   with_database database (fun db ->
-    let%bind observed = Store.observed_provider_movement_types db in
+    let%bind observed = Restore.observed_provider_movement_types db in
     let%bind () =
       List.filter_opt
         [ Option.bind match_type ~f:(function
@@ -3783,10 +3794,10 @@ let rule_add
     let%bind () =
       match action with
       | Settlement id ->
-        let%bind accounts = Store.bank_account_info db in
+        let%bind accounts = Transfers.bank_account_info db in
         (match
            List.filter accounts ~f:(fun a ->
-             String.equal (Bank_account_mapping.id a.Store.mapping) id)
+             String.equal (Bank_account_mapping.id a.Transfers.mapping) id)
          with
          | [ card ]
            when List.mem
@@ -3800,8 +3811,8 @@ let rule_add
     in
     let%bind () =
       if replace
-      then Store.replace_classification_rule db rule
-      else Store.add_classification_rule db rule
+      then Ledger.replace_classification_rule db rule
+      else Ledger.add_classification_rule db rule
     in
     printf
       "Saved rule %s (%s). Run fin rule preview %s to review existing matches.\n"
@@ -3978,8 +3989,8 @@ let rule_add_evidence
   with_database database (fun db ->
     let%bind () =
       if replace
-      then Store.replace_classification_rule db rule
-      else Store.add_classification_rule db rule
+      then Ledger.replace_classification_rule db rule
+      else Ledger.add_classification_rule db rule
     in
     printf
       "Saved evidence rule %s. It applies to future imports; run fin operation \
@@ -4044,7 +4055,7 @@ let rule_add_evidence_cmd =
 
 let rule_list database json_output =
   with_database database (fun db ->
-    let%map rules = Store.classification_rules db in
+    let%map rules = Import.classification_rules db in
     if json_output
     then Report_json.print (Jsont.list Report_json.classification_rule) rules
     else if List.is_empty rules
@@ -4092,7 +4103,7 @@ let rule_mode database name value =
     | _ -> Or_error.error_string "mode must be automatic, review, or disabled"
   in
   with_database database (fun db ->
-    let%map () = Store.set_classification_rule_mode db name mode in
+    let%map () = Ledger.set_classification_rule_mode db name mode in
     printf
       "Rule %s is now %s. Existing transactions are unchanged.\n"
       (Terminal.text name)
@@ -4111,7 +4122,7 @@ let rule_mode_cmd =
 ;;
 
 let print_rule_preview (rule : Classification_rule.t) matches =
-  let eligible, skipped = List.partition_tf matches ~f:(fun m -> m.Store.eligible) in
+  let eligible, skipped = List.partition_tf matches ~f:(fun m -> m.Accounts.eligible) in
   printf
     "Rule %s: %s -> %s; %d eligible, %d already reviewed or ineligible.\n"
     (Terminal.text rule.name)
@@ -4120,7 +4131,7 @@ let print_rule_preview (rule : Classification_rule.t) matches =
     (List.length eligible)
     (List.length skipped);
   let show_current m =
-    Terminal.review [ m.Store.transaction ];
+    Terminal.review [ m.Accounts.transaction ];
     if Option.is_none m.transaction.movement_type_override
     then print_endline "  Type source: imported evidence (no manual override)."
   in
@@ -4161,13 +4172,13 @@ let rule_from_category database operation_id name contains institution save yes 
     let%bind event_id =
       bank_event_ids_for_operations db [ operation_id ] |> Result.map ~f:List.hd_exn
     in
-    let%bind rows = Store.bank_review db in
+    let%bind rows = Review.bank_review db in
     let%bind seed =
-      List.find rows ~f:(fun (r : Store.bank_review) -> Int64.equal r.event_id event_id)
+      List.find rows ~f:(fun (r : Review.bank_review) -> Int64.equal r.event_id event_id)
       |> Or_error.of_option ~error:(Error.of_string "unknown transaction event ID")
     in
     let%bind () =
-      if Poly.equal seed.classification Store.Category
+      if Poly.equal seed.classification Review.Category
       then Ok ()
       else Or_error.error_string "choose a categorized transaction"
     in
@@ -4207,7 +4218,7 @@ let rule_from_category database operation_id name contains institution save yes 
         ~action:(Category seed.counter_account)
         ()
     in
-    let%bind matches = Store.preview_classification_rule db rule in
+    let%bind matches = Accounts.preview_classification_rule db rule in
     print_rule_preview rule matches;
     if not save
     then (
@@ -4226,7 +4237,7 @@ let rule_from_category database operation_id name contains institution save yes 
         print_endline "Rule not saved.";
         Ok ())
       else (
-        let%bind () = Store.add_classification_rule db rule in
+        let%bind () = Ledger.add_classification_rule db rule in
         printf "Saved review rule %s.\n" (Terminal.text name);
         Ok ())))
 ;;
@@ -4271,7 +4282,7 @@ let rule_preview database name force json_output =
            preview it"
       | _ -> Ok ()
     in
-    let%map matches = Store.preview_classification_rule ~force db rule in
+    let%map matches = Accounts.preview_classification_rule ~force db rule in
     if json_output
     then Report_json.print (Jsont.list Report_json.classification_rule_match) matches
     else print_rule_preview rule matches)
@@ -4309,9 +4320,9 @@ let rule_apply database name force yes =
            preview it"
       | _ -> Ok ()
     in
-    let%bind matches = Store.preview_classification_rule ~force db rule in
+    let%bind matches = Accounts.preview_classification_rule ~force db rule in
     print_rule_preview rule matches;
-    let selected = List.filter matches ~f:(fun m -> m.Store.eligible) in
+    let selected = List.filter matches ~f:(fun m -> m.Accounts.eligible) in
     if List.is_empty selected
     then (
       print_endline "Nothing to apply.";
@@ -4335,7 +4346,7 @@ let rule_apply database name force yes =
         Ok ())
       else (
         let%bind changed =
-          Store.apply_classification_rule ~force db ~expected:rule ~selected
+          Accounts.apply_classification_rule ~force db ~expected:rule ~selected
         in
         printf "rule_changes=%d\n" changed;
         Ok ())))
@@ -4379,7 +4390,7 @@ let rule_delete database name yes =
       print_endline "Nothing deleted.";
       Ok ())
     else (
-      let%bind () = Store.delete_classification_rule db name in
+      let%bind () = Ledger.delete_classification_rule db name in
       print_endline "Rule deleted.";
       Ok ()))
 ;;
@@ -4400,7 +4411,7 @@ let rule_delete_cmd =
 
 let rule_rename database old_name new_name =
   with_database database (fun db ->
-    let%map () = Store.rename_classification_rule db ~old_name ~new_name in
+    let%map () = Ledger.rename_classification_rule db ~old_name ~new_name in
     printf "Renamed rule %s to %s.\n" (Terminal.text old_name) (Terminal.text new_name))
 ;;
 
@@ -4423,10 +4434,10 @@ let rule_rename_cmd =
 
 let print_type_rule_test
       (rule : Classification_rule.t)
-      (result : Store.type_rule_test)
+      (result : Explain.type_rule_test)
       limit
   =
-  let count f = List.count result.matches ~f:(fun r -> f r.Store.outcome) in
+  let count f = List.count result.matches ~f:(fun r -> f r.Explain.outcome) in
   printf
     "Draft rule %s (automatic on import): %s -> %s, %s.\n"
     (Terminal.text rule.name)
@@ -4461,14 +4472,14 @@ let print_type_rule_test
     result.untyped_after;
   let name = Option.value_map ~default:"none" ~f:Movement_type.to_string in
   let section title select =
-    let rows = List.filter result.matches ~f:(fun r -> select r.Store.outcome) in
+    let rows = List.filter result.matches ~f:(fun r -> select r.Explain.outcome) in
     if not (List.is_empty rows)
     then (
       printf "\n%s:\n" title;
       List.iter (List.take rows limit) ~f:(fun r ->
         printf
           "  #%Ld  %s  %s -> %s  %s%s\n"
-          r.Store.event_id
+          r.Explain.event_id
           (Terminal.text r.institution)
           (name r.before)
           (name r.after)
@@ -4480,16 +4491,16 @@ let print_type_rule_test
       if hidden > 0 then printf "  ... %d more (use --limit)\n" hidden)
   in
   section "Type changes" (function
-    | Store.Changed -> true
+    | Explain.Changed -> true
     | _ -> false);
   section "Decided by an earlier rule; the draft changes nothing here" (function
-    | Store.Shadowed _ -> true
+    | Explain.Shadowed _ -> true
     | _ -> false);
   section "Newly typed" (function
-    | Store.Newly_typed -> true
+    | Explain.Newly_typed -> true
     | _ -> false);
   section "Manual type override; unchanged" (function
-    | Store.Overridden -> true
+    | Explain.Overridden -> true
     | _ -> false)
 ;;
 
@@ -4550,7 +4561,7 @@ let rule_test
       ()
   in
   with_database database (fun db ->
-    let%bind observed = Store.observed_provider_movement_types db in
+    let%bind observed = Restore.observed_provider_movement_types db in
     let%bind () =
       List.filter_opt
         [ Option.bind match_type ~f:(function
@@ -4564,7 +4575,7 @@ let rule_test
         | _ -> Ok ())
       |> Or_error.combine_errors_unit
     in
-    let%map result = Store.test_type_rule db rule in
+    let%map result = Explain.test_type_rule db rule in
     if json_output
     then Report_json.print Report_json.type_rule_test result
     else print_type_rule_test rule result limit)
@@ -4704,7 +4715,7 @@ let rule_explain database operation_id all =
     let%bind event_id =
       bank_event_ids_for_operations db [ operation_id ] |> Result.map ~f:List.hd_exn
     in
-    let%map explanation = Store.explain_movement db event_id in
+    let%map explanation = Explain.explain_movement db event_id in
     print_explanation ~all explanation)
 ;;
 
@@ -4824,7 +4835,7 @@ let print_transaction_detail (t : Transaction_detail.t) =
 ;;
 
 let show_operation_links db event_id =
-  let%map operations = Store.operation_ids_for_events db [ event_id ] in
+  let%map operations = Review.operation_ids_for_events db [ event_id ] in
   List.iter operations ~f:(fun (_, operation_id) ->
     printf "Operation: #%Ld (fin db event operations %Ld)\n" operation_id event_id)
 ;;
@@ -4832,7 +4843,7 @@ let show_operation_links db event_id =
 (* A source event without a bank movement, such as a CDC row, has no
    review detail. Show the operation it supports instead of failing. *)
 let show_operation_only db event_id =
-  let%bind operations = Store.operations_for_event db event_id in
+  let%bind operations = Operations.operations_for_event db event_id in
   match operations with
   | [] -> Or_error.error_string "unknown source event ID"
   | operations ->
@@ -4864,7 +4875,7 @@ let show_operation_only db event_id =
 
 let transaction_show database operation_id =
   with_database database (fun db ->
-    let%bind operation = Store.get_operation db operation_id in
+    let%bind operation = Operations.get_operation db operation_id in
     let sources =
       List.filter_map operation.Operation.evidence ~f:(function
         | Stored_event id -> Some (Int64.to_string id)
@@ -4879,7 +4890,7 @@ let transaction_show database operation_id =
     match event_id with
     | None -> Or_error.error_string "operation has no stored source event"
     | Some event_id ->
-      (match Store.show_movement db event_id with
+      (match Explain.show_movement db event_id with
        | Ok detail ->
          print_transaction_detail detail;
          let%map () = show_operation_links db event_id in
@@ -4919,7 +4930,7 @@ let operation_resolve database operation_id role account commodity_json symbol =
   in
   with_database database (fun db ->
     let%map changed =
-      Store.resolve_operation_movement db ~operation_id ~role ~account ~commodity ~symbol
+      Review.resolve_operation_movement db ~operation_id ~role ~account ~commodity ~symbol
     in
     printf "movement_resolution_changes=%d\n" (if changed then 1 else 0))
 ;;
@@ -4951,7 +4962,7 @@ let operation_exchange_review database operation_id undo yes =
       if undo
       then Ok None
       else (
-        let%map source, entry = Store.operation_exchange_preview db operation_id in
+        let%map source, entry = Operations.operation_exchange_preview db operation_id in
         printf
           "Proposed exchange: %s  %s\n"
           (Date.to_string entry.date)
@@ -4978,7 +4989,7 @@ let operation_exchange_review database operation_id undo yes =
       Ok ())
     else (
       let%map changed =
-        Store.set_operation_exchange
+        Operations.set_operation_exchange
           db
           ~operation_id
           ~confirm:(not undo)
@@ -5004,7 +5015,7 @@ let operation_exchange_cmd ~undo =
 
 let operation_exchange_export database =
   with_database database (fun db ->
-    let%map snapshot = Store.exchange_snapshot db in
+    let%map snapshot = Operations.exchange_snapshot db in
     Report_json.print Exchange_portable.codec snapshot)
 ;;
 
@@ -5019,7 +5030,7 @@ let operation_exchange_restore database path apply yes =
   let%bind contents = read_file path in
   let%bind snapshot = Json.decode Exchange_portable.codec contents in
   with_database database (fun db ->
-    let%bind preview = Store.preview_exchange_restore db snapshot in
+    let%bind preview = Operations.preview_exchange_restore db snapshot in
     printf
       "Exchanges to restore: %d; already matching: %d\n"
       (List.length preview.exchange_decisions)
@@ -5045,7 +5056,7 @@ let operation_exchange_restore database path apply yes =
       print_endline "Nothing restored.";
       Ok ())
     else (
-      let%map changed = Store.restore_exchanges db ~expected:preview snapshot in
+      let%map changed = Operations.restore_exchanges db ~expected:preview snapshot in
       printf "exchange_changes=%d\n" changed))
 ;;
 
@@ -5066,13 +5077,13 @@ let operation_exchange_restore_cmd =
 
 let transaction_operations database event_id json_output =
   with_database database (fun db ->
-    let%bind sources = Store.events db in
+    let%bind sources = Ledger.events db in
     let%bind () =
       if List.exists sources ~f:(fun (id, _) -> Int64.equal id event_id)
       then Ok ()
       else Or_error.error_string "unknown source event ID"
     in
-    let%map operations = Store.operations_for_event db event_id in
+    let%map operations = Operations.operations_for_event db event_id in
     if json_output
     then Report_json.print (Jsont.list Report_json.operation) operations
     else if List.is_empty operations
@@ -5104,7 +5115,7 @@ let transaction_operations database event_id json_output =
 
 let list_sources database institution json_output =
   with_database database (fun db ->
-    let%map sources = Store.events db in
+    let%map sources = Ledger.events db in
     let rows =
       List.filter sources ~f:(fun (_, event) ->
         Option.value_map
@@ -5162,7 +5173,7 @@ let print_description_gaps gaps =
   if List.is_empty gaps
   then print_endline "Every movement has a type."
   else
-    List.iter gaps ~f:(fun (g : Store.description_gap) ->
+    List.iter gaps ~f:(fun (g : Explain.description_gap) ->
       printf
         "%4d  %s  %s  %s..%s  debits %d, credits %d\n"
         g.count
@@ -5181,7 +5192,7 @@ let print_description_gaps gaps =
 
 let rule_gaps database institution limit json_output =
   with_database database (fun db ->
-    let%map gaps = Store.description_gaps ?institution db in
+    let%map gaps = Explain.description_gaps ?institution db in
     let gaps = List.take gaps limit in
     if json_output
     then Report_json.print (Jsont.list Report_json.description_gap) gaps
@@ -5205,7 +5216,7 @@ let rule_gaps_cmd =
 
 let transaction_status database json_output =
   with_database database (fun db ->
-    let%bind report = Store.transaction_status db in
+    let%bind report = Review.transaction_status db in
     if json_output
     then Report_json.print Report_json.transaction_status report
     else (
@@ -5248,10 +5259,10 @@ let transaction_status_cmd =
 
 let bank_review database all json_output =
   with_database database (fun db ->
-    let%bind rows = Store.bank_review db in
+    let%bind rows = Review.bank_review db in
     let rows =
       List.filter rows ~f:(fun r ->
-        all || String.equal r.Store.counter_account "equity:unclassified")
+        all || String.equal r.Review.counter_account "equity:unclassified")
     in
     if json_output
     then Report_json.print (Jsont.list Report_json.review) rows
@@ -5273,7 +5284,7 @@ let bank_review_cmd =
 
 let category_similar database seed json_output =
   with_database database (fun db ->
-    let%bind rows = Store.bank_review db in
+    let%bind rows = Review.bank_review db in
     let%bind preview = Category_similarity.find ~seed rows in
     if json_output
     then Report_json.print Report_json.category_similar preview
@@ -5333,13 +5344,13 @@ let portable_export scope database =
     let%bind snapshot =
       match scope with
       | Catalog ->
-        let%map categories = Store.categories db in
+        let%map categories = Setup.categories db in
         Category_portable.{ categories; rules = []; decisions = []; resolutions = [] }
       | Rules ->
-        let%map rules = Store.classification_rules db in
+        let%map rules = Import.classification_rules db in
         Category_portable.{ categories = []; rules; decisions = []; resolutions = [] }
       | Category_decisions ->
-        let%map snapshot = Store.category_snapshot db in
+        let%map snapshot = Restore.category_snapshot db in
         select_portable scope snapshot
     in
     Report_json.print (portable_codec scope) snapshot;
@@ -5408,7 +5419,7 @@ let portable_restore scope database path apply yes institution =
             - List.length resolutions )
   in
   with_database database (fun db ->
-    let%bind preview = Store.preview_category_restore db snapshot in
+    let%bind preview = Restore.preview_category_restore db snapshot in
     Option.iter institution ~f:(fun name ->
       printf "Institution: %s; decisions skipped: %d\n" (Terminal.text name) skipped);
     printf "Categories to add: %d\n" (List.length preview.categories_to_add);
@@ -5455,7 +5466,7 @@ let portable_restore scope database path apply yes institution =
         print_endline "Nothing restored.";
         Ok ())
       else (
-        let%bind changed = Store.restore_categories db ~expected:preview snapshot in
+        let%bind changed = Restore.restore_categories db ~expected:preview snapshot in
         printf
           "categories_added=%d rules_added=%d category_changes=%d type_changes=%d\n"
           (List.length preview.categories_to_add)
@@ -5513,7 +5524,7 @@ let rules_restore_cmd = portable_restore_cmd Rules "Preview or restore stored ru
 
 let category_list database json_output =
   with_database database (fun db ->
-    let%bind categories = Store.categories db in
+    let%bind categories = Setup.categories db in
     if json_output
     then Report_json.print (Jsont.list Jsont.string) categories
     else List.iter categories ~f:(fun category -> printf "%s\n" (Terminal.text category));
@@ -5529,7 +5540,7 @@ let category_list_cmd =
 
 let category_add database name =
   with_database database (fun db ->
-    let%bind () = Store.add_categories db [ name ] in
+    let%bind () = Setup.add_categories db [ name ] in
     printf "Category available: %s\n" (Terminal.text name);
     Ok ())
 ;;
@@ -5546,7 +5557,7 @@ let category_add_cmd =
 
 let category_delete database name =
   with_database database (fun db ->
-    let%bind () = Store.delete_category db name in
+    let%bind () = Setup.delete_category db name in
     printf "Category deleted: %s\n" (Terminal.text name);
     Ok ())
 ;;
@@ -5591,7 +5602,7 @@ let category_init database =
   then Or_error.error_string "category initialization requires a terminal"
   else
     with_database database (fun db ->
-      let%bind existing = Store.categories db in
+      let%bind existing = Setup.categories db in
       let available =
         List.filter starter_categories ~f:(fun name ->
           not (List.mem existing name ~equal:String.equal))
@@ -5646,7 +5657,7 @@ let category_init database =
           List.iter selected ~f:(fun name -> printf "  %s\n" name);
           (match prompt "Add these categories? [Y/n]: " with
            | Some answer when confirm_default_yes answer ->
-             let%bind () = Store.add_categories db selected in
+             let%bind () = Setup.add_categories db selected in
              printf "categories_added=%d\n" (List.length selected);
              Ok ()
            | _ ->
@@ -5669,22 +5680,23 @@ let category_review database operation_id =
       let%bind event_id =
         bank_event_ids_for_operations db [ operation_id ] |> Result.map ~f:List.hd_exn
       in
-      let%bind rows = Store.bank_review db in
+      let%bind rows = Review.bank_review db in
       let%bind seed =
-        List.find rows ~f:(fun (r : Store.bank_review) -> Int64.equal r.event_id event_id)
+        List.find rows ~f:(fun (r : Review.bank_review) ->
+          Int64.equal r.event_id event_id)
         |> Or_error.of_option ~error:(Error.of_string "unknown transaction event ID")
       in
       if
         not
-          (Poly.equal seed.classification Store.Unclassified
-           || Poly.equal seed.classification Store.Category)
+          (Poly.equal seed.classification Review.Unclassified
+           || Poly.equal seed.classification Review.Category)
       then
         Or_error.error_string
           "transaction belongs to a confirmed transfer, settlement or reversal"
       else (
         print_endline "Transaction to classify:";
         Terminal.review [ seed ];
-        let%bind categories = Store.categories db in
+        let%bind categories = Setup.categories db in
         if not (List.is_empty categories)
         then (
           print_endline "Available categories:";
@@ -5738,40 +5750,41 @@ let category_review database operation_id =
                 ~seed:event_id
                 (example
                  :: List.filter rows ~f:(fun r ->
-                   not (Int64.equal r.Store.event_id event_id)))
+                   not (Int64.equal r.Review.event_id event_id)))
           in
-          let needs_category (r : Store.bank_review) =
+          let needs_category (r : Review.bank_review) =
             not
-              (Poly.equal r.classification Store.Category
+              (Poly.equal r.classification Review.Category
                && String.equal r.counter_account category)
           in
           let fuzzy =
             Category_similarity.fuzzy ~seed rows
-            |> List.filter ~f:(fun ((r : Store.bank_review), _) ->
-              Poly.equal r.classification Store.Unclassified)
+            |> List.filter ~f:(fun ((r : Review.bank_review), _) ->
+              Poly.equal r.classification Review.Unclassified)
           in
           let initial = matches.candidates @ List.map fuzzy ~f:fst in
-          let eligible (r : Store.bank_review) =
-            Poly.equal r.classification Store.Unclassified
-            || Poly.equal r.classification Store.Category
+          let eligible (r : Review.bank_review) =
+            Poly.equal r.classification Review.Unclassified
+            || Poly.equal r.classification Review.Category
           in
           let show_rows
-                (selected : Store.bank_review list)
-                (candidates : Store.bank_review list)
+                (selected : Review.bank_review list)
+                (candidates : Review.bank_review list)
                 show_fuzzy
             =
             print_endline "Matches (selected rows marked x):";
             if List.is_empty candidates then print_endline "  No matches.";
-            List.iteri candidates ~f:(fun i (r : Store.bank_review) ->
+            List.iteri candidates ~f:(fun i (r : Review.bank_review) ->
               let chosen =
-                List.exists selected ~f:(fun x -> Int64.equal x.Store.event_id r.event_id)
+                List.exists selected ~f:(fun x ->
+                  Int64.equal x.Review.event_id r.event_id)
               in
               let label =
                 if show_fuzzy
                 then
                   Option.value_map
                     (List.find fuzzy ~f:(fun (row, _) ->
-                       Int64.equal row.Store.event_id r.event_id))
+                       Int64.equal row.Review.event_id r.event_id))
                     ~default:"exact"
                     ~f:(fun (_, score) -> Printf.sprintf "fuzzy %.2f" score)
                 else "search"
@@ -5790,8 +5803,8 @@ let category_review database operation_id =
                 (Terminal.text r.counter_account))
           in
           let rec select
-                    (candidates : Store.bank_review list)
-                    (selected : Store.bank_review list)
+                    (candidates : Review.bank_review list)
+                    (selected : Review.bank_review list)
                     show_fuzzy
             =
             show_rows selected candidates show_fuzzy;
@@ -5816,7 +5829,7 @@ let category_review database operation_id =
                 Ok
                   (Some
                      (List.dedup_and_sort
-                        ~compare:(fun (a : Store.bank_review) (b : Store.bank_review) ->
+                        ~compare:(fun (a : Review.bank_review) (b : Review.bank_review) ->
                           Int64.compare a.event_id b.event_id)
                         (selected @ List.filter candidates ~f:eligible)))
               else if
@@ -5833,7 +5846,7 @@ let category_review database operation_id =
                   then select candidates selected show_fuzzy
                   else (
                     let results =
-                      List.filter rows ~f:(fun (r : Store.bank_review) ->
+                      List.filter rows ~f:(fun (r : Review.bank_review) ->
                         (not (Int64.equal r.event_id event_id))
                         && needs_category r
                         && String.Caseless.is_substring r.description ~substring:query)
@@ -5874,7 +5887,7 @@ let category_review database operation_id =
                     select candidates selected show_fuzzy)
                   else if
                     List.contains_dup
-                      (List.map choices ~f:(fun r -> r.Store.event_id))
+                      (List.map choices ~f:(fun r -> r.Review.event_id))
                       ~compare:Int64.compare
                   then (
                     eprintf "Select each match only once.\n";
@@ -5884,10 +5897,10 @@ let category_review database operation_id =
                       List.fold choices ~init:selected ~f:(fun selected r ->
                         if
                           List.exists selected ~f:(fun x ->
-                            Int64.equal x.Store.event_id r.Store.event_id)
+                            Int64.equal x.Review.event_id r.Review.event_id)
                         then
                           List.filter selected ~f:(fun x ->
-                            not (Int64.equal x.Store.event_id r.Store.event_id))
+                            not (Int64.equal x.Review.event_id r.Review.event_id))
                         else selected @ [ r ])
                     in
                     select candidates selected show_fuzzy)))
@@ -5907,7 +5920,7 @@ let category_review database operation_id =
                printf "Proposed category: %s\n" (Terminal.text category);
                Terminal.review
                  (List.map chosen ~f:(fun r ->
-                    { r with Store.counter_account = category; reason = None }));
+                    { r with Review.counter_account = category; reason = None }));
                printf "Apply to %d transaction(s)? [Y/n]: " (List.length chosen);
                Out_channel.flush stdout;
                let confirmed =
@@ -5922,7 +5935,7 @@ let category_review database operation_id =
                  Ok ())
                else (
                  let%bind decisions =
-                   List.map chosen ~f:(fun (r : Store.bank_review) ->
+                   List.map chosen ~f:(fun (r : Review.bank_review) ->
                      Bank_category.create
                        ~event_id:r.event_id
                        ~account:category
@@ -5936,11 +5949,13 @@ let category_review database operation_id =
                    |> Or_error.combine_errors
                  in
                  let expected =
-                   List.map chosen ~f:(fun (r : Store.bank_review) ->
+                   List.map chosen ~f:(fun (r : Review.bank_review) ->
                      ( r.event_id
                      , Option.map r.reason ~f:(fun reason -> r.counter_account, reason) ))
                  in
-                 let%bind changed = Store.review_bank_categories db ~expected decisions in
+                 let%bind changed =
+                   Review.review_bank_categories db ~expected decisions
+                 in
                  printf "category_changes=%d\n" changed;
                  Ok ())))))
 ;;
@@ -5953,15 +5968,15 @@ let category_queue database shortcuts types =
       List.map types ~f:parse_movement_type_filter |> Or_error.combine_errors
     in
     with_database database (fun db ->
-      let%bind rows = Store.bank_review db in
+      let%bind rows = Review.bank_review db in
       let rows =
-        List.filter rows ~f:(fun (row : Store.bank_review) ->
-          Poly.equal row.classification Store.Unclassified
+        List.filter rows ~f:(fun (row : Review.bank_review) ->
+          Poly.equal row.classification Review.Unclassified
           && (List.is_empty types
               || List.exists types ~f:(fun filter ->
                 matches_movement_type_filter filter row.movement_type)))
       in
-      let%bind categories = Store.categories db in
+      let%bind categories = Setup.categories db in
       Category_tui.run db rows categories shortcuts))
 ;;
 
@@ -6023,7 +6038,7 @@ let category_review_cmd =
 
 let category_history database =
   with_database database (fun db ->
-    let%bind rows = Store.bank_category_history db in
+    let%bind rows = Review.bank_category_history db in
     Report_json.print (Jsont.list Report_json.category_change) rows;
     Ok ())
 ;;
@@ -6037,10 +6052,10 @@ let category_history_cmd =
 
 let transfer_candidates database all json_output =
   with_database database (fun db ->
-    let%bind rows = Store.transfer_candidates db in
-    let%bind ranked = Transfer_ranking.analyze (Store.registry db) rows in
+    let%bind rows = Transfers.transfer_candidates db in
+    let%bind ranked = Transfer_ranking.analyze (Accounts.registry db) rows in
     let%bind extra =
-      if all then Store.transfer_candidates ~include_reviewed:true db else Ok []
+      if all then Transfers.transfer_candidates ~include_reviewed:true db else Ok []
     in
     if json_output
     then Report_json.print Report_json.preview (ranked, extra)
@@ -6118,8 +6133,8 @@ let review_transfers database path =
           Or_error.error_string
             "interactive review requires a terminal or a decisions file"
         else (
-          let%bind candidates = Store.transfer_candidates db in
-          let%bind ranked = Transfer_ranking.analyze (Store.registry db) candidates in
+          let%bind candidates = Transfers.transfer_candidates db in
+          let%bind ranked = Transfer_ranking.analyze (Accounts.registry db) candidates in
           print_endline
             "Review one candidate pair at a time. Choices are staged until you confirm \
              the whole batch.";
@@ -6260,7 +6275,10 @@ let review_transfers database path =
       Ok ())
     else (
       let%map changed =
-        Store.set_bank_transfers ~require_unreviewed:(Option.is_none path) db decisions
+        Transfers.set_bank_transfers
+          ~require_unreviewed:(Option.is_none path)
+          db
+          decisions
       in
       printf "transfer_changes=%d\n" changed))
 ;;
@@ -6283,14 +6301,14 @@ let review_transfers_cmd =
 
 let transfer_export database =
   with_database database (fun db ->
-    let%map snapshot = Store.transfer_snapshot db in
+    let%map snapshot = Operations.transfer_snapshot db in
     Report_json.print Transfer_portable.codec snapshot)
 ;;
 
 let transfer_link database first_operation second_operation first_role second_role yes =
   with_database database (fun db ->
     let%bind preview =
-      Store.preview_general_transfer
+      Operations.preview_general_transfer
         db
         ~first_operation
         ~first_role
@@ -6300,7 +6318,7 @@ let transfer_link database first_operation second_operation first_role second_ro
     printf "Proposed transfer:\n";
     List.iter
       [ preview.first; preview.second ]
-      ~f:(fun (leg : Store.general_transfer_leg) ->
+      ~f:(fun (leg : Operations.general_transfer_leg) ->
         printf
           "  operation #%Ld (%s): %s %s  %s\n"
           leg.operation_id
@@ -6319,7 +6337,7 @@ let transfer_link database first_operation second_operation first_role second_ro
       print_endline "Nothing changed.";
       Ok ())
     else (
-      let%map () = Store.confirm_general_transfer db ~expected:preview in
+      let%map () = Operations.confirm_general_transfer db ~expected:preview in
       print_endline "transfer_changes=1"))
 ;;
 
@@ -6354,7 +6372,7 @@ let transfer_link_cmd =
 
 let transfer_unlink database operation_id yes =
   with_database database (fun db ->
-    let%bind links = Store.operation_transfer_links db in
+    let%bind links = Review.operation_transfer_links db in
     let%bind link =
       List.find links ~f:(fun l ->
         Int64.equal l.first_operation_id operation_id
@@ -6377,7 +6395,7 @@ let transfer_unlink database operation_id yes =
       print_endline "Nothing changed.";
       Ok ())
     else (
-      let%map () = Store.undo_general_transfer db operation_id in
+      let%map () = Operations.undo_general_transfer db operation_id in
       print_endline "transfer_changes=1"))
 ;;
 
@@ -6411,7 +6429,7 @@ let transfer_restore database path apply yes =
        | Error _ -> Error error)
   in
   with_database database (fun db ->
-    let%bind preview = Store.preview_transfer_restore db snapshot in
+    let%bind preview = Operations.preview_transfer_restore db snapshot in
     printf
       "Transfers to restore: %d; already matching: %d\n"
       (List.length preview.decisions + List.length preview.general_decisions)
@@ -6439,7 +6457,7 @@ let transfer_restore database path apply yes =
       print_endline "Nothing restored.";
       Ok ())
     else (
-      let%map changed = Store.restore_transfers db ~expected:preview snapshot in
+      let%map changed = Operations.restore_transfers db ~expected:preview snapshot in
       printf "transfer_changes=%d\n" changed))
 ;;
 
@@ -6460,7 +6478,7 @@ let transfer_restore_cmd =
 
 let transfer_undo database first second yes =
   with_database database (fun db ->
-    let%bind decisions = Store.bank_transfer_decisions db in
+    let%bind decisions = Restore.bank_transfer_decisions db in
     let first, second = Int64.min first second, Int64.max first second in
     let%bind previous =
       List.find decisions ~f:(fun (d : Bank_transfer.decision) ->
@@ -6470,10 +6488,10 @@ let transfer_undo database first second yes =
       |> Or_error.of_option
            ~error:(Error.of_string "no confirmed transfer for these event IDs")
     in
-    let%bind rows = Store.bank_review db in
+    let%bind rows = Review.bank_review db in
     let pair =
       List.filter rows ~f:(fun r ->
-        Int64.equal r.Store.event_id first || Int64.equal r.event_id second)
+        Int64.equal r.Review.event_id first || Int64.equal r.event_id second)
     in
     if List.length pair <> 2
     then Or_error.error_string "transfer movements are missing"
@@ -6506,7 +6524,7 @@ let transfer_undo database first second yes =
             ~reason:"Undone by user"
         in
         let%map changed =
-          Store.set_bank_transfers ~expected_previous:previous db [ decision ]
+          Transfers.set_bank_transfers ~expected_previous:previous db [ decision ]
         in
         printf "transfer_changes=%d\n" changed)))
 ;;
@@ -6531,11 +6549,11 @@ let transfer_undo_cmd =
 
 let reversal_candidates database =
   with_database database (fun db ->
-    let%map candidates = Store.reversal_candidates db in
+    let%map candidates = Transfers.reversal_candidates db in
     if List.is_empty candidates
     then print_endline "No unreviewed reversal candidates."
     else
-      List.iter candidates ~f:(fun (c : Store.reversal_candidate) ->
+      List.iter candidates ~f:(fun (c : Transfers.reversal_candidate) ->
         printf "Original #%Ld; reversal #%Ld\n" c.original.event_id c.reversal.event_id;
         Terminal.review [ c.original; c.reversal ]))
 ;;
@@ -6549,9 +6567,9 @@ let reversal_candidates_cmd =
 
 let reversal_review database original reversal undo yes =
   with_database database (fun db ->
-    let%bind rows = Store.bank_review db in
+    let%bind rows = Review.bank_review db in
     let find id =
-      List.find rows ~f:(fun r -> Int64.equal r.Store.event_id id)
+      List.find rows ~f:(fun r -> Int64.equal r.Review.event_id id)
       |> Or_error.of_option ~error:(Error.of_string "unknown transaction event ID")
     in
     let%bind first = find original in
@@ -6580,7 +6598,7 @@ let reversal_review database original reversal undo yes =
       print_endline "Nothing changed.";
       Ok ())
     else (
-      let%map () = Store.reversal_change db ~original ~reversal ~undo in
+      let%map () = Transfers.reversal_change db ~original ~reversal ~undo in
       print_endline (if undo then "Reversal undone." else "Reversal confirmed.")))
 ;;
 
@@ -6612,8 +6630,8 @@ let reversal_history_cmd =
     Term.(
       const (fun database ->
         with_database database (fun db ->
-          let%map changes = Store.reversal_history db in
-          List.iter changes ~f:(fun (r : Store.reversal_history_entry) ->
+          let%map changes = Transfers.reversal_history db in
+          List.iter changes ~f:(fun (r : Transfers.reversal_history_entry) ->
             printf
               "#%Ld  #%Ld -> #%Ld  %s  %s\n"
               r.id
@@ -6628,7 +6646,7 @@ let reversal_history_cmd =
 
 let transfer_history database =
   with_database database (fun db ->
-    let%bind rows = Store.bank_transfer_history db in
+    let%bind rows = Transfers.bank_transfer_history db in
     Report_json.print (Jsont.list Report_json.transfer_change) rows;
     Ok ())
 ;;
@@ -6657,7 +6675,7 @@ let accounts_export database output =
           Or_error.error_string "account snapshot output must not overwrite the database"
         else Ok ()
     in
-    let%bind config = Store.export_bank_accounts db in
+    let%bind config = Accounts.export_bank_accounts db in
     let contents = Bank_account_config.to_json config ^ "\n" in
     match output with
     | None ->
@@ -6670,7 +6688,7 @@ let accounts_import database path dry_run =
   let%bind contents = read_file path in
   let%bind config = Bank_account_config.of_json contents in
   with_database database (fun db ->
-    let%bind result = Store.apply_bank_accounts ~dry_run db config in
+    let%bind result = Accounts.apply_bank_accounts ~dry_run db config in
     Report_json.print Report_json.account_config (dry_run, result);
     Ok ())
 ;;
@@ -6695,7 +6713,7 @@ let ask question =
 (* The edit draft is recoverable, but SQLite is the sole persistent settings store. *)
 let accounts_edit database =
   with_database database (fun db ->
-    let%bind current = Store.export_bank_accounts db in
+    let%bind current = Accounts.export_bank_accounts db in
     let original = Bank_account_config.to_json current ^ "\n" in
     let draft = database ^ ".edit" in
     let%bind () =
@@ -6723,7 +6741,7 @@ let accounts_edit database =
         else (
           match
             Result.bind (Bank_account_config.of_json contents) ~f:(fun edited ->
-              Store.apply_bank_accounts db edited)
+              Accounts.apply_bank_accounts db edited)
           with
           | Ok result ->
             discard ();
@@ -6752,16 +6770,16 @@ let accounts_edit database =
 
 let accounts_history database =
   with_database database (fun db ->
-    let%bind rows = Store.bank_account_history db in
+    let%bind rows = Accounts.bank_account_history db in
     Report_json.print (Jsont.list Report_json.account_change) rows;
     Ok ())
 ;;
 
 let accounts_delete database account_id dry_run yes =
   with_database database (fun db ->
-    let%bind accounts = Store.bank_account_info db in
+    let%bind accounts = Transfers.bank_account_info db in
     let matches =
-      List.filter accounts ~f:(fun (a : Store.bank_account_info) ->
+      List.filter accounts ~f:(fun (a : Transfers.bank_account_info) ->
         String.equal (Bank_account_mapping.id a.mapping) account_id)
     in
     let%bind account =
@@ -6770,7 +6788,7 @@ let accounts_delete database account_id dry_run yes =
       | [] -> Or_error.error_string "no matching account ID; see fin account list"
       | _ -> Or_error.error_string "account ID collision; deletion is refused"
     in
-    let%bind preview = Store.delete_account ~dry_run:true db account.mapping in
+    let%bind preview = Accounts.delete_account ~dry_run:true db account.mapping in
     printf
       "Account: %s / %s (%s), ID %s\nTransactions: %d\nSource documents: %d\n"
       account.mapping.institution
@@ -6805,7 +6823,7 @@ let accounts_delete database account_id dry_run yes =
         print_endline "Nothing deleted.";
         Ok ())
       else (
-        let%bind _ = Store.delete_account db account.mapping in
+        let%bind _ = Accounts.delete_account db account.mapping in
         let journal =
           Stdlib.Filename.concat (Stdlib.Filename.dirname database) "bank.journal"
         in
@@ -6824,11 +6842,11 @@ let accounts_delete database account_id dry_run yes =
 
 let accounts_link_card database card_id bank_id yes =
   with_database database (fun db ->
-    let%bind accounts = Store.bank_account_info db in
+    let%bind accounts = Transfers.bank_account_info db in
     let find id =
       match
         List.filter accounts ~f:(fun a ->
-          String.equal (Bank_account_mapping.id a.Store.mapping) id)
+          String.equal (Bank_account_mapping.id a.Transfers.mapping) id)
       with
       | [ account ] -> Ok account
       | [] -> Or_error.errorf "unknown account ID: %s" id

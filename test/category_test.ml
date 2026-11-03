@@ -18,7 +18,7 @@ let import db =
 
 let memory f =
   ok
-    (Store.with_open ~registry:Test_support.registry ":memory:" (fun db ->
+    (Setup.with_open ~registry:Test_support.registry ":memory:" (fun db ->
        import db;
        f db;
        Ok ()))
@@ -28,22 +28,22 @@ let decision ?(reason = "Reviewed receipt") event_id account =
   ok (Bank_category.create ~event_id ~account ~reason)
 ;;
 
-let id db = fst (List.hd_exn (ok (Store.events db)))
+let id db = fst (List.hd_exn (ok (Ledger.events db)))
 
 let account db event_id =
   let _, _, entry =
-    List.find_exn (ok (Store.entries db)) ~f:(fun (id, _, _) -> Int64.equal id event_id)
+    List.find_exn (ok (Ledger.entries db)) ~f:(fun (id, _, _) -> Int64.equal id event_id)
   in
   (List.nth_exn entry.postings 1).account
 ;;
 
-let classify db decisions = ok (Store.set_bank_categories db decisions)
-let project db = ignore (ok (Store.project_bank db))
+let classify db decisions = ok (Review.set_bank_categories db decisions)
+let project db = ignore (ok (Ledger.project_bank db))
 
 let rereview_atomic () =
   memory (fun db ->
     let first, second =
-      match ok (Store.events db) with
+      match ok (Ledger.events db) with
       | (a, _) :: (b, _) :: _ -> a, b
       | _ -> failwith "expected two events"
     in
@@ -56,13 +56,13 @@ let rereview_atomic () =
     in
     ignore (classify db [ decision ~reason:"Changed elsewhere" second "expenses:other" ]);
     error
-      (Store.review_bank_categories
+      (Review.review_bank_categories
          db
          ~expected
          [ decision first "expenses:coffee"; decision second "expenses:coffee" ]);
-    let rows = ok (Store.bank_review db) in
+    let rows = ok (Review.bank_review db) in
     let category id =
-      (List.find_exn rows ~f:(fun r -> Int64.equal r.Store.event_id id)).counter_account
+      (List.find_exn rows ~f:(fun r -> Int64.equal r.Review.event_id id)).counter_account
     in
     Alcotest.(check string)
       "first unchanged after stale batch"
@@ -78,7 +78,7 @@ let staged_catalog_rollback () =
   memory (fun db ->
     let missing = 999999L in
     error
-      (Store.review_bank_categories
+      (Review.review_bank_categories
          ~categories:[ "expenses:staged" ]
          db
          ~expected:[ missing, None ]
@@ -86,36 +86,37 @@ let staged_catalog_rollback () =
     Alcotest.(check bool)
       "catalog insert rolls back when a decision fails"
       false
-      (List.mem (ok (Store.categories db)) "expenses:staged" ~equal:String.equal))
+      (List.mem (ok (Setup.categories db)) "expenses:staged" ~equal:String.equal))
 ;;
 
 let portable_restore_stale_preview () =
   memory (fun db ->
     let event_id = id db in
     ignore (classify db [ decision event_id "expenses:food" ]);
-    let snapshot = ok (Store.category_snapshot db) in
+    let snapshot = ok (Restore.category_snapshot db) in
     let snapshot =
       { snapshot with
         Category_portable.categories = "expenses:new" :: snapshot.categories
       }
     in
-    let preview = ok (Store.preview_category_restore db snapshot) in
+    let preview = ok (Restore.preview_category_restore db snapshot) in
     ignore (classify db [ decision ~reason:"changed" event_id "expenses:other" ]);
-    error (Store.restore_categories db ~expected:preview snapshot);
+    error (Restore.restore_categories db ~expected:preview snapshot);
     Alcotest.(check bool)
       "no catalog change on stale preview"
       false
-      (List.mem (ok (Store.categories db)) "expenses:new" ~equal:String.equal);
-    ignore (ok (Store.set_movement_type_override db ~event_id ~movement_type:(Some Fee)));
-    let snapshot = ok (Store.category_snapshot db) in
-    ignore (ok (Store.set_movement_type_override db ~event_id ~movement_type:None));
-    let preview = ok (Store.preview_category_restore db snapshot) in
+      (List.mem (ok (Setup.categories db)) "expenses:new" ~equal:String.equal);
     ignore
-      (ok (Store.set_movement_type_override db ~event_id ~movement_type:(Some Bonus)));
-    error (Store.restore_categories db ~expected:preview snapshot);
+      (ok (Restore.set_movement_type_override db ~event_id ~movement_type:(Some Fee)));
+    let snapshot = ok (Restore.category_snapshot db) in
+    ignore (ok (Restore.set_movement_type_override db ~event_id ~movement_type:None));
+    let preview = ok (Restore.preview_category_restore db snapshot) in
+    ignore
+      (ok (Restore.set_movement_type_override db ~event_id ~movement_type:(Some Bonus)));
+    error (Restore.restore_categories db ~expected:preview snapshot);
     let row =
       List.find_exn
-        (ok (Store.bank_review db))
+        (ok (Review.bank_review db))
         ~f:(fun r -> Int64.equal r.event_id event_id)
     in
     Alcotest.(check bool)
@@ -135,7 +136,7 @@ let replay () =
     import db;
     project db;
     Alcotest.(check string) "survives reimport" "expenses:groceries" (account db event_id);
-    check "one audit row" 1 (List.length (ok (Store.bank_category_history db)));
+    check "one audit row" 1 (List.length (ok (Review.bank_category_history db)));
     let journal = ok (Finances_hledger.export db) in
     Alcotest.(check bool)
       "audit provenance"
@@ -152,16 +153,16 @@ let replay () =
       (classify db [ decision ~reason:"Needs review" event_id "equity:unclassified" ]);
     project db;
     Alcotest.(check string) "reset applied" "equity:unclassified" (account db event_id);
-    check "history retained" 3 (List.length (ok (Store.bank_category_history db))))
+    check "history retained" 3 (List.length (ok (Review.bank_category_history db))))
 ;;
 
 let after_projection () =
   memory (fun db ->
     project db;
-    let before = ok (Store.entries db) in
+    let before = ok (Ledger.entries db) in
     let event_id = id db in
     ignore (classify db [ decision event_id "income:salary" ]);
-    let after = ok (Store.entries db) in
+    let after = ok (Ledger.entries db) in
     check "no extra entries" (List.length before) (List.length after);
     List.iter2_exn before after ~f:(fun (_, _, a) (_, _, b) ->
       Alcotest.(check bool)
@@ -173,16 +174,17 @@ let after_projection () =
            b.postings));
     let wise = In_channel.read_all "fixtures/wise.xml" in
     ignore
-      (ok (Store.import_bank_file db ~institution:"wise" ~path:"wise.xml" ~contents:wise));
+      (ok
+         (Import.import_bank_file db ~institution:"wise" ~path:"wise.xml" ~contents:wise));
     let wise_id, _, _ =
       List.find_exn
-        (ok (Store.movements db))
+        (ok (Ledger.movements db))
         ~f:(fun (_, e, _) -> String.equal e.Source_event.venue "wise")
     in
     ignore (classify db [ decision wise_id "expenses:travel" ]);
     project db;
     Alcotest.(check string) "Wise classified" "expenses:travel" (account db wise_id);
-    let mapping = List.hd_exn (ok (Store.bank_accounts db)) in
+    let mapping = List.hd_exn (ok (Ledger.bank_accounts db)) in
     let alias =
       ok
         (Bank_account_mapping.create
@@ -192,7 +194,7 @@ let after_projection () =
            ~account_type:mapping.account_type
            ~ledger_account:"assets:bank:daily")
     in
-    ignore (ok (Store.set_bank_account_mappings db [ alias ]));
+    ignore (ok (Ledger.set_bank_account_mappings db [ alias ]));
     project db;
     Alcotest.(check string)
       "mapping retains category"
@@ -205,13 +207,13 @@ let invalid_batch () =
     project db;
     let event_id = id db in
     let d = decision event_id "expenses:food" in
-    error (Store.set_bank_categories db [ d; decision 999999L "expenses:other" ]);
-    check "history rolled back" 0 (List.length (ok (Store.bank_category_history db)));
+    error (Review.set_bank_categories db [ d; decision 999999L "expenses:other" ]);
+    check "history rolled back" 0 (List.length (ok (Review.bank_category_history db)));
     Alcotest.(check string)
       "postings rolled back"
       "equity:unclassified"
       (account db event_id);
-    error (Store.set_bank_categories db [ d; d ]);
+    error (Review.set_bank_categories db [ d; d ]);
     error
       (Bank_category.create
          ~event_id
@@ -233,10 +235,10 @@ let invalid_batch () =
            ())
     in
     let other =
-      match ok (Store.ingest db event) with
+      match ok (Sources.ingest db event) with
       | Inserted id | Existing id -> id
     in
-    error (Store.set_bank_categories db [ decision other "income:other" ]))
+    error (Review.set_bank_categories db [ decision other "income:other" ]))
 ;;
 
 let with_raw path f =
@@ -262,35 +264,35 @@ let workspace f =
 let conflicts () =
   workspace (fun path ->
     ok
-      (Store.with_open ~registry:Test_support.registry path (fun db ->
+      (Setup.with_open ~registry:Test_support.registry path (fun db ->
          import db;
          project db;
          Ok ()));
     with_raw path (fun db -> sql db "UPDATE postings SET quantity='123' WHERE ordinal=1");
     ok
-      (Store.with_open ~registry:Test_support.registry path (fun db ->
-         error (Store.set_bank_categories db [ decision (id db) "expenses:food" ]);
+      (Setup.with_open ~registry:Test_support.registry path (fun db ->
+         error (Review.set_bank_categories db [ decision (id db) "expenses:food" ]);
          check
            "no decision after conflict"
            0
-           (List.length (ok (Store.bank_category_history db)));
+           (List.length (ok (Review.bank_category_history db)));
          Ok ())))
 ;;
 
 let unclassified_batch_is_atomic () =
   memory (fun db ->
     project db;
-    let rows = ok (Store.bank_review db) in
+    let rows = ok (Review.bank_review db) in
     let first = (List.nth_exn rows 0).event_id in
     let second = (List.nth_exn rows 1).event_id in
     ignore (classify db [ decision second "expenses:existing" ]);
-    let before = ok (Store.bank_category_history db) in
+    let before = ok (Review.bank_category_history db) in
     error
-      (Store.set_bank_categories
+      (Review.set_bank_categories
          ~only_unclassified:true
          db
          [ decision first "expenses:new"; decision second "expenses:new" ]);
-    let after = ok (Store.bank_category_history db) in
+    let after = ok (Review.bank_category_history db) in
     check "no partial audit entries" (List.length before) (List.length after);
     Alcotest.(check string)
       "first remains unclassified"
@@ -319,40 +321,43 @@ let rule_batch_is_atomic () =
            ~action:(Type_and_category (Movement_type.Interest, "expenses:food"))
            ())
     in
-    ok (Store.add_classification_rule db rule);
-    let matches = ok (Store.preview_classification_rule db rule) in
+    ok (Ledger.add_classification_rule db rule);
+    let matches = ok (Accounts.preview_classification_rule db rule) in
     let ids =
       List.filter_map matches ~f:(fun m ->
-        Option.some_if m.Store.eligible m.transaction.event_id)
+        Option.some_if m.Accounts.eligible m.transaction.event_id)
     in
     Alcotest.(check bool) "at least two matches" true (List.length ids >= 2);
     let first = List.hd_exn ids
     and last = List.last_exn ids in
     ignore (classify db [ decision last "expenses:existing" ]);
     error
-      (Store.apply_classification_rule
+      (Accounts.apply_classification_rule
          db
          ~expected:rule
-         ~selected:(List.filter matches ~f:(fun m -> m.Store.eligible)));
+         ~selected:(List.filter matches ~f:(fun m -> m.Accounts.eligible)));
     Alcotest.(check string)
       "no partial classification"
       "equity:unclassified"
       (account db first);
-    check "no partial audit" 1 (List.length (ok (Store.bank_category_history db)));
-    check "no partial type changes" 0 (List.length (ok (Store.movement_type_history db)));
-    let forced = ok (Store.preview_classification_rule ~force:true db rule) in
+    check "no partial audit" 1 (List.length (ok (Review.bank_category_history db)));
+    check
+      "no partial type changes"
+      0
+      (List.length (ok (Restore.movement_type_history db)));
+    let forced = ok (Accounts.preview_classification_rule ~force:true db rule) in
     ignore (classify db [ decision last "expenses:changed-again" ]);
     error
-      (Store.apply_classification_rule
+      (Accounts.apply_classification_rule
          ~force:true
          db
          ~expected:rule
-         ~selected:(List.filter forced ~f:(fun m -> m.Store.eligible)));
+         ~selected:(List.filter forced ~f:(fun m -> m.Accounts.eligible)));
     Alcotest.(check string)
       "forced batch rejects stale preview"
       "equity:unclassified"
       (account db first);
-    ok (Store.delete_classification_rule db rule.name);
+    ok (Ledger.delete_classification_rule db rule.name);
     let replacement =
       ok
         (Classification_rule.create
@@ -367,14 +372,14 @@ let rule_batch_is_atomic () =
            ~action:(Category "expenses:food")
            ())
     in
-    ok (Store.add_classification_rule db replacement);
+    ok (Ledger.add_classification_rule db replacement);
     error
-      (Store.apply_classification_rule
+      (Accounts.apply_classification_rule
          db
          ~expected:rule
          ~selected:
            (List.filter matches ~f:(fun m ->
-              Int64.equal m.Store.transaction.event_id first)));
+              Int64.equal m.Accounts.transaction.event_id first)));
     Alcotest.(check string)
       "changed rule is refused"
       "equity:unclassified"
@@ -397,7 +402,7 @@ let similarity () =
          ~amount:(Quantity.of_string "-1")
          [ description ])
   in
-  let row event_id institution description counter_account reason : Store.bank_review =
+  let row event_id institution description counter_account reason : Review.bank_review =
     { event_id
     ; institution
     ; occurred = Temporal.Date (Date.of_string "2026-10-01")
@@ -441,7 +446,7 @@ let similarity () =
   let empty = row 7L "provider" "   " "expenses:food" (Some "reviewed") in
   error (Category_similarity.find ~seed:7L [ empty ]);
   let card r name =
-    { r with Store.description = name; movement_type = Some Movement_type.Card }
+    { r with Review.description = name; movement_type = Some Movement_type.Card }
   in
   let card_seed = card seed "Coffee Shop" in
   let card_candidate =
@@ -463,7 +468,7 @@ let similarity () =
   Alcotest.(check (list int64))
     "fuzzy ranking includes a near match, excluding exact matches and transfers"
     [ 11L ]
-    (List.map fuzzy ~f:(fun (r, _) -> r.Store.event_id));
+    (List.map fuzzy ~f:(fun (r, _) -> r.Review.event_id));
   let many =
     List.init 35 ~f:(fun i ->
       row (Int64.of_int (100 + i)) "other" "Coffee-Shop Paris" "equity:unclassified" None)

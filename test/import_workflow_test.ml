@@ -33,7 +33,7 @@ let workspace f =
 
 let with_store root f =
   ok
-    (Store.with_open ~registry:Test_support.registry (database root) (fun db ->
+    (Setup.with_open ~registry:Test_support.registry (database root) (fun db ->
        f db;
        Ok ()))
 ;;
@@ -77,12 +77,12 @@ let scalar db text =
 
 let source_count root expected =
   with_store root (fun db ->
-    Alcotest.(check int) "source count" expected (List.length (ok (Store.events db))))
+    Alcotest.(check int) "source count" expected (List.length (ok (Ledger.events db))))
 ;;
 
 let entry_count root expected =
   with_store root (fun db ->
-    Alcotest.(check int) "entry count" expected (List.length (ok (Store.entries db))))
+    Alcotest.(check int) "entry count" expected (List.length (ok (Ledger.entries db))))
 ;;
 
 let overlap () =
@@ -124,13 +124,13 @@ let recursive_and_repeat () =
       (In_channel.read_all (journal root));
     source_count root 4;
     with_store root (fun db ->
-      let history = ok (Store.bank_import_history db) in
+      let history = ok (Import.bank_import_history db) in
       Alcotest.(check int) "all attempts persisted" 8 (List.length history);
       Alcotest.(check int)
         "history limit"
         2
-        (List.length (ok (Store.bank_import_history ~limit:2 db)));
-      error (Store.bank_import_history ~limit:0 db));
+        (List.length (ok (Import.bank_import_history ~limit:2 db)));
+      error (Import.bank_import_history ~limit:0 db));
     raw (database root) (fun db ->
       Alcotest.(check int)
         "rejected and unsupported evidence archived without duplicate bytes"
@@ -187,7 +187,7 @@ let conflict_then_valid () =
         "partial conflicting transactions absent"
         false
         (List.exists
-           (ok (Store.events db))
+           (ok (Ledger.events db))
            ~f:(fun (_, event) -> String.equal event.source_id "must-roll-back")));
     raw (database root) (fun db ->
       Alcotest.(check int)
@@ -243,8 +243,8 @@ let config_json mappings =
 
 let import_settings root contents =
   Result.bind (Bank_account_config.of_json contents) ~f:(fun rows ->
-    Store.with_open ~registry:Test_support.registry (database root) (fun db ->
-      Store.apply_bank_accounts db rows))
+    Setup.with_open ~registry:Test_support.registry (database root) (fun db ->
+      Accounts.apply_bank_accounts db rows))
 ;;
 
 let mappings_after_projection () =
@@ -253,10 +253,10 @@ let mappings_after_projection () =
     ignore (ok (run_workflow root));
     let initial =
       ok
-        (Store.with_open
+        (Setup.with_open
            ~registry:Test_support.registry
            (database root)
-           Store.bank_accounts)
+           Ledger.bank_accounts)
     in
     let mappings =
       List.mapi initial ~f:(fun i mapping ->
@@ -269,10 +269,10 @@ let mappings_after_projection () =
     Alcotest.(check int) "all entries reused" 3 result.projection.existing;
     let restored =
       ok
-        (Store.with_open
+        (Setup.with_open
            ~registry:Test_support.registry
            (database root)
-           Store.bank_accounts)
+           Ledger.bank_accounts)
     in
     Alcotest.(check string)
       "mapping survives reopening"
@@ -294,20 +294,20 @@ let mappings_after_projection () =
     with_store root (fun db ->
       ignore
         (ok
-           (Store.set_bank_account_mappings
+           (Ledger.set_bank_account_mappings
               db
               [ remap "renamed-again" (List.hd_exn mappings) ]));
-      let current = ok (Store.bank_accounts db) in
+      let current = ok (Ledger.bank_accounts db) in
       Alcotest.(check string)
         "omitted mapping retained"
         (List.last_exn mappings).ledger_account
         (List.last_exn current).ledger_account;
       let aliases = List.map current ~f:(remap "reviewed-alias") in
-      ignore (ok (Store.set_bank_account_mappings db aliases));
+      ignore (ok (Ledger.set_bank_account_mappings db aliases));
       Alcotest.(check int)
         "reviewed aliases do not duplicate events"
         3
-        (ok (Store.project_bank db)).existing);
+        (ok (Ledger.project_bank db)).existing);
     entry_count root 3)
 ;;
 
@@ -317,10 +317,10 @@ let mapping_errors () =
     ignore (ok (run_workflow root));
     let mappings =
       ok
-        (Store.with_open
+        (Setup.with_open
            ~registry:Test_support.registry
            (database root)
-           Store.bank_accounts)
+           Ledger.bank_accounts)
     in
     let first = List.hd_exn mappings in
     error (Bank_account_mapping.of_json (Bank_account_mapping.to_json [ first; first ]));
@@ -334,7 +334,7 @@ let mapping_errors () =
            ~ledger_account:"assets:bank:unknown")
     in
     with_store root (fun db ->
-      error (Store.set_bank_account_mappings db [ remap "first" first; unknown ]));
+      error (Ledger.set_bank_account_mappings db [ remap "first" first; unknown ]));
     raw (database root) (fun db ->
       Alcotest.(check int)
         "unknown mapping rolls back earlier mapping"
@@ -356,10 +356,10 @@ let mapping_conflict_preserves_journal () =
     let before = In_channel.read_all (journal root) in
     let mappings =
       ok
-        (Store.with_open
+        (Setup.with_open
            ~registry:Test_support.registry
            (database root)
-           Store.bank_accounts)
+           Ledger.bank_accounts)
       |> List.mapi ~f:(fun i m -> remap (Printf.sprintf "changed-%d" i) m)
     in
     raw (database root) (fun db ->

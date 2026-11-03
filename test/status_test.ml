@@ -9,7 +9,7 @@ let check = Alcotest.(check int)
 
 let memory f =
   ok
-    (Store.with_open ~registry:Test_support.registry ":memory:" (fun db ->
+    (Setup.with_open ~registry:Test_support.registry ":memory:" (fun db ->
        f db;
        Ok ()))
 ;;
@@ -17,29 +17,29 @@ let memory f =
 (* Compare SQL summaries against detailed reports through state changes. *)
 let status db =
   let report = ok (Status.read db) in
-  let detailed = ok (Store.bank_review db) in
+  let detailed = ok (Review.bank_review db) in
   check "SQL movement count" (List.length detailed) report.movements;
   check
     "SQL unclassified count"
     (List.count detailed ~f:(fun row ->
-       String.equal row.Store.counter_account "equity:unclassified"))
+       String.equal row.Review.counter_account "equity:unclassified"))
     report.unclassified_movements;
   check
     "selective candidate count"
-    (List.length (ok (Store.transfer_candidates db)))
+    (List.length (ok (Transfers.transfer_candidates db)))
     report.transfer_candidate_pairs;
   List.iter report.accounts ~f:(fun account ->
-    let m = account.Store.mapping in
+    let m = account.Transfers.mapping in
     let rows =
       List.filter detailed ~f:(fun row ->
-        let a = row.Store.transaction.Movement.account in
+        let a = row.Review.transaction.Movement.account in
         String.equal row.institution m.institution
         && String.equal a.bank_id m.bank_id
         && String.equal a.account_id m.account_id
         && String.equal a.account_type m.account_type)
     in
     check "SQL per-account count" (List.length rows) account.movements;
-    let dates = List.map rows ~f:(fun r -> r.Store.transaction.Movement.booked_on) in
+    let dates = List.map rows ~f:(fun r -> r.Review.transaction.Movement.booked_on) in
     Alcotest.(check string)
       "SQL first booking date"
       (Date.to_string (List.min_elt dates ~compare:Date.compare |> Option.value_exn))
@@ -51,7 +51,7 @@ let status db =
   Alcotest.(check bool)
     "SQL account ranges, identities and counts"
     true
-    (Poly.equal (ok (Store.bank_account_info db)) report.accounts);
+    (Poly.equal (ok (Transfers.bank_account_info db)) report.accounts);
   report
 ;;
 
@@ -68,7 +68,7 @@ let empty () =
 let import db institution path =
   ignore
     (ok
-       (Store.import_bank_file
+       (Import.import_bank_file
           ?account_label:(Option.some_if (String.equal institution "revolut") "main")
           db
           ~institution
@@ -85,10 +85,10 @@ let progress () =
     check "initially unclassified" 3 before.unclassified_movements;
     let account = List.hd_exn before.accounts in
     Alcotest.(check string) "observed date" "2026-01-04" (Date.to_string account.last_on);
-    let event_id, _ = List.hd_exn (ok (Store.events db)) in
+    let event_id, _ = List.hd_exn (ok (Ledger.events db)) in
     ignore
       (ok
-         (Store.set_bank_categories
+         (Review.set_bank_categories
             db
             [ ok
                 (Bank_category.create
@@ -98,7 +98,7 @@ let progress () =
             ]));
     ignore
       (ok
-         (Store.record_bank_read_error
+         (Import.record_bank_read_error
             db
             ~institution:"wise"
             ~path:"missing.xml"
@@ -123,11 +123,13 @@ let transfers () =
     import db "revolut" "fixtures/revolut.csv";
     let before = status db in
     let candidate =
-      List.find_exn (ok (Store.transfer_candidates db)) ~f:(fun c -> c.Store.unique)
+      List.find_exn
+        (ok (Transfers.transfer_candidates db))
+        ~f:(fun c -> c.Transfers.unique)
     in
     ignore
       (ok
-         (Store.set_bank_transfers
+         (Transfers.set_bank_transfers
             db
             [ ok
                 (Bank_transfer.create
@@ -148,7 +150,7 @@ let transfers () =
       (after.transfer_candidate_pairs < before.transfer_candidate_pairs);
     ignore
       (ok
-         (Store.set_bank_transfers
+         (Transfers.set_bank_transfers
             db
             [ ok
                 (Bank_transfer.create

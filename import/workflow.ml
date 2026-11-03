@@ -6,8 +6,8 @@ open Finances_store
 type report =
   { inputs : Files.report
   ; identity_changes : int
-  ; projection : Store.projection_report
-  ; companions : Store.companion_report
+  ; projection : Ledger.projection_report
+  ; companions : Ledger.companion_report
   ; journal : string
   }
 
@@ -115,7 +115,7 @@ let run
        | _ -> ());
       database, paths, journal)
   in
-  Store.with_open ~registry database (fun db ->
+  Setup.with_open ~registry database (fun db ->
     let%bind () =
       match account_id with
       | None -> Ok ()
@@ -132,7 +132,7 @@ let run
                 | None -> false)
               |> String.concat ~sep:", "))
     in
-    let%bind before = Store.bank_accounts db in
+    let%bind before = Ledger.bank_accounts db in
     let%bind inputs =
       Files.scan
         ?account_id
@@ -142,21 +142,21 @@ let run
         ~institution
         ~paths
     in
-    let%bind current = Store.bank_account_info db in
+    let%bind current = Transfers.bank_account_info db in
     let fresh =
       List.filter current ~f:(fun info ->
         not
           (List.exists before ~f:(fun previous ->
              String.equal
                previous.Bank_account_mapping.institution
-               info.Store.mapping.institution
+               info.Transfers.mapping.institution
              && String.equal
                   (Bank_account_mapping.source_account previous)
                   (Bank_account_mapping.source_account info.mapping))))
     in
     let%bind identity_changes = configure_new_accounts db fresh in
-    let%bind companions = Store.match_companions db in
-    let%bind projection = Store.project_bank db in
+    let%bind companions = Ledger.match_companions db in
+    let%bind projection = Ledger.project_bank db in
     let%bind contents = Finances_hledger.export db in
     let%map () = write_journal ~path:journal contents in
     { inputs; identity_changes; projection; companions; journal })

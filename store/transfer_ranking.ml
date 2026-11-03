@@ -22,7 +22,7 @@ type evidence =
   }
 
 type ranked =
-  { candidate : Store.transfer_candidate
+  { candidate : Transfers.transfer_candidate
   ; score : int
   ; evidence : evidence list
   ; assignment : assignment
@@ -168,7 +168,7 @@ let references text =
     else None)
 ;;
 
-let evidence registry (c : Store.transfer_candidate) =
+let evidence registry (c : Transfers.transfer_candidate) =
   let base =
     { code = "opposite_principal"
     ; points = 30
@@ -239,7 +239,8 @@ let evidence registry (c : Store.transfer_candidate) =
 
 let analyze registry candidates =
   let eligible =
-    List.filter candidates ~f:(fun c -> c.Store.iban_compatible && Option.is_none c.state)
+    List.filter candidates ~f:(fun c ->
+      c.Transfers.iban_compatible && Option.is_none c.state)
   in
   let scored =
     List.map eligible ~f:(fun candidate ->
@@ -248,7 +249,7 @@ let analyze registry candidates =
   in
   let edges =
     List.map scored ~f:(fun (c, _, weight) ->
-      { first = c.Store.first_event_id; second = c.second_event_id; weight })
+      { first = c.Transfers.first_event_id; second = c.second_event_id; weight })
   in
   let open Or_error.Let_syntax in
   let%map assignments = assignments edges in

@@ -28,7 +28,7 @@ let xml () = In_channel.read_all "fixtures/wise.xml"
 let csv () = In_channel.read_all "fixtures/wise.csv"
 
 let import db ?(institution = "wise") path contents =
-  ok (Store.import_bank_file db ~institution ~path ~contents)
+  ok (Import.import_bank_file db ~institution ~path ~contents)
 ;;
 
 let accepted result =
@@ -46,9 +46,9 @@ let rejected result =
    type by TransferWise ID; the typing_rules suite covers those. *)
 let memory f =
   ok
-    (Store.with_open ~registry:Test_support.registry ":memory:" (fun db ->
+    (Setup.with_open ~registry:Test_support.registry ":memory:" (fun db ->
        List.iter [ "wise-id-fee"; "wise-id-cashback" ] ~f:(fun name ->
-         ok (Store.delete_classification_rule db name));
+         ok (Ledger.delete_classification_rule db name));
        f db;
        Ok ()))
 ;;
@@ -198,8 +198,8 @@ let reusable_camt_source () =
 let multi_bank () =
   memory (fun db ->
     accepted (import db "wise.csv" (csv ()));
-    check "CSV creates no movements" 0 (List.length (ok (Store.events db)));
-    check "CSV waiting" 3 (ok (Store.match_companions ~institution:"wise" db)).unmatched;
+    check "CSV creates no movements" 0 (List.length (ok (Ledger.events db)));
+    check "CSV waiting" 3 (ok (Ledger.match_companions ~institution:"wise" db)).unmatched;
     accepted
       (import
          db
@@ -207,13 +207,13 @@ let multi_bank () =
          "bank.ofx"
          (In_channel.read_all "fixtures/bank.ofx"));
     accepted (import db "wise.xml" (xml ()));
-    check "both institutions" 6 (List.length (ok (Store.events db)));
+    check "both institutions" 6 (List.length (ok (Ledger.events db)));
     check
       "all Wise rows matched"
       3
-      (ok (Store.match_companions ~institution:"wise" db)).matched;
-    check "all projected" 6 (ok (Store.project_bank db)).inserted;
-    let accounts = ok (Store.bank_accounts db) in
+      (ok (Ledger.match_companions ~institution:"wise" db)).matched;
+    check "all projected" 6 (ok (Ledger.project_bank db)).inserted;
+    let accounts = ok (Ledger.bank_accounts db) in
     Alcotest.(check bool)
       "separate bank accounts"
       true
@@ -221,17 +221,17 @@ let multi_bank () =
          String.equal a.Bank_account_mapping.institution "wise")
        && List.exists accounts ~f:(fun a ->
          String.equal a.Bank_account_mapping.institution "boursobank"));
-    let statements = ok (Store.statement_reconciliations ~institution:"wise" db) in
+    let statements = ok (Review.statement_reconciliations ~institution:"wise" db) in
     Alcotest.(check bool) "statements stored" true (not (List.is_empty statements));
     Alcotest.(check int)
       "every Wise movement belongs to a statement"
       3
-      (List.sum (module Int) statements ~f:(fun r -> r.Store.entries));
+      (List.sum (module Int) statements ~f:(fun r -> r.Review.entries));
     List.iter statements ~f:(fun r ->
       Alcotest.(check bool)
         "stored balance reconciled"
         true
-        (Quantity.is_zero r.Store.difference));
+        (Quantity.is_zero r.Review.difference));
     let journal = ok (Finances_hledger.export db) in
     Alcotest.(check bool)
       "merchant metadata exported"
@@ -243,12 +243,12 @@ let multi_bank () =
       (String.is_substring journal ~substring:"wise-reported-fees: 0.5");
     accepted (import db "replay.xml" (xml ()));
     accepted (import db "overlap.xml" (replace (xml ()) "statement-a" "statement-b"));
-    check "overlap no new projections" 0 (ok (Store.project_bank db)).inserted;
+    check "overlap no new projections" 0 (ok (Ledger.project_bank db)).inserted;
     check
       "repeated matching stable"
       0
-      (ok (Store.match_companions ~institution:"wise" db)).changed;
-    check "replay source count" 6 (List.length (ok (Store.events db)));
+      (ok (Ledger.match_companions ~institution:"wise" db)).changed;
+    check "replay source count" 6 (List.length (ok (Ledger.events db)));
     let wise_account =
       List.find_exn accounts ~f:(fun a ->
         String.equal a.Bank_account_mapping.institution "wise")
@@ -262,8 +262,8 @@ let multi_bank () =
            ~account_type:wise_account.account_type
            ~ledger_account:"assets:bank:wise:daily")
     in
-    check "Wise mapping applied" 1 (ok (Store.set_bank_account_mappings db [ mapped ]));
-    check "mapping replay" 0 (ok (Store.project_bank db)).inserted;
+    check "Wise mapping applied" 1 (ok (Ledger.set_bank_account_mappings db [ mapped ]));
+    check "mapping replay" 0 (ok (Ledger.project_bank db)).inserted;
     let mapped_journal = ok (Finances_hledger.export db) in
     Alcotest.(check bool)
       "Wise alias exported"
@@ -276,7 +276,7 @@ let multi_bank () =
         "<Amt Ccy=\"EUR\">106.00</Amt>"
     in
     rejected (import db "conflict.xml" changed);
-    check "conflict atomic" 6 (List.length (ok (Store.events db)));
+    check "conflict atomic" 6 (List.length (ok (Ledger.events db)));
     rejected (import db ~institution:"boursobank" "wrong.xml" (xml ())))
 ;;
 
@@ -284,15 +284,15 @@ let currencies () =
   memory (fun db ->
     accepted (import db "eur.xml" (xml ()));
     accepted (import db "usd.xml" (replace (xml ()) "EUR" "USD"));
-    check "currencies independent" 6 (List.length (ok (Store.events db)));
+    check "currencies independent" 6 (List.length (ok (Ledger.events db)));
     accepted (import db "eur.csv" (csv ()));
-    check "currency match" 3 (ok (Store.match_companions ~institution:"wise" db)).matched;
+    check "currency match" 3 (ok (Ledger.match_companions ~institution:"wise" db)).matched;
     accepted (import db "fees.csv" (replace (csv ()) "0.50" "0.75"));
     check
       "fee conflict audit"
       2
-      (ok (Store.match_companions ~institution:"wise" db)).conflicts;
-    check "postings only movements" 6 (ok (Store.project_bank db)).inserted)
+      (ok (Ledger.match_companions ~institution:"wise" db)).conflicts;
+    check "postings only movements" 6 (ok (Ledger.project_bank db)).inserted)
 ;;
 
 let duplicate_rows () =
@@ -303,7 +303,7 @@ let duplicate_rows () =
     check
       "ambiguous duplicates"
       2
-      (ok (Store.match_companions ~institution:"wise" db)).ambiguous)
+      (ok (Ledger.match_companions ~institution:"wise" db)).ambiguous)
 ;;
 
 let timestamp_precision () =
@@ -327,7 +327,7 @@ let timestamp_precision () =
     tx.source_id;
   memory (fun db ->
     accepted (import db "precise.xml" contents);
-    let rows = ok (Store.events db) in
+    let rows = ok (Ledger.events db) in
     let event =
       List.find_exn rows ~f:(fun (_, e) ->
         String.equal e.Source_event.source_id tx.source_id)
@@ -382,10 +382,10 @@ let review_enrichment () =
     accepted (import db "wise.xml" (xml ()));
     accepted (import db "wise.csv" (csv ()));
     let check_companions () =
-      let all = ok (Store.companion_observations db) in
-      let journal = ok (Store.journal_companions db) in
+      let all = ok (Ledger.companion_observations db) in
+      let journal = ok (Ledger.journal_companions db) in
       let matched =
-        List.filter_map all ~f:(fun (observation : Store.companion_observation) ->
+        List.filter_map all ~f:(fun (observation : Ledger.companion_observation) ->
           match observation.matching with
           | Some { state = Matched; event_id = Some event_id; _ } ->
             Some (event_id, observation.row)
@@ -394,7 +394,7 @@ let review_enrichment () =
       let review =
         List.count all ~f:(fun observation ->
           not
-            (Option.exists observation.Store.matching ~f:(fun result ->
+            (Option.exists observation.Ledger.matching ~f:(fun result ->
                Poly.equal result.state Bank_match.Matched)))
       in
       check "all companion rows" (List.length all) journal.total;
@@ -405,14 +405,14 @@ let review_enrichment () =
         (Poly.equal matched journal.rows)
     in
     check_companions ();
-    ignore (ok (Store.match_companions ~institution:"wise" db) : Store.companion_report);
-    ignore (ok (Store.project_bank db));
+    ignore (ok (Ledger.match_companions ~institution:"wise" db) : Ledger.companion_report);
+    ignore (ok (Ledger.project_bank db));
     let check_journal_descriptions rows =
       let journal = ok (Finances_hledger.export db) in
       let transactions =
         Hledger.Parse.journal_exn journal |> Hledger.Journal.transactions
       in
-      List.iter rows ~f:(fun (row : Store.bank_review) ->
+      List.iter rows ~f:(fun (row : Review.bank_review) ->
         let code = Printf.sprintf "event-%Ld" row.event_id in
         let tx =
           List.find_exn transactions ~f:(fun tx ->
@@ -424,7 +424,7 @@ let review_enrichment () =
           tx.description)
     in
     check_companions ();
-    let rows = ok (Store.bank_review db) in
+    let rows = ok (Review.bank_review db) in
     check_journal_descriptions rows;
     List.iter rows ~f:(fun row ->
       Alcotest.(check string) "effective description" "Synthetic shop" row.description;
@@ -434,9 +434,9 @@ let review_enrichment () =
         (Option.map row.movement_type ~f:Movement_type.to_string);
       check "source row recorded" 1 (List.length row.detail_sources));
     accepted (import db "other.csv" (replace (csv ()) "Synthetic shop" "Other shop"));
-    ignore (ok (Store.match_companions ~institution:"wise" db) : Store.companion_report);
+    ignore (ok (Ledger.match_companions ~institution:"wise" db) : Ledger.companion_report);
     check_companions ();
-    let rows = ok (Store.bank_review db) in
+    let rows = ok (Review.bank_review db) in
     check_journal_descriptions rows;
     List.iter rows ~f:(fun row ->
       Alcotest.(check string)
@@ -453,8 +453,8 @@ let reported_type_rules () =
   memory (fun db ->
     accepted (import db "first.csv" (csv ()));
     accepted (import db "later.xml" (xml ()));
-    ignore (ok (Store.match_companions ~institution:"wise" db) : Store.companion_report);
-    let rows = ok (Store.bank_review db) in
+    ignore (ok (Ledger.match_companions ~institution:"wise" db) : Ledger.companion_report);
+    let rows = ok (Review.bank_review db) in
     check "all transactions imported" 3 (List.length rows);
     List.iter rows ~f:(fun row ->
       Alcotest.(check (option string))
@@ -464,7 +464,7 @@ let reported_type_rules () =
     let event_id = (List.hd_exn rows).event_id in
     ignore
       (ok
-         (Store.set_movement_type_override
+         (Restore.set_movement_type_override
             db
             ~event_id
             ~movement_type:(Some Movement_type.Fee))
@@ -485,10 +485,10 @@ let reported_type_rules () =
            ())
     in
     (* Types are derived: the rule applies as soon as it is saved. *)
-    ok (Store.add_classification_rule db rule);
+    ok (Ledger.add_classification_rule db rule);
     let types () =
       List.map
-        (ok (Store.bank_review db))
+        (ok (Review.bank_review db))
         ~f:(fun r ->
           r.event_id, Option.map r.imported_movement_type ~f:Movement_type.to_string)
     in
@@ -499,15 +499,15 @@ let reported_type_rules () =
     List.iter (types ()) ~f:(fun (_, t) ->
       Alcotest.(check (option string)) "unchanged by a reimport" (Some "bonus") t);
     (* Disabling the rule retypes again, enabling it restores. *)
-    ok (Store.set_classification_rule_mode db "card-as-bonus" Disabled);
+    ok (Ledger.set_classification_rule_mode db "card-as-bonus" Disabled);
     List.iter (types ()) ~f:(fun (_, t) ->
       Alcotest.(check (option string)) "back to the column's rule" (Some "card") t);
-    ok (Store.set_classification_rule_mode db "card-as-bonus" Automatic);
+    ok (Ledger.set_classification_rule_mode db "card-as-bonus" Automatic);
     List.iter (types ()) ~f:(fun (_, t) ->
       Alcotest.(check (option string)) "enabled again" (Some "bonus") t);
     let overridden =
       List.find_exn
-        (ok (Store.bank_review db))
+        (ok (Review.bank_review db))
         ~f:(fun r -> Int64.equal r.event_id event_id)
     in
     Alcotest.(check (option string))
@@ -521,9 +521,9 @@ let reported_type_fallbacks () =
     let csv_unknown = replace (csv ()) ",CARD\n" ",UNKNOWN\n" in
     accepted (import db "unknown.csv" csv_unknown);
     accepted (import db "statement.xml" (xml ()));
-    ignore (ok (Store.match_companions ~institution:"wise" db) : Store.companion_report);
+    ignore (ok (Ledger.match_companions ~institution:"wise" db) : Ledger.companion_report);
     List.iter
-      (ok (Store.bank_review db))
+      (ok (Review.bank_review db))
       ~f:(fun row ->
         Alcotest.(check (option string))
           "an UNKNOWN code is kept as a provider-specific type"
@@ -533,9 +533,9 @@ let reported_type_fallbacks () =
     let csv_other = replace (csv ()) ",CARD\n" ",NEW_CODE\n" in
     accepted (import db "other.csv" csv_other);
     accepted (import db "statement.xml" (xml ()));
-    ignore (ok (Store.match_companions ~institution:"wise" db) : Store.companion_report);
+    ignore (ok (Ledger.match_companions ~institution:"wise" db) : Ledger.companion_report);
     List.iter
-      (ok (Store.bank_review db))
+      (ok (Review.bank_review db))
       ~f:(fun row ->
         Alcotest.(check (option string))
           "unrecognized code retained"

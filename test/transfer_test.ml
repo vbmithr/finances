@@ -30,7 +30,7 @@ let rejected report =
 
 let import_revolut ?(account_id = "main") db contents =
   ok
-    (Store.import_bank_file
+    (Import.import_bank_file
        ~account_label:account_id
        db
        ~institution:"revolut"
@@ -39,7 +39,7 @@ let import_revolut ?(account_id = "main") db contents =
 ;;
 
 let import_bunq db contents =
-  ok (Store.import_bank_file db ~institution:"bunq" ~path:"bunq.mt940" ~contents)
+  ok (Import.import_bank_file db ~institution:"bunq" ~path:"bunq.mt940" ~contents)
 ;;
 
 let seed db =
@@ -54,22 +54,22 @@ let seed db =
 
 let memory f =
   ok
-    (Store.with_open ~registry:Test_support.registry ":memory:" (fun db ->
+    (Setup.with_open ~registry:Test_support.registry ":memory:" (fun db ->
        seed db;
        f db;
        Ok ()))
 ;;
 
-let project db = ignore (ok (Store.project_bank db))
+let project db = ignore (ok (Ledger.project_bank db))
 
 let candidate db =
-  List.find_exn (ok (Store.transfer_candidates db)) ~f:(fun c -> c.Store.unique)
+  List.find_exn (ok (Transfers.transfer_candidates db)) ~f:(fun c -> c.Transfers.unique)
 ;;
 
 let decision ?(state = Bank_transfer.Confirmed) c =
   ok
     (Bank_transfer.create
-       ~first_event_id:c.Store.first_event_id
+       ~first_event_id:c.Transfers.first_event_id
        ~second_event_id:c.second_event_id
        ~state
        ~reason:"Reviewed both owned accounts")
@@ -77,7 +77,7 @@ let decision ?(state = Bank_transfer.Confirmed) c =
 
 let entries db id =
   let _, _, entry =
-    List.find_exn (ok (Store.entries db)) ~f:(fun (event, _, _) -> Int64.equal event id)
+    List.find_exn (ok (Ledger.entries db)) ~f:(fun (event, _, _) -> Int64.equal event id)
   in
   entry
 ;;
@@ -163,7 +163,7 @@ let utc_clocks () =
   memory (fun db ->
     let event =
       List.find_exn
-        (ok (Store.events db))
+        (ok (Ledger.events db))
         ~f:(fun (_, e) ->
           String.equal e.Source_event.venue "revolut"
           && String.equal e.source_id tx.source_id)
@@ -191,20 +191,20 @@ let import_and_fees () =
     accepted replay;
     check "reused four events" 4 replay.existing;
     accepted (import_revolut db ("\239\187\191" ^ csv ()));
-    check "no new source events" 8 (List.length (ok (Store.events db)));
+    check "no new source events" 8 (List.length (ok (Ledger.events db)));
     rejected (import_revolut ~account_id:"other" db (csv ()));
     rejected
       (import_revolut db (replace (csv ()) "Initial deposit" "Changed initial deposit"));
     rejected
       (ok
-         (Store.import_bank_file
+         (Import.import_bank_file
             db
             ~institution:"revolut"
             ~path:"no-context.csv"
             ~contents:(csv ())));
     rejected
       (ok
-         (Store.import_bank_file
+         (Import.import_bank_file
             ~account_label:"main"
             db
             ~institution:"boursobank"
@@ -228,32 +228,32 @@ let import_and_fees () =
 
 let candidates () =
   memory (fun db ->
-    let cs = ok (Store.transfer_candidates db) in
+    let cs = ok (Transfers.transfer_candidates db) in
     check "five candidates including ambiguous repetitions" 5 (List.length cs);
-    check "one unique pair" 1 (List.count cs ~f:(fun c -> c.Store.unique));
+    check "one unique pair" 1 (List.count cs ~f:(fun c -> c.Transfers.unique));
     let c = candidate db in
     check
       "reject candidate"
       1
-      (ok (Store.set_bank_transfers db [ decision ~state:Rejected c ]));
-    check "rejected pair hidden" 4 (List.length (ok (Store.transfer_candidates db)));
+      (ok (Transfers.set_bank_transfers db [ decision ~state:Rejected c ]));
+    check "rejected pair hidden" 4 (List.length (ok (Transfers.transfer_candidates db)));
     check
       "all includes rejection"
       5
-      (List.length (ok (Store.transfer_candidates ~include_reviewed:true db))))
+      (List.length (ok (Transfers.transfer_candidates ~include_reviewed:true db))))
 ;;
 
 let categorized_candidates () =
   memory (fun db ->
     let c = candidate db in
     let same_pair pair =
-      Int64.equal pair.Store.first_event_id c.first_event_id
+      Int64.equal pair.Transfers.first_event_id c.first_event_id
       && Int64.equal pair.second_event_id c.second_event_id
     in
     let classify id account =
       ignore
         (ok
-           (Store.set_bank_categories
+           (Review.set_bank_categories
               db
               [ ok (Bank_category.create ~event_id:id ~account ~reason:"Test review") ]))
     in
@@ -262,7 +262,7 @@ let categorized_candidates () =
       "categorized leg excluded"
       false
       (List.exists
-         (ok (Store.transfer_candidates db))
+         (ok (Transfers.transfer_candidates db))
          ~f:(fun pair ->
            Int64.equal pair.first_event_id c.first_event_id
            || Int64.equal pair.second_event_id c.first_event_id));
@@ -270,31 +270,31 @@ let categorized_candidates () =
       "unreviewed classified pair absent from all"
       false
       (List.exists
-         (ok (Store.transfer_candidates ~include_reviewed:true db))
+         (ok (Transfers.transfer_candidates ~include_reviewed:true db))
          ~f:same_pair);
-    let _, _, _, count = ok (Store.bank_overview db) in
+    let _, _, _, count = ok (Accounts.bank_overview db) in
     check
       "status count matches eligible candidates"
-      (List.length (ok (Store.transfer_candidates db)))
+      (List.length (ok (Transfers.transfer_candidates db)))
       count;
     classify c.first_event_id "equity:unclassified";
     Alcotest.(check bool)
       "reset restores candidacy"
       true
-      (List.exists (ok (Store.transfer_candidates db)) ~f:same_pair);
+      (List.exists (ok (Transfers.transfer_candidates db)) ~f:same_pair);
     classify c.second_event_id "income:other";
     Alcotest.(check bool)
       "second categorized leg excluded"
       false
-      (List.exists (ok (Store.transfer_candidates db)) ~f:same_pair);
+      (List.exists (ok (Transfers.transfer_candidates db)) ~f:same_pair);
     classify c.second_event_id "equity:unclassified";
-    ignore (ok (Store.set_bank_transfers db [ decision ~state:Rejected c ]));
+    ignore (ok (Transfers.set_bank_transfers db [ decision ~state:Rejected c ]));
     classify c.first_event_id "expenses:food";
     Alcotest.(check bool)
       "reviewed rejection remains in all"
       true
       (List.exists
-         (ok (Store.transfer_candidates ~include_reviewed:true db))
+         (ok (Transfers.transfer_candidates ~include_reviewed:true db))
          ~f:(fun pair ->
            same_pair pair && Poly.equal pair.state (Some Bank_transfer.Rejected))))
 ;;
@@ -305,22 +305,22 @@ let confirm_and_reject () =
     let c = candidate db in
     let d = decision c in
     let first_op =
-      ok (Store.operations_for_event db c.first_event_id) |> List.hd_exn |> fst
+      ok (Operations.operations_for_event db c.first_event_id) |> List.hd_exn |> fst
     in
     let second_op =
-      ok (Store.operations_for_event db c.second_event_id) |> List.hd_exn |> fst
+      ok (Operations.operations_for_event db c.second_event_id) |> List.hd_exn |> fst
     in
     Alcotest.(check bool)
       "unreviewed operations are distinct"
       false
       (Int64.equal first_op second_op);
-    check "confirm" 1 (ok (Store.set_bank_transfers db [ d ]));
-    let link = List.hd_exn (ok (Store.operation_transfer_links db)) in
+    check "confirm" 1 (ok (Transfers.set_bank_transfers db [ d ]));
+    let link = List.hd_exn (ok (Review.operation_transfer_links db)) in
     Alcotest.(check int64) "link first operation" first_op link.first_operation_id;
     Alcotest.(check int64) "link second operation" second_op link.second_operation_id;
     Alcotest.(check string) "first stable role" "primary" link.first_movement.role;
     Alcotest.(check string) "second stable role" "primary" link.second_movement.role;
-    let sources = ok (Store.events db) in
+    let sources = ok (Ledger.events db) in
     let first_source = List.Assoc.find_exn sources c.first_event_id ~equal:Int64.equal in
     let second_source =
       List.Assoc.find_exn sources c.second_event_id ~equal:Int64.equal
@@ -333,8 +333,8 @@ let confirm_and_reject () =
       "second stable source"
       second_source.source_id
       link.second_movement.source_id;
-    let grouped_first = ok (Store.operations_for_event db c.first_event_id) in
-    let grouped_second = ok (Store.operations_for_event db c.second_event_id) in
+    let grouped_first = ok (Operations.operations_for_event db c.first_event_id) in
+    let grouped_second = ok (Operations.operations_for_event db c.second_event_id) in
     let id, operation = List.hd_exn grouped_first in
     Alcotest.(check int64) "canonical operation belongs to first event" first_op id;
     Alcotest.(check int64)
@@ -346,8 +346,8 @@ let confirm_and_reject () =
     check
       "old component ID remains resolvable"
       2
-      (List.length (ok (Store.get_operation db second_op)).movements);
-    check "confirm replay" 0 (ok (Store.set_bank_transfers db [ d ]));
+      (List.length (ok (Operations.get_operation db second_op)).movements);
+    check "confirm replay" 0 (ok (Transfers.set_bank_transfers db [ d ]));
     let account = Bank_transfer.account c.first_event_id c.second_event_id in
     List.iter [ c.first_event_id; c.second_event_id ] ~f:(fun id ->
       Alcotest.(check string) "shared transfer counter" account (counter db id));
@@ -362,7 +362,7 @@ let confirm_and_reject () =
       "transfer clears exactly despite fee"
       true
       (Quantity.is_zero sum);
-    check "no duplicate projection" 0 (ok (Store.project_bank db)).inserted;
+    check "no duplicate projection" 0 (ok (Ledger.project_bank db)).inserted;
     let journal = ok (Finances_hledger.export db) in
     Alcotest.(check bool)
       "no per-pair clearing account in export"
@@ -396,9 +396,9 @@ let confirm_and_reject () =
             accounts
             (List.hd_exn second_entry.postings).account
             ~equal:String.equal);
-    let reviews = ok (Store.bank_review db) in
+    let reviews = ok (Review.bank_review db) in
     let find_review id =
-      List.find_exn reviews ~f:(fun r -> Int64.equal r.Store.event_id id)
+      List.find_exn reviews ~f:(fun r -> Int64.equal r.Review.event_id id)
     in
     Alcotest.(check string)
       "first movement shows the other account"
@@ -432,7 +432,7 @@ let confirm_and_reject () =
       true
       (String.is_substring journal ~substring:"transfer-pair:");
     error
-      (Store.set_bank_categories
+      (Review.set_bank_categories
          db
          [ ok
              (Bank_category.create
@@ -440,7 +440,7 @@ let confirm_and_reject () =
                 ~account:"expenses:food"
                 ~reason:"cannot overwrite linked event")
          ]);
-    let mapping = List.hd_exn (ok (Store.bank_accounts db)) in
+    let mapping = List.hd_exn (ok (Ledger.bank_accounts db)) in
     let alias =
       ok
         (Bank_account_mapping.create
@@ -450,51 +450,51 @@ let confirm_and_reject () =
            ~account_type:mapping.account_type
            ~ledger_account:"assets:bank:daily")
     in
-    ignore (ok (Store.set_bank_account_mappings db [ alias ]));
+    ignore (ok (Ledger.set_bank_account_mappings db [ alias ]));
     project db;
     accepted (import_revolut db (csv ()));
     project db;
     check
       "undo confirmation"
       1
-      (ok (Store.set_bank_transfers db [ decision ~state:Rejected c ]));
+      (ok (Transfers.set_bank_transfers db [ decision ~state:Rejected c ]));
     check
       "undo removes operation link"
       0
-      (List.length (ok (Store.operation_transfer_links db)));
+      (List.length (ok (Review.operation_transfer_links db)));
     Alcotest.(check int64)
       "first operation restored"
       first_op
-      (fst (List.hd_exn (ok (Store.operations_for_event db c.first_event_id))));
+      (fst (List.hd_exn (ok (Operations.operations_for_event db c.first_event_id))));
     Alcotest.(check int64)
       "second operation restored"
       second_op
-      (fst (List.hd_exn (ok (Store.operations_for_event db c.second_event_id))));
+      (fst (List.hd_exn (ok (Operations.operations_for_event db c.second_event_id))));
     check
       "undo leaves a single movement"
       1
-      (List.length (ok (Store.get_operation db second_op)).movements);
+      (List.length (ok (Operations.get_operation db second_op)).movements);
     List.iter [ c.first_event_id; c.second_event_id ] ~f:(fun id ->
       Alcotest.(check string)
         "restored unclassified"
         "equity:unclassified"
         (counter db id));
     project db;
-    check "two audit records" 2 (List.length (ok (Store.bank_transfer_history db)));
-    check "reconfirm" 1 (ok (Store.set_bank_transfers db [ d ]));
-    let review = ok (Store.bank_review db) in
+    check "two audit records" 2 (List.length (ok (Transfers.bank_transfer_history db)));
+    check "reconfirm" 1 (ok (Transfers.set_bank_transfers db [ d ]));
+    let review = ok (Review.bank_review db) in
     check
       "review shows two transfer legs"
       2
       (List.count review ~f:(fun r ->
-         Poly.equal r.Store.classification Store.Transfer
+         Poly.equal r.Review.classification Review.Transfer
          && not (String.is_prefix r.counter_account ~prefix:"assets:transfers:pair-"))))
 ;;
 
 let before_projection () =
   memory (fun db ->
     let c = candidate db in
-    ignore (ok (Store.set_bank_transfers db [ decision c ]));
+    ignore (ok (Transfers.set_bank_transfers db [ decision c ]));
     project db;
     Alcotest.(check string)
       "decision before projection"
@@ -508,7 +508,7 @@ let safeguards () =
     let c = candidate db in
     ignore
       (ok
-         (Store.set_bank_categories
+         (Review.set_bank_categories
             db
             [ ok
                 (Bank_category.create
@@ -516,10 +516,10 @@ let safeguards () =
                    ~account:"income:work"
                    ~reason:"Previously reviewed")
             ]));
-    error (Store.set_bank_transfers db [ decision c ]);
+    error (Transfers.set_bank_transfers db [ decision c ]);
     ignore
       (ok
-         (Store.set_bank_categories
+         (Review.set_bank_categories
             db
             [ ok
                 (Bank_category.create
@@ -535,13 +535,16 @@ let safeguards () =
            ~state:Confirmed
            ~reason:"Invalid")
     in
-    error (Store.set_bank_transfers db [ decision c; wrong ]);
-    check "batch audit rolled back" 0 (List.length (ok (Store.bank_transfer_history db)));
+    error (Transfers.set_bank_transfers db [ decision c; wrong ]);
+    check
+      "batch audit rolled back"
+      0
+      (List.length (ok (Transfers.bank_transfer_history db)));
     Alcotest.(check string)
       "counter rolled back"
       "equity:unclassified"
       (counter db c.first_event_id);
-    error (Store.set_bank_transfers db [ decision c; decision c ]);
+    error (Transfers.set_bank_transfers db [ decision c; decision c ]);
     error
       (Bank_transfer.create
          ~first_event_id:1L
@@ -550,10 +553,10 @@ let safeguards () =
          ~reason:"same");
     accepted (import_bunq db (replace (mt ()) "SYNTHETICBUNQ" "SECONDACCOUNT"));
     project db;
-    ignore (ok (Store.set_bank_transfers db [ decision c ]));
+    ignore (ok (Transfers.set_bank_transfers db [ decision c ]));
     let competing =
       List.find_exn
-        (ok (Store.transfer_candidates ~include_reviewed:true db))
+        (ok (Transfers.transfer_candidates ~include_reviewed:true db))
         ~f:(fun d ->
           List.exists [ d.first_event_id; d.second_event_id ] ~f:(fun id ->
             Int64.equal id c.first_event_id || Int64.equal id c.second_event_id)
@@ -561,8 +564,8 @@ let safeguards () =
                (Int64.equal d.first_event_id c.first_event_id
                 && Int64.equal d.second_event_id c.second_event_id))
     in
-    error (Store.set_bank_transfers db [ decision competing ]);
-    ignore (ok (Store.set_bank_transfers db [ decision ~state:Rejected competing ]));
+    error (Transfers.set_bank_transfers db [ decision competing ]);
+    ignore (ok (Transfers.set_bank_transfers db [ decision ~state:Rejected competing ]));
     Alcotest.(check string)
       "unrelated rejection preserves confirmed link"
       (Bank_transfer.account c.first_event_id c.second_event_id)
@@ -596,23 +599,25 @@ let conflict_and_reopen () =
   workspace (fun path ->
     let d =
       ok
-        (Store.with_open ~registry:Test_support.registry path (fun db ->
+        (Setup.with_open ~registry:Test_support.registry path (fun db ->
            seed db;
            project db;
            let d = decision (candidate db) in
-           ignore (ok (Store.set_bank_transfers db [ d ]));
+           ignore (ok (Transfers.set_bank_transfers db [ d ]));
            Ok d))
     in
     ok
-      (Store.with_open ~registry:Test_support.registry path (fun db ->
+      (Setup.with_open ~registry:Test_support.registry path (fun db ->
          project db;
          check
            "reopened decisions"
            1
-           (List.length (ok (Store.bank_transfer_decisions db)));
-         let first = ok (Store.operations_for_event db d.first_event_id) |> List.hd_exn in
+           (List.length (ok (Restore.bank_transfer_decisions db)));
+         let first =
+           ok (Operations.operations_for_event db d.first_event_id) |> List.hd_exn
+         in
          let second =
-           ok (Store.operations_for_event db d.second_event_id) |> List.hd_exn
+           ok (Operations.operations_for_event db d.second_event_id) |> List.hd_exn
          in
          Alcotest.(check int64)
            "grouped operation survives reopen"
@@ -631,7 +636,7 @@ let conflict_and_reopen () =
             id FROM journal_entries WHERE event_id=%Ld)"
            d.second_event_id));
     ok
-      (Store.with_open ~registry:Test_support.registry path (fun db ->
+      (Setup.with_open ~registry:Test_support.registry path (fun db ->
          let reject =
            ok
              (Bank_transfer.create
@@ -640,11 +645,11 @@ let conflict_and_reopen () =
                 ~state:Rejected
                 ~reason:"Undo")
          in
-         error (Store.set_bank_transfers db [ reject ]);
+         error (Transfers.set_bank_transfers db [ reject ]);
          check
            "conflict audit unchanged"
            1
-           (List.length (ok (Store.bank_transfer_history db)));
+           (List.length (ok (Transfers.bank_transfer_history db)));
          Ok ())))
 ;;
 
@@ -653,7 +658,7 @@ let eligibility () =
     let c = candidate db in
     let other = replace (csv ()) "EUR" "USD" in
     accepted (import_revolut db other);
-    let cs = ok (Store.transfer_candidates db) in
+    let cs = ok (Transfers.transfer_candidates db) in
     check "FX legs not proposed" 5 (List.length cs);
     let event =
       ok
@@ -667,11 +672,11 @@ let eligibility () =
            ())
     in
     let id =
-      match ok (Store.ingest db event) with
+      match ok (Sources.ingest db event) with
       | Inserted id | Existing id -> id
     in
     error
-      (Store.set_bank_transfers
+      (Transfers.set_bank_transfers
          db
          [ ok
              (Bank_transfer.create
