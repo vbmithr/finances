@@ -33,15 +33,25 @@ type commodity_spec =
 type sign =
   | Positive
   | Negative
+  | Not_positive
+  | Not_negative
 
 type test =
   | One_of of string list
   | Sign of sign
   | Filled of bool
+  | Matches of Re.re
+  | Not_before of string
+  | Prefix_of of string
 
 type condition =
   { column : string
   ; test : test
+  }
+
+type requirement =
+  { applies : condition list
+  ; condition : condition
   }
 
 type movement_spec =
@@ -88,6 +98,7 @@ type reported_spec =
 type balance_spec =
   { balance_type : Records.balance_type
   ; quantity : string
+  ; decimal : decimal option (* When this column differs from the file's. *)
   ; commodity : commodity_spec
   ; as_of : date_spec
   }
@@ -112,13 +123,15 @@ type total_spec =
   }
 
 type t =
-  { institution : string
+  { raw : Jsont.json (* As it was written, for printing it back. *)
+  ; institution : string
   ; institution_type : Institution_type.t
   ; separator : char
   ; decimal : decimal
   ; header : string list
   ; observation : bool
   ; only : condition list
+  ; require : requirement list
   ; total : total_spec option
   ; account : account_spec
   ; id : id_spec
@@ -141,10 +154,82 @@ type t =
   }
 
 let institution t = t.institution
+let header t = t.header
 let institution_type t = t.institution_type
 let journal_tags t = t.journal_tags
 let journal_description t = t.journal_description
 let conflict_columns t = t.conflict_columns
+
+(* Columns, in order, under each role a definition gives them. *)
+let roles t =
+  let commodity = function
+    | Fiat_column column | Reported_column { column; _ } -> [ column ]
+    | Fiat_code _ -> []
+  in
+  let date (d : date_spec) = d.column :: Option.to_list d.fallback in
+  let quantity (q : quantity_spec) = [ q.column ] in
+  let opt = Option.to_list in
+  let text = function
+    | Column column -> [ column ]
+    | Value _ -> []
+  in
+  let named template =
+    List.filter t.header ~f:(fun column ->
+      String.is_substring template ~substring:("{" ^ column ^ "}"))
+  in
+  let account = t.account in
+  let movements = List.concat_map t.cases ~f:(fun case -> case.movements) in
+  let of_movements f = List.concat_map movements ~f in
+  let of_references f = Option.value_map t.references ~default:[] ~f in
+  let of_exchange f = Option.value_map t.exchange ~default:[] ~f in
+  [ ( "account"
+    , List.concat_map
+        (account.id
+         :: List.filter_opt [ account.bank; account.number; account.account_type ])
+        ~f:named
+      @ Option.value_map account.currency ~default:[] ~f:commodity )
+  ; ( "row ID"
+    , match t.id with
+      | Columns columns -> List.filter columns ~f:(List.mem t.header ~equal:String.equal)
+      | Inventory | Row_hash -> [] )
+  ; "date", date t.occurred
+  ; "value date", Option.value_map t.value_on ~default:[] ~f:date
+  ; "amount", of_movements (fun m -> quantity m.quantity)
+  ; "commodity", of_movements (fun m -> commodity m.commodity)
+  ; ( "fee"
+    , List.concat_map t.cases ~f:(fun case ->
+        Option.value_map case.fee ~default:[] ~f:quantity) )
+  ; ( "reported"
+    , Option.value_map t.reported ~default:[] ~f:(fun r -> [ r.quantity; r.symbol ]) )
+  ; "description", t.descriptions
+  ; "type", opt t.movement_type
+  ; "counterparty", t.counterparty_name @ opt t.counterparty_iban
+  ; ( "reference"
+    , of_references (fun r ->
+        List.filter_opt [ r.servicer; r.end_to_end; r.payment; r.hash ]
+        @ Option.value_map r.normalize ~default:[] ~f:(fun (_, column) -> [ column ])) )
+  ; ( "exchange"
+    , of_exchange (fun e ->
+        text e.source @ text e.target @ List.filter_opt [ e.rate; e.target_quantity ]) )
+  ; ( "valuation"
+    , List.concat_map t.valuations ~f:(fun v -> v.quantity :: commodity v.commodity) )
+  ; "balance after", opt t.balance_after
+  ; ( "stated balance"
+    , List.concat_map t.balances ~f:(fun b ->
+        (b.quantity :: commodity b.commodity) @ date b.as_of) )
+  ; ( "checked"
+    , List.map t.only ~f:(fun (c : condition) -> c.column)
+      @ List.concat_map t.require ~f:(fun r ->
+        List.map (r.condition :: r.applies) ~f:(fun (c : condition) -> c.column)) )
+  ]
+  |> List.filter_map ~f:(fun (role, columns) ->
+    let columns =
+      List.fold columns ~init:[] ~f:(fun seen column ->
+        if List.mem seen column ~equal:String.equal then seen else column :: seen)
+      |> List.rev
+    in
+    if List.is_empty columns then None else Some (role, columns))
+;;
 
 let overlap t : Adapter.overlap =
   match t.id with
@@ -163,6 +248,17 @@ let list_or_empty name codec map =
 ;;
 
 let flag name map = Jsont.Object.mem name Jsont.bool ~dec_absent:false map
+let decimal_codec = Jsont.enum [ "dot", Dot; "comma", Comma ]
+
+let separator_codec =
+  Jsont.map
+    Jsont.string
+    ~dec:(fun text ->
+      if String.length text = 1
+      then text.[0]
+      else Jsont.Error.msgf Jsont.Meta.none "a separator is one character")
+    ~enc:String.of_char
+;;
 
 let layout_codec =
   Jsont.enum
@@ -204,22 +300,67 @@ let commodity_codec =
   |> finish
 ;;
 
-let sign_codec = Jsont.enum [ "positive", Positive; "negative", Negative ]
+let sign_codec =
+  Jsont.enum
+    [ "positive", Positive
+    ; "negative", Negative
+    ; "not-positive", Not_positive
+    ; "not-negative", Not_negative
+    ]
+;;
 
-let condition_codec =
-  Jsont.Object.map (fun column one_of sign filled : condition ->
-    let test =
-      match one_of, sign, filled with
-      | Some values, None, None -> One_of values
-      | None, Some sign, None -> Sign sign
-      | None, None, Some filled -> Filled filled
-      | _ -> Jsont.Error.msgf Jsont.Meta.none "a condition is one of in, sign or filled"
-    in
-    { column; test })
-  |> dec_only "column" Jsont.string
+let pattern_codec =
+  Jsont.map
+    Jsont.string
+    ~dec:(fun pattern ->
+      try Re.compile (Re.Perl.re pattern) with
+      | _ -> Jsont.Error.msgf Jsont.Meta.none "invalid pattern: %s" pattern)
+    ~enc:(fun _ -> "")
+;;
+
+let test_of one_of sign filled matches not_before prefix_of =
+  match one_of, sign, filled, matches, not_before, prefix_of with
+  | Some values, None, None, None, None, None -> One_of values
+  | None, Some sign, None, None, None, None -> Sign sign
+  | None, None, Some filled, None, None, None -> Filled filled
+  | None, None, None, Some pattern, None, None -> Matches pattern
+  | None, None, None, None, Some column, None -> Not_before column
+  | None, None, None, None, None, Some column -> Prefix_of column
+  | _ ->
+    Jsont.Error.msgf
+      Jsont.Meta.none
+      "a condition is one of in, sign, filled, matches, not_before or prefix_of"
+;;
+
+let test_members map =
+  map
   |> opt "in" (Jsont.list Jsont.string)
   |> opt "sign" sign_codec
   |> opt "filled" Jsont.bool
+  |> opt "matches" pattern_codec
+  |> opt "not_before" Jsont.string
+  |> opt "prefix_of" Jsont.string
+;;
+
+let condition_codec =
+  Jsont.Object.map
+    (fun column one_of sign filled matches not_before prefix_of : condition ->
+       { column; test = test_of one_of sign filled matches not_before prefix_of })
+  |> dec_only "column" Jsont.string
+  |> test_members
+  |> finish
+;;
+
+let requirement_codec =
+  Jsont.Object.map
+    (fun applies column one_of sign filled matches not_before prefix_of : requirement ->
+       { applies
+       ; condition =
+           { column; test = test_of one_of sign filled matches not_before prefix_of }
+       })
+  |> list_or_empty "when" condition_codec
+  |> dec_only "column" Jsont.string
+  |> test_members
   |> finish
 ;;
 
@@ -306,10 +447,11 @@ let balance_type_codec =
 ;;
 
 let balance_codec =
-  Jsont.Object.map (fun balance_type quantity commodity as_of : balance_spec ->
-    { balance_type; quantity; commodity; as_of })
+  Jsont.Object.map (fun balance_type quantity decimal commodity as_of : balance_spec ->
+    { balance_type; quantity; decimal; commodity; as_of })
   |> dec_only "type" balance_type_codec
   |> dec_only "quantity" Jsont.string
+  |> opt "decimal" decimal_codec
   |> dec_only "commodity" commodity_codec
   |> dec_only "as_of" date_codec
   |> finish
@@ -346,19 +488,7 @@ let total_codec =
   |> finish
 ;;
 
-let decimal_codec = Jsont.enum [ "dot", Dot; "comma", Comma ]
-
-let separator_codec =
-  Jsont.map
-    Jsont.string
-    ~dec:(fun text ->
-      if String.length text = 1
-      then text.[0]
-      else Jsont.Error.msgf Jsont.Meta.none "a separator is one character")
-    ~enc:String.of_char
-;;
-
-let codec =
+let typed_codec =
   Jsont.Object.map
     (fun
         ()
@@ -370,6 +500,7 @@ let codec =
          header
          observation
          only
+         require
          total
          account
          id
@@ -390,13 +521,15 @@ let codec =
          journal_description
          conflict_columns
        ->
-       { institution
+       { raw = Jsont.Json.null ()
+       ; institution
        ; institution_type
        ; separator
        ; decimal
        ; header
        ; observation
        ; only
+       ; require
        ; total
        ; account
        ; id = Option.value id ~default:Inventory
@@ -426,6 +559,7 @@ let codec =
   |> dec_only "header" (Jsont.list Jsont.string)
   |> flag "observation"
   |> list_or_empty "only" condition_codec
+  |> list_or_empty "require" requirement_codec
   |> opt "total" total_codec
   |> dec_only "account" account_codec
   |> opt "id" id_codec
@@ -474,13 +608,19 @@ let named_columns t =
     | Fiat_column column | Reported_column { column; _ } -> [ column ]
     | Fiat_code _ -> []
   in
-  let conditions = List.map ~f:(fun (c : condition) -> c.column) in
+  let conditions =
+    List.concat_map ~f:(fun (c : condition) ->
+      match c.test with
+      | Not_before other | Prefix_of other -> [ c.column; other ]
+      | One_of _ | Sign _ | Filled _ | Matches _ -> [ c.column ])
+  in
   let text = function
     | Column column -> [ column ]
     | Value _ -> []
   in
   List.concat
     [ conditions t.only
+    ; List.concat_map t.require ~f:(fun r -> conditions (r.condition :: r.applies))
     ; Option.value_map t.total ~default:[] ~f:(fun total ->
         conditions total.conditions @ quantity total.quantity @ commodity total.commodity)
     ; template_columns t.account.id
@@ -516,20 +656,33 @@ let named_columns t =
     ]
 ;;
 
-let of_string text =
-  let open Or_error.Let_syntax in
-  let%bind t = Json.decode codec text in
+let check t =
   match
     List.filter (named_columns t) ~f:(fun name ->
       Option.is_none (column_index t.header name))
   with
-  | [] -> Ok t
+  | [] -> ()
   | unknown ->
-    Or_error.errorf
+    Jsont.Error.msgf
+      Jsont.Meta.none
       "%s: columns not in the header: %s"
       t.institution
       (String.concat ~sep:", " unknown)
 ;;
+
+let codec =
+  Jsont.map
+    Jsont.json
+    ~dec:(fun raw ->
+      match Jsont.Json.decode' typed_codec raw with
+      | Ok t ->
+        check t;
+        { t with raw }
+      | Error error -> raise (Jsont.Error error))
+    ~enc:(fun t -> t.raw)
+;;
+
+let of_string = Json.decode codec
 
 (* Rows. *)
 
@@ -548,11 +701,14 @@ let raw_cell t row name =
 let cell t row name = String.strip (raw_cell t row name)
 let filled text = Option.some_if (not (String.is_empty text)) text
 
-let quantity_of t text =
+let quantity_in decimal text =
+  (* Under a decimal comma, a dot is a group mark or a mistake: 1.234 is not 1.234. *)
+  if Poly.equal decimal Comma && String.mem text '.'
+  then Printf.failwithf "invalid quantity: %S" text ();
   let text =
     String.concat_map text ~f:(function
       | ' ' -> ""
-      | ',' when Poly.equal t.decimal Comma -> "."
+      | ',' when Poly.equal decimal Comma -> "."
       | c -> String.make 1 c)
     (* Groups digits with a space, no-break space or narrow no-break space. *)
     |> String.substr_replace_all ~pattern:"\xc2\xa0" ~with_:""
@@ -562,6 +718,8 @@ let quantity_of t text =
   then Quantity.of_string text
   else Printf.failwithf "invalid quantity: %S" text ()
 ;;
+
+let quantity_of t text = quantity_in t.decimal text
 
 let quantity_of_spec t row (spec : quantity_spec) =
   let value = quantity_of t (cell t row spec.column) in
@@ -574,9 +732,7 @@ let quantity_of_spec t row (spec : quantity_spec) =
 ;;
 
 let optional_quantity t row name =
-  Option.bind
-    (filled (cell t row name))
-    ~f:(fun text -> Option.try_with (fun () -> quantity_of t text))
+  Option.map (filled (cell t row name)) ~f:(quantity_of t)
 ;;
 
 let commodity_of t row = function
@@ -597,7 +753,13 @@ let holds t row (condition : condition) =
     (match Option.try_with (fun () -> quantity_of t value), sign with
      | Some quantity, Positive -> Quantity.(quantity > zero)
      | Some quantity, Negative -> Quantity.(quantity < zero)
+     | Some quantity, Not_positive -> Quantity.(quantity <= zero)
+     | Some quantity, Not_negative -> Quantity.(quantity >= zero)
      | None, _ -> false)
+  | Matches pattern -> Re.execp pattern value
+  | Not_before other -> String.compare value (cell t row other) >= 0
+  | Prefix_of other ->
+    (not (String.is_empty value)) && String.is_prefix (cell t row other) ~prefix:value
 ;;
 
 let holds_all t row = List.for_all ~f:(holds t row)
@@ -609,6 +771,17 @@ let temporal_of t row (spec : date_spec) =
     | _ -> cell t row spec.column
   in
   let date_part = String.prefix value 10 in
+  let well_formed =
+    match spec.layout with
+    | Iso_date -> String.length value = 10
+    | Iso_datetime ->
+      Re.execp
+        (Re.compile
+           (Re.Perl.re {|^[0-9]{4}-[0-9]{2}-[0-9]{2}[ T][0-9]{2}:[0-9]{2}:[0-9]{2}|}))
+        value
+    | Day_first -> true
+  in
+  if not well_formed then Printf.failwithf "invalid date: %S" value ();
   let iso =
     match spec.layout with
     | Iso_date | Iso_datetime -> date_part
@@ -827,6 +1000,34 @@ let convert t ~name contents =
   Or_error.try_with (fun () ->
     let sha256 = Digestif.SHA256.(digest_string contents |> to_hex) in
     let rows = rows_of t contents |> List.filter ~f:(fun row -> holds_all t row t.only) in
+    List.iter rows ~f:(fun row ->
+      List.iter t.require ~f:(fun { applies; condition } ->
+        if holds_all t row applies && not (holds t row condition)
+        then (
+          let value = cell t row condition.column in
+          let number = row.number
+          and column = condition.column in
+          match condition.test with
+          | Not_before other ->
+            Printf.failwithf
+              "row %d: %s %S precedes %s %S"
+              number
+              column
+              value
+              other
+              (cell t row other)
+              ()
+          | Prefix_of other ->
+            Printf.failwithf
+              "row %d: %s %S disagrees with %s %S"
+              number
+              column
+              value
+              other
+              (cell t row other)
+              ()
+          | One_of _ | Sign _ | Filled _ | Matches _ ->
+            Printf.failwithf "row %d: unexpected %s: %S" number column value ())));
     (* A row stating what the others add up to is not a movement. *)
     let totals, rows =
       List.partition_tf rows ~f:(fun row ->
@@ -864,7 +1065,9 @@ let convert t ~name contents =
         at_row row (fun () ->
           List.filter_map t.balances ~f:(fun spec ->
             Option.map
-              (optional_quantity t row spec.quantity)
+              (Option.map
+                 (filled (cell t row spec.quantity))
+                 ~f:(quantity_in (Option.value spec.decimal ~default:t.decimal)))
               ~f:(fun quantity : Records.balance ->
                 { account = expand t row t.account.id
                 ; balance_type = spec.balance_type
@@ -888,9 +1091,4 @@ let convert t ~name contents =
      ; records
      }
      : Records.t))
-;;
-
-let bundled =
-  lazy
-    (List.map Bundled_converters.all ~f:(fun text -> of_string text |> Or_error.ok_exn))
 ;;

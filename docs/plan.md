@@ -43,8 +43,8 @@ provider observations before treating them as authoritative.
 - Manual movement types can be set for a batch of transaction IDs atomically.
 - Generic CSV dates can include a validated clock; booking uses the calendar date.
 - Core commodities distinguish fiat, native network assets, contract tokens
-  and provider-scoped symbols; a read-only CDC CSV inspector proposes
-  legs and highlights identical rows without posting them. CDC CSV
+  and provider-scoped symbols; `fin convert cdc` shows what a CSV states
+  without a database. CDC CSV
   evidence and proposed operations can also be imported and listed; ambiguous
   overlapping records are refused. Reimports verify stored operations against the
   importer's interpretation. Header-only files import with nothing inserted.
@@ -489,6 +489,13 @@ position observations, derive positions from fills, or calculate funding.
   `fin db sources` instead of a separate `fin crypto` group.
 - [x] Describe CDC as data (`cdc.json`) interpreted by the generic
   `Movement_csv`, with no institution-specific OCaml.
+- [x] One definition kind for every bundled institution: `records` names a statement format, a CSV
+  layout or both. The old adapter kinds and their modules are gone, along with the read-only CDC
+  inspector, which `fin convert cdc` replaces. Rebuilding from real files, and reimporting into a
+  database from before the change, give the same journal and decisions. `stored_formats` keeps Wise
+  rows stored under format `wise` readable, until a later rebuild can drop it. Every check the old
+  parsers made is back, with a test per check: the format itself checks what records state, such as
+  running balances and fees, for any source, and `require` checks how a source's columns relate.
 - [ ] Unified records format with converters ([records-format.md](records-format.md)):
   every statement entry becomes a record, and fin matches across all stored records. Built-in converters keep `fin import wise FILE` working;
   other institutions write their own. Schema, spec and examples drafted 2026-11-03.

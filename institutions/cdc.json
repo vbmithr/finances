@@ -1,54 +1,183 @@
 {
   "version": 1,
-  "kind": "movement-csv",
-  "institution": "cdc",
+  "kind": "records",
   "type": "crypto-exchange",
-  "aliases": [],
-  "payload_tag": "cdc-csv-v1",
-  "account": "app",
-  "header": [
-    "Timestamp (UTC)",
-    "Transaction Description",
-    "Currency",
-    "Amount",
-    "To Currency",
-    "To Amount",
-    "Native Currency",
-    "Native Amount",
-    "Native Amount (in USD)",
-    "Transaction Kind",
-    "Transaction Hash"
-  ],
-  "columns": {
-    "timestamp": "Timestamp (UTC)",
-    "currency": "Currency",
-    "amount": "Amount",
-    "to_currency": "To Currency",
-    "to_amount": "To Amount",
-    "kind": "Transaction Kind"
-  },
-  "rules": [
-    {
-      "kinds": [
-        "referral_card_cashback", "mco_stake_reward", "gift_card_reward",
-        "referral_bonus", "referral_gift", "crypto_deposit",
-        "exchange_to_crypto_transfer", "reimbursement",
-        "supercharger_withdrawal", "lockup_unlock"
+  "records": {
+    "institution": "cdc",
+    "aliases": [],
+    "csv": {
+      "format": "fin-csv-converter",
+      "version": 1,
+      "institution": "cdc",
+      "institution_type": "crypto-exchange",
+      "header": [
+        "Timestamp (UTC)",
+        "Transaction Description",
+        "Currency",
+        "Amount",
+        "To Currency",
+        "To Amount",
+        "Native Currency",
+        "Native Amount",
+        "Native Amount (in USD)",
+        "Transaction Kind",
+        "Transaction Hash"
       ],
-      "legs": "single-in"
-    },
-    {
-      "kinds": [
-        "card_top_up", "card_cashback_reverted", "supercharger_deposit", "lockup_lock"
+      "account": {
+        "id": "app",
+        "bank": "cdc"
+      },
+      "id": {
+        "row_hash": true
+      },
+      "occurred": {
+        "column": "Timestamp (UTC)",
+        "layout": "iso-datetime",
+        "utc": true
+      },
+      "cases": [
+        {
+          "when": [
+            {
+              "column": "Transaction Kind",
+              "in": [
+                "referral_card_cashback",
+                "mco_stake_reward",
+                "gift_card_reward",
+                "referral_bonus",
+                "referral_gift",
+                "crypto_deposit",
+                "exchange_to_crypto_transfer",
+                "reimbursement",
+                "supercharger_withdrawal",
+                "lockup_unlock"
+              ]
+            },
+            {
+              "column": "Amount",
+              "sign": "positive"
+            },
+            {
+              "column": "To Currency",
+              "filled": false
+            }
+          ],
+          "movements": [
+            {
+              "role": "primary",
+              "quantity": {
+                "column": "Amount"
+              },
+              "commodity": {
+                "reported": "Currency",
+                "provider": "cdc"
+              }
+            }
+          ]
+        },
+        {
+          "when": [
+            {
+              "column": "Transaction Kind",
+              "in": [
+                "card_top_up",
+                "card_cashback_reverted",
+                "supercharger_deposit",
+                "lockup_lock"
+              ]
+            },
+            {
+              "column": "Amount",
+              "sign": "negative"
+            },
+            {
+              "column": "To Currency",
+              "filled": false
+            }
+          ],
+          "movements": [
+            {
+              "role": "primary",
+              "quantity": {
+                "column": "Amount"
+              },
+              "commodity": {
+                "reported": "Currency",
+                "provider": "cdc"
+              }
+            }
+          ]
+        },
+        {
+          "when": [
+            {
+              "column": "Transaction Kind",
+              "in": [
+                "crypto_viban_exchange",
+                "crypto_exchange",
+                "trading.crypto_conversion.cash",
+                "viban_purchase"
+              ]
+            },
+            {
+              "column": "Amount",
+              "sign": "negative"
+            },
+            {
+              "column": "To Amount",
+              "sign": "positive"
+            }
+          ],
+          "movements": [
+            {
+              "role": "from",
+              "quantity": {
+                "column": "Amount"
+              },
+              "commodity": {
+                "reported": "Currency",
+                "provider": "cdc"
+              }
+            },
+            {
+              "role": "to",
+              "quantity": {
+                "column": "To Amount"
+              },
+              "commodity": {
+                "reported": "To Currency",
+                "provider": "cdc"
+              }
+            }
+          ]
+        }
       ],
-      "legs": "single-out"
-    },
-    {
-      "kinds": [
-        "crypto_viban_exchange", "crypto_exchange",
-        "trading.crypto_conversion.cash", "viban_purchase"
+      "reported": {
+        "quantity": "Amount",
+        "symbol": "Currency"
+      },
+      "descriptions": [
+        "Transaction Description"
       ],
-      "legs": "exchange"
+      "type": "Transaction Kind",
+      "references": {
+        "hash": "Transaction Hash"
+      },
+      "valuations": [
+        {
+          "quantity": "Native Amount",
+          "commodity": {
+            "fiat": "Native Currency"
+          }
+        },
+        {
+          "quantity": "Native Amount (in USD)",
+          "commodity": {
+            "code": "USD"
+          }
+        }
+      ]
     }
-  ]
+  },
+  "rules": []
 }

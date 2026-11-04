@@ -99,7 +99,16 @@ let institution_definitions path =
   in
   rows
   |> List.map ~f:(fun (name, json) ->
-    let%bind definition = Json.decode Institution_definition.codec json in
+    let%bind definition =
+      Json.decode Institution_definition.codec json
+      |> Result.map_error ~f:(fun error ->
+        Error.of_string
+          (Printf.sprintf
+             "institution %s: its saved definition cannot be read; older kinds are no \
+              longer accepted, see CHANGES.md: %s"
+             name
+             (Error.to_string_hum error)))
+    in
     if String.equal name (Institution_definition.institution definition)
     then Ok definition
     else Or_error.error_string "stored institution definition name does not match")

@@ -26,8 +26,12 @@ with tempfile.TemporaryDirectory() as directory:
                XDG_CACHE_HOME=str(root / "cache"))
     checked = 0
     for definition in sorted(INSTITUTIONS.glob("*.json")):
+        if definition.stem == "companion_example":
+            continue
         name = definition.stem
-        for profile in profiles(json.loads(definition.read_text())):
+        # A statement format's settings can name the CSV's header too.
+        headers = {tuple(p["header"]): p for p in profiles(json.loads(definition.read_text()))}
+        for profile in headers.values():
             statement = root / f"{name}.csv"
             statement.write_text(profile.get("separator", ",").join(profile["header"]) + "\n")
             database = root / f"{name}.sqlite3"

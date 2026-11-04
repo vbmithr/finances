@@ -1,5 +1,19 @@
 open Base
 
+type statement =
+  | Camt of Camt_profile.t
+  | Mt940 of Mt940_profile.t
+  | Ofx
+
+(* An institution whose files reach fin as records: a statement format, a CSV layout, or both. *)
+type records =
+  { institution : string
+  ; aliases : string list
+  ; statement : statement option
+  ; csv : Csv_converter.t option
+  ; stored_formats : string list
+  }
+
 type csv =
   { institution : string
   ; aliases : string list
@@ -7,10 +21,7 @@ type csv =
   }
 
 type source =
-  | Ofx_csv of Institution_preset.t
-  | Camt_csv of Camt_institution_preset.t
-  | Mt940_csv of Mt940_profile.t
-  | Running_csv of Csv_running_profile.t
+  | Records of records
   | Csv of csv
 
 type action =
@@ -83,76 +94,6 @@ let rule_codec =
   |> Jsont.Object.finish
 ;;
 
-let camt_codec =
-  Jsont.Object.map
-    (fun
-        institution
-         aliases
-         companion_format
-         matching_policy
-         metadata_prefix
-         camt_profile
-         csv_profile
-       ->
-       let institution = Validation.token "institution" institution |> Json.or_error in
-       let aliases =
-         List.map aliases ~f:(fun x ->
-           Validation.token "institution alias" x |> Json.or_error)
-       in
-       let companion_format =
-         Validation.token "companion format" companion_format |> Json.or_error
-       in
-       let matching_policy =
-         Validation.token "matching policy" matching_policy |> Json.or_error
-       in
-       let metadata_prefix =
-         Validation.token "metadata prefix" metadata_prefix |> Json.or_error
-       in
-       if
-         not
-           (String.equal institution camt_profile.Camt_profile.institution
-            && String.equal institution csv_profile.Csv_clock_profile.institution)
-       then failwith "institution must agree with both CAMT and CSV profiles";
-       { Camt_institution_preset.institution
-       ; aliases
-       ; companion_format
-       ; matching_policy
-       ; metadata_prefix
-       ; camt_profile
-       ; csv_profile
-       })
-  |> Jsont.Object.mem
-       "institution"
-       Jsont.string
-       ~enc:(fun (p : Camt_institution_preset.t) -> p.institution)
-  |> Jsont.Object.mem
-       "aliases"
-       (Jsont.list Jsont.string)
-       ~enc:(fun (p : Camt_institution_preset.t) -> p.aliases)
-  |> Jsont.Object.mem
-       "companion_format"
-       Jsont.string
-       ~enc:(fun (p : Camt_institution_preset.t) -> p.companion_format)
-  |> Jsont.Object.mem
-       "matching_policy"
-       Jsont.string
-       ~enc:(fun (p : Camt_institution_preset.t) -> p.matching_policy)
-  |> Jsont.Object.mem
-       "metadata_prefix"
-       Jsont.string
-       ~enc:(fun (p : Camt_institution_preset.t) -> p.metadata_prefix)
-  |> Jsont.Object.mem
-       "camt_profile"
-       Camt_profile.codec
-       ~enc:(fun (p : Camt_institution_preset.t) -> p.camt_profile)
-  |> Jsont.Object.mem
-       "csv_profile"
-       Csv_clock_profile.codec
-       ~enc:(fun (p : Camt_institution_preset.t) -> p.csv_profile)
-  |> Jsont.Object.error_unknown
-  |> Jsont.Object.finish
-;;
-
 let csv_codec =
   Jsont.Object.map (fun institution aliases profile ->
     let institution = Validation.token "institution" institution |> Json.or_error in
@@ -174,52 +115,72 @@ let csv_codec =
   |> Jsont.Object.finish
 ;;
 
+let records_codec =
+  Jsont.Object.map (fun institution aliases camt mt940 ofx csv stored_formats ->
+    let statement =
+      match camt, mt940, ofx with
+      | Some profile, None, None -> Some (Camt profile)
+      | None, Some profile, None -> Some (Mt940 profile)
+      | None, None, Some true -> Some Ofx
+      | None, None, (None | Some false) -> None
+      | _ -> failwith "a definition has one statement format"
+    in
+    if Option.is_none statement && Option.is_none csv
+    then failwith "a definition needs a statement format or a CSV layout";
+    ({ institution; aliases; statement; csv; stored_formats } : records))
+  |> Jsont.Object.mem "institution" Jsont.string ~enc:(fun (r : records) -> r.institution)
+  |> Jsont.Object.mem
+       "aliases"
+       (Jsont.list Jsont.string)
+       ~dec_absent:[]
+       ~enc:(fun (r : records) -> r.aliases)
+  |> Jsont.Object.opt_mem "camt" Camt_profile.codec ~enc:(fun (r : records) ->
+    match r.statement with
+    | Some (Camt p) -> Some p
+    | _ -> None)
+  |> Jsont.Object.opt_mem "mt940" Mt940_profile.codec ~enc:(fun (r : records) ->
+    match r.statement with
+    | Some (Mt940 p) -> Some p
+    | _ -> None)
+  |> Jsont.Object.opt_mem "ofx" Jsont.bool ~enc:(fun (r : records) ->
+    match r.statement with
+    | Some Ofx -> Some true
+    | _ -> None)
+  |> Jsont.Object.opt_mem "csv" Csv_converter.codec ~enc:(fun (r : records) -> r.csv)
+  |> Jsont.Object.mem
+       "stored_formats"
+       (Jsont.list Jsont.string)
+       ~dec_absent:[]
+       ~enc_omit:List.is_empty
+       ~enc:(fun (r : records) -> r.stored_formats)
+  |> Jsont.Object.error_unknown
+  |> Jsont.Object.finish
+;;
+
 let codec =
-  Jsont.Object.map (fun () kind institution_type ofx camt csv running mt940 rules ->
-    match kind, ofx, camt, csv, running, mt940 with
-    | "ofx-csv", Some p, None, None, None, None ->
-      { source = Ofx_csv p; institution_type; rules }
-    | "camt-csv", None, Some p, None, None, None ->
-      { source = Camt_csv p; institution_type; rules }
-    | "csv", None, None, Some p, None, None -> { source = Csv p; institution_type; rules }
-    | "running-csv", None, None, None, Some p, None ->
-      { source = Running_csv p; institution_type; rules }
-    | "mt940-csv", None, None, None, None, Some p ->
-      { source = Mt940_csv p; institution_type; rules }
-    | _ -> failwith "definition kind and source profile do not agree")
+  Jsont.Object.map (fun () kind institution_type records csv rules ->
+    match kind, records, csv with
+    | "records", Some r, None -> { source = Records r; institution_type; rules }
+    | "csv", None, Some p -> { source = Csv p; institution_type; rules }
+    | _ -> failwith "definition kind and source do not agree")
   |> Jsont.Object.mem "version" (Json.version 1) ~enc:(fun _ -> ())
   |> Jsont.Object.mem "kind" Jsont.string ~enc:(fun p ->
     match p.source with
-    | Ofx_csv _ -> "ofx-csv"
-    | Camt_csv _ -> "camt-csv"
-    | Csv _ -> "csv"
-    | Running_csv _ -> "running-csv"
-    | Mt940_csv _ -> "mt940-csv")
+    | Records _ -> "records"
+    | Csv _ -> "csv")
   |> Jsont.Object.mem
        "type"
        Institution_type.jsont
        ~dec_absent:Institution_type.Bank
        ~enc:(fun p -> p.institution_type)
-  |> Jsont.Object.opt_mem "ofx" Institution_preset.codec ~enc:(fun p ->
+  |> Jsont.Object.opt_mem "records" records_codec ~enc:(fun p ->
     match p.source with
-    | Ofx_csv p -> Some p
-    | _ -> None)
-  |> Jsont.Object.opt_mem "camt" camt_codec ~enc:(fun p ->
-    match p.source with
-    | Camt_csv p -> Some p
-    | _ -> None)
+    | Records r -> Some r
+    | Csv _ -> None)
   |> Jsont.Object.opt_mem "csv" csv_codec ~enc:(fun p ->
     match p.source with
     | Csv p -> Some p
-    | _ -> None)
-  |> Jsont.Object.opt_mem "running" Csv_running_profile.codec ~enc:(fun p ->
-    match p.source with
-    | Running_csv p -> Some p
-    | _ -> None)
-  |> Jsont.Object.opt_mem "mt940" Mt940_profile.codec ~enc:(fun p ->
-    match p.source with
-    | Mt940_csv p -> Some p
-    | _ -> None)
+    | Records _ -> None)
   |> Jsont.Object.mem "rules" (Jsont.list rule_codec) ~dec_absent:[] ~enc:(fun p ->
     p.rules)
   |> Jsont.Object.error_unknown
@@ -228,26 +189,56 @@ let codec =
 
 let institution t =
   match t.source with
-  | Ofx_csv p -> p.institution
-  | Camt_csv p -> p.institution
+  | Records r -> r.institution
   | Csv p -> p.institution
-  | Running_csv p -> p.institution
-  | Mt940_csv p -> p.institution
+;;
+
+(* What can read this institution's files, statement format first. *)
+let sources (r : records) =
+  let statement =
+    Option.map r.statement ~f:(function
+      | Camt profile ->
+        Records_adapter.statement_source
+          "camt"
+          ~recognizes:(fun ~filename:_ contents -> Camt_converter.recognizes contents)
+          ~convert:(Camt_converter.convert profile)
+      | Mt940 profile ->
+        Records_adapter.statement_source
+          "mt940"
+          ~recognizes:(fun ~filename:_ contents ->
+            Mt940_converter.recognizes profile contents)
+          ~convert:(Mt940_converter.convert profile)
+      | Ofx ->
+        Records_adapter.statement_source
+          "ofx"
+          ~recognizes:
+            (* A broken file named .ofx is meant to be one, and should say so. *)
+            (fun
+              ~filename contents ->
+            Ofx_converter.recognizes contents
+            || String.equal (Adapter_support.extension filename) ".ofx")
+          ~convert:(Ofx_converter.convert ~institution:r.institution))
+  in
+  List.filter_opt [ statement; Option.map r.csv ~f:(Records_adapter.of_definition "csv") ]
+;;
+
+let overlap (r : records) : Adapter.overlap =
+  match r.statement, r.csv with
+  | Some (Camt _ | Ofx), _ -> Source_ids
+  | Some (Mt940 _), _ -> Day_inventory
+  | None, Some csv -> Csv_converter.overlap csv
+  | None, None -> Source_ids
 ;;
 
 let adapter t =
   match t.source with
-  | Running_csv p -> Csv_running_adapter.make p
-  | Mt940_csv p -> Mt940_csv_adapter.make p
-  | Ofx_csv p ->
-    Csv_ofx_adapter.make
-      ~institution:p.institution
-      ~aliases:p.aliases
-      ~csv_format:p.companion_format
-      ~policy:p.matching_policy
-      ~snapshot:p.snapshot
-      ~layout:p.layout
-      ()
+  | Records r ->
+    Records_adapter.make
+      ~aliases:r.aliases
+      ~stored_formats:r.stored_formats
+      ~institution:r.institution
+      ~overlap:(overlap r)
+      (sources r)
   | Csv p ->
     let module A =
       (val Csv_adapter.make ~institution:p.institution ~profile:p.profile () : Adapter.S)
@@ -257,24 +248,12 @@ let adapter t =
 
       let aliases = p.aliases
     end : Adapter.S)
-  | Camt_csv p ->
-    Camt_csv_adapter.make
-      ~profile:p.camt_profile
-      ~csv_profile:p.csv_profile
-      ~aliases:p.aliases
-      ~csv:p.companion_format
-      ~policy:p.matching_policy
-      ~metadata_prefix:p.metadata_prefix
-      ()
 ;;
 
 let aliases t =
   match t.source with
-  | Ofx_csv p -> p.aliases
-  | Camt_csv p -> p.aliases
+  | Records r -> r.aliases
   | Csv p -> p.aliases
-  | Running_csv p -> p.aliases
-  | Mt940_csv p -> p.aliases
 ;;
 
 let names t = institution t :: aliases t
@@ -347,109 +326,25 @@ let describe t =
     }
   in
   match t.source with
-  | Ofx_csv p ->
-    let layout = p.layout in
-    let name i = List.nth layout.header i |> Option.value ~default:"?" in
-    let required =
-      [ "account", layout.account_id
-      ; "booked on", layout.booked_on
-      ; "amount", layout.amount
-      ; "description", layout.description
-      ]
+  | Records r ->
+    let statement =
+      match r.statement with
+      | Some (Camt _) -> [ "statement", "CAMT.053" ]
+      | Some (Mt940 _) -> [ "statement", "MT940" ]
+      | Some Ofx -> [ "statement", "OFX" ]
+      | None -> []
     in
-    let optional =
-      [ "value date", layout.value_on
-      ; "suggested description", layout.suggested_description
-      ; "category", layout.category
-      ; "parent category", layout.parent_category
-      ; "comment", layout.comment
-      ; "account label", layout.account_label
-      ; "reported balance", layout.reported_balance
-      ; "pointage", layout.pointage
-      ]
-    in
-    let fields =
-      List.map required ~f:(fun (role, i) -> role, name i)
-      @ List.filter_map optional ~f:(fun (role, i) ->
-        Option.map i ~f:(fun i -> role, name i))
-    in
+    let roles = Option.value_map r.csv ~default:[] ~f:Csv_converter.roles in
     base
-      "OFX primary with CSV companion"
-      fields
-      layout.header
-      (List.map fields ~f:snd)
-      [ "the first OFX description (type rules); the CSV companion's columns are not \
-         available to rules"
+      "Records"
+      (statement
+       @ List.map roles ~f:(fun (role, columns) -> role, String.concat ~sep:", " columns)
+      )
+      (Option.value_map r.csv ~default:[] ~f:Csv_converter.header)
+      (List.concat_map roles ~f:snd)
+      [ "the description (type rules)"
+      ; "any field of the row, named as the source names it, with --field (type rules)"
       ]
-  | Camt_csv p ->
-    let c = p.csv_profile.columns in
-    let fields =
-      [ "reference", c.reference
-      ; "date", c.date
-      ; "date and time", c.datetime
-      ; "amount", c.amount
-      ; "currency", c.currency
-      ; "description", c.description
-      ; "payment reference", c.payment_reference
-      ; "running balance", c.running_balance
-      ; "merchant", c.merchant
-      ; "fees", c.fees
-      ; "direction", c.direction
-      ]
-      @ List.map p.csv_profile.conflict_columns ~f:(fun n -> "compared for conflicts", n)
-    in
-    base
-      "CAMT.053 primary with CSV companion"
-      fields
-      p.csv_profile.header
-      (List.map fields ~f:snd)
-      [ "the first CAMT description (type rules)"
-      ; "any column of the CSV companion, with --field (type rules)"
-      ]
-  | Running_csv p ->
-    let c = p.columns in
-    let fields =
-      [ "type (reported code)", c.transaction_type
-      ; "product", c.product
-      ; "started", c.started
-      ; "completed", c.completed
-      ; "description", c.description
-      ; "amount", c.amount
-      ; "fee", c.fee
-      ; "currency", c.currency
-      ; "state", c.state
-      ; "balance", c.balance
-      ]
-    in
-    base
-      "Running-balance CSV (primary)"
-      fields
-      p.header
-      (List.map fields ~f:snd)
-      [ Printf.sprintf "the description column %S (type rules)" c.description
-      ; Printf.sprintf
-          "any column of the file, named by its header, such as %S, with --field (type \
-           rules)"
-          c.transaction_type
-      ]
-  | Mt940_csv p ->
-    let c = p.columns in
-    let fields =
-      [ "booked on", c.booked_on
-      ; "value date", c.value_on
-      ; "amount", c.amount
-      ; "account", c.account_id
-      ; "counterparty", c.counterparty
-      ; "name", c.name
-      ; "description", c.description
-      ]
-    in
-    base
-      "MT940 primary with CSV companion"
-      fields
-      p.header
-      (List.map fields ~f:snd)
-      [ "the first MT940 description (type rules)" ]
   | Csv p ->
     let profile = p.profile in
     let fields =

@@ -298,36 +298,23 @@ event IDs are database-specific; do not blindly reuse old IDs.
 
 ### Inspect CDC CSV exports
 
-CDC is a bundled institution profile, `institutions/cdc.json`, not
-code: it lists the expected CSV header, the column roles and one rule per reported
-transaction kind (`single-in`, `single-out` or `exchange`). Kinds without a rule
-are flagged for review. Name it `cdc`.
+CDC is a bundled institution definition, `institutions/cdc.json`, not code: it lists
+the expected CSV header, the columns and what each reported transaction kind moves.
+Name it `cdc`.
 
-Use the read-only inspector for CDC App transaction or card CSV exports:
+To see what fin reads from an export without a database, convert it:
 
 ```sh
-fin import cdc --inspect wallet.csv card.csv
-fin import cdc --inspect wallet.csv card.csv --json
-fin import cdc --inspect --summary wallet.csv card.csv
+fin convert cdc wallet.csv card.csv
 ```
 
-The command does not need a database and does not import or post anything. It
-preserves each CSV row's fields in JSON, validates timestamps and amounts, and
-shows proposed commodity legs for recognized transaction-kind and sign patterns.
-Unsupported, ambiguous or incomplete patterns are marked for review without
-proposed legs. Symbols are scoped to the provider: the inspector does not claim
-that a symbol uniquely identifies a crypto asset or network. Native amount
-columns remain source evidence; they do not create legs. A single proposed leg
-does not establish the counterparty, wallet, category or fee.
-
-Each input row is shown independently. Overlapping exports are not deduplicated;
-proposals are not reconciled with account balances. Check source statements and
-wallet balances before treating any proposal as accounting. JSON contains
-personal transaction details and should be kept private. This inspector is not
-the generic bank CSV importer and does not change bank movements or hledger.
-`--summary` groups counts by reported kind and flags identical parsed field
-values as candidates, including rows within one file. Identical rows may be
-distinct activity; different rows can still overlap. No duplicates are removed.
+The command imports and posts nothing. It prints records, keeping each CSV row's
+fields, and refuses bad timestamps and amounts. A kind with no known movements gets
+no movements. Symbols are scoped to the provider: fin does not claim that a symbol
+identifies a crypto asset or network. Native amount columns are valuations; they
+do not create movements. A single movement does not establish the counterparty,
+wallet, category or fee. The output contains personal transaction details and
+should be kept private.
 
 To retain an export and its proposed operations in the database, import it like
 any other venue — there is no separate preview step:
@@ -428,9 +415,11 @@ fin prompts for its provider and account details when needed.
 
 ### Attach an institution definition
 
-An institution definition is a versioned JSON file for a primary CSV, an OFX
-source with a CSV companion, a CAMT.053 source with a clock-based CSV companion,
-a running-balance CSV, or the supported MT940/CSV profile. Validate a definition and preview a sample before installing it:
+An institution definition is a versioned JSON file of one of two kinds. Kind `records`
+says how to turn an institution's files into [records](records-format.md): a statement
+format (`camt`, `mt940` or `ofx`), a CSV layout (`csv`), or both. Kind `csv` is what
+`fin institution add` writes for a single primary CSV. Validate a definition and preview
+a sample before saving it:
 
 ```sh
 fin institution definition show wise > institution.json
@@ -451,7 +440,7 @@ same names are retained, including rules belonging to other institutions. For a 
 (or prompts for the label on a terminal). `check` accepts `--account-id` for its
 preview and defaults to `preview`; it prints up to five movements or companion
 rows and does not open or change the database. Invalid samples report the first
-parse error. `show` accepts all four built-in institutions and installed
+parse error. `show` accepts every built-in institution and installed
 definitions.
 
 For example, a primary CSV definition can be written as:
@@ -497,16 +486,15 @@ rule may also name a `field` to test (see "What a type rule matches"), and its
 `target` may contain `{value}`, which takes the text the rule matched, so that
 `wise:{value}` keeps a provider code as a provider-specific type. Rules may specify
 `priority`, `case_sensitive`, `account_type` and `match_type` where applicable. Use
-`fin rule add` for personal accounting rules. The CAMT interpreter supports the
-policies exposed by the Wise-shaped profile rather than every bank's CAMT format;
-likewise, the MT940 profile currently covers the observed Bunq-style structure,
-not every bank's MT940 variant.
+`fin rule add` for personal accounting rules. The CAMT reader supports the settings
+exposed by the Wise-shaped profile rather than every bank's CAMT format; likewise,
+the MT940 reader covers the observed Bunq-style structure, not every bank's MT940
+variant.
 
-The bundled Wise CSV companion maps its description role to `Merchant`, rather
-than the constructed `Description` column. When `Merchant` is empty, the companion
-description is empty. Fin chooses one effective description: the matched, nonempty
-`Merchant` value when companion rows agree, otherwise the primary CAMT description.
-Original source descriptions and CSV fields remain available as evidence.
+The bundled Wise CSV layout names `Merchant` as its `journal_description`, rather than
+the constructed `Description` column. Fin chooses one effective description: the matched,
+nonempty `Merchant` value when CSV rows agree, otherwise the CAMT description. Original
+source descriptions and CSV fields remain available as evidence.
 
 Fin saves the validated definition in its database, so later edits or removal of
 the JSON file do not change existing imports. To update it, run `definition set`
@@ -521,11 +509,11 @@ configured reference and clock policy. Backups include installed definitions.
 
 If an institution supplies both OFX and a CSV with additional transaction
 fields, configure the CSV as a companion before importing it. A companion does
-not create transactions. For example, use the bundled BoursoBank layout as a
-starting point for a user-added institution:
+not create transactions. For example, start from the bundled example layout for a
+user-added institution:
 
 ```sh
-fin institution companion show boursobank > companion.json
+fin institution companion example > companion.json
 $EDITOR companion.json
 fin institution companion set mybank companion.json
 fin import mybank ~/Statements/mybank

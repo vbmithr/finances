@@ -439,7 +439,20 @@ type source =
   ; tags : (string * string) list
   ; journal_description : string option
   ; conflict_columns : string list
+  ; left_out : string -> int
   }
+
+(* A statement format, with nothing a CSV layout adds. *)
+let statement_source format ~recognizes ~convert =
+  { format
+  ; recognizes
+  ; convert
+  ; tags = []
+  ; journal_description = None
+  ; conflict_columns = []
+  ; left_out = (fun _ -> 0)
+  }
+;;
 
 let of_definition format definition =
   { format
@@ -449,11 +462,19 @@ let of_definition format definition =
   ; tags = Csv_converter.journal_tags definition
   ; journal_description = Csv_converter.journal_description definition
   ; conflict_columns = Csv_converter.conflict_columns definition
+  ; left_out =
+      (fun contents ->
+        Csv_converter.filtered_rows definition contents
+        |> Result.ok
+        |> Option.value ~default:0)
   }
 ;;
 
 (* An institution whose files reach fin as records, directly or through a converter. *)
-let make ?(aliases = []) ~institution ~overlap sources : (module Adapter.S) =
+(* [stored_formats] are format names rows already in a database were stored under. *)
+let make ?(aliases = []) ?(stored_formats = []) ~institution ~overlap sources
+  : (module Adapter.S)
+  =
   let records = "records" in
   let module Adapter_impl = struct
     let institution = institution
@@ -469,7 +490,10 @@ let make ?(aliases = []) ~institution ~overlap sources : (module Adapter.S) =
       | Error _ -> None
     ;;
 
-    let formats = records :: List.map sources ~f:(fun source -> source.format)
+    let formats =
+      (records :: List.map sources ~f:(fun source -> source.format)) @ stored_formats
+    ;;
+
     let takes_account_label = false
 
     let probe ~filename contents =

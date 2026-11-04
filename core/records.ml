@@ -599,6 +599,43 @@ let row_identity payload =
          { record with statements = []; details = no_details })
 ;;
 
+(* The first step of these rows, in this order, that does not add up. *)
+let balance_break rows =
+  let stated =
+    List.filter_map rows ~f:(fun r ->
+      match r.details.balance_after, r.movements with
+      | Some balance, [ movement ] -> Some (r, balance, movement.quantity)
+      | _ -> None)
+  in
+  let steps =
+    match stated with
+    | [] -> []
+    | _ -> List.zip_exn (List.drop_last_exn stated) (List.drop stated 1)
+  in
+  List.find_map steps ~f:(fun ((before, previous, _), (r, balance, quantity)) ->
+    if Date.( < ) (local_date r.occurred) (local_date before.occurred)
+    then Some (Printf.sprintf "record %S of account %S is out of order" r.id r.account)
+    else if Quantity.equal Quantity.(previous + quantity) balance
+    then None
+    else
+      Some
+        (Printf.sprintf
+           "record %S of account %S states a balance of %s after %s and a movement of %s"
+           r.id
+           r.account
+           (Quantity.to_string balance)
+           (Quantity.to_string previous)
+           (Quantity.to_string quantity)))
+;;
+
+let check_balances t =
+  List.filter_map t.accounts ~f:(fun (account : account) ->
+    let rows = List.filter t.records ~f:(fun r -> String.equal r.account account.id) in
+    match balance_break rows, balance_break (List.rev rows) with
+    | Some problem, Some _ -> Some problem
+    | _ -> None)
+;;
+
 let check t =
   let problems = Queue.create () in
   let problem fmt = Printf.ksprintf (Queue.enqueue problems) fmt in
@@ -653,10 +690,14 @@ let check t =
     let one_movement = Int.equal (List.length r.movements) 1 in
     if Option.is_some r.fee && not one_movement
     then problem "a fee needs exactly one movement";
+    if Option.exists r.fee ~f:(fun fee -> Quantity.(fee < zero))
+    then problem "a fee cannot be negative";
     if Option.is_some r.details.balance_after && not one_movement
     then problem "a balance after the row needs exactly one movement";
     if r.observation && not one_movement
     then problem "an observation needs exactly one movement");
+  if List.length t.sources = 1
+  then List.iter (check_balances t) ~f:(Queue.enqueue problems);
   if Queue.is_empty problems
   then Ok ()
   else Or_error.error_string (String.concat ~sep:"\n" (Queue.to_list problems))

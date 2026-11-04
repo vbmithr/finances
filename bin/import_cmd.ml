@@ -6,74 +6,6 @@ open Cmdliner
 open Or_error.Let_syntax
 open Cli
 
-let inspect_movement_csv (profile : Movement_csv.profile) files summary_only json_output =
-  let%bind rows =
-    List.map files ~f:(fun file ->
-      let%bind contents = read_file file in
-      Movement_csv.parse profile ~file contents)
-    |> Or_error.combine_errors
-    |> Result.map ~f:List.concat
-  in
-  if summary_only
-  then (
-    let summary = Movement_csv.summarize rows in
-    if json_output
-    then Report_json.print Report_json.movement_csv_summary summary
-    else (
-      printf
-        "%s: %d rows; proposed effects are not reconciled.\n"
-        profile.institution
-        summary.total;
-      List.iter summary.by_kind ~f:(fun (kind : Movement_csv.kind_summary) ->
-        printf
-          "  %s: %d (single %d, exchange %d, review %d)\n"
-          (Terminal.text
-             (if String.is_empty kind.kind then "(empty kind)" else kind.kind))
-          kind.rows
-          kind.single
-          kind.exchange
-          kind.review);
-      printf
-        "Identical-row groups (review, not automatically deduplicated): %d\n"
-        (List.length summary.identical_rows);
-      List.iter summary.identical_rows ~f:(fun refs ->
-        List.iter refs ~f:(fun (r : Movement_csv.row_reference) ->
-          printf "  %s:%d\n" (Terminal.text r.file) r.row_number))))
-  else if json_output
-  then Report_json.print (Jsont.list Report_json.movement_csv_row) rows
-  else (
-    let review =
-      List.count rows ~f:(fun (row : Movement_csv.row) ->
-        match row.interpretation with
-        | Review _ -> true
-        | _ -> false)
-    in
-    printf
-      "%s: %d rows; %d need review. Proposed legs are not posted.\n"
-      profile.institution
-      (List.length rows)
-      review;
-    List.iter rows ~f:(fun (row : Movement_csv.row) ->
-      let kind = if String.is_empty row.kind then "(empty kind)" else row.kind in
-      let legs =
-        List.map row.proposed_legs ~f:(fun (leg : Movement_csv.leg) ->
-          Quantity.to_string leg.amount ^ " " ^ Commodity.display leg.commodity)
-        |> String.concat ~sep:", "
-      in
-      let result =
-        match row.interpretation with
-        | Review reason -> "review: " ^ reason
-        | Single | Exchange -> legs
-      in
-      printf
-        "%s:%d  %s  %s\n"
-        (Terminal.text row.file)
-        row.row_number
-        (Terminal.text kind)
-        (Terminal.text result)));
-  Ok ()
-;;
-
 let import_bank database institution paths journal max_mib account_id provider =
   if max_mib < 1 || max_mib > 1024
   then Or_error.error_string "max-file-mib must be between 1 and 1024"
@@ -312,132 +244,82 @@ let cmd =
     "import"
     "Import a bank's statement files, apply mappings, and publish a bank journal."
     Term.(
-      const
-        (fun
-            database
-             first
-             paths
-             journal
-             max_mib
-             account_id
-             provider
-             inspect
-             summary
-             json
-           ->
-           let movement_profile = Builtin.movement_profile (String.lowercase first) in
-           match movement_profile with
-           | Some profile when inspect ->
-             (match paths with
-              | [] -> Or_error.error_string "provide at least one CSV file or directory"
-              | _ ->
-                let%bind files = statement_files ~extensions:[ ".csv" ] paths in
-                inspect_movement_csv profile files summary json)
-           | _ ->
-             if inspect || summary || json
-             then
-               Or_error.error_string
-                 (match movement_profile with
-                  | Some _ -> "--summary and --json require --inspect"
-                  | None ->
-                    "--inspect, --summary and --json apply only to movement CSV \
-                     institutions (for example cdc)")
-             else (
-               let%bind () = require_database database in
-               let%bind runtime_registry = registry_for database in
-               let institutions =
-                 List.filter
-                   (Registry.institutions runtime_registry)
-                   ~f:(fun institution ->
-                     (not (String.equal institution "csv"))
-                     && List.mem
-                          (Registry.aliases runtime_registry institution)
-                          first
-                          ~equal:String.equal)
-               in
-               let%bind user_institutions =
-                 if
-                   List.is_empty institutions
-                   && ((not (Stdlib.Sys.file_exists first)) || not (List.is_empty paths))
-                 then with_database database Setup.institutions
-                 else Ok []
-               in
-               match institutions with
-               | [ institution ] ->
-                 if List.is_empty paths
-                 then Or_error.error_string "provide at least one statement path"
-                 else
-                   import_bank
-                     database
-                     institution
-                     paths
-                     journal
-                     max_mib
-                     account_id
-                     provider
-               | _ :: _ :: _ -> Or_error.errorf "ambiguous institution alias: %s" first
-               | [] when List.mem user_institutions first ~equal:String.equal ->
-                 if List.is_empty paths
-                 then
-                   Or_error.error_string
-                     "provide at least one statement file or directory"
-                 else if Option.is_some provider
-                 then
-                   Or_error.error_string
-                     "--provider is unnecessary when the institution is named"
-                 else (
-                   let%bind files = generic_statement_files paths in
-                   let%bind companion =
-                     with_database database (fun db ->
-                       Setup.institution_companion_profile db first)
-                   in
-                   if Option.is_some companion
-                   then import_bank database first files journal max_mib account_id None
-                   else (
-                     let csv, ofx =
-                       List.partition_tf files ~f:(fun path ->
-                         String.Caseless.equal (Stdlib.Filename.extension path) ".csv")
-                     in
-                     if (not (List.is_empty csv)) && not (List.is_empty ofx)
-                     then
-                       Or_error.error_string
-                         "generic CSV and OFX are separate movement sources; import one \
-                          format to avoid duplicate transactions"
-                     else if not (List.is_empty ofx)
-                     then (
-                       let%bind () =
-                         Csv_setup.ensure_generic_source database first "bank-transaction"
-                       in
-                       import_bank database first ofx journal max_mib account_id None)
-                     else (
-                       let%bind () =
-                         Csv_setup.ensure_generic_source database first "csv-movement"
-                       in
-                       List.fold_result csv ~init:() ~f:(fun () path ->
-                         printf "CSV file: %s\n" path;
-                         Out_channel.flush stdout;
-                         import_bank
-                           database
-                           "csv"
-                           [ path ]
-                           journal
-                           max_mib
-                           account_id
-                           (Some first)))))
-               | [] when Stdlib.Sys.file_exists first && Stdlib.Sys.is_directory first ->
-                 Or_error.error_string
-                   "name the bank before a directory, for example: fin import wise \
-                    DIRECTORY"
-               | [] when Stdlib.Sys.file_exists first ->
-                 import_bank
-                   database
-                   "csv"
-                   (first :: paths)
-                   journal
-                   max_mib
-                   account_id
-                   provider
-               | [] -> Or_error.errorf "unknown institution or file: %s" first))
+      const (fun database first paths journal max_mib account_id provider ->
+        let%bind () = require_database database in
+        let%bind runtime_registry = registry_for database in
+        let institutions =
+          List.filter (Registry.institutions runtime_registry) ~f:(fun institution ->
+            (not (String.equal institution "csv"))
+            && List.mem
+                 (Registry.aliases runtime_registry institution)
+                 first
+                 ~equal:String.equal)
+        in
+        let%bind user_institutions =
+          if
+            List.is_empty institutions
+            && ((not (Stdlib.Sys.file_exists first)) || not (List.is_empty paths))
+          then with_database database Setup.institutions
+          else Ok []
+        in
+        match institutions with
+        | [ institution ] ->
+          if List.is_empty paths
+          then Or_error.error_string "provide at least one statement path"
+          else import_bank database institution paths journal max_mib account_id provider
+        | _ :: _ :: _ -> Or_error.errorf "ambiguous institution alias: %s" first
+        | [] when List.mem user_institutions first ~equal:String.equal ->
+          if List.is_empty paths
+          then Or_error.error_string "provide at least one statement file or directory"
+          else if Option.is_some provider
+          then
+            Or_error.error_string
+              "--provider is unnecessary when the institution is named"
+          else (
+            let%bind files = generic_statement_files paths in
+            let%bind companion =
+              with_database database (fun db ->
+                Setup.institution_companion_profile db first)
+            in
+            if Option.is_some companion
+            then import_bank database first files journal max_mib account_id None
+            else (
+              let csv, ofx =
+                List.partition_tf files ~f:(fun path ->
+                  String.Caseless.equal (Stdlib.Filename.extension path) ".csv")
+              in
+              if (not (List.is_empty csv)) && not (List.is_empty ofx)
+              then
+                Or_error.error_string
+                  "generic CSV and OFX are separate movement sources; import one format \
+                   to avoid duplicate transactions"
+              else if not (List.is_empty ofx)
+              then (
+                let%bind () =
+                  Csv_setup.ensure_generic_source database first "bank-transaction"
+                in
+                import_bank database first ofx journal max_mib account_id None)
+              else (
+                let%bind () =
+                  Csv_setup.ensure_generic_source database first "csv-movement"
+                in
+                List.fold_result csv ~init:() ~f:(fun () path ->
+                  printf "CSV file: %s\n" path;
+                  Out_channel.flush stdout;
+                  import_bank
+                    database
+                    "csv"
+                    [ path ]
+                    journal
+                    max_mib
+                    account_id
+                    (Some first)))))
+        | [] when Stdlib.Sys.file_exists first && Stdlib.Sys.is_directory first ->
+          Or_error.error_string
+            "name the bank before a directory, for example: fin import wise DIRECTORY"
+        | [] when Stdlib.Sys.file_exists first ->
+          import_bank database "csv" (first :: paths) journal max_mib account_id provider
+        | [] -> Or_error.errorf "unknown institution or file: %s" first)
       $ database
       $ Arg.(
           required
@@ -496,20 +378,5 @@ let cmd =
           & opt (some string) None
           & info
               [ "provider" ]
-              ~doc:"Institution name for a generic CSV; prompted on a terminal.")
-      $ Arg.(
-          value
-          & flag
-          & info
-              [ "inspect" ]
-              ~doc:
-                "Movement CSV institutions such as cdc: read-only interpretation of the \
-                 CSV rows; needs no database.")
-      $ Arg.(
-          value
-          & flag
-          & info
-              [ "summary" ]
-              ~doc:"With --inspect, summarize kinds and identical row candidates.")
-      $ json_output)
+              ~doc:"Institution name for a generic CSV; prompted on a terminal."))
 ;;

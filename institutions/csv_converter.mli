@@ -6,9 +6,14 @@ open Base
     See docs/records-format.md. *)
 type t
 
+val codec : t Jsont.t
 val of_string : string -> t Or_error.t
 val institution : t -> string
+val header : t -> string list
 val institution_type : t -> Institution_type.t
+
+(** What the definition reads: each role with its columns, in order. *)
+val roles : t -> (string * string list) list
 
 (** Journal tags, as tag name and column, that a paired row of this layout adds. *)
 val journal_tags : t -> (string * string) list
@@ -31,6 +36,3 @@ val filtered_rows : t -> string -> int Or_error.t
 
 (** Every row of the CSV as a record. [name] is the source's name in the result. *)
 val convert : t -> name:string -> string -> Records.t Or_error.t
-
-(** The bundled definitions: every CSV layout fin knows, with its institution. *)
-val bundled : t list Lazy.t

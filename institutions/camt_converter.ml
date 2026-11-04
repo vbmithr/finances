@@ -1,21 +1,7 @@
 open Base
 
-(* Wise states one payment in two files. CAMT is the statement, so its entries are the counted
-   records, and this file turns them into records. The CSV has more to say about the same rows,
-   so its entries are observations; converters/wise.json describes it. Which rows belong
-   together is fin's business, apart from what Wise's own references state. *)
-
-let preset =
-  lazy
-    (match
-       Json.decode Institution_definition.codec Bundled_definitions.wise
-       |> Or_error.ok_exn
-       |> fun definition -> definition.source
-     with
-     | Camt_csv preset -> preset
-     | Ofx_csv _ | Csv _ | Running_csv _ | Mt940_csv _ ->
-       failwith "the bundled Wise definition has no CAMT source")
-;;
+(* A CAMT statement's entries are counted records. Which rows belong together is fin's business,
+   apart from what the institution's own references state. *)
 
 let movement quantity currency : Records.movement =
   { role = "primary"; quantity; commodity = Commodity.fiat currency }
@@ -117,9 +103,8 @@ let camt_balances (statement : Camt_source.statement) =
   ]
 ;;
 
-let of_camt (preset : Camt_institution_preset.t) contents =
+let of_camt (profile : Camt_profile.t) contents =
   let open Or_error.Let_syntax in
-  let profile = preset.camt_profile in
   let%bind (document : Camt_source.t) =
     Camt_source.parse (Camt_source.create profile) contents
   in
@@ -139,38 +124,21 @@ let of_camt (preset : Camt_institution_preset.t) contents =
   , records )
 ;;
 
-let is_camt contents =
+let recognizes contents =
   String.is_substring (String.prefix contents 4096) ~substring:"camt.053"
 ;;
 
-let csv =
-  lazy
-    (List.find_exn (Lazy.force Csv_converter.bundled) ~f:(fun definition ->
-       String.equal (Csv_converter.institution definition) "wise"))
-;;
-
-let recognizes contents =
-  is_camt contents || Csv_converter.recognizes (Lazy.force csv) contents
-;;
-
-let convert ~name contents =
+let convert (profile : Camt_profile.t) ~name contents =
   let open Or_error.Let_syntax in
-  let preset = Lazy.force preset in
-  if not (is_camt contents)
-  then
-    if recognizes contents
-    then Csv_converter.convert (Lazy.force csv) ~name contents
-    else Or_error.error_string "not a Wise CAMT.053 statement or CSV export"
-  else (
-    let%map accounts, statements, balances, records = of_camt preset contents in
-    ({ institution = preset.institution
-     ; identity = Source
-     ; converter = Some { name = "fin wise"; version = Some "1" }
-     ; sources = [ { name; sha256 = Digestif.SHA256.(digest_string contents |> to_hex) } ]
-     ; accounts
-     ; statements
-     ; balances
-     ; records
-     }
-     : Records.t))
+  let%map accounts, statements, balances, records = of_camt profile contents in
+  ({ institution = profile.institution
+   ; identity = Source
+   ; converter = Some { name = "fin camt"; version = Some "1" }
+   ; sources = [ { name; sha256 = Digestif.SHA256.(digest_string contents |> to_hex) } ]
+   ; accounts
+   ; statements
+   ; balances
+   ; records
+   }
+   : Records.t)
 ;;

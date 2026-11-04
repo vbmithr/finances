@@ -189,7 +189,14 @@ with no `source`, a balance of an unknown account, an `id` repeated for an accou
 statement listed twice, a reference to an unknown account or statement, a record naming
 another account's statement or one statement twice, a role repeated in a record, a `fee` or
 `balance_after` on a record without exactly one movement, an observation without exactly one movement, a `fiat` code that is
-not ISO 4217, and an impossible date.
+not ISO 4217, an impossible date, and running balances that do not add up.
+
+Balances are checked in a section with one `source`, whose rows are in that source's order: for each
+account, oldest or newest first, each `balance_after` must be the one before plus the row's movement,
+and dates must not go backwards. A section with several sources is a merge of exports that can have
+gaps between them, so its balances are not checked, though each file was when it was converted. A
+layout whose `only` leaves out rows of an account must not name `balance_after`, as what remains would
+not add up.
 
 ## Coverage
 
@@ -252,19 +259,28 @@ unknown member or a column not in its header.
 |---|---|
 | `institution_type` | `bank` or `crypto-exchange` |
 | `header` | The exact header; a file with another one is not this layout |
-| `separator`, `decimal` | Default `,` and `dot`; spaces that group digits are ignored |
+| `separator`, `decimal` | Default `,` and `dot`; spaces that group digits are ignored. Under `comma`, a dot in a number is refused |
 | `observation` | The rows describe rows stated elsewhere |
 | `only` | Conditions a row must meet to be part of this source at all; `fin convert` says how many it left out |
+| `require` | Conditions every remaining row must meet, or the file is refused. Each may add `when`, conditions that say which rows it applies to |
 | `account` | `id` and `type`, where `{Column}` is that row's value, and `bank`, `number`, `currency`. Records with one `number` and different types are one real account, as a multi-currency balance is, sharing its IBAN |
 | `id` | `{"columns": [...]}` or `{"row_hash": true}`; absent means `inventory` identity |
 | `occurred`, `value_on` | `column`, `fallback`, `layout` (`iso-date`, `iso-datetime`, `day-first`), and `utc` |
 | `cases` | The first whose `when` conditions hold gives `movements` and `fee` |
 | `reported` | `quantity` and `symbol` columns for a row no case takes |
 | `total` | `when` conditions of a row stating what the others add up to, with its `quantity` and `commodity` |
-| `balance_after`, `balances` | Running balance column, and `balance` lines to state from each row |
+| `balance_after`, `balances` | Running balance column, and `balance` lines to state from each row. A `balances` entry may name its own `decimal` |
 | `conflict_columns` | Columns two exports of one row must agree on; others, such as a note, may differ |
 | `journal_tags`, `journal_description` | Tag name to column, and the column that replaces the description, in the journal entry of a paired row |
 | `descriptions`, `type`, `counterparty_name`, `counterparty_iban`, `references`, `exchange`, `valuations` | Columns for those members of `details`; the first filled `counterparty_name` wins |
+
+A condition names a `column` and one test: `in` (one of these values), `sign` (`positive`, `negative`,
+`not-positive`, `not-negative`), `filled`, `matches` (a regular expression), `not_before` (not earlier
+than another column, comparing text, so for ISO dates) or `prefix_of` (the start of another column).
+A check that relates source columns belongs in `require`, because a record does not hold those columns.
+
+What a record states is checked by the format, for every source. Only what relates a source's columns
+to each other is left to a definition, because those columns are not in the record.
 
 - A column name repeated in the header is `Solde#2` for the second one.
 - A quantity is `column`, with optional `negate` and `minus` (another column).

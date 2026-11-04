@@ -2,8 +2,19 @@ open Base
 
 let read name = Stdio.In_channel.read_all ("fixtures/" ^ name)
 
+(* What `fin convert wise` does with a file: the first source that recognizes it. *)
+let wise_convert ~name contents =
+  let records = Option.value_exn (Builtin.records_of "wise") in
+  match
+    List.find (Institution_definition.sources records) ~f:(fun source ->
+      source.recognizes ~filename:name contents)
+  with
+  | Some source -> source.convert ~name contents
+  | None -> Or_error.error_string "not a Wise file"
+;;
+
 let convert name =
-  Wise_converter.convert ~name (read name)
+  wise_convert ~name (read name)
   |> Or_error.ok_exn
   |> Records.to_string
   |> Records.of_string
@@ -129,8 +140,7 @@ let conversion =
 
 let groups () =
   let t =
-    Wise_converter.convert ~name:"s.xml" (statement conversion ~closing:"89.00")
-    |> Or_error.ok_exn
+    wise_convert ~name:"s.xml" (statement conversion ~closing:"89.00") |> Or_error.ok_exn
   in
   let fee = find t "FEE-BALANCE-77/"
   and debit = find t "BALANCE-77/" in
@@ -143,7 +153,7 @@ let groups () =
 (* A record is the same record whichever download states it. *)
 let ids_do_not_depend_on_the_download () =
   let ids contents =
-    (Wise_converter.convert ~name:"s.xml" contents |> Or_error.ok_exn).records
+    (wise_convert ~name:"s.xml" contents |> Or_error.ok_exn).records
     |> List.map ~f:(fun (r : Records.record) -> r.id)
   in
   let short = ids (statement conversion ~closing:"89.00") in
@@ -166,7 +176,7 @@ let ids_do_not_depend_on_the_download () =
 let empty_statement () =
   let header = List.hd_exn (String.split_lines (read "wise.csv")) in
   let t =
-    Wise_converter.convert ~name:"empty.csv" (header ^ "\n")
+    wise_convert ~name:"empty.csv" (header ^ "\n")
     |> Or_error.ok_exn
     |> Records.to_string
     |> Records.of_string
@@ -183,7 +193,7 @@ let other_input () =
   Alcotest.(check bool)
     "not Wise"
     true
-    (Result.is_error (Wise_converter.convert ~name:"f" "a,b\n1,2\n"))
+    (Result.is_error (wise_convert ~name:"f" "a,b\n1,2\n"))
 ;;
 
 let () =

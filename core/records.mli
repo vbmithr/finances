@@ -158,7 +158,10 @@ type t =
   ; records : record list
   }
 
-(** Every semantic problem of the document, one per line of the error. *)
+(** Every semantic problem of the document, one per line of the error. A document with one
+    source lists rows in that source's order, oldest or newest first, so each account's
+    [balance_after]s must add up in one direction; a merged document joins exports that can
+    have gaps between them, so its balances need not. *)
 val check : t -> unit Or_error.t
 
 (** One document stating what the given documents state, in order, for one

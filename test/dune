@@ -541,6 +541,21 @@
 (rule
  (alias runtest)
  (deps
+  csv_checks_test.py
+  fixtures/wise.csv
+  fixtures/bunq.csv
+  (glob_files ../institutions/*.json))
+ (action
+  (run
+   python3
+   %{dep:csv_checks_test.py}
+   %{exe:../bin/main.exe}
+   ../institutions
+   fixtures)))
+
+(rule
+ (alias runtest)
+ (deps
   csv_converter_test.py
   fixtures/wise.xml
   fixtures/wise.csv

@@ -47,7 +47,7 @@ Total,,,,,,20.90
     listed = run("operation", "list", "--institution", "fdm", "-d", database).stdout
     assert "Refund" in listed, listed
     shown = run("institution", "show", "fdm", "-d", database).stdout
-    assert "records, from a CSV definition" in shown, shown
+    assert "Kind: Records" in shown, shown
     assert "fdm" in run("status", "-d", database).stdout
 
     # A records file gives the same journal, plain or compressed.

@@ -7,20 +7,10 @@ let ok = Or_error.ok_exn
 let check = Alcotest.(check int)
 let replace s a b = String.substr_replace_all s ~pattern:a ~with_:b
 
-module Wise_csv = struct
-  include Csv_clock_companion
-
-  let profile = (Option.value_exn (Builtin.camt_preset "wise")).csv_profile
-  let camt = (Option.value_exn (Builtin.camt_preset "wise")).camt_profile
-  let parse = parse profile camt
-  let match_rows = match_rows profile
-end
-
 module Wise_camt = struct
-  let profile = (Option.value_exn (Builtin.camt_preset "wise")).camt_profile
+  let profile = Option.value_exn (Builtin.camt_profile "wise")
   let source = Camt_source.create profile
   let parse = Camt_source.parse source
-  let matching_time = Camt_source.matching_time
 end
 
 let xml () = In_channel.read_all "fixtures/wise.xml"
@@ -78,62 +68,7 @@ let parser () =
   let start = String.substr_index_exn original ~pattern:"<Ntry>" in
   let finish = String.substr_index_exn original ~pattern:"</Ntry>" + 7 in
   let entry = String.sub original ~pos:start ~len:(finish - start) in
-  error (Wise_camt.parse (replace original "</Stmt>" (entry ^ "</Stmt>")));
-  error (Wise_csv.parse (replace (csv ()) "02-01-2025" "32-01-2025"));
-  error
-    (Wise_csv.parse
-       (replace (csv ()) "02-01-2025 00:00:00.123" "03-01-2025 00:00:00.123"));
-  error (Wise_csv.parse (replace (csv ()) "DEBIT" "CREDIT"));
-  error
-    (Wise_csv.parse (replace (csv ()) "02-01-2025 00:00:00.123" "02-01-2025 00:00:00"))
-;;
-
-let reusable_clock_csv () =
-  let wise = (Option.value_exn (Builtin.camt_preset "wise")).csv_profile in
-  let camt = (Option.value_exn (Builtin.camt_preset "wise")).camt_profile in
-  let header =
-    List.map wise.header ~f:(fun s ->
-      if String.equal s "TransferWise ID" then "Reference" else s)
-  in
-  let profile =
-    { wise with
-      institution = "example"
-    ; name = "Example"
-    ; header
-    ; columns = { wise.columns with reference = "Reference" }
-    }
-  in
-  let profile =
-    Json.decode Csv_clock_profile.codec (Json.encode Csv_clock_profile.codec profile)
-    |> ok
-  in
-  let contents = replace (csv ()) "TransferWise ID" "Reference" in
-  let rows = ok (Csv_clock_companion.parse profile camt contents) in
-  check "other profile parses all rows" 3 (List.length rows);
-  Alcotest.(check bool)
-    "recognizes configured header"
-    true
-    (Csv_clock_companion.recognizes profile camt contents);
-  let bad = { profile with columns = { profile.columns with reference = "missing" } } in
-  error (Json.decode Csv_clock_profile.codec (Json.encode Csv_clock_profile.codec bad));
-  let module A =
-    (val Camt_csv_adapter.make
-           ~profile:camt
-           ~csv_profile:profile
-           ~csv:"example_csv"
-           ~policy:"example-v1"
-           ~metadata_prefix:"example"
-           ()
-      : Adapter.S)
-  in
-  Alcotest.(check (option string))
-    "configured importer recognizes CSV"
-    (Some "example_csv")
-    (A.probe ~filename:"statement.csv" contents);
-  let document =
-    ok (A.parse ~context:{ account_label = None } ~format:"example_csv" contents)
-  in
-  check "configured importer retains rows" 3 (List.length document.companion_rows)
+  error (Wise_camt.parse (replace original "</Stmt>" (entry ^ "</Stmt>")))
 ;;
 
 let statement ~id ~currency ~opening ~closing entries =
@@ -250,7 +185,7 @@ let source_stated_groups () =
 ;;
 
 let reusable_camt_source () =
-  let wise = (Option.value_exn (Builtin.camt_preset "wise")).camt_profile in
+  let wise = Option.value_exn (Builtin.camt_profile "wise") in
   let profile =
     { wise with
       institution = "example"
@@ -463,37 +398,6 @@ let timestamp_precision () =
     Alcotest.(check bool) "replay unchanged" true (Poly.equal replay.outcome Unchanged))
 ;;
 
-let csv_times () =
-  let rows = ok (Wise_csv.parse (csv ())) in
-  let first = List.hd_exn rows in
-  Alcotest.(check string)
-    "CSV clock assumed UTC"
-    "2025-01-02T00:00:00.123000000000Z"
-    (Timestamp.to_rfc3339 first.booked_at);
-  List.iter [ "+01:00"; "-05:00"; "+05:30" ] ~f:(fun offset ->
-    let document = ok (Wise_camt.parse (replace (xml ()) "+01:00" offset)) in
-    let transactions = (List.hd_exn document.statements).transactions in
-    let tx = List.hd_exn transactions in
-    Alcotest.(check bool)
-      "matching key uses source-local clock"
-      true
-      (Ptime.equal first.booked_at (Wise_camt.matching_time tx));
-    Alcotest.(check bool)
-      "matching clock is distinct from actual CAMT instant"
-      false
-      (Ptime.equal first.booked_at tx.booked_at);
-    let input =
-      List.mapi rows ~f:(fun i row ->
-        { Wise_csv.row_id = Int64.of_int (i + 1); document_id = 1L; row })
-    in
-    let candidates = List.mapi transactions ~f:(fun i tx -> Int64.of_int (i + 100), tx) in
-    let results = Wise_csv.match_rows input candidates in
-    check
-      "all local-clock matches preserved"
-      3
-      (List.count results ~f:(fun row -> Poly.equal row.Bank_match.state Matched)))
-;;
-
 let review_enrichment () =
   memory (fun db ->
     accepted (import db "wise.xml" (xml ()));
@@ -668,11 +572,9 @@ let () =
           [ "parser and balances", parser
           ; "source-stated operation groups", source_stated_groups
           ; "reusable CAMT source profile", reusable_camt_source
-          ; "reusable clock CSV profile and importer", reusable_clock_csv
           ; "reported type rules, replay and refresh", reported_type_rules
           ; "unknown and provider-specific codes", reported_type_fallbacks
           ; "Ptime instants, raw text and stable identity", timestamp_precision
-          ; "CSV UTC assumption and source-local matching", csv_times
           ; "two banks, replay, conflict", multi_bank
           ; "currency and fee conflicts", currencies
           ; "duplicate CSV claims", duplicate_rows

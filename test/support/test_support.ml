@@ -28,10 +28,7 @@ let registry =
 (** A Revolut statement as a records file naming another account, for a second account of one
     currency: a records file can say which account it is, and a Revolut export cannot. *)
 let revolut_account ~account contents =
-  let definition =
-    List.find_exn (Lazy.force Csv_converter.bundled) ~f:(fun d ->
-      String.equal (Csv_converter.institution d) "revolut")
-  in
+  let definition = Option.value_exn (Builtin.csv_definition "revolut") in
   let t =
     Csv_converter.convert definition ~name:"revolut.csv" contents |> Or_error.ok_exn
   in

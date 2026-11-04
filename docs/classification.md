@@ -159,8 +159,8 @@ pattern, test it, save it, refresh.
 
 Updated 2026-10-31. A separate ruleset format would duplicate what exists. An
 institution definition (`fin institution definition show/check/set`) is already a
-versioned JSON file holding a source profile (primary CSV, OFX with CSV companion,
-CAMT with CSV, running-balance CSV or MT940 with CSV) and `rules` limited to
+versioned JSON file holding a source (a primary CSV, or how to turn a statement format, a
+CSV layout or both into records) and `rules` limited to
 interpretation actions (`type`, `card-reference`, `withdrawal-reversal`,
 `reported-type`, `reported-other`). That file is the unit that describes an
 institution's customization, and the way to share one.

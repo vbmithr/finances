@@ -35,6 +35,7 @@ let refused kind () =
 let reasons () =
   List.iter
     [ "balance-unknown-account", "unknown account"
+    ; "balance-does-not-follow", "states a balance of 123.45 after 96.5"
     ; "balance-with-two-movements", "a balance after the row needs exactly one movement"
     ; "duplicate-id", "repeated id"
     ; "end-miscounts", "the end line counts 99 records, found 2"
@@ -59,7 +60,7 @@ let reasons () =
         if not (String.is_substring message ~substring:reason)
         then Alcotest.failf "%s: expected %S in %s" name reason message);
   let names = examples "semantic" |> List.length in
-  Alcotest.(check int) "every semantic example has a reason" 15 names
+  Alcotest.(check int) "every semantic example has a reason" 16 names
 ;;
 
 let balance_after () =

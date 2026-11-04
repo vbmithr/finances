@@ -28,68 +28,32 @@ let records_check_cmd =
       $ Arg.(required & pos 0 (some string) None & info [] ~docv:"FILE"))
 ;;
 
-(* An institution may have several layouts; a file is whichever one recognizes it. *)
-let of_definitions definitions =
-  let find contents =
-    List.find definitions ~f:(fun definition ->
-      Csv_converter.recognizes definition contents)
+(* A file is whichever source of the institution first recognizes it. *)
+let of_sources (sources : Records_adapter.source list) =
+  let find ~filename contents =
+    List.find sources ~f:(fun source -> source.recognizes ~filename contents)
   in
-  ( (fun contents -> Option.is_some (find contents))
+  ( (fun ~name contents -> Option.is_some (find ~filename:name contents))
   , fun ~name contents ->
-      match find contents with
-      | Some definition ->
-        (match Csv_converter.filtered_rows definition contents with
-         | Ok count when count > 0 ->
-           Stdio.eprintf
-             "left out %d row%s of %s that this layout's `only` does not cover\n"
-             count
-             (if count = 1 then "" else "s")
-             name
-         | Ok _ | Error _ -> ());
-        Csv_converter.convert definition ~name contents
-      | None ->
-        Or_error.error_string "no CSV layout of this converter recognizes the file" )
-;;
-
-(* Several sources of one institution: a file is the first that recognizes it. *)
-let first_of parts =
-  let find contents = List.find parts ~f:(fun (recognizes, _) -> recognizes contents) in
-  ( (fun contents -> Option.is_some (find contents))
-  , fun ~name contents ->
-      match find contents with
-      | Some (_, convert) -> convert ~name contents
-      | None -> Or_error.error_string "not a file of this institution" )
+      match find ~filename:name contents with
+      | None -> Or_error.error_string "not a file of this institution"
+      | Some source ->
+        let count = source.left_out contents in
+        if count > 0
+        then
+          Stdio.eprintf
+            "left out %d row%s of %s that this layout's `only` does not cover\n"
+            count
+            (if count = 1 then "" else "s")
+            name;
+        source.convert ~name contents )
 ;;
 
 let converters () =
-  let structured =
-    let mt940 institution =
-      Builtin.mt940_profile institution
-      |> Option.map ~f:(fun profile ->
-        institution, (Mt940_converter.recognizes profile, Mt940_converter.convert profile))
-    in
-    List.filter_opt
-      [ Some
-          ( "boursobank"
-          , (Ofx_converter.recognizes, Ofx_converter.convert ~institution:"boursobank") )
-      ; mt940 "bunq"
-      ]
-  in
-  let csv =
-    Lazy.force Csv_converter.bundled
-    |> List.map ~f:(fun definition -> Csv_converter.institution definition, definition)
-    |> List.filter ~f:(fun (name, _) -> not (String.equal name "wise"))
-    |> Map.of_alist_multi (module String)
-    |> Map.map ~f:of_definitions
-  in
-  let with_structured =
-    List.fold structured ~init:csv ~f:(fun converters (name, part) ->
-      Map.update converters name ~f:(function
-        | Some csv -> first_of [ part; csv ]
-        | None -> part))
-  in
-  ("wise", (Wise_converter.recognizes, Wise_converter.convert))
-  :: Map.to_alist with_structured
+  List.filter_map Builtin.definitions ~f:(fun definition ->
+    match definition.source with
+    | Records r -> Some (r.institution, of_sources (Institution_definition.sources r))
+    | Csv _ -> None)
 ;;
 
 (* The same bound as fin import's default, on a file and on what an archive expands to. *)
@@ -135,7 +99,8 @@ let rec convert_input ((recognizes, convert) as converter) ~explicit path =
         (Finances_import.Zip_archive.files ~max_bytes:convert_read_limit contents)
     in
     let known, skipped =
-      List.partition_tf members ~f:(fun (_, contents) -> recognizes contents)
+      List.partition_tf members ~f:(fun (member, contents) ->
+        recognizes ~name:member contents)
     in
     List.iter skipped ~f:(fun (member, _) ->
       Stdio.eprintf "skipped %s/%s: not a recognized statement\n" path member);
@@ -145,7 +110,7 @@ let rec convert_input ((recognizes, convert) as converter) ~explicit path =
     |> Or_error.all
   | S_REG ->
     let%bind contents = read_file path in
-    if explicit || recognizes contents
+    if explicit || recognizes ~name contents
     then Result.map (convert ~name contents |> tagged path) ~f:List.return
     else skip "not a recognized statement"
   | _ when explicit -> tagged path (Or_error.error_string "not a file or directory")
@@ -161,7 +126,7 @@ let convert_statements definition arguments output =
         Result.map_error (Csv_converter.of_string text) ~f:(fun error ->
           Error.of_string (file ^ ": " ^ Error.to_string_hum error))
       in
-      of_definitions [ definition ], paths
+      of_sources [ Records_adapter.of_definition "csv" definition ], paths
     | None, institution :: paths ->
       let converters = converters () in
       (match

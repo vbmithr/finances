@@ -197,25 +197,17 @@ class ImportOnboarding(unittest.TestCase):
                         '2025-06-09 17:56:18,Payment,CRO,-3,CRO,-3,EUR,1,1,crypto_payment,\n'
                         '2025-06-09 17:56:19,Unknown,CRO,-1,EUR,,EUR,1,1,unknown_kind,\n')
         env = dict(self.env, XDG_DATA_HOME=str(self.root / 'unused-data'))
-        result = subprocess.run([FIN, 'import', 'cdc', '--inspect', '--json', str(path)],
+        result = subprocess.run([FIN, 'convert', 'cdc', str(path)],
                                 env=env, stdin=subprocess.DEVNULL, capture_output=True, text=True)
         self.assertEqual(result.returncode, 0, result.stderr)
-        rows = json.loads(result.stdout)
-        self.assertEqual([r['interpretation'] for r in rows], ['single', 'exchange', 'review', 'review'])
-        self.assertEqual(rows[0]['proposed_legs'], [{'provider': 'cdc', 'commodity': 'CRO', 'amount': '1.23456789'}])
-        self.assertEqual([leg['amount'] for leg in rows[1]['proposed_legs']], ['-2', '0.2'])
-        self.assertEqual(rows[2]['proposed_legs'], [])
-        self.assertEqual(rows[2]['fields']['To Amount'], '-3')
-        self.assertIn('Incomplete', rows[3]['review_reason'])
+        rows = [json.loads(line) for line in result.stdout.splitlines()]
+        rows = [r for r in rows if r['kind'] == 'record']
+        self.assertEqual([len(r['movements']) for r in rows], [1, 2, 0, 0])
+        self.assertEqual(rows[0]['movements'][0]['quantity'], '1.23456789')
+        self.assertEqual([m['quantity'] for m in rows[1]['movements']], ['-2', '0.2'])
+        self.assertIn(['To Amount', '-3'], rows[2]['details']['fields'])
+        self.assertEqual(rows[3]['details']['reported']['symbol'], 'CRO')
         self.assertFalse((self.root / 'unused-data').exists())
-        copy = self.root / 'cdc-copy.csv'
-        copy.write_bytes(Path(path).read_bytes())
-        summary = json.loads(self.run_fin('import', 'cdc', '--inspect', '--summary', '--json', path, str(copy)).stdout)
-        self.assertEqual(summary['total'], 8)
-        self.assertEqual(len(summary['identical_rows']), 4)
-        self.assertEqual(next(k for k in summary['by_kind'] if k['kind'] == 'crypto_payment')['review'], 2)
-        self.assertTrue(all(len(group) == 2 for group in summary['identical_rows']))
-        self.assertNotEqual(self.run_fin('import', 'cdc', '--inspect', check=False).returncode, 0)
         journal = self.run_fin('journal', 'export').stdout
         self.assertEqual(json.loads(self.run_fin('db', 'events').stdout), [])
         self.assertIn('inserted=4', self.run_fin('import', 'cdc', path).stdout)
@@ -1425,7 +1417,7 @@ class ImportOnboarding(unittest.TestCase):
 
     def test_generic_ofx_csv_companion_profile(self):
         self.run_fin('institution', 'add', 'provider')
-        template = json.loads(self.run_fin('institution', 'companion', 'show', 'boursobank').stdout)
+        template = json.loads(self.run_fin('institution', 'companion', 'example').stdout)
         template['currency'] = 'EUR'
         path = self.root / 'companion.json'
         path.write_text(json.dumps(template, ensure_ascii=False))
@@ -1482,7 +1474,7 @@ class ImportOnboarding(unittest.TestCase):
 
     def test_companion_currency_prevents_wrong_match(self):
         self.run_fin('institution', 'add', 'provider')
-        template = json.loads(self.run_fin('institution', 'companion', 'show', 'boursobank').stdout)
+        template = json.loads(self.run_fin('institution', 'companion', 'example').stdout)
         path = self.root / 'companion.json'
         invalid = dict(template, account_id=999)
         path.write_text(json.dumps(invalid, ensure_ascii=False))
@@ -1503,7 +1495,7 @@ class ImportOnboarding(unittest.TestCase):
 
     def test_unused_companion_institution_can_be_deleted(self):
         self.run_fin('institution', 'add', 'tempbank')
-        template = json.loads(self.run_fin('institution', 'companion', 'show', 'boursobank').stdout)
+        template = json.loads(self.run_fin('institution', 'companion', 'example').stdout)
         template['currency'] = 'EUR'
         path = self.root / 'companion.json'
         path.write_text(json.dumps(template, ensure_ascii=False))
@@ -2039,8 +2031,9 @@ class ImportOnboarding(unittest.TestCase):
 
     def test_institution_show_describes_fields_rules_and_data(self):
         before = self.run_fin('institution', 'show', 'revolut').stdout
-        self.assertIn('Running-balance CSV (primary)', before)
-        self.assertIn('any column of the file, named by its header, such as "Type", with --field', before)
+        self.assertIn('Records', before)
+        self.assertIn('any field of the row, named as the source names it, with --field', before)
+        self.assertRegex(before, r'amount\s+Amount\n')
         self.assertIn('Default rules (7):', before)
         self.assertIn('Imported data: none.', before)
         self.run_fin('import', 'revolut', self.csv)
@@ -2051,6 +2044,17 @@ class ImportOnboarding(unittest.TestCase):
         self.assertIn('Columns fin does not read:', wise)
         self.assertIn('Transaction Details Type', wise)
         self.assertNotEqual(self.run_fin('institution', 'show', 'nosuchbank', check=False).returncode, 0)
+
+    def test_saved_definition_of_an_old_kind_is_named(self):
+        self.run_fin('import', 'revolut', self.csv)
+        database = sqlite3.connect(self.root / 'data/fin/fin.sqlite3')
+        database.execute('INSERT INTO institution_definitions VALUES (?, ?)',
+                         ('oldbank', json.dumps({'version': 1, 'kind': 'running-csv', 'running': {}})))
+        database.commit()
+        database.close()
+        result = self.run_fin('status', check=False)
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn('institution oldbank: its saved definition cannot be read', ' '.join(result.stderr.split()))
 
     def test_delete_confirmation_defaults_to_no(self):
         self.run_fin('import', 'revolut', self.csv)
@@ -2655,8 +2659,8 @@ class ImportOnboarding(unittest.TestCase):
         self.assertTrue(all(r['event_id'] == event for r in history))
 
     def test_builtin_bunq_and_revolut_definitions(self):
-        for institution, kind, sample in [('bunq', 'mt940-csv', 'fixtures/bunq.mt940'),
-                                          ('revolut', 'running-csv', 'fixtures/revolut.csv')]:
+        for institution, kind, sample in [('bunq', 'records', 'fixtures/bunq.mt940'),
+                                          ('revolut', 'records', 'fixtures/revolut.csv')]:
             with self.subTest(institution=institution):
                 profile = json.loads(self.run_fin('institution', 'definition', 'show', institution).stdout)
                 self.assertEqual(profile['kind'], kind)
@@ -2725,13 +2729,12 @@ class ImportOnboarding(unittest.TestCase):
 
     def test_runtime_institution_definition_and_sample_preview(self):
         profile = json.loads(self.run_fin('institution', 'definition', 'show', 'wise').stdout)
-        profile['camt']['institution'] = 'samplebank'
-        profile['camt']['camt_profile']['institution'] = 'samplebank'
-        profile['camt']['camt_profile']['event_kind'] = 'samplebank-transaction'
-        profile['camt']['camt_profile']['payload_tag'] = 'samplebank-camt-v1'
-        profile['camt']['csv_profile']['institution'] = 'samplebank'
-        profile['camt']['metadata_prefix'] = 'samplebank'
-        profile['camt']['aliases'] = ['sample']
+        records = profile['records']
+        records['institution'] = 'samplebank'
+        records['aliases'] = ['sample']
+        records['camt']['institution'] = 'samplebank'
+        records['csv']['institution'] = 'samplebank'
+        del records['stored_formats']
         definition = self.root / 'samplebank.json'
         definition.write_text(json.dumps(profile))
         preview = self.run_fin('institution', 'definition', 'check', definition, 'fixtures/wise.xml').stdout
@@ -2903,7 +2906,7 @@ class ImportOnboarding(unittest.TestCase):
 
     def test_wise_definition_uses_merchant_as_companion_description(self):
         definition = json.loads(self.run_fin('institution', 'definition', 'show', 'wise').stdout)
-        self.assertEqual(definition['camt']['csv_profile']['columns']['description'], 'Merchant')
+        self.assertEqual(definition['records']['csv']['journal_description'], 'Merchant')
 
     def test_wise_enrichment_shows_merchant_and_matches_different_descriptions(self):
         self.run_fin('import', 'wise', 'fixtures/wise.xml', 'fixtures/wise.csv')

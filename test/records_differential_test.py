@@ -39,7 +39,7 @@ SEMANTIC = re.compile(
     r"listed twice|unknown account|unknown statement|another account|repeated id"
     r"|repeated role|exactly one movement|ISO 4217|invalid (date|date or instant)"
     r"|expected a header|a header before|no end line|the end line counts|names no source"
-    r"|stated differently|the file is empty|lists statement"
+    r"|stated differently|the file is empty|lists statement|states a balance|out of order"
 )
 
 

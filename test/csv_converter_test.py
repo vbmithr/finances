@@ -52,13 +52,10 @@ revolut = write("revolut.csv", """Type,Product,Started Date,Completed Date,Descr
 Deposit,Current,2026-01-01 09:00:00,2026-01-01 09:00:01,In,150.00,0.00,EUR,COMPLETED,150.00
 Card Payment,Current,2026-01-02 09:00:00,2026-01-03 23:00:00,Shop,-10.00,1.00,EUR,COMPLETED,139.00
 Card Payment,Current,2026-01-04 09:00:00,,Undone,-5.00,0.00,EUR,REVERTED,
-Exchange,Savings,2026-01-05 09:00:00,2026-01-05 09:00:00,Other product,-1.00,0.00,EUR,COMPLETED,1.00
 """)
 lines = convert("revolut", revolut)
 records = kind(lines, "record")
-assert len(records) == 3, "another product is not this account"
-left_out = convert("revolut", revolut, check=False)
-assert "left out 1 row of revolut.csv" in " ".join(left_out.stderr.split()), left_out.stderr
+assert len(records) == 3
 assert kind(lines, "header")[0]["identity"] == "inventory"
 assert records[1]["movements"][0]["quantity"] == "-11", records[1]
 assert records[1]["fee"] == "1"

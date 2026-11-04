@@ -9,20 +9,10 @@ let definitions : Institution_definition.t list =
     ; Bundled_definitions.wise
     ; Bundled_definitions.revolut
     ; Bundled_definitions.bunq
+    ; Bundled_definitions.cdc
+    ; Bundled_definitions.fdm
     ]
     ~f:(fun json -> Json.decode Institution_definition.codec json |> Or_error.ok_exn)
-;;
-
-(** Movement CSV sources (one source row, one or two commodity movements). They
-    are data like the banks and register as adapters like the banks. *)
-let movement_profiles : Movement_csv.profile list =
-  List.map [ Bundled_definitions.cdc ] ~f:(fun json ->
-    Json.decode Movement_csv.profile_codec json |> Or_error.ok_exn)
-;;
-
-let movement_profile name =
-  List.find movement_profiles ~f:(fun p ->
-    List.mem (Movement_csv.names p) name ~equal:String.equal)
 ;;
 
 let definition name =
@@ -30,131 +20,39 @@ let definition name =
     List.mem (Institution_definition.names d) name ~equal:String.equal)
 ;;
 
-(** The type a bundled institution declares in its definition or movement profile. *)
+(** The type a bundled institution declares in its definition. *)
 let institution_type name =
-  match definition name, movement_profile name with
-  | Some d, _ -> Some (Institution_definition.institution_type d)
-  | None, Some profile -> Some profile.Movement_csv.institution_type
-  | None, None ->
-    List.find_map (Lazy.force Csv_converter.bundled) ~f:(fun definition ->
-      Option.some_if
-        (String.equal (Csv_converter.institution definition) name)
-        (Csv_converter.institution_type definition))
+  Option.map (definition name) ~f:Institution_definition.institution_type
+;;
+
+let records_of name =
+  Option.bind (definition name) ~f:(fun d ->
+    match d.source with
+    | Records r -> Some r
+    | Csv _ -> None)
 ;;
 
 (* Typed accessors for tests and tools that need one bundled profile. *)
-let ofx_preset name =
-  Option.bind (definition name) ~f:(fun d ->
-    match d.source with
-    | Ofx_csv p -> Some p
-    | Camt_csv _ | Csv _ | Running_csv _ | Mt940_csv _ -> None)
-;;
-
-let camt_preset name =
-  Option.bind (definition name) ~f:(fun d ->
-    match d.source with
-    | Camt_csv p -> Some p
-    | Ofx_csv _ | Csv _ | Running_csv _ | Mt940_csv _ -> None)
-;;
-
-let running_profile name =
-  Option.bind (definition name) ~f:(fun d ->
-    match d.source with
-    | Running_csv p -> Some p
-    | Ofx_csv _ | Camt_csv _ | Csv _ | Mt940_csv _ -> None)
+let camt_profile name =
+  Option.bind (records_of name) ~f:(fun r ->
+    match r.statement with
+    | Some (Camt p) -> Some p
+    | _ -> None)
 ;;
 
 let mt940_profile name =
-  Option.bind (definition name) ~f:(fun d ->
-    match d.source with
-    | Mt940_csv p -> Some p
-    | Ofx_csv _ | Camt_csv _ | Csv _ | Running_csv _ -> None)
+  Option.bind (records_of name) ~f:(fun r ->
+    match r.statement with
+    | Some (Mt940 p) -> Some p
+    | _ -> None)
 ;;
 
-let csv_definition name =
-  List.find (Lazy.force Csv_converter.bundled) ~f:(fun definition ->
-    String.equal (Csv_converter.institution definition) name)
-;;
-
-let csv_source name =
-  Option.map (csv_definition name) ~f:(Records_adapter.of_definition "csv")
-;;
-
-(* Institutions imported through records, with how overlapping files reconcile and what can read
-   their files. The others move here one at a time, once the records of their real files give
-   what their adapter gives. *)
-let records_institutions
-  : (string * string list * Adapter.overlap * Records_adapter.source list) list
-  =
-  let csv_only name =
-    Option.map (csv_definition name) ~f:(fun definition ->
-      name, [], Csv_converter.overlap definition, Option.to_list (csv_source name))
-  in
-  let bunq =
-    Option.map (mt940_profile "bunq") ~f:(fun profile ->
-      let mt940 : Records_adapter.source =
-        { format = "mt940"
-        ; recognizes =
-            (fun ~filename:_ contents -> Mt940_converter.recognizes profile contents)
-        ; convert = Mt940_converter.convert profile
-        ; tags = []
-        ; journal_description = None
-        ; conflict_columns = []
-        }
-      in
-      "bunq", [], Adapter.Day_inventory, mt940 :: Option.to_list (csv_source "bunq"))
-  in
-  let ofx : Records_adapter.source =
-    { format = "ofx"
-    ; recognizes =
-        (* A broken file named .ofx is meant to be one, and should say so. *)
-        (fun ~filename contents ->
-          Ofx_converter.recognizes contents
-          || String.equal (Adapter_support.extension filename) ".ofx")
-    ; convert = Ofx_converter.convert ~institution:"boursobank"
-    ; tags = []
-    ; journal_description = None
-    ; conflict_columns = []
-    }
-  in
-  let boursobank =
-    Option.map (ofx_preset "boursobank") ~f:(fun preset ->
-      ( "boursobank"
-      , preset.aliases
-      , Adapter.Source_ids
-      , ofx :: Option.to_list (csv_source "boursobank") ))
-  in
-  let wise =
-    Option.map (csv_definition "wise") ~f:(fun definition ->
-      let source : Records_adapter.source =
-        { format = "wise"
-        ; recognizes = (fun ~filename:_ contents -> Wise_converter.recognizes contents)
-        ; convert = Wise_converter.convert
-        ; tags = Csv_converter.journal_tags definition
-        ; journal_description = Csv_converter.journal_description definition
-        ; conflict_columns = Csv_converter.conflict_columns definition
-        }
-      in
-      "wise", [], Adapter.Source_ids, [ source ])
-  in
-  List.filter_opt
-    [ csv_only "fdm"; csv_only "cdc"; csv_only "revolut"; bunq; boursobank; wise ]
-;;
+let csv_definition name = Option.bind (records_of name) ~f:(fun r -> r.csv)
 
 let adapters : (module Adapter.S) list =
-  let moved name =
-    List.exists records_institutions ~f:(fun (institution, _, _, _) ->
-      String.equal institution name)
-  in
-  (List.filter definitions ~f:(fun d ->
-     not (moved (Institution_definition.institution d)))
-   |> List.map ~f:Institution_definition.adapter)
-  @ List.map records_institutions ~f:(fun (institution, aliases, overlap, sources) ->
-    Records_adapter.make ~aliases ~institution ~overlap sources)
-  @ [ (module Csv_adapter) ]
+  List.map definitions ~f:Institution_definition.adapter @ [ (module Csv_adapter) ]
 ;;
 
-let companion_layout name = Option.map (ofx_preset name) ~f:(fun p -> p.layout)
 let fallback = "csv-movement", Csv_movement.decode
 let fallbacks = [ "bank-transaction", Ofx_bank.decode ]
 let type_rules = List.concat_map definitions ~f:Institution_definition.default_type_rules

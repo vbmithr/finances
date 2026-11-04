@@ -165,56 +165,6 @@ let print_institution_data db institution =
   | _ -> ()
 ;;
 
-let print_movement_profile (profile : Movement_csv.profile) =
-  printf "%s\n" (Terminal.text profile.institution);
-  printf "  Type: %s\n" (Institution_type.label profile.institution_type);
-  print_endline "  Kind: movement-csv";
-  printf
-    "  Aliases: %s\n"
-    (if List.is_empty profile.aliases
-     then "none"
-     else String.concat ~sep:", " (List.map profile.aliases ~f:Terminal.text));
-  let c = profile.columns in
-  print_endline "\n  What fin reads, by role:";
-  List.iter
-    [ "timestamp", c.timestamp_column
-    ; "currency", c.currency_column
-    ; "amount", c.amount_column
-    ; "to currency", c.to_currency_column
-    ; "to amount", c.to_amount_column
-    ; "transaction kind", c.kind_column
-    ]
-    ~f:(fun (role, name) -> printf "    %-24s %s\n" role (Terminal.text name));
-  let read =
-    [ c.timestamp_column
-    ; c.currency_column
-    ; c.amount_column
-    ; c.to_currency_column
-    ; c.to_amount_column
-    ; c.kind_column
-    ]
-  in
-  (match
-     List.filter profile.header ~f:(fun h -> not (List.mem read h ~equal:String.equal))
-   with
-   | [] -> ()
-   | unread ->
-     print_endline "\n  Columns fin does not read:";
-     printf "    %s\n" (String.concat ~sep:", " (List.map unread ~f:Terminal.text)));
-  print_endline "\n  How each reported kind becomes an operation:";
-  List.iter profile.rules ~f:(fun (rule : Movement_csv.rule) ->
-    let shape =
-      match rule.legs with
-      | Single_in -> "one movement in"
-      | Single_out -> "one movement out"
-      | Exchange -> "an exchange"
-    in
-    printf
-      "    %-18s %s\n"
-      shape
-      (String.concat ~sep:", " (List.map rule.kinds ~f:Terminal.text)))
-;;
-
 let institution_overview database =
   let%bind entries = institution_entries database in
   let%map rows =
@@ -292,35 +242,21 @@ let institution_show database name =
         print_institution_rules d;
         Ok ()
       | None ->
-        (match Builtin.definition name, Builtin.movement_profile name with
-         | Some d, _ ->
+        (match Builtin.definition name with
+         | Some d ->
            print_institution_description
              ~institution_type:(Institution_definition.institution_type d)
              (Institution_definition.describe d);
            print_institution_rules d;
            Ok ()
-         | None, Some profile ->
-           print_movement_profile profile;
-           Ok ()
-         | None, None ->
-           (match Builtin.csv_definition name with
-            | Some definition ->
-              printf "%s\n" (Terminal.text name);
-              printf
-                "  Type: %s\n"
-                (Institution_type.label (Csv_converter.institution_type definition));
-              print_endline "  Kind: records, from a CSV definition";
-              Ok ()
-            | None ->
-              Or_error.error_string
-                "unknown institution, or one without a definition; see fin institution \
-                 list"))
+         | None ->
+           Or_error.error_string
+             "unknown institution, or one without a definition; see fin institution list")
     in
     let canonical =
-      match Builtin.movement_profile name, Builtin.definition name with
-      | Some p, _ -> p.institution
-      | None, Some d -> Institution_definition.institution d
-      | None, None ->
+      match Builtin.definition name with
+      | Some d -> Institution_definition.institution d
+      | None ->
         (match
            List.find installed ~f:(fun d ->
              List.mem (Institution_definition.names d) name ~equal:String.equal)
@@ -476,7 +412,8 @@ let cmd =
     ; group
         "companion"
         "Configure CSV enrichment layouts."
-        [ Institution_definition_cmd.institution_companion_show_cmd
+        [ Institution_definition_cmd.institution_companion_example_cmd
+        ; Institution_definition_cmd.institution_companion_show_cmd
         ; Institution_definition_cmd.institution_companion_set_cmd
         ; Institution_definition_cmd.institution_companion_clear_cmd
         ]

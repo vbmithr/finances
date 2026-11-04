@@ -8,15 +8,7 @@ let ok = Or_error.ok_exn
 let error value = Alcotest.(check bool) "rejected" true (Result.is_error value)
 let ofx () = In_channel.read_all "fixtures/bank.ofx"
 let csv () = In_channel.read_all "fixtures/bank.csv"
-
-module Bank_csv = struct
-  let profile = Option.value_exn (Builtin.companion_layout "boursobank")
-  let schema = Csv_companion_layout.schema profile
-  let parse = Csv_schema.parse schema
-  let recognizes = Csv_schema.recognizes schema
-end
-
-let fields () = List.map (ok (Bank_csv.parse (csv ()))) ~f:(fun r -> r.fields)
+let fields () = Csv.input_all (Csv_reader.channel ~separator:';' (csv ())) |> List.tl_exn
 
 let set row column value =
   List.mapi row ~f:(fun i old -> if i = column then value else old)
@@ -122,67 +114,6 @@ let count_sources root expected =
 
 let transactions journal =
   Hledger.Parse.journal_exn journal |> Hledger.Journal.transactions
-;;
-
-let parser () =
-  let contents =
-    "\239\187\191" ^ String.substr_replace_all (csv ()) ~pattern:"\n" ~with_:"\r\n"
-  in
-  let rows = ok (Bank_csv.parse contents) in
-  Alcotest.(check int) "quoted multiline records" 3 (List.length rows);
-  let row = List.hd_exn rows in
-  Alcotest.(check bool)
-    "first Solde is amount"
-    true
-    (Quantity.equal row.amount (Quantity.of_string "-0.10"));
-  Alcotest.(check bool)
-    "second Solde is balance"
-    true
-    (Quantity.equal (Option.value_exn row.reported_balance) (Quantity.of_string "100.01"));
-  Alcotest.(check string)
-    "value date"
-    "2026-01-04"
-    (Date.to_string (Option.value_exn row.value_on));
-  Alcotest.(check bool)
-    "quoted semicolon retained"
-    true
-    (String.is_substring (Option.value_exn row.comment) ~substring:"source; note");
-  let large = List.nth_exn rows 1 in
-  Alcotest.(check bool)
-    "all amount digits preserved"
-    true
-    (Quantity.equal
-       large.amount
-       (Quantity.of_string "12345678901234567890.1234567890123456789"));
-  let grouped =
-    fields ()
-    |> List.mapi ~f:(fun i r -> if i = 0 then set r 6 "-1\226\128\175234,56" else r)
-    |> encode
-    |> Bank_csv.parse
-    |> ok
-  in
-  Alcotest.(check bool)
-    "French digit grouping"
-    true
-    (Quantity.equal (List.hd_exn grouped).amount (Quantity.of_string "-1234.56"))
-;;
-
-let malformed () =
-  List.iter
-    [ 6, "1 2,00"; 6, "=1+1"; 6, "1.234,56"; 1, "2026-02-30"; 10, "100,01" ]
-    ~f:(fun (column, value) ->
-      let changed =
-        fields ()
-        |> List.mapi ~f:(fun i row -> if i = 0 then set row column value else row)
-        |> encode
-      in
-      error (Bank_csv.parse changed));
-  error (Bank_csv.parse (csv () ^ "\255"));
-  error (Bank_csv.parse (encode [ List.drop_last_exn (List.hd_exn (fields ())) ]));
-  Alcotest.(check bool)
-    "other CSV layouts are not claimed"
-    false
-    (Bank_csv.recognizes "date;amount\n2026-01-01;1\n")
 ;;
 
 let exact_enrichment () =
@@ -440,9 +371,7 @@ let () =
     "bank CSV"
     [ ( "enrichment"
       , List.map
-          [ "UTF-8, quoted fields and exact numbers", parser
-          ; "malformed CSV fields", malformed
-          ; "exact enrichment and replay", exact_enrichment
+          [ "exact enrichment and replay", exact_enrichment
           ; "metadata tag syntax safety", metadata_tag_safety
           ; "CSV arrives before OFX", csv_first
           ; "duplicate CSV rows", duplicates_within_csv

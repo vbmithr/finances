@@ -3,10 +3,6 @@ open Stdio
 open Finances
 open Finances_store
 
-module Revolut_csv = Csv_running_source.Make (struct
-    let profile = Option.value_exn (Builtin.running_profile "revolut")
-  end)
-
 let ok = Or_error.ok_exn
 let check = Alcotest.(check int)
 let error r = Alcotest.(check bool) "rejected" true (Result.is_error r)
@@ -85,82 +81,9 @@ let entries db id =
 
 let counter db id = (List.nth_exn (entries db id).postings 1).account
 
-let reusable_running_csv () =
-  let original = Option.value_exn (Builtin.running_profile "revolut") in
-  let profile =
-    { original with
-      institution = "example"
-    ; name = "Example"
-    ; kind = "example-transaction"
-    ; payload_tag = "example-v1"
-    ; format = "example_csv"
-    ; header =
-        List.map original.header ~f:(fun h -> if String.equal h "Type" then "Kind" else h)
-    ; columns = { original.columns with transaction_type = "Kind" }
-    }
-  in
-  let profile =
-    Json.decode Csv_running_profile.codec (Json.encode Csv_running_profile.codec profile)
-    |> ok
-  in
-  let module A = (val Csv_running_adapter.make profile : Adapter.S) in
-  let contents = replace (csv ()) "Type,Product" "Kind,Product" in
-  let document =
-    ok (A.parse ~context:{ account_label = Some "main" } ~format:profile.format contents)
-  in
-  Alcotest.(check bool)
-    "other institution produces events"
-    true
-    (not (List.is_empty document.events));
-  List.iter document.events ~f:(fun event ->
-    let movement = ok (A.decode event) in
-    Alcotest.(check string) "configured institution" "example" movement.account.bank_id)
-;;
-
-let parser () =
-  let doc = ok (Revolut_csv.parse ~account_id:"main" (csv ())) in
-  check "duplicates preserved" 4 (List.length doc.transactions);
-  check
-    "identities distinct"
-    4
-    (List.map doc.transactions ~f:(fun t -> t.source_id)
-     |> List.dedup_and_sort ~compare:String.compare
-     |> List.length);
-  let tx = List.last_exn doc.transactions in
-  Alcotest.(check bool)
-    "bank debit includes fee"
-    true
-    (Quantity.equal tx.amount (Quantity.of_string "-100.50"));
-  error (Revolut_csv.parse ~account_id:"main" (replace (csv ()) "69.50" "70.00"));
-  error (Revolut_csv.parse ~account_id:"main" (replace (csv ()) "COMPLETED" "PENDING"));
-  error (Revolut_csv.parse ~account_id:"main" (replace (csv ()) "0.50" "-0.50"));
-  error (Revolut_csv.parse ~account_id:"" (csv ()))
-;;
-
 let utc_clocks () =
-  let tx =
-    (ok (Revolut_csv.parse ~account_id:"main" (csv ()))).transactions |> List.hd_exn
-  in
-  Alcotest.(check string)
-    "start is UTC"
-    "2026-01-01T09:00:00.000000000000Z"
-    (Timestamp.to_rfc3339 tx.started_at);
-  Alcotest.(check string)
-    "completion is UTC"
-    "2026-01-01T09:00:01.000000000000Z"
-    (Timestamp.to_rfc3339 tx.completed_at);
-  Alcotest.(check bool)
-    "source clock text retained"
-    true
-    (String.is_substring tx.payload ~substring:"2026-01-01 09:00:01");
-  error
-    (Revolut_csv.parse
-       ~account_id:"main"
-       (replace (csv ()) "2026-01-01 09:00:01" "2026-01-01 08:59:59"));
-  error
-    (Revolut_csv.parse
-       ~account_id:"main"
-       (replace (csv ()) "2026-01-01 09:00:00" "2026-02-30 09:00:00"));
+  (* A state a definition does not expect refuses the file. *)
+  memory (fun db -> rejected (import_revolut db (replace (csv ()) "COMPLETED" "PENDING")));
   memory (fun db ->
     (* A clock with no stated offset says nothing about the instant, so a record states its date. *)
     let occurred =
@@ -674,9 +597,7 @@ let () =
     "Transfers and Revolut"
     [ ( "workflow"
       , List.map
-          [ "CSV validation and duplicate identities", parser
-          ; "reusable running CSV profile", reusable_running_csv
-          ; "UTC clock interpretation and replay", utc_clocks
+          [ "UTC clock interpretation and replay", utc_clocks
           ; "import replay and fee accounting", import_and_fees
           ; "candidate ambiguity and rejections", candidates
           ; "categorized movements are excluded", categorized_candidates

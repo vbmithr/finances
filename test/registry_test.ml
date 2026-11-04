@@ -3,10 +3,6 @@ open Stdio
 open Finances
 open Finances_store
 
-module Revolut_csv = Csv_running_source.Make (struct
-    let profile = Option.value_exn (Builtin.running_profile "revolut")
-  end)
-
 let ok = Or_error.ok_exn
 let rejected name result = Alcotest.(check bool) name true (Result.is_error result)
 
@@ -157,63 +153,6 @@ let unregistered_import () =
            Ok ())))
 ;;
 
-let revolut_csv currency =
-  String.concat
-    ~sep:"\n"
-    [ "Type,Product,Started Date,Completed \
-       Date,Description,Amount,Fee,Currency,State,Balance"
-    ; "TOPUP,Current,2026-01-02 10:00:00,2026-01-02 10:00:01,Top-up,10.00,0.00,"
-      ^ currency
-      ^ ",COMPLETED,10.00"
-    ]
-;;
-
-let currencies () =
-  let parse currency = Revolut_csv.parse ~account_id:"main" (revolut_csv currency) in
-  Alcotest.(check (list string))
-    "ISO 4217 currency accepted"
-    [ "EUR" ]
-    (List.map (ok (parse "EUR")).transactions ~f:(fun tx ->
-       Iso4217.to_alpha_code tx.currency));
-  rejected "well-formed token outside ISO 4217" (parse "BTC");
-  rejected "lowercase code" (parse "eur");
-  rejected "validation" (Validation.currency "currency" "XYZ")
-;;
-
-let reverted () =
-  let csv rows =
-    String.concat
-      ~sep:"\n"
-      ("Type,Product,Started Date,Completed \
-        Date,Description,Amount,Fee,Currency,State,Balance"
-       :: rows)
-  in
-  let completed =
-    "TOPUP,Current,2026-01-02 10:00:00,2026-01-02 \
-     10:00:01,Top-up,10.00,0.00,EUR,COMPLETED,10.00"
-  and reverted =
-    "CARD_PAYMENT,Current,2026-01-03 09:00:00,,Shop,-4.00,0.00,EUR,REVERTED,"
-  in
-  let parsed = ok (Revolut_csv.parse ~account_id:"main" (csv [ completed; reverted ])) in
-  Alcotest.(check int) "reverted row skipped" 1 (List.length parsed.transactions);
-  rejected
-    "a reverted row with a balance is not a reverted row"
-    (Revolut_csv.parse
-       ~account_id:"main"
-       (csv
-          [ completed
-          ; "CARD_PAYMENT,Current,2026-01-03 09:00:00,,Shop,-4.00,0.00,EUR,REVERTED,6.00"
-          ]));
-  rejected
-    "pending rows still reject the file"
-    (Revolut_csv.parse
-       ~account_id:"main"
-       (csv
-          [ completed
-          ; "CARD_PAYMENT,Current,2026-01-03 09:00:00,,Shop,-4.00,0.00,EUR,PENDING,"
-          ]))
-;;
-
 (* The bundled institutions are one definition file each. *)
 let bundled_definitions () =
   let raw =
@@ -221,6 +160,8 @@ let bundled_definitions () =
     ; "wise", Bundled_definitions.wise
     ; "revolut", Bundled_definitions.revolut
     ; "bunq", Bundled_definitions.bunq
+    ; "cdc", Bundled_definitions.cdc
+    ; "fdm", Bundled_definitions.fdm
     ]
   in
   Alcotest.(check (list string))
@@ -264,8 +205,6 @@ let () =
         ; Alcotest.test_case "dispatch" `Quick dispatch
         ; Alcotest.test_case "aliases" `Quick aliases
         ; Alcotest.test_case "unregistered institution import" `Quick unregistered_import
-        ; Alcotest.test_case "ISO 4217 currencies" `Quick currencies
-        ; Alcotest.test_case "reverted Revolut rows" `Quick reverted
         ; Alcotest.test_case "bundled definitions" `Quick bundled_definitions
         ] )
     ]

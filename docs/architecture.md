@@ -471,10 +471,8 @@ is archived. This conservatively rejects partial-day overlaps or corrections; no
 stable upstream IDs exist to resolve those safely. Statement membership uses the
 existing document/event links. The reconciliation API sums those persisted events.
 
-`Mt940_csv_companion` treats the currency-free CSV as companion observations only. Normalized
-account, dates, amount, counterparty, name and description form a matching key.
-Both sources must supply equal occurrence counts per key within each document;
-mismatches or currency ambiguity remain review items. CSV arrival order does not
+The bunq CSV is imported as companion observations only, through `Records_adapter`: its
+definition states EUR, since the file states no currency. CSV arrival order does not
 matter: import recomputes its matches after scanning all files and before projection.
 Shared audited match persistence saves transitions without rewriting evidence.
 
@@ -484,16 +482,14 @@ The baseline includes Revolut document/account context,
 immutable daily movement inventories, current transfer decisions, unique per-event
 confirmed memberships, and append-only transfer changes.
 
-`Csv_running_source` supports the observed Current-account CSV through a profile:
-completed rows are
-movements, reverted rows (no completion date, no balance) are skipped. Its caller must
-provide an account label because the file cannot identify the account. Canonical
-payloads retain original start/completion clock text, signed principal and
-nonnegative fee. The parsed transaction interprets those clocks as UTC and exposes
-`started_at` and `completed_at` as Ptime instants, independent of the system timezone;
-booking and source-event occurrences remain the completion calendar date. Source identities include occurrence numbers
-and exclude running balance observations. Per-currency running balance steps must
-equal principal minus fee, and repeated account/day inventories must agree.
+Revolut's definition (`institutions/revolut.json`) describes the observed Current-account CSV:
+completed rows are movements, reverted rows (no completion date, no balance) are skipped. The file
+cannot identify the account, so a person's one personal account is named `personal`. Records keep the
+original start and completion clock text, signed principal and nonnegative fee. Clocks are read as UTC;
+booking and source-event occurrences remain the completion calendar date. Source identities include
+occurrence numbers and exclude running balance observations, and repeated account/day inventories must
+agree. As for any source, `Records.check` makes each currency's balance equal the one before plus
+principal minus fee.
 
 The common transaction view adds an explicit fee (zero for existing adapters).
 Projection records bank net amount, opposite principal and, where present, a

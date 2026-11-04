@@ -305,20 +305,25 @@ let institution_definition_set_cmd =
 ;;
 
 let institution_companion_show database name =
-  match Builtin.companion_layout name with
-  | Some profile ->
-    print_endline (Json.encode ~format:Jsont.Indent Csv_companion_layout.codec profile);
-    Ok ()
-  | None ->
-    with_database database (fun db ->
-      let%bind profile = Setup.institution_companion_profile db name in
-      match profile with
-      | None ->
-        Or_error.error_string "no companion profile configured for this institution"
-      | Some json ->
-        let%map profile = Json.decode Csv_companion_layout.codec json in
-        print_endline
-          (Json.encode ~format:Jsont.Indent Csv_companion_layout.codec profile))
+  with_database database (fun db ->
+    let%bind profile = Setup.institution_companion_profile db name in
+    match profile with
+    | None -> Or_error.error_string "no companion profile configured for this institution"
+    | Some json ->
+      let%map profile = Json.decode Csv_companion_layout.codec json in
+      print_endline (Json.encode ~format:Jsont.Indent Csv_companion_layout.codec profile))
+;;
+
+let institution_companion_example () =
+  print_string Bundled_definitions.companion_example;
+  Ok ()
+;;
+
+let institution_companion_example_cmd =
+  command
+    "example"
+    "Print an example layout to adapt for an institution's CSV companion."
+    Term.(const institution_companion_example $ const ())
 ;;
 
 let institution_companion_show_cmd =

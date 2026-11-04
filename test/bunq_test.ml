@@ -14,12 +14,6 @@ module Bunq_mt940 = struct
   let parse = Mt940_source.parse bunq_engine
 end
 
-module Bunq_csv = struct
-  include Mt940_csv_companion
-
-  let parse = parse bunq_profile
-end
-
 let ok = Or_error.ok_exn
 let check = Alcotest.(check int)
 let error r = Alcotest.(check bool) "rejected" true (Result.is_error r)
@@ -68,74 +62,7 @@ let parser () =
   error (Bunq_mt940.parse (replace (mt ()) "EUR175,00" "EUR176,00"));
   error (Bunq_mt940.parse (replace (mt ()) "NMSCNONREF" "NMSCTRANSACTIONID"));
   error (Bunq_mt940.parse (replace (mt ()) "2601030104" "2601031231"));
-  error (Bunq_mt940.parse (mt () ^ "extra"));
-  let rows = ok (Bunq_csv.parse (replace (csv ()) "100,00" "1\226\128\175100,00")) in
-  Alcotest.(check bool)
-    "grouped CSV decimal"
-    true
-    (Quantity.equal (List.nth_exn rows 2).amount (Quantity.of_string "1100"));
-  error (Bunq_csv.parse (replace (csv ()) "100,00" "1 1,00"));
-  error (Bunq_csv.parse (replace (csv ()) "2026-01-02" "2026-02-30"))
-;;
-
-let reusable_profile () =
-  let original = bunq_profile in
-  let profile =
-    { original with
-      institution = "example"
-    ; name = "Example"
-    ; recognizer_prefix = "EXAMPLE"
-    ; kind = "example-entry"
-    ; payload_tag = "example-mt940"
-    ; format = "example_mt940"
-    ; companion_format = "example_csv"
-    ; metadata_prefix = "example"
-    }
-  in
-  let profile =
-    Json.decode Mt940_profile.codec (Json.encode Mt940_profile.codec profile) |> ok
-  in
-  let bad = { profile with entry_pattern = "^no capture groups$" } in
-  error (Json.decode Mt940_profile.codec (Json.encode Mt940_profile.codec bad));
-  let module A = (val Mt940_csv_adapter.make profile : Adapter.S) in
-  let xml = replace (mt ()) "BUNQFRP2" "EXAMPLE" in
-  let document =
-    ok (A.parse ~context:{ account_label = None } ~format:profile.format xml)
-  in
-  let events = (List.hd_exn document.statements).events in
-  check "second institution movements" 4 (List.length events);
-  List.iter events ~f:(fun event ->
-    let movement = ok (A.decode event) in
-    Alcotest.(check string)
-      "configured source institution"
-      "example"
-      movement.account.bank_id;
-    error (Mt940_transaction.source_transaction bunq_engine event));
-  let companion = List.hd_exn A.companions in
-  let observed =
-    ok
-      (A.parse
-         ~context:{ account_label = None }
-         ~format:profile.companion_format
-         (csv ()))
-  in
-  let rows =
-    List.map observed.companion_rows ~f:(fun (row_number, fields) ->
-      { Companion.row_id = Int64.of_int row_number
-      ; document_id = 1L
-      ; institution = "example"
-      ; format = profile.companion_format
-      ; row_number
-      ; fields
-      ; context = []
-      })
-  in
-  let events = List.mapi events ~f:(fun i event -> Int64.of_int (i + 1), event) in
-  let matches = ok (companion.match_rows rows events) in
-  check
-    "matching occurrence inventories"
-    4
-    (List.count matches ~f:(fun result -> Poly.equal result.Bank_match.state Matched))
+  error (Bunq_mt940.parse (mt () ^ "extra"))
 ;;
 
 let workflow () =
@@ -313,7 +240,6 @@ let () =
     [ ( "adapter"
       , List.map
           [ "parsers and exact balances", parser
-          ; "reusable MT940 institution profile", reusable_profile
           ; "CSV first, duplicates, overlap and review", workflow
           ; "changed day rejects atomically", conflicts
           ; "ambiguity and account scope", ambiguity

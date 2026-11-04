@@ -833,7 +833,7 @@ let show () =
          (List.concat_map d.documents ~f:(fun doc -> doc.paths));
        (match d.companions with
         | [ c ] ->
-          Alcotest.(check string) "format" "wise" c.format;
+          Alcotest.(check string) "format" "csv" c.format;
           Alcotest.(check bool)
             "every column by header"
             true

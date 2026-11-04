@@ -8,6 +8,34 @@ short line of their own.
 
 ## Unreleased
 
+- Institution definitions have one kind for bundled and adapted sources: `records`, which holds a
+  statement format (`camt`, `mt940` or `ofx`), a CSV layout (`csv`), or both. **Action required:** a
+  definition file of kind `camt-csv`, `mt940-csv`, `running-csv`, `ofx-csv` or `movement-csv` is no
+  longer accepted; start again from `fin institution definition show NAME`. Kind `csv`, which
+  `fin institution add` writes, stays. No rebuild is needed for bundled institutions. A database
+  that saved a definition of an old kind stops with an error naming its institution.
+- CSV layouts gain `require`: conditions every remaining row must meet, or the file is refused.
+  Revolut refuses a `State` other than `COMPLETED` or `REVERTED`, and Wise a `Transaction Type` other
+  than `DEBIT` or `CREDIT`. A layout's columns must appear in its `header`.
+- **Action required:** `fin import cdc --inspect`, with its `--summary` and `--json`, is gone. Use
+  `fin convert cdc FILE`, which also needs no database. The count of identical rows went with it.
+- `fin institution companion show` reads only what you saved; `fin institution companion example`
+  prints a layout to start from. `fin institution show` lists a CSV layout's columns by role, and those it checks.
+- The records format now checks running balances, for every source and whoever wrote the file: in a
+  section with one source, each account's `balance_after` must equal the one before plus the row's
+  movement, listed oldest or newest first. Merged sections are not checked, as exports can have gaps
+  between them. This is new for Wise and any records file. A negative `fee` is refused from converters
+  too, not only when a file is read.
+- CSV layouts can state more about how a file's columns relate, and the bundled ones do, as their old
+  parsers did: `require` conditions gain `matches`, `not_before`, `prefix_of`, the signs `not-positive`
+  and `not-negative`, and `when`. Revolut refuses a completion before its start, a reverted row with a
+  balance or a completion, a completed row without them, and another `Product`. Wise refuses a date that
+  disagrees with its clock, a clock with no milliseconds, a `DEBIT` above zero, a `CREDIT` below zero
+  and a missing `TransferWise ID`. bunq refuses an amount that is not comma with two decimals, and an
+  account with a space.
+- Every CSV layout: an unreadable balance, rate or valuation is refused, where it used to count as
+  absent. Under a decimal comma, a dot in a number is refused. An `iso-date` cell with anything after
+  the date, and an `iso-datetime` cell with no valid clock, are refused.
 - Restoring a decision on a row imported through records now compares what identifies the row: its
   account, ID, date, movements, fee and group. A converter that later keeps more detail, or cleans
   a description, no longer blocks restoring decisions. Sources with no row IDs keep their check that
