@@ -121,3 +121,11 @@ val verify_bank_operation_anchor
   -> unit Or_error.t
 
 val category_fields_hash : Source_event.t -> string
+
+(** What tells this row from others of its day, for matching saved decisions. *)
+val evidence_key
+  :  Handle.t
+  -> Source_event.t
+  -> payload_sha256:string
+  -> fields_sha256:string
+  -> string

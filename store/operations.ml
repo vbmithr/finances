@@ -1072,9 +1072,16 @@ let preview_exchange_restore db (snapshot : Exchange_portable.t) =
                && String.equal e.kind event.kind
                && String.equal (Temporal.to_string e.occurred) d.occurred
                &&
-               if List.is_empty event.fields
-               then String.equal e.payload event.payload
-               else String.equal (category_fields_hash e) d.fields_sha256)
+               let key (r : Source_event.t) ~fields_sha256 =
+                 evidence_key
+                   db
+                   r
+                   ~payload_sha256:Digestif.SHA256.(to_hex (digest_string r.payload))
+                   ~fields_sha256
+               in
+               String.equal
+                 (key e ~fields_sha256:(category_fields_hash e))
+                 (key event ~fields_sha256:d.fields_sha256))
              > 1
            in
            if

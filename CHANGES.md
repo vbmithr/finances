@@ -8,6 +8,10 @@ short line of their own.
 
 ## Unreleased
 
+- **Action required, before upgrading:** rows imported through records have new identities, so an
+  export from before this version names rows that no longer exist. Export with your current `fin`,
+  translate with `test/records_translate.exe`, then rebuild and restore; see "Upgrading to records"
+  in the manual. Do this before the old adapters are removed.
 - `fin import wise` now goes through records, as every bundled institution does. Its journal is
   unchanged, except that `wise-reported-fees` keeps the value as stated (`0.00`, not `0`). A file
   that states one row twice is refused, where it used to leave the row ambiguous.

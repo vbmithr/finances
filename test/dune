@@ -591,3 +591,20 @@
   base
   stdio
   alcotest))
+
+(executable
+ (name records_translate)
+ (modules records_translate)
+ (flags
+  (:standard -open Finances_core -open Finances_institutions))
+ (preprocess
+  (pps ppx_compare))
+ (libraries
+  finances
+  finances.store
+  finances.import
+  finances.institutions
+  finances.core
+  base
+  stdio
+  digestif))

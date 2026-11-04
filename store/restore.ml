@@ -26,6 +26,25 @@ let category_fields_hash (e : Source_event.t) =
   |> Digestif.SHA256.to_hex
 ;;
 
+(* What tells this row from others of its day. An institution with row IDs says so itself. Without
+   them, rows with identical fields cannot be told apart between exports, so a decision on one could
+   land on the other. *)
+let evidence_key db (e : Source_event.t) ~payload_sha256 ~fields_sha256 =
+  let identified =
+    match Registry.find db.registry e.venue with
+    | Some (module A : Adapter.S) ->
+      (match A.overlap with
+       | Source_ids -> true
+       | Day_inventory -> false)
+    | None -> false
+  in
+  if identified
+  then "id:" ^ e.source_id
+  else if List.is_empty e.fields
+  then "payload:" ^ payload_sha256
+  else "fields:" ^ fields_sha256
+;;
+
 let bank_operation_anchors db =
   let* sources =
     collect
@@ -214,9 +233,8 @@ let preview_category_restore db (snapshot : Category_portable.t) =
         , e.account
         , e.kind
         , Temporal.to_string e.occurred
-        , if List.is_empty e.fields
-          then "payload:" ^ digest
-          else "fields:" ^ category_fields_hash e )
+        , evidence_key db e ~payload_sha256:digest ~fields_sha256:(category_fields_hash e)
+        )
       ~data:id);
   let problems = ref [] in
   let problem s = problems := s :: !problems in
@@ -337,9 +355,11 @@ let preview_category_restore db (snapshot : Category_portable.t) =
                     , d.source_account
                     , d.kind
                     , d.occurred
-                    , if List.is_empty e.fields
-                      then "payload:" ^ d.payload_sha256
-                      else "fields:" ^ d.fields_sha256 ))
+                    , evidence_key
+                        db
+                        e
+                        ~payload_sha256:d.payload_sha256
+                        ~fields_sha256:d.fields_sha256 ))
                  ~default:[])
             > 1
           then (
@@ -496,9 +516,11 @@ let preview_category_restore db (snapshot : Category_portable.t) =
                   , d.source_account
                   , d.kind
                   , d.occurred
-                  , if List.is_empty e.fields
-                    then "payload:" ^ d.payload_sha256
-                    else "fields:" ^ d.fields_sha256 ))
+                  , evidence_key
+                      db
+                      e
+                      ~payload_sha256:d.payload_sha256
+                      ~fields_sha256:d.fields_sha256 ))
                ~default:[]
              |> List.length
            in
