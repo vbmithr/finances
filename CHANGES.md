@@ -8,6 +8,9 @@ short line of their own.
 
 ## Unreleased
 
+- `fin import boursobank` now goes through records. Its journal is unchanged, except that 19 rows the
+  adapter left ambiguous on real files now pair and gain their value date and tags. A CSV row whose
+  description disagrees with the only candidate on its date and quantity stays unmatched, as before.
 - `fin import bunq` now goes through records. Its journal is unchanged. Its CSV states EUR by
   definition, so a statement in another currency is left unmatched instead of being ambiguous.
 - `fin import revolut` now goes through records and no longer takes `--account-id`: a person has

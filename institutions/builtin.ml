@@ -83,36 +83,58 @@ let csv_source name =
 (* Institutions imported through records, with how overlapping files reconcile and what can read
    their files. The others move here one at a time, once the records of their real files give
    what their adapter gives. *)
-let records_institutions : (string * Adapter.overlap * Records_adapter.source list) list =
+let records_institutions
+  : (string * string list * Adapter.overlap * Records_adapter.source list) list
+  =
   let csv_only name =
     Option.map (csv_definition name) ~f:(fun definition ->
-      name, Csv_converter.overlap definition, Option.to_list (csv_source name))
+      name, [], Csv_converter.overlap definition, Option.to_list (csv_source name))
   in
   let bunq =
     Option.map (mt940_profile "bunq") ~f:(fun profile ->
       let mt940 : Records_adapter.source =
         { format = "mt940"
-        ; recognizes = Mt940_converter.recognizes profile
+        ; recognizes =
+            (fun ~filename:_ contents -> Mt940_converter.recognizes profile contents)
         ; convert = Mt940_converter.convert profile
         ; tags = []
         ; journal_description = None
         }
       in
-      "bunq", Adapter.Day_inventory, mt940 :: Option.to_list (csv_source "bunq"))
+      "bunq", [], Adapter.Day_inventory, mt940 :: Option.to_list (csv_source "bunq"))
   in
-  List.filter_opt [ csv_only "fdm"; csv_only "cdc"; csv_only "revolut"; bunq ]
+  let ofx : Records_adapter.source =
+    { format = "ofx"
+    ; recognizes =
+        (* A broken file named .ofx is meant to be one, and should say so. *)
+        (fun ~filename contents ->
+          Ofx_converter.recognizes contents
+          || String.equal (Adapter_support.extension filename) ".ofx")
+    ; convert = Ofx_converter.convert ~institution:"boursobank"
+    ; tags = []
+    ; journal_description = None
+    }
+  in
+  let boursobank =
+    Option.map (ofx_preset "boursobank") ~f:(fun preset ->
+      ( "boursobank"
+      , preset.aliases
+      , Adapter.Source_ids
+      , ofx :: Option.to_list (csv_source "boursobank") ))
+  in
+  List.filter_opt [ csv_only "fdm"; csv_only "cdc"; csv_only "revolut"; bunq; boursobank ]
 ;;
 
 let adapters : (module Adapter.S) list =
   let moved name =
-    List.exists records_institutions ~f:(fun (institution, _, _) ->
+    List.exists records_institutions ~f:(fun (institution, _, _, _) ->
       String.equal institution name)
   in
   (List.filter definitions ~f:(fun d ->
      not (moved (Institution_definition.institution d)))
    |> List.map ~f:Institution_definition.adapter)
-  @ List.map records_institutions ~f:(fun (institution, overlap, sources) ->
-    Records_adapter.make ~institution ~overlap sources)
+  @ List.map records_institutions ~f:(fun (institution, aliases, overlap, sources) ->
+    Records_adapter.make ~aliases ~institution ~overlap sources)
   @ [ (module Csv_adapter) ]
 ;;
 

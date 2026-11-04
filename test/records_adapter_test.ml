@@ -172,7 +172,14 @@ let ties () =
         ; (* Different candidates and nothing to choose by stay for review. *)
           row "c1" ~on:"2025-01-04" "-1" ~descriptions:[ "One" ]
         ; row "c2" ~on:"2025-01-04" "-1" ~descriptions:[ "Two" ]
-        ; row "oc1" ~observation:true ~on:"2025-01-04" "-1" ~descriptions:[ "Three" ]
+        ; row "oc1" ~observation:true ~on:"2025-01-04" "-1"
+        ; (* Without a reference, date and quantity do not pair rows whose texts disagree. *)
+          row "d1" ~on:"2025-01-05" "-1" ~descriptions:[ "One" ]
+        ; row "od1" ~observation:true ~on:"2025-01-05" "-1" ~descriptions:[ "Other" ]
+        ; (* Two identical rows do not collapse onto one candidate. *)
+          row "e1" ~on:"2025-01-06" "-1" ~descriptions:[ "Same" ]
+        ; row "oe1" ~observation:true ~on:"2025-01-06" "-1" ~descriptions:[ "Same" ]
+        ; row "oe2" ~observation:true ~on:"2025-01-06" "-1" ~descriptions:[ "Same" ]
         ]
     ]
     (fun _ found ->
@@ -184,6 +191,9 @@ let ties () =
          ; "ob1", "matched"
          ; "ob2", "matched"
          ; "oc1", "ambiguous"
+         ; "od1", "unmatched"
+         ; "oe1", "ambiguous"
+         ; "oe2", "ambiguous"
          ]
          (sorted found))
 ;;
@@ -209,6 +219,22 @@ let overlapping_exports () =
          "two exports disagree"
          [ "o1", "conflict"; "o1", "conflict" ]
          (sorted found))
+;;
+
+let exports_of_one_row () =
+  (* Each export names its statement differently, and the row stays one row. *)
+  let export statement =
+    document
+      [ Printf.sprintf {|{"kind":"statement","id":"%s","account":"main"}|} statement
+      ; String.substr_replace_first
+          (row "c1" ~on:"2025-01-02" "-1")
+          ~pattern:{|"account":"main",|}
+          ~with_:(Printf.sprintf {|"account":"main","statements":["%s"],|} statement)
+      ]
+  in
+  imported
+    [ export "first"; export "second" ]
+    (fun db _ -> Alcotest.(check int) "one event" 1 (List.length (ok (Ledger.events db))))
 ;;
 
 let balances () =
@@ -258,6 +284,7 @@ let () =
         ; Alcotest.test_case "by account, date and quantity" `Quick by_account
         ; Alcotest.test_case "ties" `Quick ties
         ; Alcotest.test_case "overlapping exports" `Quick overlapping_exports
+        ; Alcotest.test_case "exports of one row" `Quick exports_of_one_row
         ] )
     ; "balances", [ Alcotest.test_case "stored and listed" `Quick balances ]
     ]

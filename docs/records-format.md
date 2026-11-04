@@ -1,7 +1,7 @@
 # Records format
 
 Status: version 1 draft, 2026-11-04. `fin records check FILE` validates a file and `fin convert`
-prints one. Fin imports records, pairs observations and stores balances, for FDM, CDC, Revolut and bunq so far; other
+prints one. Fin imports records, pairs observations and stores balances, for FDM, CDC, Revolut, bunq and BoursoBank so far; other
 institutions still import through their adapters.
 
 A records file is what one institution's document says, as JSON Lines: every entry becomes

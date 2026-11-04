@@ -1,8 +1,8 @@
 open Base
 
 (* OFX states one period and one or two balances per account. Each entry has a FITID, so these
-   are counted records with source identity. DTUSER is kept only in the fields: BoursoBank's is
-   not a valid date. *)
+   are counted records with source identity. DTUSER stays out of the record, in the archived file
+   only: BoursoBank's is not a valid date, and it changes between exports of one row. *)
 
 let recognizes contents =
   let prefix = String.strip (String.prefix contents 4096) in
@@ -95,7 +95,6 @@ let record (statement : Ofx_source.statement) (tx : Ofx_source.transaction)
             [ Option.map tx.name ~f:(fun value -> "name", value)
             ; Option.map tx.memo ~f:(fun value -> "memo", value)
             ; Some ("TRNTYPE", tx.transaction_type)
-            ; Option.map tx.user_date_source ~f:(fun value -> "DTUSER", value)
             ]
       }
   }

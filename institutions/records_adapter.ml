@@ -46,7 +46,8 @@ let event ~institution (account : Records.account) (record : Records.record) =
     if Option.is_some (fiat_movement record) then movement_kind else operation_kind
   in
   let account_id = account_identity ~institution account in
-  let payload = Records.row_to_string account record in
+  (* Overlapping exports list a row under different statements, and it stays the same row. *)
+  let payload = Records.row_to_string account { record with statements = [] } in
   match record.occurred.value with
   | Instant occurred_at ->
     Source_event.create
@@ -164,6 +165,12 @@ let decode (event : Source_event.t) =
   let%bind (account : Records.account), (record : Records.record) =
     Records.row_of_string event.payload
   in
+  (* An event whose payload disagrees with its identity never enters the database. *)
+  let%bind () =
+    if String.equal event.source_id record.id
+    then Ok ()
+    else Or_error.error_string "a stored row's identity disagrees with its record"
+  in
   let%bind amount, currency =
     Or_error.of_option
       (fiat_movement record)
@@ -240,8 +247,13 @@ let by_account (record : Records.record) =
 ;;
 
 let texts (record : Records.record) =
-  List.map record.details.descriptions ~f:(fun text ->
-    String.lowercase (String.strip text))
+  let name = Option.bind record.details.counterparty ~f:(fun c -> c.name) in
+  List.filter_opt [ name ] @ record.details.descriptions
+  |> List.map ~f:(fun text ->
+    String.lowercase text
+    |> String.split_on_chars ~on:[ ' '; '\t'; '\n' ]
+    |> List.filter ~f:(Fn.non String.is_empty)
+    |> String.concat ~sep:" ")
   |> List.filter ~f:(Fn.non String.is_empty)
 ;;
 
@@ -251,12 +263,15 @@ let shares_text a b = List.exists (texts a) ~f:(List.mem (texts b) ~equal:String
    order only if the candidates cannot be told apart, so that nothing is enriched wrongly. *)
 let settle rows candidates =
   let rec by_text settled rows candidates =
+    let claiming candidate =
+      List.count rows ~f:(fun (_, record) -> shares_text record candidate)
+    in
     let progress =
       List.find_map rows ~f:(fun (row, record) ->
         match
           List.filter candidates ~f:(fun (_, candidate) -> shares_text record candidate)
         with
-        | [ (id, _) ] -> Some (row, id)
+        | [ (id, candidate) ] when claiming candidate = 1 -> Some (row, id)
         | _ -> None)
     in
     match progress with
@@ -305,8 +320,18 @@ let match_rows (rows : Companion.row list) events =
   let candidates_of record =
     let on key = Option.value (Option.bind key ~f:(Hashtbl.find index)) ~default:[] in
     let referenced = on (Option.bind (servicer record) ~f:(by_reference record)) in
-    (* Oldest first: the index collects in reverse. *)
-    List.rev (if List.is_empty referenced then on (by_account record) else referenced)
+    (* Oldest first: the index collects in reverse. Without a reference, date and quantity alone
+       do not pair rows whose texts disagree. *)
+    List.rev
+      (if List.is_empty referenced
+       then
+         List.filter
+           (on (by_account record))
+           ~f:(fun (_, candidate) ->
+             List.is_empty (texts record)
+             || List.is_empty (texts candidate)
+             || shares_text record candidate)
+       else referenced)
   in
   (* Rows compete for candidates only within one document: another export states the same rows. *)
   let groups = Hashtbl.Poly.create () in
@@ -414,7 +439,7 @@ let companion ~tags ~journal_description format : Companion.t =
 
 type source =
   { format : string
-  ; recognizes : string -> bool
+  ; recognizes : filename:string -> string -> bool
   ; convert : name:string -> string -> Records.t Or_error.t
   ; tags : (string * string) list
   ; journal_description : string option
@@ -422,7 +447,8 @@ type source =
 
 let of_definition format definition =
   { format
-  ; recognizes = Csv_converter.recognizes definition
+  ; recognizes =
+      (fun ~filename:_ contents -> Csv_converter.recognizes definition contents)
   ; convert = Csv_converter.convert definition
   ; tags = Csv_converter.journal_tags definition
   ; journal_description = Csv_converter.journal_description definition
@@ -430,11 +456,11 @@ let of_definition format definition =
 ;;
 
 (* An institution whose files reach fin as records, directly or through a converter. *)
-let make ~institution ~overlap sources : (module Adapter.S) =
+let make ?(aliases = []) ~institution ~overlap sources : (module Adapter.S) =
   let records = "records" in
   let module Adapter_impl = struct
     let institution = institution
-    let aliases = []
+    let aliases = aliases
     let kinds = [ movement_kind ]
     let operation_kinds = [ operation_kind ]
     let decode = decode
@@ -449,12 +475,12 @@ let make ~institution ~overlap sources : (module Adapter.S) =
     let formats = records :: List.map sources ~f:(fun source -> source.format)
     let takes_account_label = false
 
-    let probe ~filename:_ contents =
+    let probe ~filename contents =
       if Records.is_records_of ~institution contents
       then Some records
       else
         List.find_map sources ~f:(fun source ->
-          Option.some_if (source.recognizes contents) source.format)
+          Option.some_if (source.recognizes ~filename contents) source.format)
     ;;
 
     let parse ~context:_ ~format contents =

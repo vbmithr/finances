@@ -21,7 +21,7 @@ let sources institution : Adapter.overlap * Records_adapter.source list =
     | "boursobank" ->
       Some
         { format = "ofx"
-        ; recognizes = Ofx_converter.recognizes
+        ; recognizes = (fun ~filename:_ contents -> Ofx_converter.recognizes contents)
         ; convert = Ofx_converter.convert ~institution
         ; tags = []
         ; journal_description = None
@@ -31,7 +31,8 @@ let sources institution : Adapter.overlap * Records_adapter.source list =
         (Builtin.mt940_profile institution)
         ~f:(fun profile : Records_adapter.source ->
           { format = "mt940"
-          ; recognizes = Mt940_converter.recognizes profile
+          ; recognizes =
+              (fun ~filename:_ contents -> Mt940_converter.recognizes profile contents)
           ; convert = Mt940_converter.convert profile
           ; tags = []
           ; journal_description = None
@@ -42,7 +43,7 @@ let sources institution : Adapter.overlap * Records_adapter.source list =
   | "wise" ->
     ( Source_ids
     , [ { format = "wise"
-        ; recognizes = Wise_converter.recognizes
+        ; recognizes = (fun ~filename:_ contents -> Wise_converter.recognizes contents)
         ; convert = Wise_converter.convert
         ; tags =
             Option.value_map

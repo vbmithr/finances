@@ -50,10 +50,13 @@ let create
   | `Duplicate_key institution ->
     Or_error.errorf "institution %s is registered twice" institution
   | `Ok adapters ->
+    (* A fallback decodes its kind for institutions with no adapter claiming it. *)
     let kinds =
       Map.data adapters
       |> List.concat_map ~f:(fun (module A : Adapter.S) -> A.kinds)
       |> Set.of_list (module String)
+      |> fun claimed ->
+      Set.union claimed (Set.of_list (module String) (List.map fallbacks ~f:fst))
     in
     let operation_kinds =
       Map.data adapters
