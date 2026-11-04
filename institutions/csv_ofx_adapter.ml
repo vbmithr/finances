@@ -19,7 +19,6 @@ let make
     let kinds = Ofx_bank.kinds
     let operation_kinds = []
     let operation_rows _ = Or_error.error_string "OFX events are bank movements"
-    let operation_group _ = None
     let decode = Ofx_bank.decode
     let formats = [ Ofx_bank.ofx; csv ]
     let takes_account_label = false

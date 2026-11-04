@@ -1,61 +1,44 @@
 open Base
-open Finances
 open Finances_store
 open Cmdliner
 open Or_error.Let_syntax
 open Cli
 
-type movement_type_filter =
-  | Unknown_type
-  | Known_type of Movement_type.t
-
 let parse_movement_type_filter = function
-  | "unknown" -> Ok Unknown_type
+  | "unknown" -> Ok Review.Untyped
   | value when String.is_empty (String.strip value) ->
     Or_error.error_string "--type must not be empty"
-  | value -> Ok (Known_type (Movement_type.of_string value))
+  | value -> Ok (Review.Typed (Movement_type.of_string value))
 ;;
 
 let matches_movement_type_filter filter movement_type =
   match filter with
-  | Unknown_type -> Option.is_none movement_type
-  | Known_type kind -> Option.value_map movement_type ~default:false ~f:(Poly.equal kind)
+  | Review.Untyped -> Option.is_none movement_type
+  | Typed kind -> Option.value_map movement_type ~default:false ~f:(Poly.equal kind)
 ;;
 
-type transaction_sort_column =
-  | Sort_occurrence
-  | Sort_date
-  | Sort_amount
-  | Sort_currency
-  | Sort_institution
-  | Sort_account
-  | Sort_type
-  | Sort_counter_account
-  | Sort_description
-  | Sort_event
-
 let transaction_sort_columns =
-  [ "date", Sort_date
-  ; "booked_on", Sort_date
-  ; "amount", Sort_amount
-  ; "currency", Sort_currency
-  ; "institution", Sort_institution
-  ; "account", Sort_account
-  ; "account-id", Sort_account
-  ; "account_id", Sort_account
-  ; "type", Sort_type
-  ; "movement_type", Sort_type
-  ; "counter-account", Sort_counter_account
-  ; "counter_account", Sort_counter_account
-  ; "description", Sort_description
-  ; "event", Sort_event
-  ; "event-id", Sort_event
-  ; "event_id", Sort_event
+  [ "date", Review.By_date
+  ; "booked_on", By_date
+  ; "amount", By_amount
+  ; "currency", By_currency
+  ; "institution", By_institution
+  ; "account", By_account
+  ; "account-id", By_account
+  ; "account_id", By_account
+  ; "type", By_type
+  ; "movement_type", By_type
+  ; "counter-account", By_counter_account
+  ; "counter_account", By_counter_account
+  ; "description", By_description
+  ; "event", By_event
+  ; "event-id", By_event
+  ; "event_id", By_event
   ]
 ;;
 
 let parse_transaction_sort = function
-  | None -> Ok [ Sort_occurrence ]
+  | None -> Ok [ Review.By_occurrence ]
   | Some value ->
     let%bind columns =
       String.split value ~on:','
@@ -78,106 +61,6 @@ let parse_list_date label = function
       if not (String.equal text (Date.to_string date)) then failwith "expected YYYY-MM-DD";
       Some date)
     |> Or_error.tag ~tag:label
-;;
-
-let operation_matches
-      ~account_id
-      ~institution
-      ~movement_type
-      ~classification
-      ~counter_account
-      ~from_date
-      ~to_date
-      ~search
-      (row : Report_json.operation_row)
-  =
-  let any_movement f =
-    List.exists
-      row.operation.Review.movements
-      ~f:(fun (m : Review.operation_movement_review) ->
-        Option.value_map m.review ~default:false ~f)
-  in
-  let occurred_date =
-    Date.of_string (String.prefix (Temporal.to_string row.operation.occurred) 10)
-  in
-  Option.value_map account_id ~default:true ~f:(fun id ->
-    List.exists row.movement_rows ~f:(fun m -> String.equal m.account_id id))
-  && Option.value_map institution ~default:true ~f:(fun name ->
-    String.equal name row.operation.institution
-    || any_movement (fun (r : Review.bank_review) -> String.equal name r.institution))
-  && Option.value_map movement_type ~default:true ~f:(fun filter ->
-    any_movement (fun (r : Review.bank_review) ->
-      matches_movement_type_filter filter r.movement_type))
-  && Option.value_map classification ~default:true ~f:(fun wanted ->
-    any_movement (fun (r : Review.bank_review) -> Poly.equal r.classification wanted))
-  && Option.value_map counter_account ~default:true ~f:(fun account ->
-    any_movement (fun (r : Review.bank_review) -> String.equal r.counter_account account))
-  && Option.value_map from_date ~default:true ~f:(fun date ->
-    Date.compare occurred_date date >= 0)
-  && Option.value_map to_date ~default:true ~f:(fun date ->
-    Date.compare occurred_date date <= 0)
-  && Option.value_map search ~default:true ~f:(fun text ->
-    String.Caseless.is_substring row.operation.description ~substring:text)
-;;
-
-let compare_operation_column
-      column
-      (a : Report_json.operation_row)
-      (b : Report_json.operation_row)
-  =
-  let compare_reviews f =
-    match a.operation.Review.review, b.operation.Review.review with
-    | Some ar, Some br -> f ar br
-    | Some _, None -> -1
-    | None, Some _ -> 1
-    | None, None -> 0
-  in
-  match column with
-  | Sort_occurrence ->
-    String.compare
-      (Temporal.to_string a.operation.Review.occurred)
-      (Temporal.to_string b.operation.Review.occurred)
-  | Sort_date ->
-    compare_reviews (fun ar br ->
-      Date.compare ar.Review.transaction.booked_on br.Review.transaction.booked_on)
-  | Sort_amount ->
-    compare_reviews (fun ar br ->
-      Quantity.compare ar.Review.transaction.amount br.Review.transaction.amount)
-  | Sort_currency ->
-    compare_reviews (fun ar br ->
-      String.compare
-        (Iso4217.to_alpha_code ar.Review.transaction.account.currency)
-        (Iso4217.to_alpha_code br.Review.transaction.account.currency))
-  | Sort_institution -> String.compare a.operation.institution b.operation.institution
-  | Sort_account ->
-    String.compare
-      (Option.value a.account_id ~default:"")
-      (Option.value b.account_id ~default:"")
-  | Sort_type ->
-    let name (row : Report_json.operation_row) =
-      Option.bind row.operation.Review.review ~f:(fun r ->
-        Option.map r.Review.movement_type ~f:Movement_type.to_string)
-      |> Option.value ~default:"-"
-    in
-    String.compare (name a) (name b)
-  | Sort_counter_account ->
-    let name (row : Report_json.operation_row) =
-      Option.bind row.operation.Review.review ~f:(fun r ->
-        if String.equal r.Review.counter_account "equity:unclassified"
-        then None
-        else Some r.Review.counter_account)
-      |> Option.value ~default:"-"
-    in
-    String.compare (name a) (name b)
-  | Sort_description ->
-    compare_reviews (fun ar br ->
-      String.compare ar.Review.description br.Review.description)
-  | Sort_event ->
-    let event (row : Report_json.operation_row) =
-      Option.map row.operation.Review.review ~f:(fun r -> r.Review.event_id)
-      |> Option.value ~default:Int64.max_value
-    in
-    Int64.compare (event a) (event b)
 ;;
 
 let list_transactions
@@ -211,88 +94,68 @@ let list_transactions
     | _ -> Ok ()
   in
   with_database database (fun db ->
-    let%bind accounts = Transfers.bank_account_info db in
-    let%bind () =
+    let%bind accounts = Transfers.bank_account_ids db in
+    let%bind only_account =
       match account_id with
-      | None -> Ok ()
+      | None -> Ok None
       | Some id ->
         (match
-           List.count accounts ~f:(fun a ->
-             String.equal (Bank_account_mapping.id a.Transfers.mapping) id)
+           List.filter accounts ~f:(fun (_, _, candidate) -> String.equal candidate id)
          with
-         | 1 -> Ok ()
-         | 0 -> Or_error.error_string "unknown account ID; see fin account list"
+         | [ (institution, source, _) ] -> Ok (Some (institution, source))
+         | [] -> Or_error.error_string "unknown account ID; see fin account list"
          | _ -> Or_error.error_string "account ID collision; filtering is refused")
     in
     let ids = Hashtbl.Poly.create () in
-    List.iter accounts ~f:(fun a ->
-      Hashtbl.set
-        ids
-        ~key:
-          (a.Transfers.mapping.institution, Bank_account_mapping.source_account a.mapping)
-        ~data:(Bank_account_mapping.id a.mapping));
-    let%bind operations = Review.operation_review db in
+    List.iter accounts ~f:(fun (institution, source, id) ->
+      Hashtbl.set ids ~key:(institution, source) ~data:id);
+    let%bind operations =
+      Review.operations
+        db
+        ~filter:
+          { only_account
+          ; only_institution = institution
+          ; only_type = movement_type
+          ; only_decision = classification
+          ; only_counter_account = counter_account
+          ; from_date
+          ; to_date
+          ; search
+          }
+        ~accounts
+        ~order:sort_columns
+        ~ascending:order
+        ?limit
+    in
+    let account_of (review : Review.bank_review) =
+      let account = review.transaction.account in
+      let source =
+        Json.encode
+          (Jsont.list Jsont.string)
+          [ account.bank_id; account.account_id; account.account_type ]
+      in
+      Hashtbl.find ids (review.institution, source)
+    in
     let%bind rows =
       List.map operations ~f:(fun (operation : Review.operation_review) ->
         let%map account_id =
           match operation.review with
           | None -> Ok None
           | Some review ->
-            let account = review.transaction.account in
-            let source =
-              Json.encode
-                (Jsont.list Jsont.string)
-                [ account.bank_id; account.account_id; account.account_type ]
-            in
-            (match Hashtbl.find ids (review.institution, source) with
+            (match account_of review with
              | None -> Or_error.error_string "transaction references an unknown account"
              | Some account_id -> Ok (Some account_id))
         in
         let movement_rows =
           List.filter_map operation.movements ~f:(fun m ->
             Option.map m.Review.review ~f:(fun review ->
-              let account = review.Review.transaction.account in
-              let source =
-                Json.encode
-                  (Jsont.list Jsont.string)
-                  [ account.bank_id; account.account_id; account.account_type ]
-              in
-              let account_id =
-                Option.value (Hashtbl.find ids (review.institution, source)) ~default:""
-              in
-              { Report_json.account_id; review }))
+              { Report_json.account_id = Option.value (account_of review) ~default:""
+              ; review
+              }))
         in
         { Report_json.account_id; operation; movement_rows })
       |> Or_error.combine_errors
     in
-    let rows =
-      List.filter
-        rows
-        ~f:
-          (operation_matches
-             ~account_id
-             ~institution
-             ~movement_type
-             ~classification
-             ~counter_account
-             ~from_date
-             ~to_date
-             ~search)
-      |> fun filtered ->
-      List.sort filtered ~compare:(fun a b ->
-        let rec compare = function
-          | [] ->
-            Int64.compare
-              a.Report_json.operation.operation_id
-              b.Report_json.operation.operation_id
-          | column :: rest ->
-            (match compare_operation_column column a b with
-             | 0 -> compare rest
-             | result -> result)
-        in
-        if order then compare sort_columns else -compare sort_columns)
-    in
-    let rows = Option.value_map limit ~default:rows ~f:(List.take rows) in
     let print_rows ?out () =
       if json_output
       then Report_json.print (Jsont.list Report_json.operation_row) rows

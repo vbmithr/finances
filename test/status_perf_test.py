@@ -81,6 +81,21 @@ def main():
         if cpu > MAX_CPU_SECONDS:
             raise SystemExit('status performance regression: median CPU time exceeds limit')
 
+        # A page of the list reads only that page, so it costs no more than status.
+        def listing(*options):
+            before = resource.getrusage(resource.RUSAGE_CHILDREN)
+            result = run('operation', 'list', '--json', '--database', db, *options)
+            after = resource.getrusage(resource.RUSAGE_CHILDREN)
+            return result, (after.ru_utime + after.ru_stime) - (before.ru_utime + before.ru_stime)
+        page = [listing('--limit', '20') for _ in range(5)]
+        if len(json.loads(page[0][0].stdout)) != 20:
+            raise AssertionError('expected a page of 20 operations')
+        cpu = statistics.median(sample[1] for sample in page)
+        print(f'operation list --limit 20: median CPU {cpu * 1000:.1f} ms '
+              f'(CPU limit {MAX_CPU_SECONDS * 1000:.0f} ms)', flush=True)
+        if cpu > MAX_CPU_SECONDS:
+            raise SystemExit('operation list performance regression: median CPU time exceeds limit')
+
 
 if __name__ == '__main__':
     main()

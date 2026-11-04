@@ -219,3 +219,15 @@ val set_bank_account_mappings_in_transaction
   :  Handle.t
   -> Bank_account_mapping.t list
   -> (Base__Int.t, Error.t) Result.t
+
+val companion_rows
+  :  Handle.t
+  -> institution:string
+  -> format:string
+  -> Companion.row list Or_error.t
+
+val companion_matches
+  :  Handle.t
+  -> institution:string
+  -> format:string
+  -> (Bank_match.result * string) list Or_error.t

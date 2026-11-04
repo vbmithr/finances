@@ -489,6 +489,12 @@ position observations, derive positions from fills, or calculate funding.
   `fin db sources` instead of a separate `fin crypto` group.
 - [x] Describe CDC as data (`cdc.json`) interpreted by the generic
   `Movement_csv`, with no institution-specific OCaml.
+- [x] `fin operation list` works in SQL: one query computes each movement's decision, counter-account
+  and effective description for every command that reads reviews, reading stored records with SQLite's
+  JSON functions, and the list filters, sorts and limits there. Amounts sort exactly from their text.
+  Old and new output were byte-identical on real files across 183 commands (filters, sorts in both
+  directions, JSON, and other commands reading reviews). Still open: whether DuckDB's real decimals and
+  timestamps are worth losing triggers and rewriting the store.
 - [x] One definition kind for every bundled institution: `records` names a statement format, a CSV
   layout or both. The old adapter kinds and their modules are gone, along with the read-only CDC
   inspector, which `fin convert cdc` replaces. Rebuilding from real files, and reimporting into a

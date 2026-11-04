@@ -23,9 +23,17 @@ type annotation =
   ; tags : (string * string) list (** Tag names and raw values, in order. *)
   }
 
+(** Where a matched row's display name comes from, so that a query need not run [annotate]
+    for it: a field of the stored record, or only [annotate]. *)
+type display_name =
+  | No_display_name
+  | Stored_field of string
+  | From_annotation
+
 type t =
   { format : string
   ; policy : string (** Recorded with every match; changing it re-audits. *)
+  ; display_name : display_name
   ; match_rows :
       row list -> (int64 * Source_event.t) list -> Bank_match.result list Or_error.t
     (** Rows of this format against the institution's own events. *)

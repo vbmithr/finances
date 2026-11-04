@@ -36,6 +36,7 @@ let companion_with_row
   let row = decode_row in
   { format
   ; policy
+  ; display_name = From_annotation
   ; match_rows =
       (fun rows events ->
         let open Or_error.Let_syntax in
@@ -101,7 +102,6 @@ let adapter
       ?(operation_kinds = [])
       ?(operation_rows =
         fun _ -> Or_error.error_string "this adapter does not interpret operation events")
-      ?(operation_group = fun _ -> None)
       ~formats
       ~takes_account_label
       ~overlap
@@ -118,7 +118,6 @@ let adapter
     let kinds = kinds
     let operation_kinds = operation_kinds
     let operation_rows = operation_rows
-    let operation_group = operation_group
     let formats = formats
     let takes_account_label = takes_account_label
     let overlap = overlap

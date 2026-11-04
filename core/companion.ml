@@ -17,9 +17,15 @@ type annotation =
   ; tags : (string * string) list
   }
 
+type display_name =
+  | No_display_name
+  | Stored_field of string
+  | From_annotation
+
 type t =
   { format : string
   ; policy : string
+  ; display_name : display_name
   ; match_rows :
       row list -> (int64 * Source_event.t) list -> Bank_match.result list Or_error.t
   ; annotate : row -> annotation Or_error.t

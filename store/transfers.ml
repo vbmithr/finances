@@ -803,6 +803,51 @@ let selected_movements db needed =
   Ok (Hashtbl.of_alist_exn (module Int64) rows)
 ;;
 
+(* Each account's institution, source account and ID, read from one movement of each. *)
+let bank_account_ids db =
+  let* rows =
+    collect
+      db
+      (statement
+         "SELECT m.venue,m.account,m.bank_id,m.account_id,m.account_type,m.currency, \
+          n.ledger_account,min(m.event_id) FROM movements m LEFT JOIN \
+          bank_account_mappings n ON n.institution=m.venue AND \
+          n.source_account=m.account GROUP BY m.venue,m.account"
+         Row.(
+           unit (fun venue source bank account kind currency mapped _ ->
+             venue, source, bank, account, kind, currency, mapped)
+           * text "venue"
+           * text "account"
+           * text "bank_id"
+           * text "account_id"
+           * text "account_type"
+           * text "currency"
+           * option Rel.Type.text "ledger_account"
+           * int64 "event_id"))
+  in
+  traverse
+    (fun (venue, source, bank_id, account_id, account_type, currency, mapped) ->
+       let* currency = Validation.currency "currency" currency in
+       let* ledger_account =
+         match mapped with
+         | Some name -> Ok name
+         | None ->
+           Bank_projection.ledger_account
+             ~institution:venue
+             { bank_id; account_id; account_type; currency }
+       in
+       let* mapping =
+         Bank_account_mapping.create
+           ~institution:venue
+           ~bank_id
+           ~account_id
+           ~account_type
+           ~ledger_account
+       in
+       Ok (venue, source, Bank_account_mapping.id mapping))
+    rows
+;;
+
 let bank_account_info db =
   let* source = movement_source db in
   let* summaries, _, _ = status_summaries db source in

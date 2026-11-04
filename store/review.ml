@@ -515,97 +515,291 @@ let effective_description fallback annotations =
   | _ -> fallback
 ;;
 
-let bank_review_from
+(* What a query needs from outside the database, as one JSON parameter: SQL reads it with
+   json_each, so that a query takes one value however many rows it describes. *)
+let json_text = Json.encode Jsont.string
+let json_array items = "[" ^ String.concat ~sep:"," items ^ "]"
+
+let json_object members =
+  "{"
+  ^ String.concat
+      ~sep:","
+      (List.map members ~f:(fun (name, value) -> json_text name ^ ":" ^ value))
+  ^ "}"
+;;
+
+(* Where a confirmed transfer's movement goes: the other side's ledger account, which
+   OCaml names unless the user mapped it. *)
+let transfer_destinations db =
+  let* rows =
+    collect
       db
-      source
-      table
-      (categories, transfers, settlements, reversals)
-      details
-      overrides
-      evidence
-  =
+      (statement
+         "SELECT t.event_id,o.venue,o.bank_id,o.account_id,o.account_type,o.currency, \
+          n.ledger_account FROM bank_transfer_memberships t JOIN bank_transfer_decisions \
+          d ON d.first_event_id=t.first_event_id AND d.second_event_id=t.second_event_id \
+          LEFT JOIN movements o ON o.event_id=CASE WHEN t.event_id=t.first_event_id THEN \
+          t.second_event_id ELSE t.first_event_id END LEFT JOIN bank_account_mappings n \
+          ON n.institution=o.venue AND n.source_account=o.account WHERE \
+          d.state='confirmed'"
+         Row.(
+           unit (fun event venue bank account kind currency mapped ->
+             event, venue, bank, account, kind, currency, mapped)
+           * int64 "event_id"
+           * option Rel.Type.text "venue"
+           * option Rel.Type.text "bank_id"
+           * option Rel.Type.text "account_id"
+           * option Rel.Type.text "account_type"
+           * option Rel.Type.text "currency"
+           * option Rel.Type.text "ledger_account"))
+  in
   traverse
-    (fun (event_id, (event : Source_event.t)) ->
-       let* (transaction : Movement.t) = stored table event_id in
-       let category = Hashtbl.find categories event_id in
-       let transfer = Hashtbl.find transfers event_id in
-       let settlement = Hashtbl.find settlements event_id in
-       let reversal = Hashtbl.find reversals event_id in
-       let observations = Option.value (Hashtbl.find details event_id) ~default:[] in
-       let description =
-         effective_description
-           (Option.value
-              (List.nth transaction.descriptions transaction.main_description)
-              ~default:"")
-           (List.map observations ~f:snd)
+    (fun (event_id, venue, bank_id, account_id, account_type, currency, mapped) ->
+       let* name =
+         match mapped, venue, bank_id, account_id, account_type, currency with
+         | Some name, _, _, _, _, _ -> Ok name
+         | ( None
+           , Some venue
+           , Some bank_id
+           , Some account_id
+           , Some account_type
+           , Some currency ) ->
+           let* currency = Validation.currency "currency" currency in
+           Bank_projection.ledger_account
+             ~institution:venue
+             { bank_id; account_id; account_type; currency }
+         | _ -> Or_error.error_string "confirmed transfer references missing movement"
        in
-       let* transfer_destination =
-         match transfer with
-         | None -> Ok None
-         | Some (_, _, _, Some account) -> Ok (Some account)
-         | Some (first, second, _, None) ->
-           let other = if Int64.equal event_id first then second else first in
-           let* (other_event : Source_event.t) =
-             Or_error.of_option
-               (List.Assoc.find source other ~equal:Int64.equal)
-               ~error:(Error.of_string "confirmed transfer references missing movement")
-           in
-           let* other_movement = stored table other in
-           let* mapped =
-             db_result
-               (Db.first db.conn (find_mapping other_event.venue other_event.account))
-           in
-           let* account =
-             match mapped with
-             | Some name -> Ok name
-             | None ->
-               Bank_projection.ledger_account
-                 ~institution:other_event.venue
-                 other_movement.account
-           in
-           Ok (Some account)
+       Ok (json_array [ Int64.to_string event_id; json_text name ]))
+    rows
+;;
+
+(* Names a companion's OCaml code gives its matched rows. Only a CSV companion layout
+   needs it; a stored record's field is read by the query itself. *)
+let computed_display_names db =
+  let computed =
+    List.filter (registered_companions db) ~f:(fun (_, (c : Companion.t)) ->
+      Poly.equal c.display_name From_annotation)
+  in
+  let* lists =
+    traverse
+      (fun (owner, (companion : Companion.t)) ->
+         let* rows = companion_rows db ~institution:owner ~format:companion.format in
+         let* matches =
+           companion_matches db ~institution:owner ~format:companion.format
+         in
+         let matching = Hashtbl.create (module Int64) in
+         List.iter matches ~f:(fun (result, _) ->
+           match result.Bank_match.state, result.event_id with
+           | Matched, Some event_id ->
+             Hashtbl.set matching ~key:result.row_id ~data:event_id
+           | _ -> ());
+         let* names =
+           traverse
+             (fun (row : Companion.row) ->
+                match Hashtbl.find matching row.row_id with
+                | None -> Ok None
+                | Some event_id ->
+                  let* annotation = companion.annotate row in
+                  Ok
+                    (Option.map annotation.display_name ~f:(fun name ->
+                       json_array
+                         [ Int64.to_string event_id; json_text (String.strip name) ])))
+             rows
+         in
+         Ok (List.filter_opt names))
+      computed
+  in
+  Ok (List.concat lists)
+;;
+
+let review_context db =
+  let* destinations = transfer_destinations db in
+  let* computed = computed_display_names db in
+  let display =
+    List.filter_map (registered_companions db) ~f:(fun (owner, (c : Companion.t)) ->
+      match c.display_name with
+      | Stored_field field ->
+        Some (json_array [ json_text owner; json_text c.format; json_text field ])
+      | No_display_name | From_annotation -> None)
+  in
+  Ok
+    [ "destinations", json_array destinations
+    ; "computed", json_array computed
+    ; "display", json_array display
+    ]
+;;
+
+(* One row per bank movement: its decision, counter-account and effective description.
+   The effective description is the name its matched companion rows agree on, or the
+   movement's main description. The parameter is [review_context]. *)
+let reviews_sql =
+  "destinations(event_id,account) AS (SELECT value->>0,value->>1 FROM \
+   json_each(?1,'$.destinations')), named(event_id,name) AS (SELECT \
+   m.event_id,trim(f.value->>1,' '||char(9,10,11,12,13)) FROM json_each(?1,'$.display') \
+   d JOIN companion_rows c ON c.institution=d.value->>0 AND c.format=d.value->>1 JOIN \
+   companion_matches m ON m.row_id=c.id AND m.state='matched' AND m.event_id IS NOT NULL \
+   JOIN json_each(c.fields_json->>0,'$.record.details.fields') f ON \
+   f.value->>0=d.value->>2 UNION ALL SELECT value->>0,value->>1 FROM \
+   json_each(?1,'$.computed')), display(event_id,name) AS MATERIALIZED (SELECT \
+   event_id,CASE WHEN count(DISTINCT name)=1 THEN min(name) END FROM (SELECT \
+   event_id,name FROM named WHERE name<>'' UNION ALL SELECT event_id,NULL FROM \
+   movements) GROUP BY event_id), transfers(event_id,first_id,second_id,reason,account) \
+   AS MATERIALIZED (SELECT \
+   m.event_id,m.first_event_id,m.second_event_id,d.reason,g.account FROM \
+   bank_transfer_memberships m JOIN bank_transfer_decisions d ON \
+   d.first_event_id=m.first_event_id AND d.second_event_id=m.second_event_id LEFT JOIN \
+   destinations g ON g.event_id=m.event_id WHERE d.state='confirmed' UNION ALL SELECT \
+   own.anchor_event_id,a.anchor_event_id,b.anchor_event_id,l.reason,r.account FROM \
+   operation_transfer_links l JOIN operation_movements a ON a.id=l.first_movement_id \
+   JOIN operation_movements b ON b.id=l.second_movement_id JOIN operation_movements own \
+   ON own.id IN (a.id,b.id) JOIN operations o ON o.id=own.operation_id AND \
+   o.bank_event_id=own.anchor_event_id JOIN operation_movements other ON other.id=CASE \
+   WHEN own.id=a.id THEN b.id ELSE a.id END JOIN operations oo ON \
+   oo.id=other.operation_id AND oo.bank_event_id IS NULL JOIN \
+   operation_movement_resolutions r ON r.movement_id=other.id), reviews AS MATERIALIZED \
+   (SELECT m.event_id,m.venue AS institution,m.account AS \
+   source,m.booked_on,m.amount,m.currency,e.occurred_at, \
+   e.occurred_on,coalesce(n.name,m.descriptions->>('$['||m.main_description||']'),'') AS \
+   description,o.movement_type AS override,coalesce(o.movement_type,m.movement_type) AS \
+   movement_type,CASE WHEN r.original IS NOT NULL THEN 'reversal' WHEN t.event_id IS NOT \
+   NULL THEN 'transfer' WHEN s.event_id IS NOT NULL THEN 'settlement' WHEN \
+   coalesce(c.account,'equity:unclassified')<>'equity:unclassified' THEN 'category' ELSE \
+   'unclassified' END AS decision,CASE WHEN r.original IS NOT NULL THEN \
+   'assets:reversals:pair-'||r.original||'-'||r.reversal WHEN t.event_id IS NOT NULL \
+   THEN t.account WHEN s.event_id IS NOT NULL THEN s.ledger_account ELSE \
+   coalesce(c.account,'equity:unclassified') END AS counter_account, \
+   coalesce(r.reason,t.reason,s.reason,c.reason) AS reason,v.card_reference, \
+   v.withdrawal_reversal FROM display n JOIN movements m ON m.event_id=n.event_id JOIN \
+   source_events e ON e.id=m.event_id LEFT JOIN movement_type_overrides o ON \
+   o.event_id=m.event_id LEFT JOIN bank_categories c ON c.event_id=m.event_id LEFT JOIN \
+   card_settlement_decisions s ON s.event_id=m.event_id LEFT JOIN transfers t ON \
+   t.event_id=m.event_id LEFT JOIN reversal_pairs r ON r.original=m.event_id OR \
+   r.reversal=m.event_id LEFT JOIN movement_evidence v ON v.event_id=m.event_id)"
+;;
+
+let decision_of_string = function
+  | "reversal" -> Reversal
+  | "transfer" -> Transfer
+  | "settlement" -> Settlement
+  | "category" -> Category
+  | _ -> Unclassified
+;;
+
+(* The reviews [where] selects, built from one query and the stored movements. [where]
+   is a condition on the reviews row [r]; the parameter also holds what it reads. *)
+let select_reviews db ~context ~where ~order ~movements =
+  let* rows =
+    collect
+      db
+      (Rel_sql.Stmt.(
+         func
+           ("WITH "
+            ^ reviews_sql
+            ^ " SELECT \
+               r.event_id,r.institution,r.occurred_at,r.occurred_on,r.description, \
+               r.override,r.decision,r.counter_account,r.reason,r.card_reference, \
+               r.withdrawal_reversal FROM reviews r"
+            ^ where
+            ^ " ORDER BY "
+            ^ order)
+           (text
+            @-> ret
+                  Row.(
+                    unit
+                      (fun
+                          event_id
+                           institution
+                           at
+                           on_
+                           description
+                           override
+                           decision
+                           counter
+                           reason
+                           card
+                           reversal
+                         ->
+                         ( event_id
+                         , institution
+                         , at
+                         , on_
+                         , description
+                         , override
+                         , decision
+                         , counter
+                         , reason
+                         , card
+                         , reversal ))
+                    * int64 "event_id"
+                    * text "institution"
+                    * read_column Db_schema.Source_events.occurred_at
+                    * read_column Db_schema.Source_events.occurred_on
+                    * text "description"
+                    * option Rel.Type.text "override"
+                    * text "decision"
+                    * option Rel.Type.text "counter_account"
+                    * option Rel.Type.text "reason"
+                    * option Rel.Type.text "card_reference"
+                    * option Rel.Type.text "withdrawal_reversal")))
+         (json_object context))
+  in
+  let* matched =
+    collect
+      db
+      (statement
+         "SELECT event_id,row_id FROM companion_matches WHERE state='matched' AND \
+          event_id IS NOT NULL ORDER BY row_id"
+         Row.(t2 (int64 "event_id") (int64 "row_id")))
+  in
+  let sources = Hashtbl.create (module Int64) in
+  List.iter (List.rev matched) ~f:(fun (event_id, row_id) ->
+    Hashtbl.add_multi sources ~key:event_id ~data:row_id);
+  traverse
+    (fun ( event_id
+         , institution
+         , at
+         , on_
+         , description
+         , override
+         , decision
+         , counter
+         , reason
+         , card_reference
+         , withdrawal_reversal ) ->
+       let* (transaction : Movement.t) = stored movements event_id in
+       let* occurred =
+         match at, on_ with
+         | Some instant, None -> Ok (Temporal.Instant instant)
+         | None, Some date ->
+           Or_error.try_with (fun () -> Temporal.Date (Date.of_string date))
+         | _ -> Or_error.error_string "invalid source event occurrence"
        in
-       (* The stored type already follows the rules, companion columns included. *)
        let imported_movement_type = transaction.movement_type in
-       let movement_type_override = Hashtbl.find overrides event_id in
+       let movement_type_override = Option.map override ~f:Movement_type.of_string in
        Ok
          { event_id
-         ; institution = event.venue
-         ; occurred = event.occurred
+         ; institution
+         ; occurred
          ; transaction
          ; description
          ; movement_type = Option.first_some movement_type_override imported_movement_type
          ; imported_movement_type
          ; movement_type_override
          ; source_evidence =
-             Option.value (Hashtbl.find evidence event_id) ~default:Source_evidence.empty
-         ; detail_sources =
-             List.map observations ~f:fst |> List.sort ~compare:Int64.compare
-         ; classification =
-             (match reversal, transfer, settlement, category with
-              | Some _, _, _, _ -> Reversal
-              | None, Some _, _, _ -> Transfer
-              | None, None, Some _, _ -> Settlement
-              | None, None, None, Some (account, _)
-                when not (String.equal account "equity:unclassified") -> Category
-              | _ -> Unclassified)
-         ; counter_account =
-             (match reversal, transfer with
-              | Some (original, reversed, _), _ -> reversal_account original reversed
-              | None, Some _ -> Option.value_exn transfer_destination
-              | None, None ->
-                (match settlement with
-                 | Some (account, _) -> account
-                 | None -> Option.value_map category ~default:"equity:unclassified" ~f:fst))
-         ; reason =
-             (match reversal, transfer with
-              | Some (_, _, reason), _ | None, Some (_, _, reason, _) -> Some reason
-              | None, None ->
-                (match settlement with
-                 | Some (_, reason) -> Some reason
-                 | None -> Option.map category ~f:snd))
+             { Source_evidence.card_reference
+             ; withdrawal_reversal =
+                 Option.value_map
+                   withdrawal_reversal
+                   ~default:false
+                   ~f:(String.equal "yes")
+             }
+         ; detail_sources = Option.value (Hashtbl.find sources event_id) ~default:[]
+         ; classification = decision_of_string decision
+         ; counter_account = Option.value counter ~default:"equity:unclassified"
+         ; reason
          })
-    source
+    rows
 ;;
 
 let movement_source db =
@@ -614,66 +808,25 @@ let movement_source db =
 ;;
 
 let bank_review_with_order ?order db =
-  let* source = events_with_order ?order db in
-  let source = List.filter source ~f:(fun (_, e) -> Registry.is_movement db.registry e) in
-  let* table = movement_table db in
-  let* metadata = review_metadata db in
-  let* override_rows =
-    collect
-      db
-      (statement
-         "SELECT movement_id,event_id,movement_type FROM movement_type_overrides"
-         Db_schema.Movement_type_overrides.row)
+  let order =
+    match order with
+    | None ->
+      "coalesce(r.occurred_on,substr(r.occurred_at,1,10)),r.occurred_at,r.event_id"
+    | Some (columns, ascending) ->
+      let direction = if ascending then " ASC" else " DESC" in
+      let column = function
+        | Review_date -> "r.booked_on"
+        | Review_currency -> "r.currency"
+        | Review_institution -> "r.institution"
+        | Review_type -> "coalesce(r.movement_type,'-')"
+        | Review_event -> "r.event_id"
+      in
+      List.map (columns @ [ Review_event ]) ~f:(fun col -> column col ^ direction)
+      |> String.concat ~sep:","
   in
-  let overrides =
-    Hashtbl.of_alist_exn
-      (module Int64)
-      (List.map override_rows ~f:(fun (r : Db_schema.Movement_type_overrides.t) ->
-         r.event_id, Movement_type.of_string r.movement_type))
-  in
-  let* observations = companion_observations db in
-  let companions = registered_companions db in
-  let details = Hashtbl.create (module Int64) in
-  let* () =
-    traverse
-      (fun (observation : companion_observation) ->
-         match observation.matching with
-         | Some { state = Matched; event_id = Some event_id; _ } ->
-           let row = observation.row in
-           let* companion =
-             List.find companions ~f:(fun (owner, (c : Companion.t)) ->
-               String.equal owner row.institution && String.equal c.format row.format)
-             |> Or_error.of_option
-                  ~error:(Error.of_string "unregistered companion format")
-           in
-           let* annotation = (snd companion).annotate row in
-           Hashtbl.add_multi details ~key:event_id ~data:(row.row_id, annotation);
-           Ok ()
-         | _ -> Ok ())
-      observations
-    |> Or_error.map ~f:ignore
-  in
-  let* evidence_rows =
-    collect
-      db
-      (statement
-         "SELECT event_id,card_reference,withdrawal_reversal FROM movement_evidence"
-         Row.(
-           t3
-             (int64 "event_id")
-             (option Rel.Type.text "card_reference")
-             (text "withdrawal_reversal")))
-  in
-  let evidence = Hashtbl.create (module Int64) in
-  List.iter evidence_rows ~f:(fun (event_id, card_reference, reversal) ->
-    Hashtbl.set
-      evidence
-      ~key:event_id
-      ~data:
-        { Source_evidence.card_reference
-        ; withdrawal_reversal = String.equal reversal "yes"
-        });
-  bank_review_from db source table metadata details overrides evidence
+  let* context = review_context db in
+  let* movements = movement_table db in
+  select_reviews db ~context ~where:"" ~order ~movements
 ;;
 
 let bank_review db = bank_review_with_order db
@@ -791,29 +944,33 @@ let operation_transfer_links db =
 ;;
 
 let operation_groups db =
-  let* links = operation_transfer_links db in
-  let* bank_operations =
+  let* links =
     collect
       db
       (statement
-         "SELECT id,bank_event_id FROM operations WHERE bank_event_id IS NOT NULL ORDER \
-          BY id"
-         Row.(t2 (int64 "id") (int64 "bank_event_id")))
+         "SELECT a.operation_id,b.operation_id FROM operation_transfer_links l JOIN \
+          operation_movements a ON a.id=l.first_movement_id JOIN operation_movements b \
+          ON b.id=l.second_movement_id ORDER BY l.first_movement_id,l.second_movement_id"
+         Row.(t2 (int64 "first_operation_id") (int64 "second_operation_id")))
   in
-  let* events = events db in
-  let by_id = Hashtbl.of_alist_exn (module Int64) events in
-  let stated = Hashtbl.Poly.create () in
-  List.iter bank_operations ~f:(fun (operation_id, event_id) ->
-    Option.iter (Hashtbl.find by_id event_id) ~f:(fun (event : Source_event.t) ->
-      Option.iter
-        (Registry.operation_group db.registry event)
-        ~f:(fun (key, supporting) ->
-          Hashtbl.add_multi stated ~key:(event.venue, key) ~data:(supporting, operation_id))));
+  let* stated =
+    collect
+      db
+      (statement
+         "SELECT e.venue,e.payload->>'$.record.group',o.id, \
+          coalesce(e.payload->>'$.record.supporting',0) FROM operations o JOIN \
+          source_events e ON e.id=o.bank_event_id WHERE CASE WHEN json_valid(e.payload) \
+          THEN e.payload->>'$.format'='fin-records-row' AND e.payload->>'$.record.group' \
+          IS NOT NULL ELSE 0 END ORDER BY o.id"
+         Row.(t4 (text "venue") (text "group") (int64 "id") (int "supporting")))
+  in
+  let groups = Hashtbl.Poly.create () in
+  List.iter stated ~f:(fun (venue, key, operation_id, supporting) ->
+    Hashtbl.add_multi groups ~key:(venue, key) ~data:(supporting <> 0, operation_id));
   Operation_groups.create
-    ~links:
-      (List.map links ~f:(fun link -> link.first_operation_id, link.second_operation_id))
+    ~links
     ~stated:
-      (Hashtbl.data stated
+      (Hashtbl.data groups
        |> List.map ~f:(fun group ->
          List.sort group ~compare:[%compare: bool * int64] |> List.map ~f:snd))
 ;;
@@ -845,161 +1002,344 @@ let operation_fields db operation_id =
   collect db (query operation_id)
 ;;
 
-let operation_review db =
-  let* reviews = bank_review db in
-  let* exchange_ids =
+type operation_type_filter =
+  | Untyped
+  | Typed of Movement_type.t
+
+type operation_filter =
+  { only_account : (string * string) option
+  ; only_institution : string option
+  ; only_type : operation_type_filter option
+  ; only_decision : review_classification option
+  ; only_counter_account : string option
+  ; from_date : Date.t option
+  ; to_date : Date.t option
+  ; search : string option
+  }
+
+let no_operation_filter =
+  { only_account = None
+  ; only_institution = None
+  ; only_type = None
+  ; only_decision = None
+  ; only_counter_account = None
+  ; from_date = None
+  ; to_date = None
+  ; search = None
+  }
+;;
+
+type operation_order =
+  | By_id
+  | By_occurrence
+  | By_date
+  | By_amount
+  | By_currency
+  | By_institution
+  | By_account
+  | By_type
+  | By_counter_account
+  | By_description
+  | By_event
+
+let classification_name = function
+  | Unclassified -> "unclassified"
+  | Category -> "category"
+  | Transfer -> "transfer"
+  | Settlement -> "settlement"
+  | Reversal -> "reversal"
+;;
+
+(* The operations a query can see: one row per stored operation, with its group's
+   canonical ID and its primary movement's review, or the provider's own columns when
+   there is none. *)
+let operations_sql =
+  ", grouped(member,canonical) AS MATERIALIZED (SELECT value->>0,value->>1 FROM \
+   json_each(?1,'$.groups')), accounts(institution,source,id) AS MATERIALIZED (SELECT \
+   value->>0,value->>1,value->>2 FROM json_each(?1,'$.accounts')), anchors AS \
+   MATERIALIZED (SELECT operation_id,anchor_event_id FROM (SELECT \
+   operation_id,anchor_event_id,row_number() OVER (PARTITION BY operation_id ORDER BY \
+   role<>'primary',id) AS rank FROM operation_movements) WHERE rank=1), ops AS \
+   MATERIALIZED (SELECT o.id,o.occurred,coalesce(g.canonical,o.id) AS canonical, \
+   a.anchor_event_id AS anchor FROM operations o LEFT JOIN grouped g ON g.member=o.id \
+   LEFT JOIN anchors a ON a.operation_id=o.id), venues(operation_id,venue) AS \
+   MATERIALIZED (SELECT operation_id,CASE WHEN count(DISTINCT venue)=1 THEN min(venue) \
+   ELSE '' END FROM (SELECT s.operation_id,e.venue FROM operation_sources s JOIN \
+   source_events e ON e.id=s.event_id UNION ALL SELECT m.operation_id,e.venue FROM \
+   operation_movements m JOIN source_events e ON e.id=m.anchor_event_id) GROUP BY \
+   operation_id), fields(operation_id,event_id,ordinal,name,value) AS (SELECT \
+   s.operation_id,f.event_id,f.ordinal,f.name,f.value FROM operation_sources s JOIN \
+   source_event_fields f ON f.event_id=s.event_id), views AS (SELECT \
+   p.id,p.occurred,p.canonical,p.anchor,r.event_id,r.booked_on,r.amount,r.currency, \
+   r.movement_type,r.counter_account,r.description AS review_description,a.id AS \
+   account_id,CASE WHEN r.event_id IS NOT NULL THEN r.institution ELSE \
+   coalesce(n.venue,'') END AS institution,CASE WHEN r.event_id IS NOT NULL THEN \
+   r.description ELSE coalesce((SELECT f.value FROM fields f WHERE f.operation_id=p.id \
+   AND f.name='Transaction Description' ORDER BY f.event_id,f.ordinal LIMIT 1),(SELECT \
+   f.value FROM fields f WHERE f.operation_id=p.id AND f.name='Description' ORDER BY \
+   f.event_id,f.ordinal LIMIT 1),(SELECT f.value FROM fields f WHERE f.operation_id=p.id \
+   AND f.name='description' ORDER BY f.event_id,f.ordinal LIMIT 1),'') END AS \
+   description FROM ops p LEFT JOIN reviews r ON r.event_id=p.anchor LEFT JOIN accounts \
+   a ON a.institution=r.institution AND a.source=r.source LEFT JOIN venues n ON \
+   n.operation_id=p.id)"
+;;
+
+(* A condition on any movement of the operation's group, on its review [x]. *)
+let any_movement condition =
+  "v.id IN (SELECT o.canonical FROM reviews x JOIN operation_movements m ON \
+   m.anchor_event_id=x.event_id JOIN ops o ON o.id=m.operation_id WHERE "
+  ^ condition
+  ^ ")"
+;;
+
+let operation_where (filter : operation_filter) =
+  List.filter_opt
+    [ Option.map filter.only_account ~f:(fun _ ->
+        any_movement
+          "x.institution=?1->>'$.account_institution' AND \
+           x.source=?1->>'$.account_source'")
+    ; Option.map filter.only_institution ~f:(fun _ ->
+        "(v.institution=?1->>'$.institution' OR "
+        ^ any_movement "x.institution=?1->>'$.institution'"
+        ^ ")")
+    ; Option.map filter.only_type ~f:(function
+        | Untyped -> any_movement "x.movement_type IS NULL"
+        | Typed _ -> any_movement "x.movement_type=?1->>'$.movement_type'")
+    ; Option.map filter.only_decision ~f:(fun _ ->
+        any_movement "x.decision=?1->>'$.decision'")
+    ; Option.map filter.only_counter_account ~f:(fun _ ->
+        any_movement "x.counter_account=?1->>'$.counter_account'")
+    ; Option.map filter.from_date ~f:(fun _ ->
+        "substr(v.occurred,1,10)>=?1->>'$.from_date'")
+    ; Option.map filter.to_date ~f:(fun _ -> "substr(v.occurred,1,10)<=?1->>'$.to_date'")
+    ; Option.map filter.search ~f:(fun _ ->
+        "instr(lower(v.description),lower(?1->>'$.search'))>0")
+    ]
+;;
+
+let operation_filter_values (filter : operation_filter) =
+  let text name value = name, json_text value in
+  let date name value = text name (Date.to_string value) in
+  List.filter_opt
+    [ Option.map filter.only_account ~f:(fun (institution, _) ->
+        text "account_institution" institution)
+    ; Option.map filter.only_account ~f:(fun (_, source) -> text "account_source" source)
+    ; Option.map filter.only_institution ~f:(text "institution")
+    ; Option.bind filter.only_type ~f:(function
+        | Untyped -> None
+        | Typed kind -> Some (text "movement_type" (Movement_type.to_string kind)))
+    ; Option.map filter.only_decision ~f:(fun c ->
+        text "decision" (classification_name c))
+    ; Option.map filter.only_counter_account ~f:(text "counter_account")
+    ; Option.map filter.from_date ~f:(date "from_date")
+    ; Option.map filter.to_date ~f:(date "to_date")
+    ; Option.map filter.search ~f:(text "search")
+    ]
+;;
+
+(* An exact decimal's digits as text that sorts like its magnitude, with room for any
+   amount a statement states: a float would tie amounts that differ. *)
+let magnitude =
+  "substr(printf('%040d',0)||substr(ltrim(v.amount,'-'),1,instr(ltrim(v.amount,'-')||'.','.')-1),-40)||substr(substr(ltrim(v.amount,'-'),instr(ltrim(v.amount,'-')||'.','.')+1)||printf('%040d',0),1,40)"
+;;
+
+(* Sort terms, with whether each runs against the requested direction. Rows with no
+   review sort after those with one, like any column only a review has. *)
+let operation_order_terms =
+  let term sql = sql, false in
+  function
+  | By_id -> [ term "v.id" ]
+  | By_occurrence -> [ term "v.occurred" ]
+  | By_date -> [ term "v.event_id IS NULL"; term "v.booked_on" ]
+  | By_amount ->
+    [ term "v.event_id IS NULL"
+    ; term "v.amount NOT LIKE '-%'"
+    ; "CASE WHEN v.amount LIKE '-%' THEN " ^ magnitude ^ " END", true
+    ; term ("CASE WHEN v.amount NOT LIKE '-%' THEN " ^ magnitude ^ " END")
+    ]
+  | By_currency -> [ term "v.event_id IS NULL"; term "v.currency" ]
+  | By_institution -> [ term "v.institution" ]
+  | By_account -> [ term "coalesce(v.account_id,'')" ]
+  | By_type -> [ term "coalesce(v.movement_type,'-')" ]
+  | By_counter_account ->
+    [ term
+        "CASE WHEN \
+         coalesce(v.counter_account,'equity:unclassified')='equity:unclassified' THEN \
+         '-' ELSE v.counter_account END"
+    ]
+  | By_description -> [ term "v.event_id IS NULL"; term "v.review_description" ]
+  | By_event -> [ term "coalesce(v.event_id,9223372036854775807)" ]
+;;
+
+let operations
+      ?(filter = no_operation_filter)
+      ?(accounts = [])
+      ?(order = [ By_id ])
+      ?(ascending = true)
+      ?limit
+      db
+  =
+  let* groups = operation_groups db in
+  let* grouped =
+    collect db (statement "SELECT id FROM operations ORDER BY id" Row.(t1 (int64 "id")))
+  in
+  let group_rows =
+    List.filter_map grouped ~f:(fun id ->
+      let canonical = Operation_groups.canonical groups id in
+      Option.some_if
+        (not (Int64.equal canonical id))
+        (json_array [ Int64.to_string id; Int64.to_string canonical ]))
+  in
+  let* context = review_context db in
+  let parameter =
+    context
+    @ [ "groups", json_array group_rows
+      ; ( "accounts"
+        , json_array
+            (List.map accounts ~f:(fun (institution, source, id) ->
+               json_array [ json_text institution; json_text source; json_text id ])) )
+      ]
+    @ operation_filter_values filter
+    @ Option.value_map limit ~default:[] ~f:(fun n -> [ "limit", Int.to_string n ])
+  in
+  let ordering =
+    List.concat_map (order @ [ By_id ]) ~f:operation_order_terms
+    |> List.map ~f:(fun (term, against) ->
+      term ^ if Bool.equal ascending against then " DESC" else " ASC")
+    |> String.concat ~sep:","
+  in
+  let where = String.concat ~sep:" AND " ("v.canonical=v.id" :: operation_where filter) in
+  let* rows =
+    collect
+      db
+      (Rel_sql.Stmt.(
+         func
+           ("WITH "
+            ^ reviews_sql
+            ^ operations_sql
+            ^ " SELECT \
+               v.id,v.occurred,v.anchor,v.institution,v.description,x.operation_id IS \
+               NOT NULL AS exchange,(SELECT f.value FROM fields f WHERE \
+               f.operation_id=v.id AND f.name='Amount' ORDER BY f.event_id,f.ordinal \
+               LIMIT 1) AS reported_amount,(SELECT f.value FROM fields f WHERE \
+               f.operation_id=v.id AND f.name='Currency' ORDER BY f.event_id,f.ordinal \
+               LIMIT 1) AS reported_currency FROM views v LEFT JOIN \
+               operation_exchange_decisions x ON x.operation_id=v.id WHERE "
+            ^ where
+            ^ " ORDER BY "
+            ^ ordering
+            ^ " LIMIT coalesce(?1->>'$.limit',-1)")
+           (text
+            @-> ret
+                  Row.(
+                    unit
+                      (fun
+                          id
+                           occurred
+                           anchor
+                           institution
+                           description
+                           exchange
+                           amount
+                           currency
+                         ->
+                         ( id
+                         , occurred
+                         , anchor
+                         , institution
+                         , description
+                         , exchange
+                         , amount
+                         , currency ))
+                    * int64 "id"
+                    * text "occurred"
+                    * option Rel.Type.int64 "anchor"
+                    * text "institution"
+                    * text "description"
+                    * int "exchange"
+                    * option Rel.Type.text "reported_amount"
+                    * option Rel.Type.text "reported_currency")))
+         (json_object parameter))
+  in
+  (* Only what these rows show is read from here on. *)
+  let chosen = List.map rows ~f:(fun (id, _, _, _, _, _, _, _) -> id) in
+  let member_ids = List.concat_map chosen ~f:(Operation_groups.members groups) in
+  let ids_sql ids = String.concat ~sep:"," (List.map ids ~f:Int64.to_string) in
+  let* movement_rows =
     collect
       db
       (statement
-         "SELECT operation_id FROM operation_exchange_decisions ORDER BY operation_id"
-         Row.(t1 (int64 "operation_id")))
+         ("SELECT m.id,m.operation_id,m.anchor_event_id,m.role, \
+           COALESCE(r.account,m.account) AS account,COALESCE(r.commodity,m.commodity) AS \
+           commodity,m.quantity FROM operation_movements m LEFT JOIN \
+           operation_movement_resolutions r ON r.movement_id=m.id WHERE m.operation_id \
+           IN ("
+          ^ ids_sql member_ids
+          ^ ") ORDER BY m.operation_id,m.id")
+         Db_schema.Operation_movements.row)
   in
-  let exchange_ids = Set.of_list (module Int64) exchange_ids in
+  let anchors =
+    List.map movement_rows ~f:(fun (m : Db_schema.Operation_movements.t) ->
+      m.anchor_event_id)
+    |> List.dedup_and_sort ~compare:Int64.compare
+  in
+  let in_anchors = "event_id IN (" ^ ids_sql anchors ^ ")" in
+  let* stored_movements = Ledger.movement_rows db (" WHERE " ^ in_anchors) in
+  let table = Hashtbl.of_alist_exn (module Int64) stored_movements in
+  let* reviews =
+    select_reviews
+      db
+      ~context
+      ~where:(" WHERE r." ^ in_anchors)
+      ~order:"r.event_id"
+      ~movements:table
+  in
   let review_by_event =
     Hashtbl.of_alist_exn
       (module Int64)
       (List.map reviews ~f:(fun (r : bank_review) -> r.event_id, r))
   in
-  let* stored =
-    collect
-      db
-      (statement
-         "SELECT id,occurred,bank_event_id,source_event_id FROM operations ORDER BY id"
-         Db_schema.Operations.row)
-  in
-  let* movement_rows =
-    collect
-      db
-      (statement
-         "SELECT \
-          m.id,m.operation_id,m.anchor_event_id,m.role,COALESCE(r.account,m.account) AS \
-          account, COALESCE(r.commodity,m.commodity) AS commodity,m.quantity FROM \
-          operation_movements m LEFT JOIN operation_movement_resolutions r ON \
-          r.movement_id=m.id ORDER BY m.operation_id,m.id"
-         Db_schema.Operation_movements.row)
-  in
-  let movements = Hashtbl.create (module Int64) in
-  List.iter movement_rows ~f:(fun (m : Db_schema.Operation_movements.t) ->
-    Hashtbl.add_multi movements ~key:m.operation_id ~data:m);
-  let* source_ids =
-    collect
-      db
-      (statement
-         "SELECT operation_id,event_id FROM operation_sources ORDER BY \
-          operation_id,event_id"
-         Db_schema.Operation_sources.row)
-  in
-  let sources = Hashtbl.create (module Int64) in
-  List.iter source_ids ~f:(fun (s : Db_schema.Operation_sources.t) ->
-    Hashtbl.add_multi sources ~key:s.operation_id ~data:s.event_id);
-  let* events =
-    collect
-      db
-      (statement
-         "SELECT id,venue FROM source_events ORDER BY id"
-         Row.(t2 (int64 "id") (text "venue")))
-  in
-  let venue = Hashtbl.of_alist_exn (module Int64) events in
-  let source_events operation_id =
-    Option.value (Hashtbl.find sources operation_id) ~default:[]
-    @ List.map
-        (Option.value (Hashtbl.find movements operation_id) ~default:[])
-        ~f:(fun (m : Db_schema.Operation_movements.t) -> m.anchor_event_id)
-  in
-  let institution_of operation_id =
-    List.filter_map (source_events operation_id) ~f:(Hashtbl.find venue)
-    |> List.dedup_and_sort ~compare:String.compare
-  in
-  let movement_of_row (m : Db_schema.Operation_movements.t) =
-    let* commodity = Json.decode Commodity.codec m.commodity in
-    let* quantity = Or_error.try_with (fun () -> Quantity.of_string m.quantity) in
-    Ok
-      { role = m.role
-      ; account = m.account
-      ; commodity
-      ; quantity
-      ; anchor_event_id = m.anchor_event_id
-      ; review = Hashtbl.find review_by_event m.anchor_event_id
-      }
-  in
-  let* rows =
+  let* movements =
     traverse
-      (fun (o : Db_schema.Operations.t) ->
-         let* occurred =
-           Or_error.try_with (fun () -> Temporal.of_string_exn o.occurred)
-         in
-         let* movements =
-           traverse
-             movement_of_row
-             (Option.value (Hashtbl.find movements o.id) ~default:[])
-         in
-         let primary =
-           List.find movements ~f:(fun m -> String.equal m.role "primary")
-           |> Option.first_some (List.hd movements)
-         in
-         let review =
-           Option.bind primary ~f:(fun m ->
-             Hashtbl.find review_by_event m.anchor_event_id)
-         in
-         let institution =
-           match review with
-           | Some (r : bank_review) -> r.institution
-           | None ->
-             (match institution_of o.id with
-              | [ name ] -> name
-              | _ -> "")
-         in
-         let* fields =
-           match review with
-           | Some _ -> Ok []
-           | None -> operation_fields db o.id
-         in
-         let field name = List.Assoc.find fields name ~equal:String.equal in
-         let description =
-           match review with
-           | Some (r : bank_review) -> r.description
-           | None ->
-             List.find_map
-               [ "Transaction Description"; "Description"; "description" ]
-               ~f:field
-             |> Option.value ~default:""
-         in
-         let reported_amount, reported_currency =
-           if List.is_empty movements
-           then field "Amount", field "Currency"
-           else None, None
-         in
+      (fun (m : Db_schema.Operation_movements.t) ->
+         let* commodity = Json.decode Commodity.codec m.commodity in
+         let* quantity = Or_error.try_with (fun () -> Quantity.of_string m.quantity) in
          Ok
-           { operation_id = o.id
-           ; occurred
-           ; institution
-           ; description
-           ; reported_amount
-           ; reported_currency
-           ; exchange_reviewed = Set.mem exchange_ids o.id
-           ; review
-           ; movements
-           })
-      stored
+           ( m.operation_id
+           , { role = m.role
+             ; account = m.account
+             ; commodity
+             ; quantity
+             ; anchor_event_id = m.anchor_event_id
+             ; review = Hashtbl.find review_by_event m.anchor_event_id
+             } ))
+      movement_rows
   in
-  let* groups = operation_groups db in
-  let by_id = Hashtbl.create (module Int64) in
-  List.iter rows ~f:(fun row -> Hashtbl.set by_id ~key:row.operation_id ~data:row);
-  Ok
-    (List.filter_map rows ~f:(fun row ->
-       Option.some_if
-         (Int64.equal
-            (Operation_groups.canonical groups row.operation_id)
-            row.operation_id)
-         { row with
-           movements =
-             List.concat_map
-               (Operation_groups.members groups row.operation_id)
-               ~f:(fun id ->
-                 Option.value_map (Hashtbl.find by_id id) ~default:[] ~f:(fun r ->
-                   r.movements))
-         }))
+  let by_operation = Hashtbl.create (module Int64) in
+  List.iter movements ~f:(fun (id, m) -> Hashtbl.add_multi by_operation ~key:id ~data:m);
+  let of_operation id = Option.value (Hashtbl.find by_operation id) ~default:[] in
+  traverse
+    (fun (id, occurred, anchor, institution, description, exchange, amount, currency) ->
+       let* occurred = Or_error.try_with (fun () -> Temporal.of_string_exn occurred) in
+       let movements =
+         List.concat_map (Operation_groups.members groups id) ~f:of_operation
+       in
+       let own = of_operation id in
+       Ok
+         { operation_id = id
+         ; occurred
+         ; institution
+         ; description
+         ; reported_amount = (if List.is_empty own then amount else None)
+         ; reported_currency = (if List.is_empty own then currency else None)
+         ; exchange_reviewed = exchange <> 0
+         ; review = Option.bind anchor ~f:(Hashtbl.find review_by_event)
+         ; movements
+         })
+    rows
 ;;
+
+let operation_review db = operations db
 
 let validate_commodity_symbol commodity symbol =
   let* symbol = Validation.token "commodity symbol" symbol in

@@ -37,10 +37,6 @@ val is_movement : t -> Source_event.t -> bool
     role-labelled movements rather than one bank movement. *)
 val is_operation_kind : t -> string -> bool
 
-(** The key its adapter gives this event for grouping, if any, and whether the event
-    only supports the others. Keys only compare within one institution. *)
-val operation_group : t -> Source_event.t -> (string * bool) option
-
 (** Decode an operation-kind event into its proposed source rows with the venue
     adapter that owns the kind. *)
 val operation_rows : t -> Source_event.t -> Operation_import.row list Or_error.t

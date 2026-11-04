@@ -476,6 +476,16 @@ definition states EUR, since the file states no currency. CSV arrival order does
 matter: import recomputes its matches after scanning all files and before projection.
 Shared audited match persistence saves transitions without rewriting evidence.
 
+## Reading reviews
+
+`Review.reviews_sql` is the one definition of a movement's decision, counter-account and effective
+description. A query takes one JSON parameter for what only OCaml can state, such as ledger names of
+transfer destinations and each companion's display field, and reads it with `json_each`. Stored records
+are read with SQLite's JSON functions rather than decoded, and grouped passes replace correlated lookups,
+as most foreign keys here have no index behind them. `Review.operations` filters, sorts and limits in
+SQL, then builds only the rows it returns. Operation groups are read from the `fin-records-row` format,
+which is the only source that states them.
+
 ## Revolut and transfer decisions
 
 The baseline includes Revolut document/account context,

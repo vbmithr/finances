@@ -395,6 +395,9 @@ let observation (row : Companion.row) =
 let companion ~tags ~journal_description ~conflict_columns format : Companion.t =
   { format
   ; policy = "records-v1"
+  ; display_name =
+      Option.value_map journal_description ~default:Companion.No_display_name ~f:(fun f ->
+        Stored_field f)
   ; match_rows = match_rows ~conflict_columns
   ; annotate =
       (fun row ->
@@ -483,12 +486,6 @@ let make ?(aliases = []) ?(stored_formats = []) ~institution ~overlap sources
     let operation_kinds = [ operation_kind ]
     let decode = decode
     let operation_rows = operation_rows
-
-    let operation_group (event : Source_event.t) =
-      match Records.row_of_string event.payload with
-      | Ok (_, record) -> Option.map record.group ~f:(fun key -> key, record.supporting)
-      | Error _ -> None
-    ;;
 
     let formats =
       (records :: List.map sources ~f:(fun source -> source.format)) @ stored_formats

@@ -86,6 +86,7 @@ type bank_account_info =
   ; settlement_account : Bank_account_config.reference option
   }
 
+val bank_account_ids : t -> (string * string * string) list Or_error.t
 val bank_account_info : t -> bank_account_info list Or_error.t
 
 (** Preview and confirm a single bank debit against its linked credit card. *)

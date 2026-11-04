@@ -161,6 +161,50 @@ val operation_ids_for_events : t -> int64 list -> (int64 * int64) list Or_error.
     operation; a confirmed transfer appears once, with both movements. *)
 val operation_review : t -> operation_review list Or_error.t
 
+type operation_type_filter =
+  | Untyped
+  | Typed of Movement_type.t
+
+(** Each is a condition on the operation's group: [only_account] names a movement's
+    institution and source account. *)
+type operation_filter =
+  { only_account : (string * string) option
+  ; only_institution : string option
+  ; only_type : operation_type_filter option
+  ; only_decision : review_classification option
+  ; only_counter_account : string option
+  ; from_date : Date.t option
+  ; to_date : Date.t option
+  ; search : string option
+  }
+
+val no_operation_filter : operation_filter
+
+type operation_order =
+  | By_id
+  | By_occurrence
+  | By_date
+  | By_amount
+  | By_currency
+  | By_institution
+  | By_account
+  | By_type
+  | By_counter_account
+  | By_description
+  | By_event
+
+(** The operations a filter selects, in SQL, ending with the operation ID in the same
+    direction. Only the rows returned are read in full. [accounts] gives, as institution,
+    source account and ID, what [By_account] sorts on. *)
+val operations
+  :  ?filter:operation_filter
+  -> ?accounts:(string * string * string) list
+  -> ?order:operation_order list
+  -> ?ascending:bool
+  -> ?limit:int
+  -> t
+  -> operation_review list Or_error.t
+
 val resolve_operation_movement
   :  t
   -> operation_id:int64

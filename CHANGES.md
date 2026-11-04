@@ -8,6 +8,9 @@ short line of their own.
 
 ## Unreleased
 
+- `fin operation list` filters, sorts and limits in SQL, and reads only the rows it returns: on about
+  5,300 operations the full list takes half the time, and `--limit` now saves work (0.37 s to 0.10 s).
+  Its output is unchanged. Commands that read reviews share the same query.
 - Institution definitions have one kind for bundled and adapted sources: `records`, which holds a
   statement format (`camt`, `mt940` or `ofx`), a CSV layout (`csv`), or both. **Action required:** a
   definition file of kind `camt-csv`, `mt940-csv`, `running-csv`, `ofx-csv` or `movement-csv` is no
