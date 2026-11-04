@@ -8,6 +8,8 @@ short line of their own.
 
 ## Unreleased
 
+- `fin import bunq` now goes through records. Its journal is unchanged. Its CSV states EUR by
+  definition, so a statement in another currency is left unmatched instead of being ambiguous.
 - `fin import revolut` now goes through records and no longer takes `--account-id`: a person has
   one personal account, named `personal` in the ledger, as in
   `assets:bank:revolut:revolut:current-EUR:personal`. **Action required:** remove `--account-id` from

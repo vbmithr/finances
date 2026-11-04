@@ -13,6 +13,10 @@ val institution_type : t -> Institution_type.t
 (** Journal tags, as tag name and column, that a paired row of this layout adds. *)
 val journal_tags : t -> (string * string) list
 
+(** The column whose value, if any, a paired row of this layout gives its journal entry as
+    description. Otherwise the counted record's stays. *)
+val journal_description : t -> string option
+
 (** How overlapping files of this layout are reconciled. *)
 val overlap : t -> Adapter.overlap
 

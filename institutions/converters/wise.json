@@ -63,8 +63,8 @@
     }
   ],
   "descriptions": [
-    "Merchant",
-    "Description"
+    "Description",
+    "Merchant"
   ],
   "counterparty_name": [
     "Payee Name",
@@ -96,5 +96,6 @@
     "wise-merchant": "Merchant",
     "wise-payment-reference": "Payment Reference",
     "wise-reported-fees": "Total fees"
-  }
+  },
+  "journal_description": "Merchant"
 }

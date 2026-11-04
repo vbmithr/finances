@@ -8,8 +8,6 @@ let bunq_engine = Mt940_transaction.make bunq_profile
 
 module Bunq_transaction = struct
   include Mt940_transaction
-
-  let source_transaction = source_transaction bunq_engine
 end
 
 module Bunq_mt940 = struct
@@ -20,7 +18,6 @@ module Bunq_csv = struct
   include Mt940_csv_companion
 
   let parse = parse bunq_profile
-  let match_rows = match_rows bunq_profile
 end
 
 let ok = Or_error.ok_exn
@@ -236,22 +233,18 @@ let conflicts () =
 let ambiguity () =
   memory (fun db ->
     accepted (import db "original.mt940" (mt ()));
-    let rows = ok (Bunq_csv.parse (csv ())) in
-    let partial =
-      List.tl_exn rows
-      |> List.mapi ~f:(fun i row ->
-        { Bunq_csv.row_id = Int64.of_int (i + 1); document_id = 1L; row })
+    let without_first =
+      match String.split_lines (csv ()) with
+      | header :: _ :: rows -> String.concat ~sep:"\n" (header :: rows) ^ "\n"
+      | _ -> Alcotest.fail "the fixture has rows"
     in
-    let transactions =
-      List.map
-        (ok (Ledger.events db))
-        ~f:(fun (id, event) -> id, ok (Bunq_transaction.source_transaction event))
-    in
-    let results = Bunq_csv.match_rows partial transactions in
+    accepted (import db "partial.csv" without_first);
     check
       "partial identical group is ambiguous"
       1
-      (List.count results ~f:(fun r -> Poly.equal r.Bank_match.state Ambiguous));
+      (ok (Ledger.match_companions ~institution:"bunq" db)).ambiguous);
+  memory (fun db ->
+    accepted (import db "original.mt940" (mt ()));
     let other = replace (mt ()) "SYNTHETICBUNQ" "SYNTHETICSECOND" in
     accepted (import db "other.mt940" other);
     accepted (import db "original.csv" (csv ()));
@@ -259,11 +252,12 @@ let ambiguity () =
       "account matching isolates movements"
       4
       (ok (Ledger.match_companions ~institution:"bunq" db)).matched;
+    (* The CSV states EUR by definition, so a statement in another currency is not its pair. *)
     accepted (import db "usd.mt940" (replace (mt ()) "EUR" "USD"));
     check
-      "currency-free CSV cannot guess currency"
+      "another currency is left alone"
       4
-      (ok (Ledger.match_companions ~institution:"bunq" db)).ambiguous)
+      (ok (Ledger.match_companions ~institution:"bunq" db)).matched)
 ;;
 
 let multibank () =

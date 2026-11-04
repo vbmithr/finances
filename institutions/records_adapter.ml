@@ -372,7 +372,7 @@ let observation (row : Companion.row) =
   | _ -> Or_error.error_string "an observation is one stored record"
 ;;
 
-let companion ~tags format : Companion.t =
+let companion ~tags ~journal_description format : Companion.t =
   { format
   ; policy = "records-v1"
   ; match_rows
@@ -382,7 +382,10 @@ let companion ~tags format : Companion.t =
         let%map (record : Records.record) = observation row in
         let details = record.details in
         { Companion.value_on = record.value_on
-        ; display_name = List.hd details.descriptions
+        ; display_name =
+            Option.bind journal_description ~f:(fun field ->
+              List.Assoc.find details.fields ~equal:String.equal field)
+            |> Option.map ~f:String.strip
         ; movement_type = details.movement_type
         ; tags =
             List.filter_map tags ~f:(fun (tag, field) ->
@@ -414,6 +417,7 @@ type source =
   ; recognizes : string -> bool
   ; convert : name:string -> string -> Records.t Or_error.t
   ; tags : (string * string) list
+  ; journal_description : string option
   }
 
 let of_definition format definition =
@@ -421,6 +425,7 @@ let of_definition format definition =
   ; recognizes = Csv_converter.recognizes definition
   ; convert = Csv_converter.convert definition
   ; tags = Csv_converter.journal_tags definition
+  ; journal_description = Csv_converter.journal_description definition
   }
 ;;
 
@@ -481,7 +486,10 @@ let make ~institution ~overlap sources : (module Adapter.S) =
 
     let companions =
       let tags = List.concat_map sources ~f:(fun source -> source.tags) in
-      List.map formats ~f:(companion ~tags)
+      let journal_description =
+        List.find_map sources ~f:(fun source -> source.journal_description)
+      in
+      List.map formats ~f:(companion ~tags ~journal_description)
     ;;
   end
   in

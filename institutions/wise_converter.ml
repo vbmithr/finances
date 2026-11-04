@@ -7,9 +7,14 @@ open Base
 
 let preset =
   lazy
-    (match Builtin.camt_preset "wise" with
-     | Some preset -> preset
-     | None -> failwith "the bundled Wise definition has no CAMT source")
+    (match
+       Json.decode Institution_definition.codec Bundled_definitions.wise
+       |> Or_error.ok_exn
+       |> fun definition -> definition.source
+     with
+     | Camt_csv preset -> preset
+     | Ofx_csv _ | Csv _ | Running_csv _ | Mt940_csv _ ->
+       failwith "the bundled Wise definition has no CAMT source")
 ;;
 
 let movement quantity currency : Records.movement =

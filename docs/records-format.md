@@ -1,7 +1,7 @@
 # Records format
 
 Status: version 1 draft, 2026-11-04. `fin records check FILE` validates a file and `fin convert`
-prints one. Fin imports records, pairs observations and stores balances, for FDM, CDC and Revolut so far; other
+prints one. Fin imports records, pairs observations and stores balances, for FDM, CDC, Revolut and bunq so far; other
 institutions still import through their adapters.
 
 A records file is what one institution's document says, as JSON Lines: every entry becomes
@@ -263,7 +263,7 @@ unknown member or a column not in its header.
 | `reported` | `quantity` and `symbol` columns for a row no case takes |
 | `total` | `when` conditions of a row stating what the others add up to, with its `quantity` and `commodity` |
 | `balance_after`, `balances` | Running balance column, and `balance` lines to state from each row |
-| `journal_tags` | Tag name to column: what a paired row adds to its journal entry |
+| `journal_tags`, `journal_description` | Tag name to column, and the column that replaces the description, in the journal entry of a paired row |
 | `descriptions`, `type`, `counterparty_name`, `counterparty_iban`, `references`, `exchange`, `valuations` | Columns for those members of `details`; the first filled `counterparty_name` wins |
 
 - A column name repeated in the header is `Solde#2` for the second one.

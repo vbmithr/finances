@@ -24,6 +24,7 @@ let sources institution : Adapter.overlap * Records_adapter.source list =
         ; recognizes = Ofx_converter.recognizes
         ; convert = Ofx_converter.convert ~institution
         ; tags = []
+        ; journal_description = None
         }
     | "bunq" ->
       Option.map
@@ -33,6 +34,7 @@ let sources institution : Adapter.overlap * Records_adapter.source list =
           ; recognizes = Mt940_converter.recognizes profile
           ; convert = Mt940_converter.convert profile
           ; tags = []
+          ; journal_description = None
           })
     | _ -> None
   in
@@ -47,6 +49,8 @@ let sources institution : Adapter.overlap * Records_adapter.source list =
               (definition institution)
               ~default:[]
               ~f:Csv_converter.journal_tags
+        ; journal_description =
+            Option.bind (definition institution) ~f:Csv_converter.journal_description
         }
       ] )
   | _ ->

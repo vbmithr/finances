@@ -303,10 +303,7 @@ let institution_show database name =
            print_movement_profile profile;
            Ok ()
          | None, None ->
-           (match
-              List.find Builtin.records_institutions ~f:(fun definition ->
-                String.equal (Csv_converter.institution definition) name)
-            with
+           (match Builtin.csv_definition name with
             | Some definition ->
               printf "%s\n" (Terminal.text name);
               printf
