@@ -10,6 +10,12 @@ short line of their own.
 
 - Internal: draft of the records format (`docs/records-format.md`, a JSON Schema and
   examples) for statements converted outside fin's adapters. fin does not read it yet.
+- Wise rows the bank states belong together now read as one operation: a conversion's
+  debit, its credit in the other currency and its `FEE-` row appear as one row in
+  `fin operation list`, and `fin operation show` works from any of their IDs. They
+  group in either import order, and from CAMT alone. The rule is data, an optional
+  `operation_group` in a CAMT definition. A row in a confirmed transfer stays out of
+  its group. The journal is unchanged: each row still posts on its own.
 - Internal: one module, `Operation_groups`, now decides which stored operations read
   as one; the operation list and operation lookups both use it. No user-visible
   change. A database where an operation is named by two transfer links now reports

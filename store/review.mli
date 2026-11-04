@@ -148,7 +148,8 @@ type operation_transfer_link =
 
 val operation_transfer_links : t -> operation_transfer_link list Or_error.t
 
-(** Which stored operations read as one, from the confirmed transfer links. *)
+(** Which stored operations read as one: confirmed transfer links, and the groups
+    institutions state through their adapters. *)
 val operation_groups : t -> Operation_groups.t Or_error.t
 
 (** The operation carrying each bank movement, from its primary movement anchor.

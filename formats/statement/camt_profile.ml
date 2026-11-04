@@ -14,6 +14,14 @@ type reference_normalization =
   | Preserve
   | Canonical_hex of hex_normalization
 
+(** References the institution itself uses to link records of one activity: those
+    starting with [reference_prefix] belong together once [linked_prefix] is removed,
+    so [FEE-BALANCE-1] joins [BALANCE-1]. *)
+type operation_group =
+  { reference_prefix : string
+  ; linked_prefix : string
+  }
+
 type t =
   { institution : string
   ; namespace : string
@@ -23,6 +31,7 @@ type t =
   ; payload_tag : string
   ; reference_field : reference_field
   ; reference_normalization : reference_normalization
+  ; operation_group : operation_group option
   }
 
 let reference_field_codec =
@@ -58,6 +67,18 @@ let normalization_codec =
       | Canonical_hex config -> Some config)
 ;;
 
+let operation_group_codec =
+  Jsont.Object.map (fun reference_prefix linked_prefix ->
+    let text name value = Validation.text name value |> Json.or_error in
+    { reference_prefix = text "reference prefix" reference_prefix
+    ; linked_prefix = text "linked prefix" linked_prefix
+    })
+  |> Jsont.Object.mem "reference_prefix" Jsont.string ~enc:(fun g -> g.reference_prefix)
+  |> Jsont.Object.mem "linked_prefix" Jsont.string ~enc:(fun g -> g.linked_prefix)
+  |> Jsont.Object.error_unknown
+  |> Jsont.Object.finish
+;;
+
 let codec =
   Jsont.Object.map
     (fun
@@ -70,6 +91,7 @@ let codec =
          payload_tag
          reference_field
          reference_normalization
+         operation_group
        ->
        let institution = Validation.token "institution" institution |> Json.or_error in
        let namespace = Validation.text "CAMT namespace" namespace |> Json.or_error in
@@ -90,6 +112,7 @@ let codec =
        ; payload_tag
        ; reference_field
        ; reference_normalization
+       ; operation_group
        })
   |> Jsont.Object.mem "version" (Json.version 1) ~enc:(fun _ -> ())
   |> Jsont.Object.mem "institution" Jsont.string ~enc:(fun p -> p.institution)
@@ -104,6 +127,18 @@ let codec =
     p.reference_field)
   |> Jsont.Object.mem "reference_normalization" normalization_codec ~enc:(fun p ->
     p.reference_normalization)
+  |> Jsont.Object.opt_mem "operation_group" operation_group_codec ~enc:(fun p ->
+    p.operation_group)
   |> Jsont.Object.error_unknown
   |> Jsont.Object.finish
+;;
+
+let operation_group_key profile reference =
+  Option.bind profile.operation_group ~f:(fun g ->
+    let supporting, key =
+      match String.chop_prefix reference ~prefix:g.linked_prefix with
+      | Some key -> true, key
+      | None -> false, reference
+    in
+    Option.some_if (String.is_prefix key ~prefix:g.reference_prefix) (key, supporting))
 ;;

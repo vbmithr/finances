@@ -159,8 +159,9 @@ separate, each with its own source event.
 ### Source-stated grouping
 
 These rules will belong to converters and reach fin as the `group` and `supporting`
-members of [records](records-format.md). For Wise: group by `reference` after removing a
-`FEE-` prefix, for `BALANCE-` references only. Other prefixes stay ungrouped until checked, because a reference
+members of [records](records-format.md); until then they are data in the institution
+definition. For Wise: group by `reference` after removing a `FEE-` prefix, for `BALANCE-`
+references only. Other prefixes stay ungrouped until checked, because a reference
 may also be shared by a payment and its refund.
 
 The `reference` comes from CAMT and is stored on the source event, so this does not
@@ -171,6 +172,9 @@ The group is a pure function of stored events, which makes it independent of imp
 order and needs no completion step. If a currency's export was never imported, the
 group has one commodity and is reported as incomplete in `fin status` and the
 operation list; it is not posted as an exchange.
+
+A linked row, such as `FEE-BALANCE-n`, only supports the others. It never represents
+the group, so the group's type and description are those of a `BALANCE-n` row.
 
 ### Inferred grouping: the candidate finder
 
@@ -229,16 +233,18 @@ do not survive a rebuild. A side with no confirmed match stays in
 
 1. Derive operation membership from stored events and decisions, keeping today's
    transfer grouping and every journal result unchanged.
-2. Post confirmed transfers through the clearing account, updating the journal
-   tests and the manual. This is a visible journal change.
-3. Add the source-stated rule for Wise, the incomplete state, and the conflict
-   report for existing decisions on grouped rows.
-4. Project a grouped Wise conversion through the exchange path, with the fee as its
+2. Add the source-stated rule for Wise. Done 2026-11-03: rows group on read, the
+   journal is unchanged. Still to do: the incomplete state, and the conflict report
+   for existing decisions on grouped rows.
+3. Project a grouped Wise conversion through the exchange path, with the fee as its
    own movement.
-5. Move candidates to operation movements, reproducing today's bank results on the
+4. Move candidates to operation movements, reproducing today's bank results on the
    existing fixtures first.
-6. Merge and split decisions, migrating the existing links; schema bump and rebuild.
-7. Read the CDC hash, then explained fee differences on inferred groups.
+5. Merge and split decisions, migrating the existing links; schema bump and rebuild.
+6. Read the CDC hash, then explained fee differences on inferred groups.
+7. Post confirmed transfers through the clearing account, updating the journal tests
+   and the manual. This is a visible journal change. It comes last because it changes
+   how transfers post, not which movements match.
 
 ### Not covered
 

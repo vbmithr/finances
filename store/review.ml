@@ -792,8 +792,30 @@ let operation_transfer_links db =
 
 let operation_groups db =
   let* links = operation_transfer_links db in
-  Operation_groups.of_links
-    (List.map links ~f:(fun link -> link.first_operation_id, link.second_operation_id))
+  let* bank_operations =
+    collect
+      db
+      (statement
+         "SELECT id,bank_event_id FROM operations WHERE bank_event_id IS NOT NULL ORDER \
+          BY id"
+         Row.(t2 (int64 "id") (int64 "bank_event_id")))
+  in
+  let* events = events db in
+  let by_id = Hashtbl.of_alist_exn (module Int64) events in
+  let stated = Hashtbl.Poly.create () in
+  List.iter bank_operations ~f:(fun (operation_id, event_id) ->
+    Option.iter (Hashtbl.find by_id event_id) ~f:(fun (event : Source_event.t) ->
+      Option.iter
+        (Registry.operation_group db.registry event)
+        ~f:(fun (key, supporting) ->
+          Hashtbl.add_multi stated ~key:(event.venue, key) ~data:(supporting, operation_id))));
+  Operation_groups.create
+    ~links:
+      (List.map links ~f:(fun link -> link.first_operation_id, link.second_operation_id))
+    ~stated:
+      (Hashtbl.data stated
+       |> List.map ~f:(fun group ->
+         List.sort group ~compare:[%compare: bool * int64] |> List.map ~f:snd))
 ;;
 
 let operation_ids_for_events db event_ids =

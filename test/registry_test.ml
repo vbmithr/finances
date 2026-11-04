@@ -17,6 +17,7 @@ module Example = struct
   let kinds = [ "example-transaction"; "bank-transaction" ]
   let operation_kinds = []
   let operation_rows _ = Or_error.error_string "example produces no operation events"
+  let operation_group _ = None
   let formats = [ "example" ]
   let probe ~filename:_ _ = None
   let takes_account_label = false

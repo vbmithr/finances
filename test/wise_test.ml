@@ -137,6 +137,119 @@ let reusable_clock_csv () =
   check "configured importer retains rows" 3 (List.length document.companion_rows)
 ;;
 
+let statement ~id ~currency ~opening ~closing entries =
+  let balance code amount =
+    Printf.sprintf
+      {|<Bal><Tp><CdOrPrtry><Cd>%s</Cd></CdOrPrtry></Tp><Amt Ccy="%s">%s</Amt><CdtDbtInd>CRDT</CdtDbtInd><Dt><DtTm>2025-01-01T00:00:00+01:00</DtTm></Dt></Bal>|}
+      code
+      currency
+      amount
+  in
+  let entry (amount, direction, time, code) =
+    Printf.sprintf
+      {|<Ntry><Amt Ccy="%s">%s</Amt><CdtDbtInd>%s</CdtDbtInd><Sts><Cd>BOOK</Cd></Sts><BookgDt><DtTm>2025-01-02T%s+01:00</DtTm></BookgDt><BkTxCd><Prtry><Cd>%s</Cd></Prtry></BkTxCd><AddtlNtryInf>Synthetic</AddtlNtryInf></Ntry>|}
+      currency
+      amount
+      direction
+      time
+      code
+  in
+  Printf.sprintf
+    {|<Document xmlns="urn:iso:std:iso:20022:tech:xsd:camt.053.001.10"><BkToCstmrStmt><Stmt><Id>%s</Id><FrToDt><FrDtTm>2025-01-01T00:00:00+01:00</FrDtTm><ToDtTm>2025-01-31T23:59:59+01:00</ToDtTm></FrToDt><Acct><Id><IBAN>SYNTHETIC-ACCOUNT</IBAN></Id><Ccy>%s</Ccy><Svcr><FinInstnId><Nm>Wise</Nm></FinInstnId></Svcr></Acct>%s%s%s</Stmt></BkToCstmrStmt></Document>|}
+    id
+    currency
+    (balance "OPBD" opening)
+    (balance "CLBD" closing)
+    (String.concat (List.map entries ~f:entry))
+;;
+
+(* One conversion: net and fee leave the source balance, the target amount enters the
+   other. A card payment and its reversal share a reference and stay apart. *)
+let source_statement =
+  statement
+    ~id:"statement-eur"
+    ~currency:"EUR"
+    ~opening:"100.00"
+    ~closing:"89.00"
+    [ "1.00", "DBIT", "10:00:00.100000", "FEE-BALANCE-77"
+    ; "10.00", "DBIT", "10:00:00.200000", "BALANCE-77"
+    ; "3.00", "DBIT", "11:00:00.000000", "CARD-5"
+    ; "3.00", "CRDT", "12:00:00.000000", "CARD-5"
+    ]
+;;
+
+let target_statement =
+  statement
+    ~id:"statement-sgd"
+    ~currency:"SGD"
+    ~opening:"0.00"
+    ~closing:"15.00"
+    [ "15.00", "CRDT", "10:00:00.200000", "BALANCE-77" ]
+;;
+
+let conversion_rows db =
+  List.map
+    (ok (Review.operation_review db))
+    ~f:(fun row ->
+      let amounts =
+        List.map row.movements ~f:(fun m ->
+          Quantity.to_string m.quantity ^ " " ^ Commodity.display m.commodity)
+        |> List.sort ~compare:String.compare
+      in
+      row.operation_id, amounts)
+;;
+
+let source_stated_groups () =
+  let shapes db =
+    List.map (conversion_rows db) ~f:snd
+    |> List.sort ~compare:(List.compare String.compare)
+  in
+  let same = Alcotest.(check (list (list string))) in
+  let expected = [ [ "-1 EUR"; "-10 EUR"; "15 SGD" ]; [ "-3 EUR" ]; [ "3 EUR" ] ] in
+  memory (fun db ->
+    accepted (import db "source.xml" source_statement);
+    same
+      "the source balance alone groups the fee with the net"
+      [ [ "-1 EUR"; "-10 EUR" ]; [ "-3 EUR" ]; [ "3 EUR" ] ]
+      (shapes db);
+    accepted (import db "target.xml" target_statement);
+    same "all three rows" expected (shapes db);
+    (* Grouping is a read: each row keeps its own source event. *)
+    check "events stay per row" 5 (List.length (ok (Ledger.events db)));
+    let id, _ = List.find_exn (conversion_rows db) ~f:(fun (_, a) -> List.length a = 3) in
+    let row =
+      List.find_exn
+        (ok (Review.operation_review db))
+        ~f:(fun r -> Int64.equal r.operation_id id)
+    in
+    Alcotest.(check string)
+      "the main row represents the group, not the fee"
+      "-10"
+      (Quantity.to_string (List.hd_exn row.movements).quantity);
+    List.iter
+      (ok (Ledger.events db))
+      ~f:(fun (event_id, (e : Source_event.t)) ->
+        if String.is_substring e.payload ~substring:"BALANCE-77"
+        then (
+          let operations = ok (Operations.operations_for_event db event_id) in
+          Alcotest.(check (list int64))
+            "each row finds the group"
+            [ id ]
+            (List.map operations ~f:fst);
+          check
+            "with all its movements"
+            3
+            (List.length (snd (List.hd_exn operations)).movements)));
+    check
+      "the group reads the same by its ID"
+      3
+      (List.length (ok (Operations.get_operation db id)).movements));
+  memory (fun db ->
+    accepted (import db "target.xml" target_statement);
+    accepted (import db "source.xml" source_statement);
+    same "either import order" expected (shapes db))
+;;
+
 let reusable_camt_source () =
   let wise = (Option.value_exn (Builtin.camt_preset "wise")).camt_profile in
   let profile =
@@ -549,6 +662,7 @@ let () =
     [ ( "adapter"
       , List.map
           [ "parser and balances", parser
+          ; "source-stated operation groups", source_stated_groups
           ; "reusable CAMT source profile", reusable_camt_source
           ; "reusable clock CSV profile and importer", reusable_clock_csv
           ; "reported type rules, replay and refresh", reported_type_rules

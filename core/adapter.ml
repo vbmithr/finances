@@ -35,6 +35,12 @@ module type S = sig
       adapters own no operation kinds. *)
   val operation_rows : Source_event.t -> Operation_import.row list Base.Or_error.t
 
+  (** The key shared by events the institution itself states are one activity, if
+      this event has one, and whether the event only supports the others (a fee row),
+      so it never represents the group. It may only use the event, so grouping is
+      independent of import order. *)
+  val operation_group : Source_event.t -> (string * bool) option
+
   (** Format identifiers, recorded in import history. *)
   val formats : string list
 

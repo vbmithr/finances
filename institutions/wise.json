@@ -21,6 +21,10 @@
         "prefix": "BALANCE_CASHBACK-",
         "description": "cashback",
         "length": 32
+      },
+      "operation_group": {
+        "reference_prefix": "BALANCE-",
+        "linked_prefix": "FEE-"
       }
     },
     "csv_profile": {

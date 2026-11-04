@@ -6,22 +6,29 @@ type t =
   }
 
 let empty = { others = Map.empty (module Int64); canonical = Map.empty (module Int64) }
+let grouped t id = Map.mem t.canonical id || Map.mem t.others id
 
-let of_links links =
-  List.fold_result links ~init:empty ~f:(fun t (first, second) ->
-    if
-      Int64.equal first second
-      || Map.mem t.canonical first
-      || Map.mem t.canonical second
-      || Map.mem t.others first
-      || Map.mem t.others second
-    then
-      Or_error.errorf "operation %Ld or %Ld belongs to more than one group" first second
-    else
-      Ok
-        { others = Map.set t.others ~key:first ~data:[ second ]
-        ; canonical = Map.set t.canonical ~key:second ~data:first
-        })
+let add t first others =
+  { others = Map.set t.others ~key:first ~data:others
+  ; canonical =
+      List.fold others ~init:t.canonical ~f:(fun canonical id ->
+        Map.set canonical ~key:id ~data:first)
+  }
+;;
+
+let create ~links ~stated =
+  let open Or_error.Let_syntax in
+  let%map linked =
+    List.fold_result links ~init:empty ~f:(fun t (first, second) ->
+      if Int64.equal first second || grouped t first || grouped t second
+      then
+        Or_error.errorf "operation %Ld or %Ld belongs to more than one group" first second
+      else Ok (add t first [ second ]))
+  in
+  List.fold stated ~init:linked ~f:(fun t group ->
+    match List.filter group ~f:(fun id -> not (grouped linked id)) with
+    | first :: (_ :: _ as others) -> add t first others
+    | _ -> t)
 ;;
 
 let canonical t id = Option.value (Map.find t.canonical id) ~default:id

@@ -770,7 +770,8 @@ let cdc_reimport_validates_movements () =
 ;;
 
 let operation_groups () =
-  let groups = ok (Operation_groups.of_links [ 9L, 4L; 2L, 3L ]) in
+  let create ?(stated = []) links = Operation_groups.create ~links ~stated in
+  let groups = ok (create [ 9L, 4L; 2L, 3L ]) in
   let check = Alcotest.(check (list int64)) in
   check "an unlinked operation is alone" [ 7L ] (Operation_groups.members groups 7L);
   Alcotest.(check int64) "alone reads as itself" 7L (Operation_groups.canonical groups 7L);
@@ -782,12 +783,20 @@ let operation_groups () =
     Alcotest.(check bool)
       "an operation belongs to one group"
       true
-      (Result.is_error (Operation_groups.of_links links))
+      (Result.is_error (create links))
   in
   refused [ 1L, 2L; 2L, 3L ];
   refused [ 1L, 2L; 3L, 2L ];
   refused [ 1L, 2L; 1L, 3L ];
-  refused [ 1L, 1L ]
+  refused [ 1L, 1L ];
+  (* A stated group has any size, and a person's link outranks it. *)
+  let stated =
+    ok (create ~stated:[ [ 5L; 6L; 8L ]; [ 20L; 21L; 22L ]; [ 30L ] ] [ 21L, 40L ])
+  in
+  check "three operations" [ 5L; 6L; 8L ] (Operation_groups.members stated 8L);
+  check "a linked operation leaves" [ 20L; 22L ] (Operation_groups.members stated 22L);
+  check "the link stands" [ 21L; 40L ] (Operation_groups.members stated 21L);
+  check "a group of one is alone" [ 30L ] (Operation_groups.members stated 30L)
 ;;
 
 let exchange_accounting () =

@@ -172,3 +172,8 @@ let companions t =
   |> List.concat_map ~f:(fun (institution, (module A : Adapter.S)) ->
     List.map A.companions ~f:(fun companion -> institution, companion))
 ;;
+
+let operation_group t (event : Source_event.t) =
+  Option.bind (find t event.venue) ~f:(fun (module A : Adapter.S) ->
+    A.operation_group event)
+;;

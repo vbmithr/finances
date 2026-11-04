@@ -4957,10 +4957,14 @@ let transaction_show database operation_id =
         | File_row _ -> None)
     in
     printf "Source event IDs: %s\n" (String.concat ~sep:", " sources);
+    (* The first movement is the group's main one, so a fee never heads the detail. *)
     let event_id =
-      List.find_map operation.Operation.evidence ~f:(function
-        | Stored_event id -> Some id
-        | File_row _ -> None)
+      List.find_map
+        (List.concat_map operation.Operation.movements ~f:(fun m -> m.evidence)
+         @ operation.evidence)
+        ~f:(function
+          | Stored_event id -> Some id
+          | File_row _ -> None)
     in
     match event_id with
     | None -> Or_error.error_string "operation has no stored source event"

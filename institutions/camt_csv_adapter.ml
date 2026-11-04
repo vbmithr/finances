@@ -25,6 +25,13 @@ let make ~profile ~csv_profile ?(aliases = []) ~csv ~policy ~metadata_prefix ()
     let kinds = [ profile.event_kind ]
     let operation_kinds = []
     let operation_rows _ = Or_error.error_string "CAMT events are bank movements"
+
+    let operation_group event =
+      match Camt_source.source_transaction source event with
+      | Ok tx -> Camt_profile.operation_group_key profile tx.reference
+      | Error _ -> None
+    ;;
+
     let formats = [ camt; csv ]
     let takes_account_label = false
     let overlap = Adapter.Source_ids

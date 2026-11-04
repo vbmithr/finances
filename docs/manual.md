@@ -1013,6 +1013,13 @@ so a concurrent decision cannot be overwritten. The separate `search` command us
 raw source column.
 
 
+Some rows are one activity because the institution says so. A Wise conversion has a
+debit, a credit in the other currency and usually a `FEE-` row, linked by their
+references, so `fin operation list` shows them as one row and `fin operation show`
+accepts any of their IDs. A conversion shows only the rows imported so far. A row in
+a confirmed transfer stays out of the group. These rows still post separately in the
+journal.
+
 Confirmed same-currency transfers export as one journal transaction with direct
 postings to both bank accounts, retaining both source event IDs and any fee postings.
 Fin uses the earlier booking date as the transaction date and attaches the later
