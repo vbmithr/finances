@@ -346,7 +346,8 @@ original fields and source event IDs. The complete CSV is archived in the databa
 Reimporting the identical file is reported as unchanged, but a different file
 containing already imported rows or a file containing identical rows is rejected
 as ambiguous. Review those exports before importing them. A file with only the
-header and no transaction rows is rejected, and a reimport that finds a stored
+header is a valid statement of no activity: it imports with `inserted=0`. A reimport that
+finds a stored
 operation differing from the importer's interpretation (movement roles,
 commodities, quantities or source links) is refused without changing the stored
 decisions.

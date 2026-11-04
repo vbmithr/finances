@@ -14,11 +14,6 @@ let make (profile : Movement_csv.profile) () : (module Adapter.S) =
   let parse ~context:_ ~format:_ contents =
     let open Or_error.Let_syntax in
     let%bind events = Movement_csv.events profile contents in
-    let%bind () =
-      if List.is_empty events
-      then Or_error.errorf "%s file has no transaction rows" profile.institution
-      else Ok ()
-    in
     let identities =
       List.map events ~f:(fun (e : Source_event.t) ->
         e.venue, e.account, e.kind, e.source_id)

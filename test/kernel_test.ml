@@ -701,23 +701,25 @@ let cdc_import_unified () =
            (match report.Bank_import.outcome with
             | Bank_import.Rejected -> true
             | _ -> false));
-      (* A header with no transaction rows is not a successful import. *)
-      let header_only =
+      (* A header with no transaction rows is a valid statement of no activity. *)
+      let import_header () =
         Import.import_bank_file
           db
           ~institution:"cdc"
           ~path:"empty.csv"
           ~contents:cdc_header
+        |> ok
       in
-      Alcotest.(check bool)
-        "header-only file refused"
-        true
-        (match header_only with
-         | Error _ -> true
-         | Ok report ->
-           (match report.Bank_import.outcome with
-            | Bank_import.Rejected -> true
-            | _ -> false));
+      let header_only = import_header () in
+      Alcotest.(check string)
+        "header-only file is imported"
+        "imported"
+        (Bank_import.outcome_name header_only.outcome);
+      Alcotest.(check int) "header-only file adds nothing" 0 header_only.inserted;
+      Alcotest.(check string)
+        "and is unchanged the second time"
+        "unchanged"
+        (Bank_import.outcome_name (import_header ()).outcome);
       (* A file the adapter does not recognize is unsupported. *)
       let foreign = "a,b\n1,2\n" in
       let unsupported =

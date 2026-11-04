@@ -40,3 +40,7 @@ successfully.
 
 Reject the file with a clear no-transaction-rows error and add an import test
 covering a header-only file.
+
+**Reversed on 2026-11-04.** A header with no rows is a valid statement of no activity, as
+Wise exports for an unused balance, so it now imports with `inserted=0`. The summary shows
+that nothing was added. `test/import_empty_test.py` covers every bundled institution.

@@ -525,3 +525,15 @@
    %{exe:../bin/main.exe}
    ../formats/records
    fixtures)))
+
+(rule
+ (alias runtest)
+ (deps
+  import_empty_test.py
+  (glob_files ../institutions/*.json))
+ (action
+  (run
+   python3
+   %{dep:import_empty_test.py}
+   %{exe:../bin/main.exe}
+   ../institutions)))
