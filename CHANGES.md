@@ -8,6 +8,8 @@ short line of their own.
 
 ## Unreleased
 
+- Internal: `bin/main.ml` is split into one module per command group. No user-visible
+  change.
 - New `fin convert wise PATH...` prints Wise CAMT and CSV files as records, without a
   database and without storing anything. `-o FILE` writes a file instead, compressed if
   its name ends in `.zst`. A row stated by several files appears once; if they disagree,

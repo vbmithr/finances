@@ -27,6 +27,8 @@ provider observations before treating them as authoritative.
 
 ### Code
 
+- The command line lives in `bin/`, one module per command group, and `main.ml` only lists
+  them.
 - Persistence lives in the `finances.store` library (`store/`), one module per
   domain (`Sources`, `Import`, `Ledger`, `Review`, `Restore`, `Transfers`,
   `Accounts`, `Explain`, `Operations`) over a shared `Handle`, each with an
