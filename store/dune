@@ -5,6 +5,11 @@
  (name finances_store)
  (public_name finances.store)
  (private_modules db_schema sqlite_schema)
+ (foreign_stubs
+  (language c)
+  (names sqlite_decimal sqlite_decimal_stubs)
+  (flags
+   (:standard -DSQLITE_CORE)))
  (flags
   (:standard -open Finances_core -open Finances))
  (libraries

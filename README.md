@@ -201,10 +201,11 @@ fin journal export
 ## Setup
 
 Use an opam switch with OCaml 5.1 or later and SQLite development headers
-(SQLite 3.38.5 or later). Rel is pinned in `finances.opam` to upstream commit
-`f196804c51031870327ecc482d0b97f052941081` from
-[dbuenzli/rel](https://github.com/dbuenzli/rel). This is an immutable Git revision,
-not a branch pin. `conf-sqlite3` is required so Rel builds its SQLite backend.
+(SQLite 3.38.5 or later). Fin currently needs Rel commit
+`135d8f6246e17ccc4700029c503ca96e341cd3bf`, which adds static SQLite extension
+support and is not yet published upstream. Pin a checkout containing that commit
+before installing the dependencies. `conf-sqlite3` is required so Rel builds its
+SQLite backend.
 The OCaml `hledger` binding is also pinned to upstream commit
 `cad809fa47876142cfdf361bde2a2e506ebdadad` of
 [ocaml-hledger](https://github.com/vbmithr/ocaml-hledger). This opam package is
@@ -216,8 +217,10 @@ From this directory, in your chosen switch:
 mkdir -p "$HOME/.cache/codex/scratch/finances"
 export TMPDIR="$HOME/.cache/codex/scratch/finances"
 git submodule update --init --recursive
+# Replace this path with the absolute path of your Rel checkout.
+REL_REPOSITORY=/absolute/path/to/rel
 opam pin add --no-action rel \
-  'git+https://github.com/dbuenzli/rel.git#f196804c51031870327ecc482d0b97f052941081'
+  "git+file://${REL_REPOSITORY}#135d8f6246e17ccc4700029c503ca96e341cd3bf"
 opam pin add --no-action hledger \
   'git+https://github.com/vbmithr/ocaml-hledger.git#cad809fa47876142cfdf361bde2a2e506ebdadad'
 opam install . --deps-only --with-test
@@ -229,7 +232,7 @@ The test suite also needs Python 3 on Unix for terminal-driven CLI checks.
 
 Dependencies are installed per opam switch. After changing switches, rerun
 `opam install . --deps-only --with-test` in this directory. This also installs the
-project's pinned Rel and hledger dependencies. If Dune reports a missing library
+the project's other pinned dependencies; pin Rel first as shown above. If Dune reports a missing library
 such as `csv`, check that installation and execution use the same switch:
 
 ```sh

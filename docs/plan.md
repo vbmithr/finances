@@ -369,8 +369,12 @@ The import side is done; turning movements into accounting is not.
 - [x] Recognize deferred-card settlement types and refresh stored movement types
   with a preview and confirmation, without removing accounting decisions.
 - [x] Transaction listings support multi-column ordering, with SQLite sorting for
-  stored date, currency, institution, effective type and event ID; exact amounts
-  and computed values are sorted after review data is assembled.
+  stored date, exact decimal amounts, currency, institution, effective type and
+  event ID. SQLite's decimal extension is registered per connection; the Rel
+  extension API is currently pinned to a local unpublished commit.
+  On 4,400 synthetic movements, amount sorting took median CPU 47.5 ms before
+  and 46.1 ms after for a 20-row page, and 159.5 ms before and 161.9 ms after
+  for the full list (nine warm runs each).
 - [x] Transaction listings show accounting classification and use a terminal pager;
   settlement rule batches reuse loaded data across decisions.
 - [x] CSV enrichment, with ambiguous matches visible.

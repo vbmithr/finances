@@ -8,6 +8,12 @@ short line of their own.
 
 ## Unreleased
 
+- Compare amounts in `fin operation list --order-by amount` with SQLite's
+  decimal collation, including values beyond 40 decimal places. SQLite's
+  decimal extension is compiled into Fin and initialized on each connection.
+  **Action required:** builds need the unpublished Rel extension API commit;
+  pin a checkout as described in the README. No database rebuild is needed.
+
 - `fin operation list` filters, sorts and limits in SQL, and reads only the rows it returns: on about
   5,300 operations the full list takes half the time, and `--limit` now saves work (0.37 s to 0.10 s).
   Its output is unchanged. Commands that read reviews share the same query.

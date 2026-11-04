@@ -1137,12 +1137,6 @@ let operation_filter_values (filter : operation_filter) =
     ]
 ;;
 
-(* An exact decimal's digits as text that sorts like its magnitude, with room for any
-   amount a statement states: a float would tie amounts that differ. *)
-let magnitude =
-  "substr(printf('%040d',0)||substr(ltrim(v.amount,'-'),1,instr(ltrim(v.amount,'-')||'.','.')-1),-40)||substr(substr(ltrim(v.amount,'-'),instr(ltrim(v.amount,'-')||'.','.')+1)||printf('%040d',0),1,40)"
-;;
-
 (* Sort terms, with whether each runs against the requested direction. Rows with no
    review sort after those with one, like any column only a review has. *)
 let operation_order_terms =
@@ -1151,12 +1145,7 @@ let operation_order_terms =
   | By_id -> [ term "v.id" ]
   | By_occurrence -> [ term "v.occurred" ]
   | By_date -> [ term "v.event_id IS NULL"; term "v.booked_on" ]
-  | By_amount ->
-    [ term "v.event_id IS NULL"
-    ; term "v.amount NOT LIKE '-%'"
-    ; "CASE WHEN v.amount LIKE '-%' THEN " ^ magnitude ^ " END", true
-    ; term ("CASE WHEN v.amount NOT LIKE '-%' THEN " ^ magnitude ^ " END")
-    ]
+  | By_amount -> [ term "v.event_id IS NULL"; term "v.amount COLLATE decimal" ]
   | By_currency -> [ term "v.event_id IS NULL"; term "v.currency" ]
   | By_institution -> [ term "v.institution" ]
   | By_account -> [ term "coalesce(v.account_id,'')" ]

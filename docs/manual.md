@@ -1285,9 +1285,8 @@ Amounts are compared exactly, but not converted between currencies; use
 movement sort last on bank columns, since they have no booking date, amount or
 type.
 
-Sorting always happens in OCaml after computing the displayed values; Fin's
-SQLite connection does not currently load the optional decimal extension. The
-report loads review data before applying filters and the limit.
+SQLite applies sorting, filters and the limit before Fin loads the displayed
+review data. Its decimal collation compares stored amount text numerically.
 A matched Wise CSV can provide the
 effective description; missing or conflicting values fall back to the primary
 description. JSON contains one effective `description`, `movement_type`, and

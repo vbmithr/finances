@@ -2958,7 +2958,11 @@ class ImportOnboarding(unittest.TestCase):
         extra = ('<STMTTRN><DTPOSTED>20260104</DTPOSTED><TRNTYPE>CREDIT</TRNTYPE>'
                  '<TRNAMT>0.10000000000000000002</TRNAMT><FITID>precise-high</FITID><NAME>precise High</NAME></STMTTRN>'
                  '<STMTTRN><DTPOSTED>20260104</DTPOSTED><TRNTYPE>CREDIT</TRNTYPE>'
-                 '<TRNAMT>0.10000000000000000001</TRNAMT><FITID>precise-low</FITID><NAME>precise Low</NAME></STMTTRN>')
+                 '<TRNAMT>0.10000000000000000001</TRNAMT><FITID>precise-low</FITID><NAME>precise Low</NAME></STMTTRN>'
+                 '<STMTTRN><DTPOSTED>20260104</DTPOSTED><TRNTYPE>CREDIT</TRNTYPE>'
+                 '<TRNAMT>0.100000000000000000000000000000000000000002</TRNAMT><FITID>long-high</FITID><NAME>long High</NAME></STMTTRN>'
+                 '<STMTTRN><DTPOSTED>20260104</DTPOSTED><TRNTYPE>CREDIT</TRNTYPE>'
+                 '<TRNAMT>0.100000000000000000000000000000000000000001</TRNAMT><FITID>long-low</FITID><NAME>long Low</NAME></STMTTRN>')
         ofx.write_text(Path('fixtures/bank.ofx').read_text().replace('</BANKTRANLIST>', extra + '</BANKTRANLIST>', 1))
         self.run_fin('import', 'boursobank', ofx)
         sample = json.loads(self.run_fin('operation', 'list', '--json').stdout)[0]['event_id']
@@ -2980,6 +2984,8 @@ class ImportOnboarding(unittest.TestCase):
             self.assertEqual([r['event_id'] for r in desc], [r['event_id'] for r in reversed(expected)], columns)
         precise = json.loads(self.run_fin('operation', 'list', '--json', '--order-by', 'amount', '--asc', '--search', 'precise').stdout)
         self.assertEqual([r['description'] for r in precise], ['precise Low', 'precise High'])
+        long_amounts = json.loads(self.run_fin('operation', 'list', '--json', '--order-by', 'amount', '--asc', '--search', 'long').stdout)
+        self.assertEqual([r['description'] for r in long_amounts], ['long Low', 'long High'])
         self.assertEqual(json.loads(self.run_fin('operation', 'list', '--json', '--order-by', 'account_id,event_id', '--asc').stdout),
                          json.loads(self.run_fin('operation', 'list', '--json', '--order-by', 'account,event', '--asc').stdout))
         filtered = json.loads(self.run_fin('operation', 'list', '--json', '--institution', 'revolut', '--order-by', 'amount', '--asc', '--limit', '2').stdout)

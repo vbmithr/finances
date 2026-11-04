@@ -374,10 +374,13 @@ let initialize db =
         Db_schema.version)
 ;;
 
+external decimal_extension : unit -> Db.Extension.t = "fin_sqlite_decimal_extension"
+
 let with_connection ~mode path f =
   let* conn = db_result (Db.open' ~foreign_keys:true ~mode path) in
   let result =
     try
+      let* () = db_result (Db.Extension.apply conn (decimal_extension ())) in
       let* () = db_result (Db.busy_timeout_ms conn 5000) in
       f conn
     with
