@@ -798,6 +798,10 @@ let operation_groups () =
   check "three operations" [ 5L; 6L; 8L ] (Operation_groups.members stated 8L);
   check "a linked operation leaves" [ 20L; 22L ] (Operation_groups.members stated 22L);
   check "the link stands" [ 21L; 40L ] (Operation_groups.members stated 21L);
+  Alcotest.(check (list (pair int64 int64)))
+    "noncanonical members respect decisions and stated groups"
+    [ 6L, 5L; 8L, 5L; 22L, 20L; 40L, 21L ]
+    (Operation_groups.noncanonical_members stated);
   check "a group of one is alone" [ 30L ] (Operation_groups.members stated 30L)
 ;;
 

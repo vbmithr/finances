@@ -1669,6 +1669,9 @@ class ImportOnboarding(unittest.TestCase):
         self.assertIn('type_changes=1', self.run_fin('operation', 'restore', snapshot, '--yes').stdout)
         transfer = next(r for r in json.loads(self.run_fin('operation', 'list', '--json').stdout) if r['event_id'] == first)
         self.assertEqual((transfer['decision'], transfer['movement_type_override']), ('transfer', 'fee'))
+        transfer_page = json.loads(self.run_fin('operation', 'list', '--json', '--decision', 'transfer', '--limit', '1').stdout)
+        transfer_rows = json.loads(self.run_fin('operation', 'list', '--json', '--decision', 'transfer').stdout)
+        self.assertEqual(transfer_page, transfer_rows[:1])
         self.run_fin('rule', 'add', 'force-transfer-test', 'Transfer', 'expenses:other')
         preview = json.loads(self.run_fin('rule', 'preview', 'force-transfer-test', '--force', '--json').stdout)
         self.assertTrue(all(not r['apply_account'] for r in preview if r['transaction']['event_id'] in (first, second)))
@@ -2928,6 +2931,9 @@ class ImportOnboarding(unittest.TestCase):
         decisions.write_text(json.dumps([{'event_id': seed['event_id'],
                                           'account': 'expenses:shopping', 'reason': 'Reviewed'}]))
         self.run_fin('operation', 'category', 'apply', decisions)
+        reviewed_rows = json.loads(self.run_fin('operation', 'list', '--json').stdout)
+        self.assertEqual(json.loads(self.run_fin('operation', 'list', '--json', '--limit', '2').stdout),
+                         reviewed_rows[:2])
         result = json.loads(self.run_fin('operation', 'category', 'similar', seed['event_id'],
                                          '--json').stdout)
         self.assertEqual(len(result['candidates']), 2)

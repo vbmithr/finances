@@ -375,6 +375,12 @@ The import side is done; turning movements into accounting is not.
   On 4,400 synthetic movements, amount sorting took median CPU 47.5 ms before
   and 46.1 ms after for a 20-row page, and 159.5 ms before and 161.9 ms after
   for the full list (nine warm runs each).
+- [x] Narrow the second review query to selected movements on limited pages and
+  use the grouping map directly. On 4,400 synthetic movements, eleven warm paired
+  runs measured median wall time of 43.2 ms before and 39.0 ms after for a
+  20-row page; the full list measured 104.6 ms and 108.4 ms. The main review
+  query and source-record group discovery remain the largest costs in a
+  frame-pointer profile of the limited page.
 - [x] Transaction listings show accounting classification and use a terminal pager;
   settlement rule batches reuse loaded data across decisions.
 - [x] CSV enrichment, with ambiguous matches visible.

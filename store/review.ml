@@ -633,7 +633,13 @@ let review_context db =
 (* One row per bank movement: its decision, counter-account and effective description.
    The effective description is the name its matched companion rows agree on, or the
    movement's main description. The parameter is [review_context]. *)
-let reviews_sql =
+let reviews_sql ?event_ids () =
+  let scope =
+    Option.value_map event_ids ~default:"" ~f:(fun ids ->
+      " AND event_id IN ("
+      ^ String.concat ~sep:"," (List.map ids ~f:Int64.to_string)
+      ^ ")")
+  in
   "destinations(event_id,account) AS (SELECT value->>0,value->>1 FROM \
    json_each(?1,'$.destinations')), named(event_id,name) AS (SELECT \
    m.event_id,trim(f.value->>1,' '||char(9,10,11,12,13)) FROM json_each(?1,'$.display') \
@@ -643,39 +649,43 @@ let reviews_sql =
    f.value->>0=d.value->>2 UNION ALL SELECT value->>0,value->>1 FROM \
    json_each(?1,'$.computed')), display(event_id,name) AS MATERIALIZED (SELECT \
    event_id,CASE WHEN count(DISTINCT name)=1 THEN min(name) END FROM (SELECT \
-   event_id,name FROM named WHERE name<>'' UNION ALL SELECT event_id,NULL FROM \
-   movements) GROUP BY event_id), transfers(event_id,first_id,second_id,reason,account) \
-   AS MATERIALIZED (SELECT \
-   m.event_id,m.first_event_id,m.second_event_id,d.reason,g.account FROM \
-   bank_transfer_memberships m JOIN bank_transfer_decisions d ON \
-   d.first_event_id=m.first_event_id AND d.second_event_id=m.second_event_id LEFT JOIN \
-   destinations g ON g.event_id=m.event_id WHERE d.state='confirmed' UNION ALL SELECT \
-   own.anchor_event_id,a.anchor_event_id,b.anchor_event_id,l.reason,r.account FROM \
-   operation_transfer_links l JOIN operation_movements a ON a.id=l.first_movement_id \
-   JOIN operation_movements b ON b.id=l.second_movement_id JOIN operation_movements own \
-   ON own.id IN (a.id,b.id) JOIN operations o ON o.id=own.operation_id AND \
-   o.bank_event_id=own.anchor_event_id JOIN operation_movements other ON other.id=CASE \
-   WHEN own.id=a.id THEN b.id ELSE a.id END JOIN operations oo ON \
-   oo.id=other.operation_id AND oo.bank_event_id IS NULL JOIN \
-   operation_movement_resolutions r ON r.movement_id=other.id), reviews AS MATERIALIZED \
-   (SELECT m.event_id,m.venue AS institution,m.account AS \
-   source,m.booked_on,m.amount,m.currency,e.occurred_at, \
-   e.occurred_on,coalesce(n.name,m.descriptions->>('$['||m.main_description||']'),'') AS \
-   description,o.movement_type AS override,coalesce(o.movement_type,m.movement_type) AS \
-   movement_type,CASE WHEN r.original IS NOT NULL THEN 'reversal' WHEN t.event_id IS NOT \
-   NULL THEN 'transfer' WHEN s.event_id IS NOT NULL THEN 'settlement' WHEN \
-   coalesce(c.account,'equity:unclassified')<>'equity:unclassified' THEN 'category' ELSE \
-   'unclassified' END AS decision,CASE WHEN r.original IS NOT NULL THEN \
-   'assets:reversals:pair-'||r.original||'-'||r.reversal WHEN t.event_id IS NOT NULL \
-   THEN t.account WHEN s.event_id IS NOT NULL THEN s.ledger_account ELSE \
-   coalesce(c.account,'equity:unclassified') END AS counter_account, \
-   coalesce(r.reason,t.reason,s.reason,c.reason) AS reason,v.card_reference, \
-   v.withdrawal_reversal FROM display n JOIN movements m ON m.event_id=n.event_id JOIN \
-   source_events e ON e.id=m.event_id LEFT JOIN movement_type_overrides o ON \
-   o.event_id=m.event_id LEFT JOIN bank_categories c ON c.event_id=m.event_id LEFT JOIN \
-   card_settlement_decisions s ON s.event_id=m.event_id LEFT JOIN transfers t ON \
-   t.event_id=m.event_id LEFT JOIN reversal_pairs r ON r.original=m.event_id OR \
-   r.reversal=m.event_id LEFT JOIN movement_evidence v ON v.event_id=m.event_id)"
+   event_id,name FROM named WHERE name<>''"
+  ^ scope
+  ^ " UNION ALL SELECT event_id,NULL FROM movements WHERE 1"
+  ^ scope
+  ^ ") GROUP BY event_id), transfers(event_id,first_id,second_id,reason,account) AS \
+     MATERIALIZED (SELECT \
+     m.event_id,m.first_event_id,m.second_event_id,d.reason,g.account FROM \
+     bank_transfer_memberships m JOIN bank_transfer_decisions d ON \
+     d.first_event_id=m.first_event_id AND d.second_event_id=m.second_event_id LEFT JOIN \
+     destinations g ON g.event_id=m.event_id WHERE d.state='confirmed' UNION ALL SELECT \
+     own.anchor_event_id,a.anchor_event_id,b.anchor_event_id,l.reason,r.account FROM \
+     operation_transfer_links l JOIN operation_movements a ON a.id=l.first_movement_id \
+     JOIN operation_movements b ON b.id=l.second_movement_id JOIN operation_movements \
+     own ON own.id IN (a.id,b.id) JOIN operations o ON o.id=own.operation_id AND \
+     o.bank_event_id=own.anchor_event_id JOIN operation_movements other ON other.id=CASE \
+     WHEN own.id=a.id THEN b.id ELSE a.id END JOIN operations oo ON \
+     oo.id=other.operation_id AND oo.bank_event_id IS NULL JOIN \
+     operation_movement_resolutions r ON r.movement_id=other.id), reviews AS \
+     MATERIALIZED (SELECT m.event_id,m.venue AS institution,m.account AS \
+     source,m.booked_on,m.amount,m.currency,e.occurred_at, \
+     e.occurred_on,coalesce(n.name,m.descriptions->>('$['||m.main_description||']'),'') \
+     AS description,o.movement_type AS \
+     override,coalesce(o.movement_type,m.movement_type) AS movement_type,CASE WHEN \
+     r.original IS NOT NULL THEN 'reversal' WHEN t.event_id IS NOT NULL THEN 'transfer' \
+     WHEN s.event_id IS NOT NULL THEN 'settlement' WHEN \
+     coalesce(c.account,'equity:unclassified')<>'equity:unclassified' THEN 'category' \
+     ELSE 'unclassified' END AS decision,CASE WHEN r.original IS NOT NULL THEN \
+     'assets:reversals:pair-'||r.original||'-'||r.reversal WHEN t.event_id IS NOT NULL \
+     THEN t.account WHEN s.event_id IS NOT NULL THEN s.ledger_account ELSE \
+     coalesce(c.account,'equity:unclassified') END AS counter_account, \
+     coalesce(r.reason,t.reason,s.reason,c.reason) AS reason,v.card_reference, \
+     v.withdrawal_reversal FROM display n JOIN movements m ON m.event_id=n.event_id JOIN \
+     source_events e ON e.id=m.event_id LEFT JOIN movement_type_overrides o ON \
+     o.event_id=m.event_id LEFT JOIN bank_categories c ON c.event_id=m.event_id LEFT \
+     JOIN card_settlement_decisions s ON s.event_id=m.event_id LEFT JOIN transfers t ON \
+     t.event_id=m.event_id LEFT JOIN reversal_pairs r ON r.original=m.event_id OR \
+     r.reversal=m.event_id LEFT JOIN movement_evidence v ON v.event_id=m.event_id)"
 ;;
 
 let decision_of_string = function
@@ -688,14 +698,14 @@ let decision_of_string = function
 
 (* The reviews [where] selects, built from one query and the stored movements. [where]
    is a condition on the reviews row [r]; the parameter also holds what it reads. *)
-let select_reviews db ~context ~where ~order ~movements =
+let select_reviews ?event_ids db ~context ~where ~order ~movements =
   let* rows =
     collect
       db
       (Rel_sql.Stmt.(
          func
            ("WITH "
-            ^ reviews_sql
+            ^ reviews_sql ?event_ids ()
             ^ " SELECT \
                r.event_id,r.institution,r.occurred_at,r.occurred_on,r.description, \
                r.override,r.decision,r.counter_account,r.reason,r.card_reference, \
@@ -1169,15 +1179,9 @@ let operations
       db
   =
   let* groups = operation_groups db in
-  let* grouped =
-    collect db (statement "SELECT id FROM operations ORDER BY id" Row.(t1 (int64 "id")))
-  in
   let group_rows =
-    List.filter_map grouped ~f:(fun id ->
-      let canonical = Operation_groups.canonical groups id in
-      Option.some_if
-        (not (Int64.equal canonical id))
-        (json_array [ Int64.to_string id; Int64.to_string canonical ]))
+    List.map (Operation_groups.noncanonical_members groups) ~f:(fun (id, canonical) ->
+      json_array [ Int64.to_string id; Int64.to_string canonical ])
   in
   let* context = review_context db in
   let parameter =
@@ -1204,7 +1208,7 @@ let operations
       (Rel_sql.Stmt.(
          func
            ("WITH "
-            ^ reviews_sql
+            ^ reviews_sql ()
             ^ operations_sql
             ^ " SELECT \
                v.id,v.occurred,v.anchor,v.institution,v.description,x.operation_id IS \
@@ -1277,6 +1281,7 @@ let operations
   let table = Hashtbl.of_alist_exn (module Int64) stored_movements in
   let* reviews =
     select_reviews
+      ?event_ids:(Option.map limit ~f:(fun _ -> anchors))
       db
       ~context
       ~where:(" WHERE r." ^ in_anchors)

@@ -15,5 +15,8 @@ val create : links:(int64 * int64) list -> stated:int64 list list -> t Or_error.
 (** The ID the group of this operation reads under. *)
 val canonical : t -> int64 -> int64
 
+(** Noncanonical member IDs paired with their canonical IDs, in member order. *)
+val noncanonical_members : t -> (int64 * int64) list
+
 (** All operations of this operation's group, canonical first. *)
 val members : t -> int64 -> int64 list

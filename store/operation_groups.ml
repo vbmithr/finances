@@ -32,6 +32,7 @@ let create ~links ~stated =
 ;;
 
 let canonical t id = Option.value (Map.find t.canonical id) ~default:id
+let noncanonical_members t = Map.to_alist t.canonical
 
 let members t id =
   let first = canonical t id in

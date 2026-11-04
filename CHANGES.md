@@ -8,6 +8,10 @@ short line of their own.
 
 ## Unreleased
 
+- Speed up limited `fin operation list` pages by reviewing only selected
+  movements and avoiding an unnecessary scan of operation IDs. Filters,
+  ordering and grouping remain unchanged.
+
 - Compare amounts in `fin operation list --order-by amount` with SQLite's
   decimal collation, including values beyond 40 decimal places. SQLite's
   decimal extension is compiled into Fin and initialized on each connection.
