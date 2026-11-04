@@ -23,6 +23,8 @@ let no_details : Records.details =
   ; references = None
   ; exchange = None
   ; reported = None
+  ; balance_after = None
+  ; valuations = []
   ; fields = []
   }
 ;;
@@ -86,17 +88,28 @@ let camt_record profile statement_id (tx : Camt_source.transaction) =
 ;;
 
 let camt_statement (statement : Camt_source.statement) : Records.statement =
-  let balance quantity at : Records.balance =
-    { quantity; as_of = Records.of_instant at }
-  in
   { id = statement.statement_id
   ; account = camt_account_id statement.account
-  ; currency = statement.account.currency
-  ; period_start = Records.of_instant statement.period_start
-  ; period_end = Records.of_instant statement.period_end
-  ; opening = balance statement.opening statement.opening_at
-  ; closing = balance statement.closing statement.closing_at
+  ; period =
+      Some
+        ( Records.of_instant statement.period_start
+        , Records.of_instant statement.period_end )
+  ; total = None
   }
+;;
+
+let camt_balances (statement : Camt_source.statement) =
+  let balance balance_type quantity at : Records.balance =
+    { account = camt_account_id statement.account
+    ; balance_type
+    ; quantity
+    ; commodity = Commodity.fiat statement.account.currency
+    ; as_of = Records.of_instant at
+    }
+  in
+  [ balance Opening statement.opening statement.opening_at
+  ; balance Closing statement.closing statement.closing_at
+  ]
 ;;
 
 let of_camt (preset : Camt_institution_preset.t) contents =
@@ -115,7 +128,10 @@ let of_camt (preset : Camt_institution_preset.t) contents =
     |> List.dedup_and_sort ~compare:(fun (a : Records.account) b ->
       String.compare a.id b.id)
   in
-  accounts, List.map document.statements ~f:camt_statement, records
+  ( accounts
+  , List.map document.statements ~f:camt_statement
+  , List.concat_map document.statements ~f:camt_balances
+  , records )
 ;;
 
 (* The CSV names no account, only a currency in each row, so a CSV with no rows has
@@ -131,7 +147,9 @@ let csv_account currency : Records.account =
   }
 ;;
 
-let csv_details ~credit ~reference (fields : (string * string) list) : Records.details =
+let csv_details ~credit ~reference ~balance_after (fields : (string * string) list)
+  : Records.details
+  =
   let stated name =
     List.Assoc.find fields ~equal:String.equal name
     |> Option.filter ~f:(fun value -> not (String.is_empty value))
@@ -170,6 +188,7 @@ let csv_details ~credit ~reference (fields : (string * string) list) : Records.d
   ; counterparty
   ; references = Some (references reference (stated "Payment Reference"))
   ; exchange
+  ; balance_after = Some balance_after
   ; fields = List.filter fields ~f:(fun (_, value) -> not (String.is_empty value))
   }
 ;;
@@ -199,6 +218,7 @@ let csv_record (preset : Camt_institution_preset.t) (row : Csv_clock_companion.r
       csv_details
         ~credit:(String.equal direction "CREDIT")
         ~reference:row.reference
+        ~balance_after:row.running_balance
         fields
   }
 ;;
@@ -214,6 +234,7 @@ let of_csv (preset : Camt_institution_preset.t) contents =
     |> List.dedup_and_sort ~compare:(fun (a, _) (b, _) -> String.compare a b)
   in
   ( List.map currencies ~f:(fun (_, currency) -> csv_account currency)
+  , []
   , []
   , List.map rows ~f:(csv_record preset) )
 ;;
@@ -231,7 +252,7 @@ let recognizes contents =
 let convert ~name contents =
   let open Or_error.Let_syntax in
   let preset = Lazy.force preset in
-  let%map accounts, statements, records =
+  let%map accounts, statements, balances, records =
     if is_camt contents
     then of_camt preset contents
     else if recognizes contents
@@ -244,6 +265,7 @@ let convert ~name contents =
    ; sources = [ { name; sha256 = Digestif.SHA256.(digest_string contents |> to_hex) } ]
    ; accounts
    ; statements
+   ; balances
    ; records
    }
    : Records.t)

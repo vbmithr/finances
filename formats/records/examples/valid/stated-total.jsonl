@@ -1,0 +1,7 @@
+{"kind":"header","format":"fin-records","version":1,"institution":"example","identity":"source"}
+{"kind":"source","name":"export.csv","sha256":"0000000000000000000000000000000000000000000000000000000000000000"}
+{"kind":"account","id":"main","currency":"EUR"}
+{"kind":"statement","id":"s1","account":"main","total":{"quantity":"-4.50","commodity":{"kind":"fiat","code":"EUR"}}}
+{"kind":"record","id":"row-1","account":"main","occurred":"2025-01-02","movements":[{"role":"primary","quantity":"-3.50","commodity":{"kind":"fiat","code":"EUR"}}],"statements":["s1"]}
+{"kind":"record","id":"row-2","account":"main","occurred":"2025-01-02","movements":[{"role":"primary","quantity":"-1","commodity":{"kind":"fiat","code":"EUR"}}],"statements":["s1"]}
+{"kind":"end","records":2}

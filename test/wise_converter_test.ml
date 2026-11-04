@@ -68,6 +68,10 @@ let csv () =
     true
     (List.exists row.details.fields ~f:(fun (name, _) -> String.equal name "Date Time"));
   Alcotest.(check bool) "no fee: Total fees repeats a row" true (Option.is_none row.fee);
+  Alcotest.(check (option string))
+    "the running balance is kept"
+    (Some "90")
+    (Option.map row.details.balance_after ~f:Quantity.to_string);
   Alcotest.(check bool)
     "empty columns are left out"
     false

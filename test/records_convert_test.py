@@ -53,7 +53,7 @@ assert sum(r.get("observation", False) for r in of_kind(merged, "record")) == 3
 with tempfile.TemporaryDirectory() as directory:
     plain = pathlib.Path(directory) / "wise.jsonl"
     packed = pathlib.Path(directory) / "wise.jsonl.zst"
-    summary = "institution=wise accounts=2 statements=1 records=6\n"
+    summary = "institution=wise accounts=2 statements=1 balances=2 records=6\n"
     assert run("convert", "wise", camt, csv, "-o", str(plain)) == summary
     assert run("convert", "wise", camt, csv, "--output", str(packed)) == summary
     assert plain.read_bytes()[:1] == b"{"

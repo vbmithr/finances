@@ -1,5 +1,7 @@
 {"kind":"header","format":"fin-records","version":1,"institution":"example","identity":"source"}
 {"kind":"source","name":"empty.xml","sha256":"0000000000000000000000000000000000000000000000000000000000000000"}
 {"kind":"account","id":"a"}
-{"kind":"statement","id":"s","account":"a","currency":"EUR","period_start":"2025-01-01","period_end":"2025-01-31","opening":{"quantity":"1","as_of":"2025-01-01"},"closing":{"quantity":"1","as_of":"2025-01-31"}}
+{"kind":"statement","id":"s","account":"a","period_start":"2025-01-01","period_end":"2025-01-31"}
+{"kind":"balance","account":"a","type":"opening","quantity":"1","commodity":{"kind":"fiat","code":"EUR"},"as_of":"2025-01-01"}
+{"kind":"balance","account":"a","type":"closing","quantity":"1","commodity":{"kind":"fiat","code":"EUR"},"as_of":"2025-01-31"}
 {"kind":"end","records":0}

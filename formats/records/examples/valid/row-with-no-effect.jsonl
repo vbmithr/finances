@@ -1,0 +1,5 @@
+{"kind":"header","format":"fin-records","version":1,"institution":"example","identity":"source"}
+{"kind":"source","name":"export.csv","sha256":"0000000000000000000000000000000000000000000000000000000000000000"}
+{"kind":"account","id":"main","currency":"EUR"}
+{"kind":"record","id":"row-1","account":"main","occurred":"2025-01-02","movements":[],"details":{"reported":{"quantity":"-3.50","symbol":"EUR"},"fields":[["State","REVERTED"]]}}
+{"kind":"end","records":1}

@@ -3,8 +3,9 @@
 Status: version 1 draft, 2026-11-04. `fin records check FILE` validates a file and `fin
 convert wise FILE` prints one. Fin does not import the format yet.
 
-A records file is what one institution's statement says, as JSON Lines: every entry of
-the statement becomes one record. A **converter** reads a statement and prints the file; fin
+A records file is what one institution's document says, as JSON Lines: every entry becomes
+one record. The document may be a statement, or only a list of movements with no stated
+period or balances. It then has no `statement` line, and says nothing about being complete. A **converter** reads a statement and prints the file; fin
 validates and stores it, then matches what can be matched across all stored records.
 Categories, rules and the journal also stay in fin.
 
@@ -57,7 +58,8 @@ otherwise valid JSON Lines. A file with no `end` line is refused.
 | `header` | `format` (`fin-records`), `version` (`1`), `institution` (lower case; records of one institution can group together), `identity` (`source` or `inventory`, see below), optional `converter` (name and version, for diagnosis) |
 | `source` | `name` and `sha256` of a statement file read; a section has at least one |
 | `account` | An account the records use |
-| `statement` | Stated period and balances |
+| `statement` | Rows the source says belong together, with their period or total if stated |
+| `balance` | A balance the source states at a point in time |
 | `record` | One source row |
 | `end` | `records`, how many `record` lines the section has |
 
@@ -69,9 +71,14 @@ An account has an `id`, stable across exports, and optionally `bank`, `number`, 
 and `currency`. `iban` gives its IBAN, and `no_iban` says it has none, such as a card;
 with neither, a registered IBAN may supply it.
 
-A statement has `id`, `account`, `currency`, `period_start`, `period_end`, and `opening`
-and `closing`, each a `quantity` with `as_of`. Fin reports a statement whose records do
-not reconcile; it does not refuse it, because exports can be partial.
+A statement has `id` and `account`, and optionally `period_start` with `period_end`, and
+`total`, what its rows add up to with signs as in the movements, as a `quantity` and a
+`commodity`. A source may state neither. Rows list it in `statements`. Fin reports a
+statement that does not reconcile; it does not refuse it, because exports can be partial.
+
+A balance has `account`, `quantity`, `commodity`, `as_of` and a `type`: `opening`, `closing`,
+`available`, or `day_end` for one balance per day whichever rows it follows. It stands alone,
+so a source with no statement can state one, and overlapping exports state it once.
 
 ## Record
 
@@ -86,7 +93,7 @@ each export's statement differently, so one row can be listed by several.
 | `statements` | The `statement` ids that list this row, if any |
 | `occurred` | A date, or an instant with an offset, as stated; a date asserts no time of day |
 | `value_on` | Value date |
-| `movements` | Balance effects; empty when the converter cannot interpret the row |
+| `movements` | Balance effects; empty when the source says the row had none, or the converter cannot interpret it, with the amount in `reported` |
 | `fee` | Non-negative, on a one-movement record: part of its balance effect, posted apart |
 | `group` | Key shared by rows the institution states are one activity |
 | `supporting` | This row only supports its group, such as a fee row, and never represents it |
@@ -106,9 +113,16 @@ not change it, so a record gains data without changing identity.
 | `type` | A movement type, if the source states one |
 | `counterparty` | `name` and `iban` as stated; evidence for matching, not an account |
 | `references` | `servicer`, `end_to_end`, `payment`, `hash` |
-| `exchange` | `source`, `target`, `rate`, `target_quantity`, as stated |
+| `exchange` | `source`, `target`, `rate`, and a signed `target_quantity`, as stated |
 | `reported` | An amount stated but not interpreted, with its symbol |
+| `balance_after` | The account's balance after this row, if the source displays one |
+| `valuations` | What the source says this row is worth, as `quantity` and `commodity`, as stated |
 | `fields` | Raw values as `[name, value]`, in source order; rules match these |
+
+A displayed running balance is evidence, so it is kept as stated, never computed. It is in
+the commodity of the record's one movement, and sits in `details` so that it reaches the
+record when it comes from an observation, as Wise's does. A balance that does not follow
+each row is a `balance` line instead.
 
 ## Observations
 
@@ -163,11 +177,40 @@ Fin matches three ways, using stored evidence only:
 
 Shape is not enough, so fin also refuses: a line outside a section, a `header` before the
 previous section's `end`, a file with no `end` line, an `end` that miscounts, a section
-with no `source`, an `id` repeated for an account, an account or
+with no `source`, a balance of an unknown account, an `id` repeated for an account, an account or
 statement listed twice, a reference to an unknown account or statement, a record naming
-another account's statement or one statement twice, a role repeated in a record, a `fee` on a record without
-exactly one movement, an observation without exactly one movement, a `fiat` code that is
+another account's statement or one statement twice, a role repeated in a record, a `fee` or
+`balance_after` on a record without exactly one movement, an observation without exactly one movement, a `fiat` code that is
 not ISO 4217, and an impossible date.
+
+## Coverage
+
+Audited on 2026-11-04 against real files of each institution, by structure and counts. A
+source file is often no statement at all, only a list of movements.
+
+| Source | What it states | In the format |
+|---|---|---|
+| Wise CAMT | Period, opening and closing, entries with instants | `statement`, `balance`, `record` |
+| Wise CSV | Row list, running balance after each row, exchange columns | observations with `balance_after` and `exchange` |
+| BoursoBank OFX | Period, one available balance, entries with `FITID` | `statement` with a period, an `available` balance |
+| BoursoBank CSV | Row list with two columns both named `Solde`, bank category | the second `Solde` as `day_end` balances; the category in `fields` |
+| bunq MT940 | Opening and closing, entries with a value date, no row IDs | `balance`, `inventory` identity |
+| bunq CSV | Row list with date and value date, no IDs, identical rows | observations, `inventory` identity |
+| Revolut CSV | Row list per currency, running balance, `REVERTED` rows | `balance_after`; a reverted row has no movements and a `reported` amount |
+| CDC CSV | Row list of up to two legs, stated fiat values, some hashes | `valuations`, `references.hash`, a signed exchange target |
+| FDM CSV | Card rows with local and USD amounts, a final total row | `exchange`, a `statement` with a `total` |
+
+Only Wise has been converted so far; the others are mapped from their structure.
+
+Measured, so these are not guesses: Wise and Revolut running balances reconcile on every
+consecutive pair, with Revolut's balance moving by `Amount` minus `Fee`. BoursoBank has
+exactly one balance per value date on every account. It reconciles from day to day on most
+days of two accounts and hardly ever on a third, apparently a card, so it is stated
+evidence, not a running total. FDM's last row is the exact sum of its dated rows.
+
+For pairing, reference and date do not always decide. On bunq, which has no references, date
+and quantity pair all 332 rows only on the value date, and 113 of them share a key with
+another row; BoursoBank has 13 such keys. Fin will need the descriptions or the source order.
 
 ## From CAMT
 
@@ -175,7 +218,7 @@ The concepts come from CAMT.053 where they fit, so converting CAMT loses little:
 
 | CAMT | Records |
 |---|---|
-| `Stmt`, `Bal` (`OPBD`, `CLBD`) | `statements`, `opening`, `closing` |
+| `Stmt`, `Bal` (`OPBD`, `CLBD`) | `statement`, `balance` lines of type `opening`, `closing` |
 | `Ntry`, `BookgDt`, `ValDt` | `records`, `occurred`, `value_on` |
 | `Refs/AcctSvcrRef`, `EndToEndId`, `RmtInf` | `references`, `descriptions` |
 | `CcyXchg` | `exchange` |

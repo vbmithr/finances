@@ -42,19 +42,30 @@ let of_instant instant =
 
 let local_date t = Date.of_string (String.prefix t.stated 10)
 
-type balance =
+type amount =
   { quantity : Quantity.t
+  ; commodity : Commodity.t
+  }
+
+type balance_type =
+  | Opening
+  | Closing
+  | Available
+  | Day_end
+
+type balance =
+  { account : string
+  ; balance_type : balance_type
+  ; quantity : Quantity.t
+  ; commodity : Commodity.t
   ; as_of : temporal
   }
 
 type statement =
   { id : string
   ; account : string
-  ; currency : Iso4217.t
-  ; period_start : temporal
-  ; period_end : temporal
-  ; opening : balance
-  ; closing : balance
+  ; period : (temporal * temporal) option
+  ; total : amount option
   }
 
 type movement =
@@ -94,6 +105,8 @@ type details =
   ; references : references option
   ; exchange : exchange option
   ; reported : reported option
+  ; balance_after : Quantity.t option
+  ; valuations : amount list
   ; fields : (string * string) list
   }
 
@@ -124,6 +137,7 @@ type t =
   ; sources : source list
   ; accounts : account list
   ; statements : statement list
+  ; balances : balance list
   ; records : record list
   }
 
@@ -264,25 +278,46 @@ let account_codec =
   |> Jsont.Object.finish
 ;;
 
-let balance_codec =
-  Jsont.Object.map (fun quantity as_of : balance -> { quantity; as_of })
-  |> Jsont.Object.mem "quantity" quantity ~enc:(fun (b : balance) -> b.quantity)
-  |> Jsont.Object.mem "as_of" temporal ~enc:(fun (b : balance) -> b.as_of)
+let amount_codec =
+  Jsont.Object.map (fun quantity commodity : amount -> { quantity; commodity })
+  |> Jsont.Object.mem "quantity" quantity ~enc:(fun (a : amount) -> a.quantity)
+  |> Jsont.Object.mem "commodity" commodity ~enc:(fun (a : amount) -> a.commodity)
   |> Jsont.Object.error_unknown
   |> Jsont.Object.finish
 ;;
 
+let balance_type_codec =
+  Jsont.enum
+    [ "opening", Opening; "closing", Closing; "available", Available; "day_end", Day_end ]
+;;
+
+let balance_codec =
+  Jsont.Object.map (fun account balance_type quantity commodity as_of : balance ->
+    { account; balance_type; quantity; commodity; as_of })
+  |> Jsont.Object.mem "account" text ~enc:(fun (b : balance) -> b.account)
+  |> Jsont.Object.mem "type" balance_type_codec ~enc:(fun (b : balance) -> b.balance_type)
+  |> Jsont.Object.mem "quantity" quantity ~enc:(fun (b : balance) -> b.quantity)
+  |> Jsont.Object.mem "commodity" commodity ~enc:(fun (b : balance) -> b.commodity)
+  |> Jsont.Object.mem "as_of" temporal ~enc:(fun (b : balance) -> b.as_of)
+  |> Jsont.Object.finish
+;;
+
 let statement_codec =
-  Jsont.Object.map
-    (fun id account currency period_start period_end opening closing : statement ->
-       { id; account; currency; period_start; period_end; opening; closing })
+  Jsont.Object.map (fun id account period_start period_end total : statement ->
+    let period =
+      match period_start, period_end with
+      | Some first, Some last -> Some (first, last)
+      | None, None -> None
+      | _ -> refuse "a period needs both period_start and period_end"
+    in
+    { id; account; period; total })
   |> Jsont.Object.mem "id" text ~enc:(fun (s : statement) -> s.id)
   |> Jsont.Object.mem "account" text ~enc:(fun (s : statement) -> s.account)
-  |> Jsont.Object.mem "currency" currency ~enc:(fun (s : statement) -> s.currency)
-  |> Jsont.Object.mem "period_start" temporal ~enc:(fun (s : statement) -> s.period_start)
-  |> Jsont.Object.mem "period_end" temporal ~enc:(fun (s : statement) -> s.period_end)
-  |> Jsont.Object.mem "opening" balance_codec ~enc:(fun (s : statement) -> s.opening)
-  |> Jsont.Object.mem "closing" balance_codec ~enc:(fun (s : statement) -> s.closing)
+  |> Jsont.Object.opt_mem "period_start" temporal ~enc:(fun (s : statement) ->
+    Option.map s.period ~f:fst)
+  |> Jsont.Object.opt_mem "period_end" temporal ~enc:(fun (s : statement) ->
+    Option.map s.period ~f:snd)
+  |> Jsont.Object.opt_mem "total" amount_codec ~enc:(fun (s : statement) -> s.total)
   |> Jsont.Object.finish
 ;;
 
@@ -321,8 +356,7 @@ let exchange_codec =
   |> Jsont.Object.mem "source" text ~enc:(fun e -> e.source)
   |> Jsont.Object.mem "target" text ~enc:(fun e -> e.target)
   |> Jsont.Object.opt_mem "rate" positive_quantity ~enc:(fun e -> e.rate)
-  |> Jsont.Object.opt_mem "target_quantity" positive_quantity ~enc:(fun e ->
-    e.target_quantity)
+  |> Jsont.Object.opt_mem "target_quantity" quantity ~enc:(fun e -> e.target_quantity)
   |> Jsont.Object.error_unknown
   |> Jsont.Object.finish
 ;;
@@ -351,13 +385,25 @@ let field =
 
 let details_codec =
   Jsont.Object.map
-    (fun descriptions movement_type counterparty references exchange reported fields ->
+    (fun
+        descriptions
+         movement_type
+         counterparty
+         references
+         exchange
+         reported
+         balance_after
+         valuations
+         fields
+       ->
        { descriptions
        ; movement_type
        ; counterparty
        ; references
        ; exchange
        ; reported
+       ; balance_after
+       ; valuations
        ; fields
        })
   |> optional_list "descriptions" Jsont.string ~enc:(fun d -> d.descriptions)
@@ -366,6 +412,8 @@ let details_codec =
   |> Jsont.Object.opt_mem "references" references_codec ~enc:(fun d -> d.references)
   |> Jsont.Object.opt_mem "exchange" exchange_codec ~enc:(fun d -> d.exchange)
   |> Jsont.Object.opt_mem "reported" reported_codec ~enc:(fun d -> d.reported)
+  |> Jsont.Object.opt_mem "balance_after" quantity ~enc:(fun d -> d.balance_after)
+  |> optional_list "valuations" amount_codec ~enc:(fun d -> d.valuations)
   |> optional_list "fields" field ~enc:(fun d -> d.fields)
   |> Jsont.Object.error_unknown
   |> Jsont.Object.finish
@@ -378,6 +426,8 @@ let no_details =
   ; references = None
   ; exchange = None
   ; reported = None
+  ; balance_after = None
+  ; valuations = []
   ; fields = []
   }
 ;;
@@ -435,6 +485,8 @@ let record_codec =
          && Option.is_none d.references
          && Option.is_none d.exchange
          && Option.is_none d.reported
+         && Option.is_none d.balance_after
+         && List.is_empty d.valuations
          && List.is_empty d.fields)
        ~enc:(fun r -> r.details)
   |> flag "observation" ~enc:(fun r -> r.observation)
@@ -474,6 +526,7 @@ type line =
   | Source_line of source
   | Account_line of account
   | Statement_line of statement
+  | Balance_line of balance
   | Record_line of record
   | End of int
 
@@ -483,6 +536,7 @@ let line_codec =
   and source = Case.map "source" source_codec ~dec:(fun x -> Source_line x)
   and account = Case.map "account" account_codec ~dec:(fun x -> Account_line x)
   and statement = Case.map "statement" statement_codec ~dec:(fun x -> Statement_line x)
+  and balance = Case.map "balance" balance_codec ~dec:(fun x -> Balance_line x)
   and record = Case.map "record" record_codec ~dec:(fun x -> Record_line x)
   and end_ = Case.map "end" end_codec ~dec:(fun x -> End x) in
   map Fn.id
@@ -495,6 +549,7 @@ let line_codec =
          | Source_line x -> Case.value source x
          | Account_line x -> Case.value account x
          | Statement_line x -> Case.value statement x
+         | Balance_line x -> Case.value balance x
          | Record_line x -> Case.value record x
          | End x -> Case.value end_ x)
        Case.
@@ -502,6 +557,7 @@ let line_codec =
          ; make source
          ; make account
          ; make statement
+         ; make balance
          ; make record
          ; make end_
          ]
@@ -531,6 +587,9 @@ let check t =
   List.iter t.statements ~f:(fun s ->
     if not (Hash_set.mem accounts s.account)
     then problem "statement %S: unknown account %S" s.id s.account);
+  List.iter t.balances ~f:(fun b ->
+    if not (Hash_set.mem accounts b.account)
+    then problem "balance as of %s: unknown account %S" b.as_of.stated b.account);
   let record_ids = Hash_set.create (module String) in
   List.iter t.records ~f:(fun r ->
     let problem fmt =
@@ -559,6 +618,8 @@ let check t =
     let one_movement = Int.equal (List.length r.movements) 1 in
     if Option.is_some r.fee && not one_movement
     then problem "a fee needs exactly one movement";
+    if Option.is_some r.details.balance_after && not one_movement
+    then problem "a balance after the row needs exactly one movement";
     if r.observation && not one_movement
     then problem "an observation needs exactly one movement");
   if Queue.is_empty problems
@@ -617,6 +678,19 @@ let merge documents =
           statement_codec
           ~key:(fun (s : statement) -> s.id)
           (all (fun t -> t.statements))
+    ; balances =
+        once
+          (fun (b : balance) -> Printf.sprintf "balance as of %s" b.as_of.stated)
+          balance_codec
+          ~key:(fun (b : balance) ->
+            String.concat
+              ~sep:"\000"
+              [ b.account
+              ; Json.encode balance_type_codec b.balance_type
+              ; Commodity.display b.commodity
+              ; b.as_of.stated
+              ])
+          (all (fun t -> t.balances))
     ; records =
         (let records = all (fun t -> t.records) in
          let key (r : record) = r.account ^ "\000" ^ r.id in
@@ -684,6 +758,7 @@ let sections text =
     | Some t, Source_line s -> Some { t with sources = s :: t.sources }
     | Some t, Account_line a -> Some { t with accounts = a :: t.accounts }
     | Some t, Statement_line s -> Some { t with statements = s :: t.statements }
+    | Some t, Balance_line b -> Some { t with balances = b :: t.balances }
     | Some t, Record_line r -> Some { t with records = r :: t.records }
     | _ -> open_
   in
@@ -706,6 +781,7 @@ let sections text =
               ; sources = []
               ; accounts = []
               ; statements = []
+              ; balances = []
               ; records = []
               }
           , closed
@@ -731,6 +807,7 @@ let sections text =
            sources = List.rev t.sources
          ; accounts = List.rev t.accounts
          ; statements = List.rev t.statements
+         ; balances = List.rev t.balances
          ; records = List.rev t.records
          }))
 ;;
@@ -771,6 +848,7 @@ let to_string t =
   ; List.map t.sources ~f:(fun x -> Source_line x)
   ; List.map t.accounts ~f:(fun x -> Account_line x)
   ; List.map t.statements ~f:(fun x -> Statement_line x)
+  ; List.map t.balances ~f:(fun x -> Balance_line x)
   ; List.map t.records ~f:(fun x -> Record_line x)
   ; [ End (List.length t.records) ]
   ]

@@ -498,8 +498,10 @@ position observations, derive positions from fills, or calculate funding.
   statements, reference, quantity, currency and date pair 2002 of 2003 CSV rows with exactly
   one CAMT record, and none with several; the other row's CSV reference has a
   `CARD_ORDER_CHECKOUT-` prefix the CAMT lacks.
-  Next: `fin import` for records beside the current adapters, then retire adapters one at
-  a time.
+  Audited against every institution's real files (2026-11-04, see Coverage in
+  [records-format.md](records-format.md#coverage)). The format now holds what it found.
+  Next: a generic CSV converter driven by a config file, then `fin import` for
+  records beside the current adapters, and retire adapters one at a time.
 - [ ] Group movements into operations by evidence strength, covering transfers,
   CDC exchanges and Wise conversions: design proposed 2026-11-03 in
   [operation-transactions.md](operation-transactions.md#grouping-movements-into-operations-proposal),

@@ -55,19 +55,34 @@ val temporal_of_string : string -> temporal Or_error.t
 (** The calendar date as stated, at the stated offset. *)
 val local_date : temporal -> Date.t
 
-type balance =
+(** A quantity of a commodity, as a source states it. *)
+type amount =
   { quantity : Quantity.t
+  ; commodity : Commodity.t
+  }
+
+type balance_type =
+  | Opening
+  | Closing
+  | Available
+  | Day_end (** One balance per day, whichever rows it follows. *)
+
+(** A balance a source states at a point in time. *)
+type balance =
+  { account : string
+  ; balance_type : balance_type
+  ; quantity : Quantity.t
+  ; commodity : Commodity.t
   ; as_of : temporal
   }
 
+(** A claim that some rows belong together. A source may state a period, what they add up
+    to, both or neither. Most sources state no statement at all. *)
 type statement =
   { id : string
   ; account : string
-  ; currency : Iso4217.t
-  ; period_start : temporal
-  ; period_end : temporal
-  ; opening : balance
-  ; closing : balance
+  ; period : (temporal * temporal) option
+  ; total : amount option
   }
 
 type movement =
@@ -108,6 +123,9 @@ type details =
   ; references : references option
   ; exchange : exchange option
   ; reported : reported option
+  ; balance_after : Quantity.t option
+    (** The account's balance after this row, as the source displays it. *)
+  ; valuations : amount list (** What the source says this row is worth, as stated. *)
   ; fields : (string * string) list
   }
 
@@ -134,6 +152,7 @@ type t =
   ; sources : source list
   ; accounts : account list
   ; statements : statement list
+  ; balances : balance list
   ; records : record list
   }
 

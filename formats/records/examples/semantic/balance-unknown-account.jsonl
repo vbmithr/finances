@@ -1,0 +1,5 @@
+{"kind":"header","format":"fin-records","version":1,"institution":"example","identity":"source"}
+{"kind":"source","name":"export.csv","sha256":"0000000000000000000000000000000000000000000000000000000000000000"}
+{"kind":"account","id":"main","currency":"EUR"}
+{"kind":"balance","account":"elsewhere","type":"closing","quantity":"1","commodity":{"kind":"fiat","code":"EUR"},"as_of":"2025-01-02"}
+{"kind":"end","records":0}

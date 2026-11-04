@@ -34,7 +34,9 @@ let refused kind () =
    on something else. *)
 let reasons () =
   List.iter
-    [ "duplicate-id", "repeated id"
+    [ "balance-unknown-account", "unknown account"
+    ; "balance-with-two-movements", "a balance after the row needs exactly one movement"
+    ; "duplicate-id", "repeated id"
     ; "end-miscounts", "the end line counts 99 records, found 2"
     ; "fee-with-two-movements", "a fee needs exactly one movement"
     ; "header-before-end", "a header before the previous section's end line"
@@ -57,7 +59,23 @@ let reasons () =
         if not (String.is_substring message ~substring:reason)
         then Alcotest.failf "%s: expected %S in %s" name reason message);
   let names = examples "semantic" |> List.length in
-  Alcotest.(check int) "every semantic example has a reason" 13 names
+  Alcotest.(check int) "every semantic example has a reason" 15 names
+;;
+
+let balance_after () =
+  let t =
+    Records.of_string (Stdio.In_channel.read_all (root ^ "/valid/running-balance.jsonl"))
+    |> Or_error.ok_exn
+    |> List.hd_exn
+  in
+  let balances =
+    List.map t.records ~f:(fun r ->
+      Option.map r.details.balance_after ~f:Quantity.to_string)
+  in
+  Alcotest.(check (list (option string)))
+    "stated"
+    [ Some "96.5"; Some "-1"; None ]
+    balances
 ;;
 
 let print documents = List.map documents ~f:Records.to_string |> String.concat
@@ -168,6 +186,10 @@ let merging () =
     (List.for_all both.records ~f:(fun (r : Records.record) ->
        List.is_empty r.statements || List.length r.statements = 2));
   Alcotest.(check int)
+    "balances stated by both are kept once"
+    (List.length wise.balances)
+    (List.length both.balances);
+  Alcotest.(check int)
     "both statements are kept"
     (2 * List.length wise.statements)
     (List.length both.statements);
@@ -224,6 +246,7 @@ let () =
         ; Alcotest.test_case "quantities are exact" `Quick quantities_are_exact
         ; Alcotest.test_case "errors name the place" `Quick errors_name_the_place
         ; Alcotest.test_case "merging documents" `Quick merging
+        ; Alcotest.test_case "running balance" `Quick balance_after
         ; Alcotest.test_case "compression" `Quick compression
         ] )
     ]

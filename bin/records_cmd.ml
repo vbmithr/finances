@@ -5,10 +5,11 @@ open Cli
 
 let print_records_summary (records : Records.t) =
   Stdio.printf
-    "institution=%s accounts=%d statements=%d records=%d\n"
+    "institution=%s accounts=%d statements=%d balances=%d records=%d\n"
     records.institution
     (List.length records.accounts)
     (List.length records.statements)
+    (List.length records.balances)
     (List.length records.records)
 ;;
 

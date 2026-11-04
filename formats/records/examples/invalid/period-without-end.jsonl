@@ -1,0 +1,5 @@
+{"kind":"header","format":"fin-records","version":1,"institution":"example","identity":"source"}
+{"kind":"source","name":"export.csv","sha256":"0000000000000000000000000000000000000000000000000000000000000000"}
+{"kind":"account","id":"main","currency":"EUR"}
+{"kind":"statement","id":"s1","account":"main","period_start":"2025-01-01"}
+{"kind":"end","records":0}

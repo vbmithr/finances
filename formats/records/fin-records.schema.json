@@ -17,6 +17,9 @@
       "$ref": "#/$defs/statement"
     },
     {
+      "$ref": "#/$defs/balance"
+    },
+    {
       "$ref": "#/$defs/record"
     },
     {
@@ -143,6 +146,22 @@
         }
       ]
     },
+    "amount": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "quantity",
+        "commodity"
+      ],
+      "properties": {
+        "quantity": {
+          "$ref": "#/$defs/quantity"
+        },
+        "commodity": {
+          "$ref": "#/$defs/commodity"
+        }
+      }
+    },
     "account": {
       "type": "object",
       "additionalProperties": false,
@@ -183,34 +202,13 @@
         }
       }
     },
-    "balance": {
-      "type": "object",
-      "additionalProperties": false,
-      "required": [
-        "quantity",
-        "as_of"
-      ],
-      "properties": {
-        "quantity": {
-          "$ref": "#/$defs/quantity"
-        },
-        "as_of": {
-          "$ref": "#/$defs/temporal"
-        }
-      }
-    },
     "statement": {
       "type": "object",
       "additionalProperties": false,
       "required": [
         "kind",
         "id",
-        "account",
-        "currency",
-        "period_start",
-        "period_end",
-        "opening",
-        "closing"
+        "account"
       ],
       "properties": {
         "kind": {
@@ -222,21 +220,24 @@
         "account": {
           "$ref": "#/$defs/text"
         },
-        "currency": {
-          "$ref": "#/$defs/currency"
-        },
         "period_start": {
           "$ref": "#/$defs/temporal"
         },
         "period_end": {
           "$ref": "#/$defs/temporal"
         },
-        "opening": {
-          "$ref": "#/$defs/balance"
-        },
-        "closing": {
-          "$ref": "#/$defs/balance"
+        "total": {
+          "description": "What the source states its rows add up to, with signs as in the movements.",
+          "$ref": "#/$defs/amount"
         }
+      },
+      "dependentRequired": {
+        "period_start": [
+          "period_end"
+        ],
+        "period_end": [
+          "period_start"
+        ]
       }
     },
     "movement": {
@@ -389,7 +390,7 @@
               "$ref": "#/$defs/positive_quantity"
             },
             "target_quantity": {
-              "$ref": "#/$defs/positive_quantity"
+              "$ref": "#/$defs/quantity"
             }
           }
         },
@@ -408,6 +409,17 @@
             "symbol": {
               "$ref": "#/$defs/text"
             }
+          }
+        },
+        "balance_after": {
+          "description": "The account's balance after this row, as the source displays it, in the commodity of the record's one movement.",
+          "$ref": "#/$defs/quantity"
+        },
+        "valuations": {
+          "description": "What the source says this row is worth, as stated.",
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/amount"
           }
         },
         "fields": {
@@ -511,6 +523,44 @@
           "description": "How many records lines the section has, so that a truncated file is noticed.",
           "type": "integer",
           "minimum": 0
+        }
+      }
+    },
+    "balance": {
+      "description": "A balance the source states at a point in time.",
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "kind",
+        "account",
+        "type",
+        "quantity",
+        "commodity",
+        "as_of"
+      ],
+      "properties": {
+        "kind": {
+          "const": "balance"
+        },
+        "account": {
+          "$ref": "#/$defs/text"
+        },
+        "type": {
+          "enum": [
+            "opening",
+            "closing",
+            "available",
+            "day_end"
+          ]
+        },
+        "quantity": {
+          "$ref": "#/$defs/quantity"
+        },
+        "commodity": {
+          "$ref": "#/$defs/commodity"
+        },
+        "as_of": {
+          "$ref": "#/$defs/temporal"
         }
       }
     }
