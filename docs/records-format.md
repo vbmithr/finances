@@ -1,8 +1,7 @@
 # Records format
 
 Status: version 1 draft, 2026-11-04. `fin records check FILE` validates a file and `fin convert`
-prints one. Fin imports records, pairs observations and stores balances, for FDM, CDC, Revolut, bunq and BoursoBank so far; other
-institutions still import through their adapters.
+prints one. Fin imports records, pairs observations and stores balances, for every bundled institution.
 
 A records file is what one institution's document says, as JSON Lines: every entry becomes
 one record. The document may be a statement, or only a list of movements with no stated
@@ -140,8 +139,8 @@ account has to agree. Either way the booking date, quantity and commodity must t
 rows fit, a shared description settles it, and rows that cannot be told apart pair in source order,
 since they are interchangeable. A unique pair adds the observation's `details` to the record, in
 either import order. Another export of one row is no competition. A pair that stays ambiguous, or
-two exports that state a row differently, stays visible for review and is neither merged nor
-counted. An observation with no pair is kept, and it is reported as unmatched.
+two exports that differ in a `conflict_columns` column of the definition, stays visible for review
+and is neither merged nor counted. An observation with no pair is kept, and it is reported as unmatched.
 
 The Wise converter marks its CSV rows this way. The CSV names a currency and no account, so these
 rows use an account `balance-EUR` that holds no counted record, and they pair by reference. The CSV
@@ -263,6 +262,7 @@ unknown member or a column not in its header.
 | `reported` | `quantity` and `symbol` columns for a row no case takes |
 | `total` | `when` conditions of a row stating what the others add up to, with its `quantity` and `commodity` |
 | `balance_after`, `balances` | Running balance column, and `balance` lines to state from each row |
+| `conflict_columns` | Columns two exports of one row must agree on; others, such as a note, may differ |
 | `journal_tags`, `journal_description` | Tag name to column, and the column that replaces the description, in the journal entry of a paired row |
 | `descriptions`, `type`, `counterparty_name`, `counterparty_iban`, `references`, `exchange`, `valuations` | Columns for those members of `details`; the first filled `counterparty_name` wins |
 

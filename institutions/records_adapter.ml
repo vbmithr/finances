@@ -295,7 +295,7 @@ let settle rows candidates =
   else settled, List.map rows ~f:(fun (row, _) -> row, List.map candidates ~f:fst)
 ;;
 
-let match_rows (rows : Companion.row list) events =
+let match_rows ~conflict_columns (rows : Companion.row list) events =
   let open Or_error.Let_syntax in
   let%bind inputs =
     List.map rows ~f:(fun (row : Companion.row) ->
@@ -354,17 +354,12 @@ let match_rows (rows : Companion.row list) events =
     in
     List.iter settled ~f:(fun (row, id) -> Hashtbl.set matched ~key:row ~data:id);
     List.iter left ~f:(fun (row, ids) -> Hashtbl.set undecided ~key:row ~data:ids));
-  (* Exports that state one row differently are for review, as with any other source. *)
+  (* Exports may differ in text or a user's note. A declared column that differs is for review. *)
   let signature (record : Records.record) =
-    Records.row_to_string
-      { id = ""
-      ; bank = None
-      ; number = None
-      ; account_type = None
-      ; currency = None
-      ; iban = Unstated
-      }
-      { record with statements = []; details = { record.details with fields = [] } }
+    List.filter record.details.fields ~f:(fun (name, _) ->
+      List.mem conflict_columns name ~equal:String.equal)
+    |> List.map ~f:(fun (name, value) -> name ^ "\000" ^ value)
+    |> String.concat ~sep:"\000"
   in
   let claims = Hashtbl.create (module Int64) in
   List.iter inputs ~f:(fun ((row : Companion.row), record) ->
@@ -397,10 +392,10 @@ let observation (row : Companion.row) =
   | _ -> Or_error.error_string "an observation is one stored record"
 ;;
 
-let companion ~tags ~journal_description format : Companion.t =
+let companion ~tags ~journal_description ~conflict_columns format : Companion.t =
   { format
   ; policy = "records-v1"
-  ; match_rows
+  ; match_rows = match_rows ~conflict_columns
   ; annotate =
       (fun row ->
         let open Or_error.Let_syntax in
@@ -443,6 +438,7 @@ type source =
   ; convert : name:string -> string -> Records.t Or_error.t
   ; tags : (string * string) list
   ; journal_description : string option
+  ; conflict_columns : string list
   }
 
 let of_definition format definition =
@@ -452,6 +448,7 @@ let of_definition format definition =
   ; convert = Csv_converter.convert definition
   ; tags = Csv_converter.journal_tags definition
   ; journal_description = Csv_converter.journal_description definition
+  ; conflict_columns = Csv_converter.conflict_columns definition
   }
 ;;
 
@@ -515,7 +512,10 @@ let make ?(aliases = []) ~institution ~overlap sources : (module Adapter.S) =
       let journal_description =
         List.find_map sources ~f:(fun source -> source.journal_description)
       in
-      List.map formats ~f:(companion ~tags ~journal_description)
+      let conflict_columns =
+        List.concat_map sources ~f:(fun source -> source.conflict_columns)
+      in
+      List.map formats ~f:(companion ~tags ~journal_description ~conflict_columns)
     ;;
   end
   in

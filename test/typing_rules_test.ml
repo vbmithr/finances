@@ -826,14 +826,14 @@ let show () =
        Alcotest.(check bool)
          "payload is shown"
          true
-         (String.is_substring d.payload ~substring:"wise-camt-v1");
+         (String.is_substring d.payload ~substring:"fin-records-row");
        Alcotest.(check (list string))
          "imported from"
          [ "wise.xml" ]
          (List.concat_map d.documents ~f:(fun doc -> doc.paths));
        (match d.companions with
         | [ c ] ->
-          Alcotest.(check string) "format" "wise_csv" c.format;
+          Alcotest.(check string) "format" "wise" c.format;
           Alcotest.(check bool)
             "every column by header"
             true

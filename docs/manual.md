@@ -755,7 +755,7 @@ document with no records. Keep the output private: it holds your statement's nam
 
 ### Import through records
 
-FDM, CDC, Revolut, bunq and BoursoBank are imported through records, directly from their files or from a records
+Every bundled institution is imported through records, directly from its files or from a records
 file, plain or compressed. Both give the same result:
 
 ```sh
@@ -764,8 +764,8 @@ fin import fdm records.jsonl.zst
 ```
 
 Observations in a records file are paired with its counted records, and balances are stored:
-`fin statement balances` lists them as JSON. Stated totals stay in the archived file for now.
-Other institutions still import through their own adapters.
+`fin statement balances` lists them as JSON. Stated totals, and a statement with no opening and
+closing such as BoursoBank's OFX, stay in the archived file for now.
 
 ### Check a records file
 

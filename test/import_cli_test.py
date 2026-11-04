@@ -2872,7 +2872,7 @@ class ImportOnboarding(unittest.TestCase):
         self.assertRegex(out, r'TransferWise ID\s+\S+')
         self.assertIn('Transaction Details Type', out)
         self.assertIn('display name: Synthetic shop', out)
-        self.assertIn('wise-csv-v1', out)
+        self.assertIn('records-v1', out)
         self.assertNotEqual(self.run_fin('operation', 'show', '999999', check=False).returncode, 0)
 
     def test_type_rules_can_match_any_companion_column(self):

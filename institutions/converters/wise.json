@@ -97,5 +97,12 @@
     "wise-payment-reference": "Payment Reference",
     "wise-reported-fees": "Total fees"
   },
-  "journal_description": "Merchant"
+  "journal_description": "Merchant",
+  "conflict_columns": [
+    "Total fees",
+    "Exchange From",
+    "Exchange To",
+    "Exchange Rate",
+    "Exchange To Amount"
+  ]
 }

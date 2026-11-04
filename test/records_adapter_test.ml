@@ -211,13 +211,14 @@ let overlapping_exports () =
     ]
     (fun _ found ->
        Alcotest.check states "states" [ "o1", "matched"; "o1", "matched" ] (sorted found));
+  (* Exports may differ in text: only declared columns can conflict. *)
   imported
     [ document [ counted; observed "One" ]; document [ observed "Two" ] ]
     (fun _ found ->
        Alcotest.check
          states
-         "two exports disagree"
-         [ "o1", "conflict"; "o1", "conflict" ]
+         "text may differ"
+         [ "o1", "matched"; "o1", "matched" ]
          (sorted found))
 ;;
 

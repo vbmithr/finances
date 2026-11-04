@@ -20,7 +20,6 @@ module Wise_camt = struct
   let profile = (Option.value_exn (Builtin.camt_preset "wise")).camt_profile
   let source = Camt_source.create profile
   let parse = Camt_source.parse source
-  let source_transaction = Camt_source.source_transaction source
   let matching_time = Camt_source.matching_time
 end
 
@@ -412,11 +411,13 @@ let duplicate_rows () =
   memory (fun db ->
     accepted (import db "wise.xml" (xml ()));
     let lines = String.split_lines (csv ()) in
-    accepted (import db "dup.csv" (csv () ^ List.nth_exn lines 1 ^ "\n"));
+    (* One row stated twice in a file cannot be told from itself, so the file is refused. *)
+    rejected (import db "dup.csv" (csv () ^ List.nth_exn lines 1 ^ "\n"));
+    accepted (import db "wise.csv" (csv ()));
     check
-      "ambiguous duplicates"
-      2
-      (ok (Ledger.match_companions ~institution:"wise" db)).ambiguous)
+      "and the clean file pairs"
+      3
+      (ok (Ledger.match_companions ~institution:"wise" db)).matched)
 ;;
 
 let timestamp_precision () =
@@ -443,7 +444,7 @@ let timestamp_precision () =
     let rows = ok (Ledger.events db) in
     let event =
       List.find_exn rows ~f:(fun (_, e) ->
-        String.equal e.Source_event.source_id tx.source_id)
+        String.equal e.Source_event.source_id "CARD-1/1735772400123456789/DBIT")
       |> snd
     in
     (match event.occurred with
@@ -453,8 +454,11 @@ let timestamp_precision () =
          true
          (Ptime.equal instant tx.booked_at)
      | Temporal.Date _ -> Alcotest.fail "Wise instant lost");
-    let decoded = ok (Wise_camt.source_transaction event) in
-    Alcotest.(check string) "payload remains byte-identical" tx.payload decoded.payload;
+    let _, record = ok (Records.row_of_string event.payload) in
+    Alcotest.(check string)
+      "the record keeps the instant as stated"
+      source
+      record.occurred.stated;
     let replay = import db "precise.xml" contents in
     Alcotest.(check bool) "replay unchanged" true (Poly.equal replay.outcome Unchanged))
 ;;

@@ -99,6 +99,7 @@ let records_institutions
         ; convert = Mt940_converter.convert profile
         ; tags = []
         ; journal_description = None
+        ; conflict_columns = []
         }
       in
       "bunq", [], Adapter.Day_inventory, mt940 :: Option.to_list (csv_source "bunq"))
@@ -113,6 +114,7 @@ let records_institutions
     ; convert = Ofx_converter.convert ~institution:"boursobank"
     ; tags = []
     ; journal_description = None
+    ; conflict_columns = []
     }
   in
   let boursobank =
@@ -122,7 +124,21 @@ let records_institutions
       , Adapter.Source_ids
       , ofx :: Option.to_list (csv_source "boursobank") ))
   in
-  List.filter_opt [ csv_only "fdm"; csv_only "cdc"; csv_only "revolut"; bunq; boursobank ]
+  let wise =
+    Option.map (csv_definition "wise") ~f:(fun definition ->
+      let source : Records_adapter.source =
+        { format = "wise"
+        ; recognizes = (fun ~filename:_ contents -> Wise_converter.recognizes contents)
+        ; convert = Wise_converter.convert
+        ; tags = Csv_converter.journal_tags definition
+        ; journal_description = Csv_converter.journal_description definition
+        ; conflict_columns = Csv_converter.conflict_columns definition
+        }
+      in
+      "wise", [], Adapter.Source_ids, [ source ])
+  in
+  List.filter_opt
+    [ csv_only "fdm"; csv_only "cdc"; csv_only "revolut"; bunq; boursobank; wise ]
 ;;
 
 let adapters : (module Adapter.S) list =

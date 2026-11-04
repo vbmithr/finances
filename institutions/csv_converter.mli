@@ -17,6 +17,9 @@ val journal_tags : t -> (string * string) list
     description. Otherwise the counted record's stays. *)
 val journal_description : t -> string option
 
+(** Columns two exports of one row must agree on. Others, such as a user's note, may differ. *)
+val conflict_columns : t -> string list
+
 (** How overlapping files of this layout are reconciled. *)
 val overlap : t -> Adapter.overlap
 

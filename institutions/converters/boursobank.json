@@ -71,5 +71,12 @@
     "bank-category": "Catégorie",
     "bank-parent-category": "Catégorie Parente",
     "bank-suggested-description": "Libellé Suggéré"
-  }
+  },
+  "conflict_columns": [
+    "Date Valeur",
+    "Libellé Suggéré",
+    "Catégorie",
+    "Catégorie Parente",
+    "Commentaire"
+  ]
 }

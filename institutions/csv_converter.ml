@@ -137,12 +137,14 @@ type t =
   ; balances : balance_spec list
   ; journal_tags : (string * string) list
   ; journal_description : string option
+  ; conflict_columns : string list
   }
 
 let institution t = t.institution
 let institution_type t = t.institution_type
 let journal_tags t = t.journal_tags
 let journal_description t = t.journal_description
+let conflict_columns t = t.conflict_columns
 
 let overlap t : Adapter.overlap =
   match t.id with
@@ -386,6 +388,7 @@ let codec =
          balances
          journal_tags
          journal_description
+         conflict_columns
        ->
        { institution
        ; institution_type
@@ -412,6 +415,7 @@ let codec =
        ; balances
        ; journal_tags
        ; journal_description
+       ; conflict_columns
        })
   |> dec_only "format" (Json.tag "fin-csv-converter")
   |> dec_only "version" (Json.version 1)
@@ -440,6 +444,7 @@ let codec =
   |> list_or_empty "balances" balance_codec
   |> Jsont.Object.mem "journal_tags" Json.string_map ~dec_absent:[]
   |> opt "journal_description" Jsont.string
+  |> list_or_empty "conflict_columns" Jsont.string
   |> finish
 ;;
 
@@ -505,6 +510,7 @@ let named_columns t =
     ; Option.to_list t.balance_after
     ; List.map t.journal_tags ~f:snd
     ; Option.to_list t.journal_description
+    ; t.conflict_columns
     ; List.concat_map t.balances ~f:(fun b ->
         (b.quantity :: commodity b.commodity) @ date b.as_of)
     ]

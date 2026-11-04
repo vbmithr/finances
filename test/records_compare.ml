@@ -25,6 +25,7 @@ let sources institution : Adapter.overlap * Records_adapter.source list =
         ; convert = Ofx_converter.convert ~institution
         ; tags = []
         ; journal_description = None
+        ; conflict_columns = []
         }
     | "bunq" ->
       Option.map
@@ -36,6 +37,7 @@ let sources institution : Adapter.overlap * Records_adapter.source list =
           ; convert = Mt940_converter.convert profile
           ; tags = []
           ; journal_description = None
+          ; conflict_columns = []
           })
     | _ -> None
   in
@@ -52,6 +54,11 @@ let sources institution : Adapter.overlap * Records_adapter.source list =
               ~f:Csv_converter.journal_tags
         ; journal_description =
             Option.bind (definition institution) ~f:Csv_converter.journal_description
+        ; conflict_columns =
+            Option.value_map
+              (definition institution)
+              ~default:[]
+              ~f:Csv_converter.conflict_columns
         }
       ] )
   | _ ->

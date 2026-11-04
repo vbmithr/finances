@@ -8,6 +8,9 @@ short line of their own.
 
 ## Unreleased
 
+- `fin import wise` now goes through records, as every bundled institution does. Its journal is
+  unchanged, except that `wise-reported-fees` keeps the value as stated (`0.00`, not `0`). A file
+  that states one row twice is refused, where it used to leave the row ambiguous.
 - `fin import boursobank` now goes through records. Its journal is unchanged, except that 19 rows the
   adapter left ambiguous on real files now pair and gain their value date and tags. A CSV row whose
   description disagrees with the only candidate on its date and quantity stays unmatched, as before.
