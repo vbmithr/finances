@@ -1,7 +1,7 @@
 # Records format
 
-Status: version 1 draft, 2026-11-04. `fin records check FILE` validates a file and `fin
-convert wise FILE` prints one. Fin does not import the format yet.
+Status: version 1 draft, 2026-11-04. `fin records check FILE` validates a file and `fin convert`
+prints one. Fin imports records for FDM; other institutions still import through their adapters.
 
 A records file is what one institution's document says, as JSON Lines: every entry becomes
 one record. The document may be a statement, or only a list of movements with no stated
@@ -229,6 +229,7 @@ unknown member or a column not in its header.
   "format": "fin-csv-converter",
   "version": 1,
   "institution": "mine",
+  "institution_type": "bank",
   "header": ["When", "What", "Currency", "Text"],
   "account": { "id": "main-{Currency}", "currency": { "fiat": "Currency" } },
   "occurred": { "column": "When", "layout": "day-first" },
@@ -245,6 +246,7 @@ unknown member or a column not in its header.
 
 | Member | Meaning |
 |---|---|
+| `institution_type` | `bank` or `crypto-exchange` |
 | `header` | The exact header; a file with another one is not this layout |
 | `separator`, `decimal` | Default `,` and `dot`; spaces that group digits are ignored |
 | `observation` | The rows describe rows stated elsewhere |

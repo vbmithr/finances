@@ -8,6 +8,9 @@ short line of their own.
 
 ## Unreleased
 
+- `fin import fdm` imports a new institution through records, from its CSV or from a records
+  file. It is the first to do so; the others keep their adapters until their records give the
+  same result.
 - Internal: `bin/main.ml` is split into one module per command group. No user-visible
   change.
 - `fin convert` also reads BoursoBank OFX, bunq MT940 and the CSV files of Revolut, CDC,

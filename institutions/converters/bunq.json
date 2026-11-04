@@ -2,6 +2,7 @@
   "format": "fin-csv-converter",
   "version": 1,
   "institution": "bunq",
+  "institution_type": "bank",
   "decimal": "comma",
   "header": [
     "Date",

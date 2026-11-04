@@ -164,6 +164,7 @@ assert kind(lines, "record") == [] and kind(lines, "account") == []
 # Anyone's definition, and refusals that say what is wrong.
 definition = write("mine.json", json.dumps({
     "format": "fin-csv-converter", "version": 1, "institution": "mine",
+    "institution_type": "bank",
     "header": ["When", "What"],
     "account": {"id": "main", "currency": {"code": "EUR"}},
     "occurred": {"column": "When", "layout": "day-first"},

@@ -763,6 +763,19 @@ A CAMT file gives one counted record per entry, and a CSV gives observations des
 those entries. A CSV with no rows, as Wise exports for a balance with no activity, gives a
 document with no records. Keep the output private: it holds your statement's names and references.
 
+### Import through records
+
+FDM is imported through records, directly from its CSV or from a records file, plain or
+compressed. Both give the same journal:
+
+```sh
+fin import fdm ~/statements/fdm
+fin import fdm records.jsonl.zst
+```
+
+Balances and stated totals stay in the archived file for now, and observations are not imported
+yet. Other institutions still import through their own adapters.
+
 ### Check a records file
 
 A converter turns one institution's statement into a records file, in the format

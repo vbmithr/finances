@@ -555,3 +555,9 @@
    %{exe:../bin/main.exe}
    ../formats/records
    fixtures)))
+
+(rule
+ (alias runtest)
+ (deps records_import_test.py)
+ (action
+  (run python3 %{dep:records_import_test.py} %{exe:../bin/main.exe})))

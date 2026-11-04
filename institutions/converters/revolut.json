@@ -2,6 +2,7 @@
   "format": "fin-csv-converter",
   "version": 1,
   "institution": "revolut",
+  "institution_type": "bank",
   "header": [
     "Type",
     "Product",

@@ -112,6 +112,7 @@ type total_spec =
 
 type t =
   { institution : string
+  ; institution_type : Institution_type.t
   ; separator : char
   ; decimal : decimal
   ; header : string list
@@ -136,6 +137,13 @@ type t =
   }
 
 let institution t = t.institution
+let institution_type t = t.institution_type
+
+let overlap t : Adapter.overlap =
+  match t.id with
+  | Inventory -> Day_inventory
+  | Row_hash | Columns _ -> Source_ids
+;;
 
 (* Definitions. *)
 
@@ -348,6 +356,7 @@ let codec =
         ()
          ()
          institution
+         institution_type
          separator
          decimal
          header
@@ -371,6 +380,7 @@ let codec =
          balances
        ->
        { institution
+       ; institution_type
        ; separator
        ; decimal
        ; header
@@ -396,6 +406,7 @@ let codec =
   |> dec_only "format" (Json.tag "fin-csv-converter")
   |> dec_only "version" (Json.version 1)
   |> dec_only "institution" Jsont.string
+  |> dec_only "institution_type" Institution_type.jsont
   |> Jsont.Object.mem "separator" separator_codec ~dec_absent:','
   |> Jsont.Object.mem "decimal" decimal_codec ~dec_absent:Dot
   |> dec_only "header" (Jsont.list Jsont.string)

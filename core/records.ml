@@ -565,6 +565,17 @@ let line_codec =
   |> finish
 ;;
 
+let row_codec =
+  Jsont.Object.map (fun () account record -> account, record)
+  |> Jsont.Object.mem "format" (Json.tag "fin-records-row") ~enc:(fun _ -> ())
+  |> Jsont.Object.mem "account" account_codec ~enc:fst
+  |> Jsont.Object.mem "record" record_codec ~enc:snd
+  |> Jsont.Object.finish
+;;
+
+let row_to_string account record = Json.encode row_codec (account, record)
+let row_of_string = Json.decode row_codec
+
 let check t =
   let problems = Queue.create () in
   let problem fmt = Printf.ksprintf (Queue.enqueue problems) fmt in
@@ -882,6 +893,16 @@ let sections text =
          ; balances = List.rev t.balances
          ; records = List.rev t.records
          }))
+;;
+
+let is_records_of ~institution contents =
+  let first_line text = List.hd_exn (String.split text ~on:'\n') in
+  match decompressed contents with
+  | Error _ -> false
+  | Ok text ->
+    (match Json.decode line_codec (first_line text) with
+     | Ok (Header header) -> String.equal header.institution institution
+     | Ok _ | Error _ -> false)
 ;;
 
 let of_string ?file contents =

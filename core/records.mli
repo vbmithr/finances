@@ -174,6 +174,15 @@ val merge_all : t list -> t list Or_error.t
     in errors. *)
 val of_string : ?file:string -> string -> t list Or_error.t
 
+(** Whether this is a records file, plain or compressed, of this institution. Only its first
+    line is read. *)
+val is_records_of : institution:string -> string -> bool
+
+(** One record with its account, as stored for a source event. *)
+val row_to_string : account -> record -> string
+
+val row_of_string : string -> (account * record) Or_error.t
+
 (** One section of a records file, as JSON Lines. *)
 val to_string : t -> string
 

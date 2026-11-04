@@ -303,8 +303,21 @@ let institution_show database name =
            print_movement_profile profile;
            Ok ()
          | None, None ->
-           Or_error.error_string
-             "unknown institution, or one without a definition; see fin institution list")
+           (match
+              List.find Builtin.records_institutions ~f:(fun definition ->
+                String.equal (Csv_converter.institution definition) name)
+            with
+            | Some definition ->
+              printf "%s\n" (Terminal.text name);
+              printf
+                "  Type: %s\n"
+                (Institution_type.label (Csv_converter.institution_type definition));
+              print_endline "  Kind: records, from a CSV definition";
+              Ok ()
+            | None ->
+              Or_error.error_string
+                "unknown institution, or one without a definition; see fin institution \
+                 list"))
     in
     let canonical =
       match Builtin.movement_profile name, Builtin.definition name with

@@ -2,6 +2,7 @@
   "format": "fin-csv-converter",
   "version": 1,
   "institution": "cdc",
+  "institution_type": "crypto-exchange",
   "header": [
     "Timestamp (UTC)",
     "Transaction Description",

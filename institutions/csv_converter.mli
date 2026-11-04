@@ -8,6 +8,10 @@ type t
 
 val of_string : string -> t Or_error.t
 val institution : t -> string
+val institution_type : t -> Institution_type.t
+
+(** How overlapping files of this layout are reconciled. *)
+val overlap : t -> Adapter.overlap
 
 (** Whether this is a CSV the definition describes, judged from its header. *)
 val recognizes : t -> string -> bool

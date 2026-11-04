@@ -35,7 +35,11 @@ let institution_type name =
   match definition name, movement_profile name with
   | Some d, _ -> Some (Institution_definition.institution_type d)
   | None, Some profile -> Some profile.Movement_csv.institution_type
-  | None, None -> None
+  | None, None ->
+    List.find_map (Lazy.force Csv_converter.bundled) ~f:(fun definition ->
+      Option.some_if
+        (String.equal (Csv_converter.institution definition) name)
+        (Csv_converter.institution_type definition))
 ;;
 
 (* Typed accessors for tests and tools that need one bundled profile. *)
@@ -67,9 +71,17 @@ let mt940_profile name =
     | Ofx_csv _ | Camt_csv _ | Csv _ | Running_csv _ -> None)
 ;;
 
+(* Institutions imported through records. The others move here one at a time, once the records
+   of their real files give what their adapter gives. *)
+let records_institutions =
+  List.filter (Lazy.force Csv_converter.bundled) ~f:(fun definition ->
+    String.equal (Csv_converter.institution definition) "fdm")
+;;
+
 let adapters : (module Adapter.S) list =
   List.map definitions ~f:Institution_definition.adapter
   @ List.map movement_profiles ~f:(fun profile -> Movement_csv_adapter.make profile ())
+  @ List.map records_institutions ~f:Records_adapter.make
   @ [ (module Csv_adapter) ]
 ;;
 
