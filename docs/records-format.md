@@ -1,8 +1,8 @@
 # Records format
 
 Status: version 1 draft, 2026-11-04. `fin records check FILE` validates a file and `fin convert`
-prints one. Fin imports records, pairs observations and stores balances, for FDM so far; other institutions
-still import through their adapters.
+prints one. Fin imports records, pairs observations and stores balances, for FDM and CDC so far; other
+institutions still import through their adapters.
 
 A records file is what one institution's document says, as JSON Lines: every entry becomes
 one record. The document may be a statement, or only a list of movements with no stated
@@ -180,6 +180,9 @@ Fin matches three ways, using stored evidence only:
   `reported` and `fields` with no movements.
 
 ## What fin checks beyond the schema
+
+Two identical rows in one file are refused when their IDs come from the row's content, as they
+cannot be told apart; the same row in two files is one record.
 
 Shape is not enough, so fin also refuses: a line outside a section, a `header` before the
 previous section's `end`, a file with no `end` line, an `end` that miscounts, a section

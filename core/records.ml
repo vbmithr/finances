@@ -624,7 +624,8 @@ let check t =
       (List.find_a_dup r.statements ~compare:String.compare)
       ~f:(fun statement -> problem "lists statement %S twice" statement);
     let key = r.account ^ "\000" ^ r.id in
-    if Hash_set.mem record_ids key then problem "repeated id";
+    if Hash_set.mem record_ids key
+    then problem "repeated id: identical rows cannot be told apart";
     Hash_set.add record_ids key;
     (match
        List.find_a_dup
@@ -796,6 +797,9 @@ let merge documents =
 ;;
 
 let merge_all documents =
+  let open Or_error.Let_syntax in
+  (* A row one file states twice is not an overlap: merging would silently lose one. *)
+  let%bind () = List.map documents ~f:check |> Or_error.all_unit in
   let same (a : t) (b : t) =
     String.equal a.institution b.institution && Poly.equal a.identity b.identity
   in
@@ -917,7 +921,6 @@ let of_string ?file contents =
   let result =
     let%bind text = decompressed contents in
     let%bind sections = sections text in
-    let%bind () = List.map sections ~f:check |> Or_error.all_unit in
     merge_all sections
   in
   Result.map_error result ~f:(fun error ->

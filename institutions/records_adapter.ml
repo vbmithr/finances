@@ -56,6 +56,7 @@ let event ~institution (account : Records.account) (record : Records.record) =
       ~source_id:record.id
       ~occurred_at
       ~payload
+      ~fields:record.details.fields
       ()
   | Date occurred_on ->
     Source_event.create_dated
@@ -65,6 +66,7 @@ let event ~institution (account : Records.account) (record : Records.record) =
       ~source_id:record.id
       ~occurred_on
       ~payload
+      ~fields:record.details.fields
       ()
 ;;
 

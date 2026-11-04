@@ -625,7 +625,7 @@ let cdc_import_unified () =
       Alcotest.(check int) "two source events" 2 (List.length events);
       List.iter events ~f:(fun (_, (e : Source_event.t)) ->
         Alcotest.(check string) "venue" "cdc" e.venue;
-        Alcotest.(check string) "operation kind" "cdc-csv-v1" e.kind);
+        Alcotest.(check string) "operation kind" "records-operation" e.kind);
       let exchange =
         List.find_exn events ~f:(fun (_, e) ->
           String.equal

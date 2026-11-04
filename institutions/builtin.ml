@@ -75,12 +75,11 @@ let mt940_profile name =
    of their real files give what their adapter gives. *)
 let records_institutions =
   List.filter (Lazy.force Csv_converter.bundled) ~f:(fun definition ->
-    String.equal (Csv_converter.institution definition) "fdm")
+    List.mem [ "fdm"; "cdc" ] (Csv_converter.institution definition) ~equal:String.equal)
 ;;
 
 let adapters : (module Adapter.S) list =
   List.map definitions ~f:Institution_definition.adapter
-  @ List.map movement_profiles ~f:(fun profile -> Movement_csv_adapter.make profile ())
   @ List.map records_institutions ~f:(fun definition ->
     Records_adapter.make
       ~institution:(Csv_converter.institution definition)

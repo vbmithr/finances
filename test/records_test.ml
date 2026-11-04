@@ -227,6 +227,17 @@ let merging () =
     (2 * List.length wise.statements)
     (List.length both.statements);
   Records.check both |> Or_error.ok_exn;
+  (* A row one file states twice is refused, not merged away. *)
+  let repeated = { wise with records = wise.records @ wise.records } in
+  Alcotest.(check bool)
+    "a repeat within one document is refused"
+    true
+    (Result.is_error (Records.merge_all [ repeated ]));
+  Alcotest.(check int)
+    "the same row in two documents is one"
+    (List.length wise.records)
+    (List.length
+       (List.hd_exn (Records.merge_all [ wise; wise ] |> Or_error.ok_exn)).records);
   (* Files can be concatenated, and fin compares them as it does when merging. *)
   let text = read "wise-conversion" in
   Alcotest.(check int)

@@ -765,8 +765,8 @@ document with no records. Keep the output private: it holds your statement's nam
 
 ### Import through records
 
-FDM is imported through records, directly from its CSV or from a records file, plain or
-compressed. Both give the same journal:
+FDM and CDC are imported through records, directly from their CSVs or from a records file, plain
+or compressed. Both give the same result:
 
 ```sh
 fin import fdm ~/statements/fdm

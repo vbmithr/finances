@@ -114,6 +114,19 @@ assert all(r["observation"] for r in records)
 assert [(b["type"], b["quantity"], b["as_of"]) for b in balances] == [
     ("day_end", "100", "2025-01-03"), ("day_end", "102", "2025-01-05")]
 
+# Two identical rows in one file with row hashes are refused, never merged into one.
+twice = write("cdc-twice.csv", header + """2025-01-02 12:00:00,Reward,CRO,1,,,EUR,1,1.1,referral_bonus,
+2025-01-02 12:00:00,Reward,CRO,1,,,EUR,1,1.1,referral_bonus,
+""")
+done = convert("cdc", twice, check=False)
+assert done.returncode != 0 and "repeated id" in " ".join(done.stderr.split()), done.stderr
+assert done.stdout == "", done.stdout
+# With inventory identity they are two rows, by position.
+assert len(kind(convert("fdm", write("fdm-twice.csv", """Merchant,Category,Date,Local currency,Local amount,Exchange rate,USD
+Shop,Shopping,2025-01-02,EUR,10.00,1.1,11.00
+Shop,Shopping,2025-01-02,EUR,10.00,1.1,11.00
+""")), "record")) == 2
+
 # bunq: a narrow no-break space groups digits.
 bunq = write("bunq.csv", "Date,Interest Date,Amount,Account,Counterparty,Name,Description\n"
              '2025-01-02,2025-01-03,"-1 234,50",SYNTHETIC,,Shop,Text\n')

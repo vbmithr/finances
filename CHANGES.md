@@ -8,6 +8,9 @@ short line of their own.
 
 ## Unreleased
 
+- `fin import cdc` now goes through records. Its operations and movements are unchanged, but their
+  source events have a new kind, so rebuild with the schema 34 rebuild below. The message for two
+  identical rows in one file is now `repeated id: identical rows cannot be told apart`.
 - New `fin statement balances` lists the balances imported sources stated. Records files now
   import with their observations paired and their balances stored. **Action required:** schema 34
   requires a database rebuild: export your decisions, delete the database and import again, as for

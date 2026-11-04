@@ -965,7 +965,7 @@ let operation_review db =
              |> Option.value ~default:""
          in
          let reported_amount, reported_currency =
-           if List.is_empty movements && String.equal institution "cdc"
+           if List.is_empty movements
            then field "Amount", field "Currency"
            else None, None
          in

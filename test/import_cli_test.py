@@ -288,7 +288,7 @@ class ImportOnboarding(unittest.TestCase):
         duplicated.write_text(header + '\n' + first + '\n' + first + '\n')
         blocked = self.run_fin('import', 'cdc', duplicated, check=False)
         self.assertNotEqual(blocked.returncode, 0)
-        self.assertIn('identical source rows are ambiguous', blocked.stdout)
+        self.assertIn('identical rows cannot be told apart', blocked.stdout)
 
     def test_fiat_exchange_uses_same_review_and_trading_postings(self):
         path = self.root / 'forex.csv'
