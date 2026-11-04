@@ -18,7 +18,7 @@ type category_restore_preview =
   ; problems : string list
   }
 
-let category_fields_hash (e : Source_event.t) =
+let raw_fields_hash (e : Source_event.t) =
   List.map e.fields ~f:(fun (name, value) ->
     Printf.sprintf "%d:%s%d:%s" (String.length name) name (String.length value) value)
   |> String.concat
@@ -26,10 +26,23 @@ let category_fields_hash (e : Source_event.t) =
   |> Digestif.SHA256.to_hex
 ;;
 
+let sha256 text = Digestif.SHA256.(to_hex (digest_string text))
+
+let payload_hash (e : Source_event.t) =
+  sha256 (Option.value (Records.row_identity e.payload) ~default:e.payload)
+;;
+
+(* A records row's fields can grow with its converter, and its identity says what it is. *)
+let category_fields_hash (e : Source_event.t) =
+  match Records.row_identity e.payload with
+  | Some identity -> sha256 identity
+  | None -> raw_fields_hash e
+;;
+
 (* What tells this row from others of its day. An institution with row IDs says so itself. Without
    them, rows with identical fields cannot be told apart between exports, so a decision on one could
    land on the other. *)
-let evidence_key db (e : Source_event.t) ~payload_sha256 ~fields_sha256 =
+let evidence_key db (e : Source_event.t) =
   let identified =
     match Registry.find db.registry e.venue with
     | Some (module A : Adapter.S) ->
@@ -41,8 +54,8 @@ let evidence_key db (e : Source_event.t) ~payload_sha256 ~fields_sha256 =
   if identified
   then "id:" ^ e.source_id
   else if List.is_empty e.fields
-  then "payload:" ^ payload_sha256
-  else "fields:" ^ fields_sha256
+  then "payload:" ^ sha256 e.payload
+  else "fields:" ^ raw_fields_hash e
 ;;
 
 let bank_operation_anchors db =
@@ -123,7 +136,7 @@ let category_snapshot db =
             ; kind = event.kind
             ; source_id = event.source_id
             ; occurred = Temporal.to_string event.occurred
-            ; payload_sha256 = Digestif.SHA256.(to_hex (digest_string event.payload))
+            ; payload_sha256 = payload_hash event
             ; fields_sha256 = category_fields_hash event
             ; movement_role = "primary"
             ; account =
@@ -193,7 +206,7 @@ let category_snapshot db =
                ; kind = event.kind
                ; source_id = event.source_id
                ; occurred = Temporal.to_string event.occurred
-               ; payload_sha256 = Digestif.SHA256.(to_hex (digest_string event.payload))
+               ; payload_sha256 = payload_hash event
                ; fields_sha256 = category_fields_hash event
                ; movement_role = role
                ; account = None
@@ -221,20 +234,14 @@ let preview_category_restore db (snapshot : Category_portable.t) =
   List.iter review ~f:(fun (r : bank_review) ->
     Hashtbl.set review_by_id ~key:r.event_id ~data:r);
   List.iter source ~f:(fun (id, (e : Source_event.t)) ->
-    let digest = Digestif.SHA256.(to_hex (digest_string e.payload)) in
+    let digest = payload_hash e in
     Hashtbl.add_multi
       by_identity
       ~key:(e.venue, e.account, e.kind, e.source_id)
       ~data:(id, e, digest);
     Hashtbl.add_multi
       by_evidence
-      ~key:
-        ( e.venue
-        , e.account
-        , e.kind
-        , Temporal.to_string e.occurred
-        , evidence_key db e ~payload_sha256:digest ~fields_sha256:(category_fields_hash e)
-        )
+      ~key:(e.venue, e.account, e.kind, Temporal.to_string e.occurred, evidence_key db e)
       ~data:id);
   let problems = ref [] in
   let problem s = problems := s :: !problems in
@@ -355,11 +362,7 @@ let preview_category_restore db (snapshot : Category_portable.t) =
                     , d.source_account
                     , d.kind
                     , d.occurred
-                    , evidence_key
-                        db
-                        e
-                        ~payload_sha256:d.payload_sha256
-                        ~fields_sha256:d.fields_sha256 ))
+                    , evidence_key db e ))
                  ~default:[])
             > 1
           then (
@@ -512,15 +515,7 @@ let preview_category_restore db (snapshot : Category_portable.t) =
              Option.value
                (Hashtbl.find
                   by_evidence
-                  ( d.institution
-                  , d.source_account
-                  , d.kind
-                  , d.occurred
-                  , evidence_key
-                      db
-                      e
-                      ~payload_sha256:d.payload_sha256
-                      ~fields_sha256:d.fields_sha256 ))
+                  (d.institution, d.source_account, d.kind, d.occurred, evidence_key db e))
                ~default:[]
              |> List.length
            in

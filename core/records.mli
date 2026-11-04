@@ -185,6 +185,10 @@ val row_to_string : account -> record -> string
 
 val row_of_string : string -> (account * record) Or_error.t
 
+(** What identifies a stored row, if this is one: its account, its ID and its fixed part. A digest
+    of this survives a converter that later keeps more detail about the row. *)
+val row_identity : string -> string option
+
 (** One section of a records file, as JSON Lines. *)
 val to_string : t -> string
 

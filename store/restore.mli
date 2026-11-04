@@ -122,10 +122,9 @@ val verify_bank_operation_anchor
 
 val category_fields_hash : Source_event.t -> string
 
+(** A digest that says a saved decision still names this row. For a records row it covers only what
+    identifies the row, so that it survives a converter keeping more detail. *)
+val payload_hash : Source_event.t -> string
+
 (** What tells this row from others of its day, for matching saved decisions. *)
-val evidence_key
-  :  Handle.t
-  -> Source_event.t
-  -> payload_sha256:string
-  -> fields_sha256:string
-  -> string
+val evidence_key : Handle.t -> Source_event.t -> string

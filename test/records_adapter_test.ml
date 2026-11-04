@@ -238,6 +238,43 @@ let exports_of_one_row () =
     (fun db _ -> Alcotest.(check int) "one event" 1 (List.length (ok (Ledger.events db))))
 ;;
 
+let surviving_a_converter_change () =
+  (* A converter that later keeps more detail about a row must not strand decisions made on it. *)
+  let event ?(quantity = "-1") details =
+    let record =
+      Printf.sprintf
+        {|{"format":"fin-records-row","account":{"id":"main"},"record":{"id":"c1","account":"main","occurred":"2025-01-02","movements":[{"role":"primary","quantity":"%s","commodity":%s}],"details":%s}}|}
+        quantity
+        eur
+        details
+    in
+    ok
+      (Source_event.create_dated
+         ~venue:"test"
+         ~account:"a"
+         ~kind:"records-movement"
+         ~source_id:"c1"
+         ~occurred_on:(Date.of_string "2025-01-02")
+         ~payload:record
+         ())
+  in
+  let before = event {|{"descriptions":["Text"]}|}
+  and after = event {|{"descriptions":["Text","More"],"fields":[["New","Column"]]}|} in
+  Alcotest.(check string)
+    "payload"
+    (Restore.payload_hash before)
+    (Restore.payload_hash after);
+  Alcotest.(check string)
+    "fields"
+    (Restore.category_fields_hash before)
+    (Restore.category_fields_hash after);
+  let moved = event ~quantity:"-2" {|{"descriptions":["Text"]}|} in
+  Alcotest.(check bool)
+    "a different amount is a different row"
+    false
+    (String.equal (Restore.payload_hash before) (Restore.payload_hash moved))
+;;
+
 let balances () =
   let line ~type_ ~account ~on quantity =
     Printf.sprintf
@@ -286,6 +323,12 @@ let () =
         ; Alcotest.test_case "ties" `Quick ties
         ; Alcotest.test_case "overlapping exports" `Quick overlapping_exports
         ; Alcotest.test_case "exports of one row" `Quick exports_of_one_row
+        ] )
+    ; ( "decisions"
+      , [ Alcotest.test_case
+            "survive a converter change"
+            `Quick
+            surviving_a_converter_change
         ] )
     ; "balances", [ Alcotest.test_case "stored and listed" `Quick balances ]
     ]

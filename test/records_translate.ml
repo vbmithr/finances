@@ -102,9 +102,21 @@ let translate_accounts rows =
   let reference (r : Bank_account_config.reference) =
     { r with account_id = revolut_account r.account_id r.institution }
   in
+  (* A saved mapping names the old label too, and would keep it in the ledger. *)
+  let ledger_account (row : Bank_account_config.t) =
+    if String.equal row.reference.institution "revolut"
+    then
+      Option.map row.ledger_account ~f:(fun account ->
+        match String.rsplit2 account ~on:':' with
+        | Some (path, last) when String.equal last row.reference.account_id ->
+          path ^ ":personal"
+        | _ -> account)
+    else row.ledger_account
+  in
   List.map rows ~f:(fun (row : Bank_account_config.t) ->
     { row with
       reference = reference row.reference
+    ; ledger_account = ledger_account row
     ; settlement_account =
         (match row.settlement_account with
          | Set target -> Set (reference target)
@@ -154,7 +166,7 @@ let () =
            ; kind = n.kind
            ; source_id = n.source_id
            ; occurred = Temporal.to_string n.occurred
-           ; payload_sha256 = sha256 n.payload
+           ; payload_sha256 = Restore.payload_hash n
            ; fields_sha256 = Restore.category_fields_hash n
            }
        in

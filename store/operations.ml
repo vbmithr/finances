@@ -542,7 +542,7 @@ let transfer_snapshot db =
           ; kind = event.kind
           ; source_id = event.source_id
           ; occurred = Temporal.to_string event.occurred
-          ; payload_sha256 = Digestif.SHA256.(to_hex (digest_string event.payload))
+          ; payload_sha256 = payload_hash event
           ; fields_sha256 = category_fields_hash event
           ; movement_role = identity.role
           ; account = None
@@ -639,9 +639,7 @@ let preview_transfer_restore db (snapshot : Transfer_portable.t) =
         if
           not
             (String.equal (Temporal.to_string e.occurred) r.occurred
-             && String.equal
-                  Digestif.SHA256.(to_hex (digest_string e.payload))
-                  r.payload_sha256
+             && String.equal (payload_hash e) r.payload_sha256
              && String.equal (category_fields_hash e) r.fields_sha256)
         then (
           problem ("source evidence differs: " ^ label);
@@ -1003,7 +1001,7 @@ let exchange_snapshot db =
                ; kind = event.kind
                ; source_id = event.source_id
                ; occurred = Temporal.to_string event.occurred
-               ; payload_sha256 = Digestif.SHA256.(to_hex (digest_string event.payload))
+               ; payload_sha256 = payload_hash event
                ; fields_sha256 = category_fields_hash event
                ; movement_role = role
                ; account = None
@@ -1061,9 +1059,7 @@ let preview_exchange_restore db (snapshot : Exchange_portable.t) =
          match matches with
          | [ (id, event) ]
            when String.equal (Temporal.to_string event.occurred) d.occurred
-                && String.equal
-                     Digestif.SHA256.(to_hex (digest_string event.payload))
-                     d.payload_sha256
+                && String.equal (payload_hash event) d.payload_sha256
                 && String.equal (category_fields_hash event) d.fields_sha256 ->
            let duplicate =
              List.count source_events ~f:(fun (_, e) ->
@@ -1071,17 +1067,7 @@ let preview_exchange_restore db (snapshot : Exchange_portable.t) =
                && String.equal e.account event.account
                && String.equal e.kind event.kind
                && String.equal (Temporal.to_string e.occurred) d.occurred
-               &&
-               let key (r : Source_event.t) ~fields_sha256 =
-                 evidence_key
-                   db
-                   r
-                   ~payload_sha256:Digestif.SHA256.(to_hex (digest_string r.payload))
-                   ~fields_sha256
-               in
-               String.equal
-                 (key e ~fields_sha256:(category_fields_hash e))
-                 (key event ~fields_sha256:d.fields_sha256))
+               && String.equal (evidence_key db e) (evidence_key db event))
              > 1
            in
            if

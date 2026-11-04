@@ -510,6 +510,8 @@ position observations, derive positions from fills, or calculate funding.
   19 BoursoBank rows the adapter leaves ambiguous.
   Every bundled institution has moved; all files of all institutions import together into one
   database, and all 10 statements with balances reconcile.
+  `test/records_translate.ml` carries exports across the move; it needs the old adapters, so they
+  stay until the user's database has migrated.
   Next: delete the old adapters, parsers' companions and `--inspect`, which nothing imports through
   any more, and match transfers across institutions.
 - [ ] Group movements into operations by evidence strength, covering transfers,

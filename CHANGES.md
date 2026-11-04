@@ -8,6 +8,10 @@ short line of their own.
 
 ## Unreleased
 
+- Restoring a decision on a row imported through records now compares what identifies the row: its
+  account, ID, date, movements, fee and group. A converter that later keeps more detail, or cleans
+  a description, no longer blocks restoring decisions. Sources with no row IDs keep their check that
+  identical rows cannot be told apart.
 - **Action required, before upgrading:** rows imported through records have new identities, so an
   export from before this version names rows that no longer exist. Export with your current `fin`,
   translate with `test/records_translate.exe`, then rebuild and restore; see "Upgrading to records"

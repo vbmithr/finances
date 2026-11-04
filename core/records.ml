@@ -583,6 +583,22 @@ let row_codec =
 let row_to_string account record = Json.encode row_codec (account, record)
 let row_of_string = Json.decode row_codec
 
+let row_identity payload =
+  match row_of_string payload with
+  | Error _ -> None
+  | Ok (account, record) ->
+    Some
+      (row_to_string
+         { id = account.id
+         ; bank = None
+         ; number = None
+         ; account_type = None
+         ; currency = None
+         ; iban = Unstated
+         }
+         { record with statements = []; details = no_details })
+;;
+
 let check t =
   let problems = Queue.create () in
   let problem fmt = Printf.ksprintf (Queue.enqueue problems) fmt in
