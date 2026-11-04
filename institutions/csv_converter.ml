@@ -95,6 +95,7 @@ type balance_spec =
 type account_spec =
   { id : string
   ; bank : string option
+  ; number : string option
   ; account_type : string option
   ; currency : commodity_spec option
   }
@@ -311,10 +312,11 @@ let balance_codec =
 ;;
 
 let account_codec =
-  Jsont.Object.map (fun id bank account_type currency : account_spec ->
-    { id; bank; account_type; currency })
+  Jsont.Object.map (fun id bank number account_type currency : account_spec ->
+    { id; bank; number; account_type; currency })
   |> dec_only "id" Jsont.string
   |> opt "bank" Jsont.string
+  |> opt "number" Jsont.string
   |> opt "type" Jsont.string
   |> opt "currency" commodity_codec
   |> finish
@@ -472,6 +474,7 @@ let named_columns t =
     ; Option.value_map t.total ~default:[] ~f:(fun total ->
         conditions total.conditions @ quantity total.quantity @ commodity total.commodity)
     ; template_columns t.account.id
+    ; Option.value_map t.account.account_type ~default:[] ~f:template_columns
     ; Option.value_map t.account.currency ~default:[] ~f:commodity
     ; (match t.id with
        | Columns columns -> List.filter columns ~f:(Fn.non (String.equal "@reference"))
@@ -770,8 +773,8 @@ let account_of t row : Records.account =
   in
   { id = expand t row t.account.id
   ; bank = t.account.bank
-  ; number = None
-  ; account_type = t.account.account_type
+  ; number = t.account.number
+  ; account_type = Option.map t.account.account_type ~f:(expand t row)
   ; currency
   ; iban = Unstated
   }
@@ -796,6 +799,11 @@ let rows_of t contents =
 
 let recognizes t contents =
   Csv_reader.recognizes ~separator:t.separator ~trim:false ~header:t.header contents
+;;
+
+let filtered_rows t contents =
+  Or_error.try_with (fun () ->
+    List.count (rows_of t contents) ~f:(fun row -> not (holds_all t row t.only)))
 ;;
 
 let at_row row f =

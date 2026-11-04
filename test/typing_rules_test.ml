@@ -12,7 +12,6 @@ let import_revolut db =
     (ok
        (Test_support.import
           db
-          ~account_label:"main"
           ~institution:"revolut"
           ~path:"revolut.csv"
           (In_channel.read_all "fixtures/revolut.csv")))

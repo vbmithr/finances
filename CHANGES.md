@@ -8,6 +8,16 @@ short line of their own.
 
 ## Unreleased
 
+- `fin import revolut` now goes through records and no longer takes `--account-id`: a person has
+  one personal account, named `personal` in the ledger, as in
+  `assets:bank:revolut:revolut:current-EUR:personal`. **Action required:** remove `--account-id` from
+  your scripts, and map any account settings you saved under `main` to `personal` when you rebuild.
+  A second account, such as a company's, can be imported as a records file naming it. Rows are stored
+  with their date rather than an assumed UTC time, as Revolut's clock states no offset; the clock
+  stays in their fields.
+  Reverted rows, which the adapter dropped, are kept as operations with no movements and their
+  amount as reported, so `fin operation list` now shows them; they post nothing to the journal.
+- `fin convert` says on standard error how many rows a layout's `only` left out.
 - `fin import cdc` now goes through records. Its operations and movements are unchanged, but their
   source events have a new kind, so rebuild with the schema 34 rebuild below. The message for two
   identical rows in one file is now `repeated id: identical rows cannot be told apart`.

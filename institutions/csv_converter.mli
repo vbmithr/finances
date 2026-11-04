@@ -19,6 +19,9 @@ val overlap : t -> Adapter.overlap
 (** Whether this is a CSV the definition describes, judged from its header. *)
 val recognizes : t -> string -> bool
 
+(** How many rows [only] leaves out of this file, so that they do not vanish unnoticed. *)
+val filtered_rows : t -> string -> int Or_error.t
+
 (** Every row of the CSV as a record. [name] is the source's name in the result. *)
 val convert : t -> name:string -> string -> Records.t Or_error.t
 

@@ -1,7 +1,7 @@
 # Records format
 
 Status: version 1 draft, 2026-11-04. `fin records check FILE` validates a file and `fin convert`
-prints one. Fin imports records, pairs observations and stores balances, for FDM and CDC so far; other
+prints one. Fin imports records, pairs observations and stores balances, for FDM, CDC and Revolut so far; other
 institutions still import through their adapters.
 
 A records file is what one institution's document says, as JSON Lines: every entry becomes
@@ -255,8 +255,8 @@ unknown member or a column not in its header.
 | `header` | The exact header; a file with another one is not this layout |
 | `separator`, `decimal` | Default `,` and `dot`; spaces that group digits are ignored |
 | `observation` | The rows describe rows stated elsewhere |
-| `only` | Conditions a row must meet to be part of this source at all |
-| `account` | `id`, where `{Column}` is that row's value, and `bank`, `type`, `currency` |
+| `only` | Conditions a row must meet to be part of this source at all; `fin convert` says how many it left out |
+| `account` | `id` and `type`, where `{Column}` is that row's value, and `bank`, `number`, `currency`. Records with one `number` and different types are one real account, as a multi-currency balance is, sharing its IBAN |
 | `id` | `{"columns": [...]}` or `{"row_hash": true}`; absent means `inventory` identity |
 | `occurred`, `value_on` | `column`, `fallback`, `layout` (`iso-date`, `iso-datetime`, `day-first`), and `utc` |
 | `cases` | The first whose `when` conditions hold gives `movements` and `fee` |

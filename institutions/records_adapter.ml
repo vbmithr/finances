@@ -194,7 +194,7 @@ let decode (event : Source_event.t) =
     ?counterparty_iban:
       (Option.bind details.counterparty ~f:(fun c -> Option.bind c.iban ~f:iban))
     ?movement_type:details.movement_type
-    ~fields:details.fields
+    (* The source event carries the fields, and fin adds them to the movement. *)
     (match details.descriptions with
      | [] -> [ record.id ]
      | descriptions -> descriptions)

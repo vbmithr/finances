@@ -213,7 +213,7 @@ fin init
 fin import boursobank ~/Statements/boursobank
 fin import wise ~/Statements/wise
 fin import bunq ~/Statements/bunq
-fin import revolut ~/Statements/revolut --account-id main
+fin import revolut ~/Statements/revolut
 ```
 
 After importing all banks, restore account settings with
@@ -584,7 +584,7 @@ Use the corresponding institution for your other inboxes:
 ```sh
 fin import wise ~/Statements/wise
 fin import bunq ~/Statements/bunq
-fin import revolut ~/Statements/revolut --account-id main
+fin import revolut ~/Statements/revolut
 ```
 
 For known bank formats, the first argument names the institution: `boursobank`,
@@ -624,17 +624,7 @@ An explicitly named ZIP containing no recognized bank documents fails the
 command, just like an unsupported file; unrelated members alongside valid
 statements are reported as unsupported without failing the command.
 
-For Revolut, choose a stable account label with `--account-id`, since its CSV does
-not identify the account; use separate labels and folders for different Revolut
-accounts. If you omit it on a terminal, import asks for the label; scripts must
-supply it. Labels accept letters, digits, underscores and hyphens. Use the same
-label every time. Revolut exports one file per currency: import them together under
-one label, and each currency becomes its own account. Reverted transactions, which
-never moved money, are skipped. Import scans the folder recursively, archives the inputs,
-imports movements, projects accounting entries and publishes a combined
-`bank.journal` beside the selected database. `--journal FILE` chooses another
-output location. Importing each bank into the same database produces one combined
-view of your finances.
+For Revolut no label is needed: a person has one personal account, with a balance per currency.
 
 On a terminal, import asks for an IBAN when it first discovers an account whose
 statements do not supply one. It asks once for a group of currency accounts with
@@ -765,8 +755,8 @@ document with no records. Keep the output private: it holds your statement's nam
 
 ### Import through records
 
-FDM and CDC are imported through records, directly from their CSVs or from a records file, plain
-or compressed. Both give the same result:
+FDM, CDC and Revolut are imported through records, directly from their CSVs or from a records file,
+plain or compressed. Both give the same result:
 
 ```sh
 fin import fdm ~/statements/fdm

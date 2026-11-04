@@ -57,6 +57,8 @@ Exchange,Savings,2026-01-05 09:00:00,2026-01-05 09:00:00,Other product,-1.00,0.0
 lines = convert("revolut", revolut)
 records = kind(lines, "record")
 assert len(records) == 3, "another product is not this account"
+left_out = convert("revolut", revolut, check=False)
+assert "left out 1 row of revolut.csv" in " ".join(left_out.stderr.split()), left_out.stderr
 assert kind(lines, "header")[0]["identity"] == "inventory"
 assert records[1]["movements"][0]["quantity"] == "-11", records[1]
 assert records[1]["fee"] == "1"

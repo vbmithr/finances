@@ -38,6 +38,32 @@ class ImportOnboarding(unittest.TestCase):
         self.usd.write_text(FIXTURE.replace(',EUR,', ',USD,'))
         self.config = self.root / 'config/fin/accounts.json'
 
+    def import_revolut_account(self, path, account, *args):
+        """A second Revolut account, as a records file naming it: a converted statement can say
+        which account it is, and a Revolut export cannot."""
+        definition = self.root / f'revolut-{account}.json'
+        definition.write_text(json.dumps({
+            'format': 'fin-csv-converter', 'version': 1, 'institution': 'revolut',
+            'institution_type': 'bank',
+            'header': ['Type', 'Product', 'Started Date', 'Completed Date', 'Description',
+                       'Amount', 'Fee', 'Currency', 'State', 'Balance'],
+            'account': {'id': account, 'bank': 'revolut', 'type': f'current-{account}',
+                        'currency': {'fiat': 'Currency'}},
+            'occurred': {'column': 'Completed Date', 'fallback': 'Started Date',
+                         'layout': 'iso-datetime'},
+            'cases': [{'when': [{'column': 'State', 'in': ['COMPLETED']}],
+                       'movements': [{'role': 'primary',
+                                      'quantity': {'column': 'Amount', 'minus': 'Fee'},
+                                      'commodity': {'fiat': 'Currency'}}],
+                       'fee': {'column': 'Fee'}}],
+            'reported': {'quantity': 'Amount', 'symbol': 'Currency'},
+            'descriptions': ['Description'],
+            'balance_after': 'Balance',
+        }))
+        records = self.root / f'revolut-{account}-{Path(path).stem}.jsonl'
+        self.run_fin('convert', '--definition', definition, path, '-o', records)
+        return self.run_fin('import', 'revolut', records, *args)
+
     def run_fin(self, *args, check=True):
         result = subprocess.run([FIN, *map(str, args)], env=self.env,
                                 stdin=subprocess.DEVNULL, capture_output=True, text=True)
@@ -314,7 +340,7 @@ class ImportOnboarding(unittest.TestCase):
         wallet = self.root / 'wallet.csv'
         wallet.write_text('Timestamp (UTC),Transaction Description,Currency,Amount,To Currency,To Amount,Native Currency,Native Amount,Native Amount (in USD),Transaction Kind,Transaction Hash\n'
                           '2026-01-02 10:01:00,Deposit,EUR,10,,,EUR,10,11,crypto_deposit,\n')
-        self.run_fin('import', 'revolut', bank, '--account-id', 'main')
+        self.run_fin('import', 'revolut', bank)
         self.run_fin('import', 'cdc', wallet)
         rows = json.loads(self.run_fin('operation', 'list', '--json').stdout)
         bank_op = next(r['operation_id'] for r in rows if r['institution'] == 'revolut')
@@ -338,7 +364,7 @@ class ImportOnboarding(unittest.TestCase):
         rebuilt = self.root / 'transfer-general-rebuilt.sqlite3'
         self.run_fin('init', '--database', rebuilt)
         self.run_fin('import', 'cdc', wallet, '--database', rebuilt)
-        self.run_fin('import', 'revolut', bank, '--account-id', 'main', '--database', rebuilt)
+        self.run_fin('import', 'revolut', bank, '--database', rebuilt)
         self.run_fin('operation', 'restore', resolutions, '--database', rebuilt, '--yes')
         self.assertIn('Transfers to restore: 1', self.terminal(['transfer', 'restore', transfers, '--database', rebuilt], [('Restore these transfers?', 'n')]))
         self.assertIn('transfer_changes=1', self.run_fin('transfer', 'restore', transfers, '--database', rebuilt, '--yes').stdout)
@@ -520,7 +546,7 @@ class ImportOnboarding(unittest.TestCase):
         self.assertEqual(json.loads(self.run_fin('status', '--json').stdout)['movements'], before)
 
     def test_portable_categories_roundtrip_with_different_event_ids(self):
-        self.run_fin('import', 'revolut', self.csv, '--account-id', 'main')
+        self.run_fin('import', 'revolut', self.csv)
         first = json.loads(self.run_fin('operation', 'list', '--search', 'Initial deposit', '--json').stdout)[0]['event_id']
         self.run_fin('cat', 'add', 'expenses:unused')
         self.run_fin('operation', 'category', 'set', 'income:salary', first)
@@ -557,7 +583,7 @@ class ImportOnboarding(unittest.TestCase):
         other = self.root / 'rebuilt.sqlite3'
         self.run_fin('init', '--database', other)
         self.run_fin('import', 'boursobank', 'fixtures/bank.ofx', '--database', other)
-        self.run_fin('import', 'revolut', self.csv, '--account-id', 'main', '--database', other)
+        self.run_fin('import', 'revolut', self.csv, '--database', other)
         current = json.loads(self.run_fin('operation', 'list', '--database', other, '--search', 'Initial deposit', '--json').stdout)[0]
         self.assertNotEqual(current['event_id'], first)
         refused = self.run_fin('operation', 'restore', snapshot, '--database', other, check=False)
@@ -600,7 +626,7 @@ class ImportOnboarding(unittest.TestCase):
         legacy.write_text(json.dumps({'version': 1, 'categories': c['categories'], 'rules': r['rules'], 'decisions': exported['decisions']}))
         legacy_db = self.root / 'legacy.sqlite3'
         self.run_fin('init', '--database', legacy_db)
-        self.run_fin('import', 'revolut', self.csv, '--account-id', 'main', '--database', legacy_db)
+        self.run_fin('import', 'revolut', self.csv, '--database', legacy_db)
         self.run_fin('operation', 'restore', legacy, '--database', legacy_db, '--yes')
         self.assertNotIn('expenses:unused', json.loads(self.run_fin('cat', 'list', '--database', legacy_db, '--json').stdout))
         self.run_fin('rule', 'restore', legacy, '--database', legacy_db, '--yes')
@@ -610,7 +636,7 @@ class ImportOnboarding(unittest.TestCase):
         self.assertIn('category_changes=0', self.run_fin('operation', 'restore', snapshot, '--database', other, '--yes').stdout)
 
     def test_portable_transaction_types_roundtrip_and_conflict(self):
-        self.run_fin('import', 'revolut', self.csv, '--account-id', 'main')
+        self.run_fin('import', 'revolut', self.csv)
         rows = json.loads(self.run_fin('operation', 'list', '--json').stdout)
         first, second = (r['event_id'] for r in rows[:2])
         self.run_fin('operation', 'category', 'set', 'expenses:food', first)
@@ -625,7 +651,7 @@ class ImportOnboarding(unittest.TestCase):
         other = self.root / 'rebuilt-types.sqlite3'
         self.run_fin('init', '--database', other)
         self.run_fin('import', 'boursobank', 'fixtures/bank.ofx', '--database', other)
-        self.run_fin('import', 'revolut', self.csv, '--account-id', 'main', '--database', other)
+        self.run_fin('import', 'revolut', self.csv, '--database', other)
         preview = self.terminal(['operation', 'restore', snapshot, '--database', other], [('Restore this snapshot?', 'n')])
         self.assertIn('Type overrides to restore: 2', preview)
         current = json.loads(self.run_fin('operation', 'list', '--database', other, '--institution', 'revolut', '--json').stdout)
@@ -647,7 +673,7 @@ class ImportOnboarding(unittest.TestCase):
         csv = self.csv.read_text().replace('Repeated transfer,10.00,0.00,EUR,COMPLETED,160.00', 'Repeated transfer,0.00,0.00,EUR,COMPLETED,150.00')
         csv = csv.replace('Repeated transfer,10.00,0.00,EUR,COMPLETED,170.00', 'Repeated transfer,0.00,0.00,EUR,COMPLETED,150.00').replace(',69.50', ',49.50')
         self.csv.write_text(csv)
-        self.run_fin('import', 'revolut', self.csv, '--account-id', 'main')
+        self.run_fin('import', 'revolut', self.csv)
         rows = json.loads(self.run_fin('operation', 'list', '--search', 'Repeated transfer', '--json').stdout)
         self.assertEqual(len(rows), 2)
         self.run_fin('operation', 'category', 'set', 'income:other', rows[0]['event_id'])
@@ -658,7 +684,7 @@ class ImportOnboarding(unittest.TestCase):
         self.assertIn('ambiguous duplicate source evidence', result.stdout)
 
     def test_rule_from_category_can_be_applied_to_other_transactions(self):
-        self.run_fin('import', 'revolut', self.csv, '--account-id', 'main')
+        self.run_fin('import', 'revolut', self.csv)
         rows = json.loads(self.run_fin('operation', 'list', '--search', 'Repeated', '--json').stdout)
         first, second = (r['event_id'] for r in rows)
         self.run_fin('operation', 'category', 'set', 'income:other', first)
@@ -674,7 +700,7 @@ class ImportOnboarding(unittest.TestCase):
         csv = csv.replace('Repeated transfer,10.00,0.00,EUR,COMPLETED,170.00',
                           'ShopXOne,10.00,0.00,EUR,COMPLETED,170.00')
         self.csv.write_text(csv)
-        self.run_fin('import', 'revolut', self.csv, '--account-id', 'main')
+        self.run_fin('import', 'revolut', self.csv)
         seed = json.loads(self.run_fin('operation', 'list', '--search', 'Shop*One', '--json').stdout)[0]['event_id']
         self.run_fin('operation', 'category', 'set', 'expenses:shopping', seed)
         self.run_fin('rule', 'from-category', seed, 'literal-shop', '--contains', 'Shop*One', '--yes')
@@ -683,7 +709,7 @@ class ImportOnboarding(unittest.TestCase):
         self.assertEqual(matches[0]['transaction']['event_id'], seed)
 
     def test_portable_restore_blocks_conflicts_and_missing_evidence(self):
-        self.run_fin('import', 'revolut', self.csv, '--account-id', 'main')
+        self.run_fin('import', 'revolut', self.csv)
         first = json.loads(self.run_fin('operation', 'list', '--search', 'Initial deposit', '--json').stdout)[0]['event_id']
         self.run_fin('operation', 'category', 'set', 'income:salary', first)
         snapshot = self.root / 'categories-portable.json'
@@ -723,7 +749,7 @@ class ImportOnboarding(unittest.TestCase):
         self.assertNotEqual(self.run_fin('operation', 'export', check=False).returncode, 0)
 
     def test_ledger_wrapper_streams_journal_and_forwards_arguments(self):
-        self.run_fin('import', 'revolut', self.csv, '--account-id', 'main')
+        self.run_fin('import', 'revolut', self.csv)
         expected = self.run_fin('journal', 'export').stdout
         bindir = self.root / 'bin'
         bindir.mkdir()
@@ -752,7 +778,7 @@ class ImportOnboarding(unittest.TestCase):
         self.assertIsNone(empty['categorized_percent'])
         self.assertEqual((empty['by_category'], empty['by_type']), ([], []))
         self.assertIn('n/a', self.run_fin('operation', 'status').stdout)
-        self.run_fin('import', 'revolut', self.csv, '--account-id', 'main')
+        self.run_fin('import', 'revolut', self.csv)
         event = json.loads(self.run_fin('operation', 'list', '--json').stdout)[0]['event_id']
         self.run_fin('operation', 'category', 'set', 'expenses:food', event)
         status = json.loads(self.run_fin('operation', 'status', '--json').stdout)
@@ -795,7 +821,7 @@ class ImportOnboarding(unittest.TestCase):
         missing = self.run_fin('cat', 'delete', 'expenses:mistake', check=False)
         self.assertNotEqual(missing.returncode, 0)
         self.assertIn('unknown category', missing.stderr)
-        self.run_fin('import', 'revolut', self.csv, '--account-id', 'main')
+        self.run_fin('import', 'revolut', self.csv)
         event = json.loads(self.run_fin('operation', 'list', '--json').stdout)[0]['event_id']
         self.run_fin('cat', 'add', 'expenses:used')
         self.run_fin('operation', 'category', 'set', 'expenses:used', event)
@@ -814,7 +840,7 @@ class ImportOnboarding(unittest.TestCase):
         self.run_fin('cat', 'delete', 'expenses:rule')
 
     def test_category_set_changes_and_resets(self):
-        self.run_fin('import', 'revolut', self.csv, '--account-id', 'main')
+        self.run_fin('import', 'revolut', self.csv)
         event = json.loads(self.run_fin('operation', 'list', '--json').stdout)[0]['event_id']
         self.assertIn('category_changes=1', self.run_fin('operation', 'category', 'set', 'expenses:food', event).stdout)
         self.assertIn('category_changes=1', self.run_fin('operation', 'category', 'set', 'expenses:coffee', event).stdout)
@@ -826,7 +852,7 @@ class ImportOnboarding(unittest.TestCase):
         self.assertEqual(len(json.loads(self.run_fin('operation', 'category', 'history').stdout)), 3)
 
     def test_category_set_multiple_transactions_is_atomic(self):
-        self.run_fin('import', 'revolut', self.csv, '--account-id', 'main')
+        self.run_fin('import', 'revolut', self.csv)
         rows = json.loads(self.run_fin('operation', 'list', '--json').stdout)
         first, second = (row['event_id'] for row in rows[:2])
         self.assertIn('category_changes=2', self.run_fin('operation', 'category', 'set', 'expenses:food', first, second).stdout)
@@ -844,7 +870,7 @@ class ImportOnboarding(unittest.TestCase):
         self.assertTrue(all(row['counter_account'] == 'equity:unclassified' for row in after if row['event_id'] in (first, second)))
 
     def test_category_set_from_filtered_transaction_list(self):
-        self.run_fin('import', 'revolut', self.csv, '--account-id', 'main')
+        self.run_fin('import', 'revolut', self.csv)
         selected = self.run_fin('operation', 'list', '--search', 'Repeated', '--decision', 'unclassified', '--json').stdout
         ids = {row['event_id'] for row in json.loads(selected)}
         self.assertEqual(len(ids), 2)
@@ -873,7 +899,7 @@ class ImportOnboarding(unittest.TestCase):
         self.assertEqual(self.run_fin('operation', 'category', 'history').stdout, before)
 
     def test_interactive_classification_review(self):
-        self.run_fin('import', 'revolut', self.csv, '--account-id', 'main')
+        self.run_fin('import', 'revolut', self.csv)
         rows = json.loads(self.run_fin('operation', 'list', '--json', '--search', 'Repeated').stdout)
         first, second = (row['event_id'] for row in rows)
         self.assertEqual(json.loads(self.run_fin('category', 'list', '--json').stdout), [])
@@ -893,7 +919,7 @@ class ImportOnboarding(unittest.TestCase):
         self.assertIn('expenses:food', journal)
 
     def test_interactive_classification_cancel_and_select_none(self):
-        self.run_fin('import', 'revolut', self.csv, '--account-id', 'main')
+        self.run_fin('import', 'revolut', self.csv)
         rows = json.loads(self.run_fin('operation', 'list', '--json', '--search', 'Repeated').stdout)
         first, second = (row['event_id'] for row in rows)
         before = self.run_fin('operation', 'review', '--all', '--json').stdout
@@ -915,7 +941,7 @@ class ImportOnboarding(unittest.TestCase):
                          {first: 'expenses:food', second: 'equity:unclassified'})
 
     def test_category_review_search_and_selection(self):
-        self.run_fin('import', 'revolut', self.csv, '--account-id', 'main')
+        self.run_fin('import', 'revolut', self.csv)
         seed = json.loads(self.run_fin('operation', 'list', '--search', 'Initial deposit', '--json').stdout)[0]['event_id']
         output = self.terminal(['operation', 'category', 'review', seed], [
             ('Category name or number', 'income:other'),
@@ -940,7 +966,7 @@ class ImportOnboarding(unittest.TestCase):
         more = [line.replace('Repeated transfer,', 'Repeated transfers,').replace(',170.00', ',180.00'),
                 line.replace('Repeated transfer,', 'Repeated transferring,').replace(',170.00', ',190.00')]
         self.csv.write_text(self.csv.read_text().replace(line, '\n'.join([line, *more])).replace(',69.50', ',89.50'))
-        self.run_fin('import', 'revolut', self.csv, '--account-id', 'main')
+        self.run_fin('import', 'revolut', self.csv)
         rows = json.loads(self.run_fin('operation', 'list', '--search', 'Repeated', '--json').stdout)
         exact = [r['event_id'] for r in rows if r['description'] == 'Repeated transfer']
         fuzzy_same = next(r['event_id'] for r in rows if r['description'] == 'Repeated transfers')
@@ -971,7 +997,7 @@ class ImportOnboarding(unittest.TestCase):
         line = 'Transfer,Current,2026-01-02 10:00:00,2026-01-02 10:00:01,Repeated transfer,10.00,0.00,EUR,COMPLETED,170.00'
         extra = line.replace('Repeated transfer,', 'Repeated transfers,').replace(',170.00', ',180.00')
         self.csv.write_text(self.csv.read_text().replace(line, line + '\n' + extra).replace(',69.50', ',79.50'))
-        self.run_fin('import', 'revolut', self.csv, '--account-id', 'main')
+        self.run_fin('import', 'revolut', self.csv)
         rows = json.loads(self.run_fin('operation', 'list', '--search', 'Repeated', '--json').stdout)
         exact = [r['event_id'] for r in rows if r['description'] == 'Repeated transfer']
         fuzzy = next(r['event_id'] for r in rows if r['description'] == 'Repeated transfers')
@@ -991,7 +1017,7 @@ class ImportOnboarding(unittest.TestCase):
         csv = self.csv.read_text().replace('Repeated transfer,10.00,0.00,EUR,COMPLETED,170.00',
                                            'Repeated transfers,10.00,0.00,EUR,COMPLETED,170.00')
         self.csv.write_text(csv)
-        self.run_fin('import', 'revolut', self.csv, '--account-id', 'main')
+        self.run_fin('import', 'revolut', self.csv)
         rows = json.loads(self.run_fin('operation', 'list', '--search', 'Repeated transfer', '--json').stdout)
         seed = next(r['event_id'] for r in rows if r['description'] == 'Repeated transfer')
         output = self.terminal(['operation', 'category', 'review', seed], [
@@ -1005,7 +1031,7 @@ class ImportOnboarding(unittest.TestCase):
     def test_category_review_all_selects_exact_and_fuzzy(self):
         line = 'Transfer,Current,2026-01-02 10:00:00,2026-01-02 10:00:01,Repeated transfer,10.00,0.00,EUR,COMPLETED,170.00'
         self.csv.write_text(self.csv.read_text().replace(line, line + '\n' + line.replace('Repeated transfer,', 'Repeated transfers,').replace(',170.00', ',180.00')).replace(',69.50', ',79.50'))
-        self.run_fin('import', 'revolut', self.csv, '--account-id', 'main')
+        self.run_fin('import', 'revolut', self.csv)
         rows = json.loads(self.run_fin('operation', 'list', '--search', 'Repeated transfer', '--json').stdout)
         seed = next(r['event_id'] for r in rows if r['description'] == 'Repeated transfer')
         output = self.terminal(['operation', 'category', 'review', seed], [
@@ -1017,7 +1043,7 @@ class ImportOnboarding(unittest.TestCase):
         self.assertEqual(rows[0]['counter_account'], 'income:other')
 
     def test_category_review_ranges_toggle_and_validate(self):
-        self.run_fin('import', 'revolut', self.csv, '--account-id', 'main')
+        self.run_fin('import', 'revolut', self.csv)
         seed = json.loads(self.run_fin('operation', 'list', '--search', 'Initial deposit', '--json').stdout)[0]['event_id']
         output = self.terminal(['operation', 'category', 'review', seed], [
             ('Category name or number', 'income:other'),
@@ -1031,7 +1057,7 @@ class ImportOnboarding(unittest.TestCase):
         self.assertIn('category_changes=3', output)
 
     def test_category_review_all_changes_categorized_search_results(self):
-        self.run_fin('import', 'revolut', self.csv, '--account-id', 'main')
+        self.run_fin('import', 'revolut', self.csv)
         rows = json.loads(self.run_fin('operation', 'list', '--json').stdout)
         seed = next(r['event_id'] for r in rows if r['description'] == 'Initial deposit')
         others = [r['event_id'] for r in rows if r['description'] == 'Repeated transfer']
@@ -1049,7 +1075,7 @@ class ImportOnboarding(unittest.TestCase):
         self.assertEqual({r['counter_account'] for r in rows}, {'income:other'})
 
     def test_category_rereview_changes_selected_categorized_matches(self):
-        self.run_fin('import', 'revolut', self.csv, '--account-id', 'main')
+        self.run_fin('import', 'revolut', self.csv)
         rows = json.loads(self.run_fin('operation', 'list', '--search', 'Repeated', '--json').stdout)
         first, second = (r['event_id'] for r in rows)
         self.run_fin('operation', 'category', 'set', 'expenses:food', first)
@@ -1071,7 +1097,7 @@ class ImportOnboarding(unittest.TestCase):
         self.assertEqual({r['counter_account'] for r in json.loads(self.run_fin('operation', 'list', '--search', 'Repeated', '--json').stdout)}, {'expenses:coffee'})
 
     def test_category_similar_is_read_only_and_reports_conflicts(self):
-        self.run_fin('import', 'revolut', self.csv, '--account-id', 'main')
+        self.run_fin('import', 'revolut', self.csv)
         rows = json.loads(self.run_fin('operation', 'list', '--json', '--search', 'Repeated').stdout)
         self.assertEqual(len(rows), 2)
         first, second = (row['event_id'] for row in rows)
@@ -1097,7 +1123,7 @@ class ImportOnboarding(unittest.TestCase):
         self.assertNotEqual(self.run_fin('operation', 'category', 'similar', '999999', check=False).returncode, 0)
 
     def test_transaction_list_filters_and_reviewed_rows(self):
-        self.run_fin('import', 'revolut', self.csv, '--account-id', 'main')
+        self.run_fin('import', 'revolut', self.csv)
         accounts = json.loads(self.run_fin('account', 'list', '--json').stdout)
         account_id = accounts[0]['id']
         rows = json.loads(self.run_fin('operation', 'list', '--json').stdout)
@@ -1142,11 +1168,11 @@ class ImportOnboarding(unittest.TestCase):
         self.assertNotEqual(self.run_fin('operation', 'list', '--decision', 'invalid', check=False).returncode, 0)
 
     def test_operation_list_shows_one_row_per_operation(self):
-        self.run_fin('import', 'revolut', self.csv, '--account-id', 'main')
+        self.run_fin('import', 'revolut', self.csv)
         other = self.root / 'other.csv'
         other.write_text('Type,Product,Started Date,Completed Date,Description,Amount,Fee,Currency,State,Balance\n'
                          'Transfer,Current,2026-01-02 10:00:00,2026-01-02 10:00:01,Transfer,-10.00,0.00,EUR,COMPLETED,0.00\n')
-        self.run_fin('import', 'revolut', other, '--account-id', 'other')
+        self.import_revolut_account(other, 'other')
         cdc = self.root / 'cdc.csv'
         cdc.write_text('Timestamp (UTC),Transaction Description,Currency,Amount,To Currency,To Amount,Native Currency,Native Amount,Native Amount (in USD),Transaction Kind,Transaction Hash\n'
                        '2025-06-09 17:56:16,Reward,CRO,1.23456789,,,EUR,0.10,0.12,referral_card_cashback,\n'
@@ -1210,7 +1236,7 @@ class ImportOnboarding(unittest.TestCase):
         db = self.root / 'data/fin/fin.sqlite3'
         with sqlite3.connect(db) as conn:
             conn.execute("INSERT INTO operations(id, occurred) VALUES (100, '2025-01-01')")
-        self.run_fin('import', 'revolut', self.csv, '--account-id', 'main')
+        self.run_fin('import', 'revolut', self.csv)
         rows = json.loads(self.run_fin('operation', 'list', '--json').stdout)
         row = next(r for r in rows if r['event_id'] is not None)
         self.assertNotEqual(row['event_id'], row['operation_id'])
@@ -1229,7 +1255,7 @@ class ImportOnboarding(unittest.TestCase):
         self.assertNotEqual(self.run_fin('operation', 'type', 'show', row['event_id'], check=False).returncode, 0)
 
     def test_restore_decisions_for_one_institution(self):
-        self.run_fin('import', 'revolut', self.csv, '--account-id', 'main')
+        self.run_fin('import', 'revolut', self.csv)
         row = json.loads(self.run_fin('operation', 'list', '--json').stdout)[0]
         self.run_fin('operation', 'category', 'set', 'expenses:food', row['event_id'])
         snapshot = json.loads(self.run_fin('operation', 'export').stdout)
@@ -1239,7 +1265,7 @@ class ImportOnboarding(unittest.TestCase):
         path.write_text(json.dumps(snapshot))
         rebuilt = self.root / 'filtered.sqlite3'
         self.run_fin('init', '--database', rebuilt)
-        self.run_fin('import', 'revolut', self.csv, '--account-id', 'main', '--database', rebuilt)
+        self.run_fin('import', 'revolut', self.csv, '--database', rebuilt)
         blocked = self.run_fin('operation', 'restore', path, '--database', rebuilt, '--yes', check=False)
         self.assertNotEqual(blocked.returncode, 0)
         self.assertIn('transaction not found', blocked.stdout)
@@ -1305,7 +1331,7 @@ class ImportOnboarding(unittest.TestCase):
         self.assertTrue(all(r['event_id'] == event for r in history))
 
     def test_type_set_multiple_is_atomic(self):
-        self.run_fin('import', 'revolut', self.csv, '--account-id', 'main')
+        self.run_fin('import', 'revolut', self.csv)
         rows = json.loads(self.run_fin('operation', 'list', '--json').stdout)
         first, second = (row['event_id'] for row in rows[:2])
         before = self.run_fin('operation', 'type', 'history', '--json').stdout
@@ -1319,7 +1345,7 @@ class ImportOnboarding(unittest.TestCase):
         self.assertEqual(len(json.loads(self.run_fin('operation', 'type', 'history', '--json').stdout)), 2)
 
     def test_type_history_is_removed_with_account(self):
-        self.run_fin('import', 'revolut', self.csv, '--account-id', 'main')
+        self.run_fin('import', 'revolut', self.csv)
         row = json.loads(self.run_fin('operation', 'list', '--json').stdout)[0]
         self.run_fin('operation', 'type', 'set', 'bonus', row['event_id'])
         self.assertEqual(len(json.loads(self.run_fin('operation', 'type', 'history', '--json').stdout)), 1)
@@ -1576,7 +1602,7 @@ class ImportOnboarding(unittest.TestCase):
         self.assertEqual(len(json.loads(self.run_fin('operation', 'list', '--json').stdout)), 3)
 
     def test_command_aliases(self):
-        self.run_fin('import', 'revolut', self.csv, '--account-id', 'main')
+        self.run_fin('import', 'revolut', self.csv)
         expected = self.run_fin('operation', 'list', '--json').stdout
         self.assertEqual(self.run_fin('op', 'list', '--json').stdout, expected)
         self.assertIn('fin-operation-list', self.run_fin('op', 'list', '--help=plain').stdout)
@@ -1589,11 +1615,11 @@ class ImportOnboarding(unittest.TestCase):
         self.assertNotEqual(self.run_fin('txx', 'list', check=False).returncode, 0)
 
     def test_transfer_candidate_evidence_and_interactive_review(self):
-        self.run_fin('import', 'revolut', self.csv, '--account-id', 'main')
+        self.run_fin('import', 'revolut', self.csv)
         other = self.root / 'other.csv'
         other.write_text('Type,Product,Started Date,Completed Date,Description,Amount,Fee,Currency,State,Balance\n'
                          'Transfer,Current,2026-01-02 10:00:00,2026-01-02 10:00:01,Transfer,-10.00,0.00,EUR,COMPLETED,0.00\n')
-        self.run_fin('import', 'revolut', other, '--account-id', 'other')
+        self.import_revolut_account(other, 'other')
         report = json.loads(self.run_fin('transfer', 'candidates', '--json').stdout)
         self.assertTrue(report['candidates'])
         candidate = report['candidates'][0]
@@ -1614,8 +1640,8 @@ class ImportOnboarding(unittest.TestCase):
         self.assertEqual((saved['version'], len(saved['links'])), (2, 1))
         rebuilt = self.root / 'transfer-rebuilt.sqlite3'
         self.run_fin('init', '--database', rebuilt)
-        self.run_fin('import', 'revolut', other, '--account-id', 'other', '--database', rebuilt)
-        self.run_fin('import', 'revolut', self.csv, '--account-id', 'main', '--database', rebuilt)
+        self.import_revolut_account(other, 'other', '--database', rebuilt)
+        self.run_fin('import', 'revolut', self.csv, '--database', rebuilt)
         journal_before = self.run_fin('journal', 'export', '--database', rebuilt).stdout
         preview = self.terminal(['transfer', 'restore', portable, '--database', rebuilt], [('Restore these transfers?', 'n')])
         self.assertIn('Transfers to restore: 1', preview)
@@ -1681,8 +1707,8 @@ class ImportOnboarding(unittest.TestCase):
         other.write_text(header + ''.join(
             f'Transfer,Current,2026-01-{day:02} 10:00:00,2026-01-{day:02} 10:00:01,Outgoing,-{amount}.00,0.00,EUR,COMPLETED,-{balance}.00\n'
             for day, amount, balance in [(1, 20, 20), (1, 30, 50), (7, 10, 60)]))
-        self.run_fin('import', 'revolut', self.csv, '--account-id', 'main')
-        self.run_fin('import', 'revolut', other, '--account-id', 'other')
+        self.run_fin('import', 'revolut', self.csv)
+        self.import_revolut_account(other, 'other')
         candidates = json.loads(self.run_fin('transfer', 'candidates', '--json').stdout)['candidates']
         self.assertEqual(len(candidates), 3)
         scores = [candidate['score'] for candidate in candidates]
@@ -1702,8 +1728,8 @@ class ImportOnboarding(unittest.TestCase):
         self.csv.write_text(header + 'Transfer,Current,2026-01-02 10:00:00,2026-01-02 10:00:01,Incoming,10.00,0.00,EUR,COMPLETED,10.00\n')
         other = self.root / 'transfer-out.csv'
         other.write_text(header + 'Transfer,Current,2026-01-02 10:00:00,2026-01-02 10:00:01,Outgoing,-10.00,0.00,EUR,COMPLETED,-10.00\n')
-        self.run_fin('import', 'revolut', self.csv, '--account-id', 'main')
-        self.run_fin('import', 'revolut', other, '--account-id', 'other')
+        self.run_fin('import', 'revolut', self.csv)
+        self.import_revolut_account(other, 'other')
         report = json.loads(self.run_fin('transfer', 'candidates', '--json').stdout)
         self.assertEqual(len(report['candidates']), 1)
         event = report['candidates'][0]['first']['event_id']
@@ -1726,8 +1752,8 @@ class ImportOnboarding(unittest.TestCase):
         self.csv.write_text(rows(''))
         other = self.root / 'other.csv'
         other.write_text(rows('-'))
-        self.run_fin('import', 'revolut', self.csv, '--account-id', 'main')
-        self.run_fin('import', 'revolut', other, '--account-id', 'other')
+        self.run_fin('import', 'revolut', self.csv)
+        self.import_revolut_account(other, 'other')
         report = json.loads(self.run_fin('transfer', 'candidates', '--json').stdout)
         self.assertEqual(len(report['candidates']), 2)
         self.assertTrue(all(r['assignment_status'] == 'supported' for r in report['candidates']))
@@ -1747,8 +1773,8 @@ class ImportOnboarding(unittest.TestCase):
         other.write_text('Type,Product,Started Date,Completed Date,Description,Amount,Fee,Currency,State,Balance\n'
                          'Transfer,Current,2026-01-02 10:00:00,2026-01-02 10:00:01,Ambiguous,-10.00,0.00,EUR,COMPLETED,-10.00\n'
                          'Transfer,Current,2026-01-04 10:00:00,2026-01-04 10:00:01,Unique,-20.00,0.00,EUR,COMPLETED,-30.00\n')
-        self.run_fin('import', 'revolut', self.csv, '--account-id', 'main')
-        self.run_fin('import', 'revolut', other, '--account-id', 'other')
+        self.run_fin('import', 'revolut', self.csv)
+        self.import_revolut_account(other, 'other')
         report = json.loads(self.run_fin('transfer', 'candidates', '--json').stdout)
         self.assertTrue(any(r['assignment_status'] == 'supported' for r in report['candidates']))
         self.assertTrue(any(r['assignment_status'] != 'supported' for r in report['candidates']))
@@ -1941,7 +1967,7 @@ class ImportOnboarding(unittest.TestCase):
         self.assertEqual(len(json.loads(self.run_fin('operation', 'list', '--type', 'fee', '--json').stdout)), 4)
 
     def test_regex_category_rule_preview_and_explicit_apply(self):
-        self.run_fin('import', 'revolut', self.csv, '--account-id', 'main')
+        self.run_fin('import', 'revolut', self.csv)
         self.assertNotEqual(self.run_fin('rule', 'add', 'bad', '[', 'expenses:food', check=False).returncode, 0)
         self.assertNotEqual(self.run_fin('rule', 'add', 'bad', 'transfer', 'assets:checking', check=False).returncode, 0)
         self.run_fin('rule', 'add', 'repeat', 'repeated transfer', 'expenses:food', '--institution', 'revolut')
@@ -1968,7 +1994,7 @@ class ImportOnboarding(unittest.TestCase):
         later = self.root / 'later.csv'
         later.write_text('Type,Product,Started Date,Completed Date,Description,Amount,Fee,Currency,State,Balance\n'
                          'Transfer,Current,2026-01-04 10:00:00,2026-01-04 10:00:01,Repeated transfer,10.00,0.00,EUR,COMPLETED,79.50\n')
-        self.run_fin('import', 'revolut', later, '--account-id', 'main')
+        self.run_fin('import', 'revolut', later)
         preview = json.loads(self.run_fin('rule', 'preview', 'renamed', '--json').stdout)
         self.assertEqual(sum(row['eligible'] for row in preview), 1)
         self.assertEqual(sum(not row['eligible'] for row in preview), 2)
@@ -1977,7 +2003,7 @@ class ImportOnboarding(unittest.TestCase):
         self.assertEqual(len(json.loads(self.run_fin('operation', 'category', 'history').stdout)), 3)
 
     def test_rule_apply_force_replaces_categories(self):
-        self.run_fin('import', 'revolut', self.csv, '--account-id', 'main')
+        self.run_fin('import', 'revolut', self.csv)
         rows = json.loads(self.run_fin('operation', 'list', '--search', 'Repeated', '--json').stdout)
         first, second = (r['event_id'] for r in rows)
         self.run_fin('operation', 'category', 'set', 'expenses:old', first)
@@ -1993,7 +2019,7 @@ class ImportOnboarding(unittest.TestCase):
         self.assertTrue(any(r['event_id'] == first and r['account'] == 'expenses:new' and 'Rule repeat-force' in r['reason'] for r in history))
 
     def test_rule_explain_traces_the_type(self):
-        self.run_fin('import', 'revolut', self.csv, '--account-id', 'main')
+        self.run_fin('import', 'revolut', self.csv)
         rows = json.loads(self.run_fin('operation', 'list', '--json').stdout)
         deposit = next(r['event_id'] for r in rows if r['description'] == 'Initial deposit')
         out = self.run_fin('rule', 'explain', deposit).stdout
@@ -2017,7 +2043,7 @@ class ImportOnboarding(unittest.TestCase):
         self.assertIn('any column of the file, named by its header, such as "Type", with --field', before)
         self.assertIn('Default rules (7):', before)
         self.assertIn('Imported data: none.', before)
-        self.run_fin('import', 'revolut', self.csv, '--account-id', 'main')
+        self.run_fin('import', 'revolut', self.csv)
         after = self.run_fin('institution', 'show', 'revolut').stdout
         self.assertIn('Imported data: 4 movements', after)
         self.assertRegex(after, r'\n\s+3\s+transfer\n')
@@ -2027,7 +2053,7 @@ class ImportOnboarding(unittest.TestCase):
         self.assertNotEqual(self.run_fin('institution', 'show', 'nosuchbank', check=False).returncode, 0)
 
     def test_delete_confirmation_defaults_to_no(self):
-        self.run_fin('import', 'revolut', self.csv, '--account-id', 'main')
+        self.run_fin('import', 'revolut', self.csv)
         database = self.root / 'data/fin/fin.sqlite3'
         self.assertTrue(database.exists())
         for answer in ('', 'n', 'maybe'):
@@ -2039,7 +2065,7 @@ class ImportOnboarding(unittest.TestCase):
         self.assertFalse(database.exists())
 
     def test_revolut_types_come_from_the_type_column(self):
-        self.run_fin('import', 'revolut', self.csv, '--account-id', 'main')
+        self.run_fin('import', 'revolut', self.csv)
         rows = json.loads(self.run_fin('operation', 'list', '--json').stdout)
         self.assertEqual(
             sorted((r['description'], r['movement_type']) for r in rows),
@@ -2050,7 +2076,7 @@ class ImportOnboarding(unittest.TestCase):
         extra = self.root / 'revolut-other.csv'
         extra.write_text('Type,Product,Started Date,Completed Date,Description,Amount,Fee,Currency,State,Balance\n'
                          'Cashback,Current,2026-01-05 10:00:00,2026-01-05 10:00:01,Reward,1.00,0.00,EUR,COMPLETED,90.50\n')
-        self.run_fin('import', 'revolut', extra, '--account-id', 'main')
+        self.run_fin('import', 'revolut', extra)
         row = next(r for r in json.loads(self.run_fin('operation', 'list', '--json').stdout) if r['booked_on'] == '2026-01-05')
         self.assertEqual(row['movement_type'], 'revolut:Cashback')
 
@@ -2059,11 +2085,11 @@ class ImportOnboarding(unittest.TestCase):
         # mapping of Revolut's own Type column first.
         for code in ('card-payment', 'card-refund', 'deposit', 'transfer', 'atm', 'charge', 'other'):
             self.run_fin('rule', 'delete', 'revolut-reported-' + code, '--yes')
-        self.run_fin('import', 'revolut', self.csv, '--account-id', 'main')
+        self.run_fin('import', 'revolut', self.csv)
         later = self.root / 'rule-extra.csv'
         later.write_text('Type,Product,Started Date,Completed Date,Description,Amount,Fee,Currency,State,Balance\n'
                          'Transfer,Current,2026-01-04 10:00:00,2026-01-04 10:00:01,Repeated transfer,10.00,0.00,EUR,COMPLETED,79.50\n')
-        self.run_fin('import', 'revolut', later, '--account-id', 'main')
+        self.run_fin('import', 'revolut', later)
         rows = json.loads(self.run_fin('operation', 'list', '--search', 'Repeated transfer', '--json').stdout)
         manual, categorized, fresh = [r['event_id'] for r in rows]
         self.run_fin('operation', 'type', 'set', 'bonus', manual)
@@ -2099,7 +2125,7 @@ class ImportOnboarding(unittest.TestCase):
         future = self.root / 'rule-future.csv'
         future.write_text('Type,Product,Started Date,Completed Date,Description,Amount,Fee,Currency,State,Balance\n'
                           'Transfer,Current,2026-01-05 10:00:00,2026-01-05 10:00:01,Repeated transfer,10.00,0.00,EUR,COMPLETED,89.50\n')
-        self.run_fin('import', 'revolut', future, '--account-id', 'main')
+        self.run_fin('import', 'revolut', future)
         new_row = next(r for r in json.loads(self.run_fin('operation', 'list', '--json').stdout) if r['booked_on'] == '2026-01-05')
         self.assertIsNone(new_row['movement_type'])
         self.assertEqual(new_row['decision'], 'unclassified')
@@ -2269,7 +2295,7 @@ class ImportOnboarding(unittest.TestCase):
         self.assertEqual([h['event_id'] for h in json.loads(self.run_fin('settlement', 'history').stdout)], [chosen])
 
     def test_fullscreen_category_queue(self):
-        self.run_fin('import', 'revolut', self.csv, '--account-id', 'main')
+        self.run_fin('import', 'revolut', self.csv)
         self.run_fin('cat', 'add', 'expenses:food')
         rows = json.loads(self.run_fin('operation', 'list', '--json').stdout)
         output = self.fullscreen(['operation', 'category', 'queue', '--key', 'f=expenses:food'], [
@@ -2304,7 +2330,7 @@ class ImportOnboarding(unittest.TestCase):
             os.close(slave)
 
     def test_category_queue_stages_and_discards_changes(self):
-        self.run_fin('import', 'revolut', self.csv, '--account-id', 'main')
+        self.run_fin('import', 'revolut', self.csv)
         self.run_fin('cat', 'add', 'expenses:food')
         before = self.run_fin('operation', 'list', '--json').stdout
         master, slave = pty.openpty()
@@ -2344,7 +2370,7 @@ class ImportOnboarding(unittest.TestCase):
             os.close(master)
 
     def test_category_queue_rejects_concurrent_changes(self):
-        self.run_fin('import', 'revolut', self.csv, '--account-id', 'main')
+        self.run_fin('import', 'revolut', self.csv)
         self.run_fin('cat', 'add', 'expenses:food')
         master, slave = pty.openpty()
         fcntl.ioctl(slave, termios.TIOCSWINSZ, struct.pack('HHHH', 30, 120, 0, 0))
@@ -2390,7 +2416,7 @@ class ImportOnboarding(unittest.TestCase):
             os.close(master)
 
     def test_category_queue_filters_movement_types(self):
-        self.run_fin('import', 'revolut', self.csv, '--account-id', 'main')
+        self.run_fin('import', 'revolut', self.csv)
         rows = json.loads(self.run_fin('operation', 'list', '--json').stdout)
         deposit = next(row for row in rows if row['description'] == 'Initial deposit')
         repeated = [row for row in rows if row['description'] == 'Repeated transfer']
@@ -2411,7 +2437,7 @@ class ImportOnboarding(unittest.TestCase):
         custom = self.root / 'custom-type.csv'
         custom.write_text('Type,Product,Started Date,Completed Date,Description,Amount,Fee,Currency,State,Balance\n'
                           'Mystery,Current,2026-01-05 10:00:00,2026-01-05 10:00:01,Provider special,1.00,0.00,EUR,COMPLETED,1.00\n')
-        self.run_fin('import', 'revolut', custom, '--account-id', 'custom')
+        self.import_revolut_account(custom, 'custom')
         self.fullscreen(['operation', 'category', 'queue', '--type', 'revolut:Mystery'], [('Provider special', 'q')])
         master, slave = pty.openpty()
         try:
@@ -2424,7 +2450,7 @@ class ImportOnboarding(unittest.TestCase):
             os.close(slave)
 
     def test_category_queue_exact_matches_and_batch_undo(self):
-        self.run_fin('import', 'revolut', self.csv, '--account-id', 'main')
+        self.run_fin('import', 'revolut', self.csv)
         wise_csv = self.root / 'wise-same-merchant.csv'
         wise_csv.write_text(Path('fixtures/wise.csv').read_text().replace('Synthetic shop', '  repeated   TRANSFER '))
         self.run_fin('import', 'wise', 'fixtures/wise.xml', wise_csv)
@@ -2456,7 +2482,7 @@ class ImportOnboarding(unittest.TestCase):
         self.assertEqual({row['event_id']: row['counter_account'] for row in after if row['event_id'] in outside}, outside)
 
     def test_category_queue_batch_rejects_stale_match(self):
-        self.run_fin('import', 'revolut', self.csv, '--account-id', 'main')
+        self.run_fin('import', 'revolut', self.csv)
         self.run_fin('cat', 'add', 'expenses:food')
         repeated = json.loads(self.run_fin('operation', 'list', '--search', 'Repeated transfer', '--json').stdout)
         self.assertEqual(len(repeated), 2)
@@ -2509,7 +2535,7 @@ class ImportOnboarding(unittest.TestCase):
                        'Transfer,Current,2026-01-01 09:00:00,2026-01-01 09:00:01,Incoming sample,10.00,0.00,EUR,COMPLETED,10.00\n'
                        'Transfer,Current,2026-01-02 09:00:00,2026-01-02 09:00:01,Outgoing sample,-10.00,0.00,EUR,COMPLETED,0.00\n'
                        'Transfer,Current,2026-01-03 09:00:00,2026-01-03 09:00:01,Neutral sample,0.00,0.00,EUR,COMPLETED,0.00\n')
-        self.run_fin('import', 'revolut', csv, '--account-id', 'colors')
+        self.import_revolut_account(csv, 'colors')
         answers = [('Incoming sample', 's'), ('Outgoing sample', 's'), ('Neutral sample', 'q')]
         output = self.fullscreen(['operation', 'category', 'queue'], answers)
         self.assertRegex(output, r'\x1b\[[0-9;]*32m[^\x1b]*10 EUR')
@@ -2520,7 +2546,7 @@ class ImportOnboarding(unittest.TestCase):
         self.assertNotRegex(plain, r'\x1b\[[0-9;]*(?:31|32)m')
 
     def test_category_queue_hierarchical_browsing(self):
-        self.run_fin('import', 'revolut', self.csv, '--account-id', 'main')
+        self.run_fin('import', 'revolut', self.csv)
         self.run_fin('cat', 'add', 'expenses:food')
         self.run_fin('cat', 'add', 'expenses:food:restaurants')
         self.fullscreen(['operation', 'category', 'queue'], [
@@ -2775,7 +2801,7 @@ class ImportOnboarding(unittest.TestCase):
 
     def test_every_column_of_a_primary_csv_is_a_field(self):
         # Revolut: the columns the payload drops are kept beside the event.
-        self.run_fin('import', 'revolut', self.csv, '--account-id', 'main')
+        self.run_fin('import', 'revolut', self.csv)
         rows = json.loads(self.run_fin('operation', 'list', '--json').stdout)
         deposit = next(r['event_id'] for r in rows if r['description'] == 'Initial deposit')
         shown = self.run_fin('operation', 'show', deposit).stdout
@@ -2829,14 +2855,14 @@ class ImportOnboarding(unittest.TestCase):
         self.assertIn('[reference: BALANCE_CASHBACK-', explain)
 
     def test_tx_show_lists_source_files_fields_and_companions(self):
-        self.run_fin('import', 'revolut', self.csv, '--account-id', 'main')
+        self.run_fin('import', 'revolut', self.csv)
         rows = json.loads(self.run_fin('operation', 'list', '--json').stdout)
         deposit = next(r['event_id'] for r in rows if r['description'] == 'Initial deposit')
         out = self.run_fin('operation', 'show', deposit).stdout
         self.assertIn('Type: deposit (type rules)', out)
         self.assertIn('Imported from', out)
         self.assertIn('file: ' + str(self.csv), out)
-        self.assertIn('"transaction_type": "Deposit"', out)
+        self.assertIn('Deposit', out)
         self.assertIn('Companion files: no matched rows', out)
         self.assertIn('fin rule explain OPERATION-ID', out)
         self.run_fin('import', 'wise', 'fixtures/wise.csv', 'fixtures/wise.xml')
@@ -2910,7 +2936,7 @@ class ImportOnboarding(unittest.TestCase):
             '2026-01-02 10:00:00,2026-01-02 10:00:01,Earlier transfer,10.00,0.00,EUR,COMPLETED,160.00').replace(
             '2026-01-02 10:00:00,2026-01-02 10:00:01,Repeated transfer,10.00,0.00,EUR,COMPLETED,170.00',
             '2026-01-02 11:00:00,2026-01-02 11:00:01,Later transfer,10.00,0.00,EUR,COMPLETED,170.00'))
-        self.run_fin('import', 'revolut', csv, '--account-id', 'main')
+        self.run_fin('import', 'revolut', csv)
         asc = json.loads(self.run_fin('operation', 'list', '--json', '--asc').stdout)
         desc = json.loads(self.run_fin('operation', 'list', '--json', '--desc').stdout)
         self.assertEqual([r['event_id'] for r in asc], [r['event_id'] for r in reversed(desc)])
@@ -2924,7 +2950,7 @@ class ImportOnboarding(unittest.TestCase):
                                          check=False).returncode, 0)
 
     def test_transaction_list_sorts_multiple_columns_and_exact_amounts(self):
-        self.run_fin('import', 'revolut', self.csv, '--account-id', 'main')
+        self.run_fin('import', 'revolut', self.csv)
         ofx = self.root / 'exact-sort.ofx'
         extra = ('<STMTTRN><DTPOSTED>20260104</DTPOSTED><TRNTYPE>CREDIT</TRNTYPE>'
                  '<TRNAMT>0.10000000000000000002</TRNAMT><FITID>precise-high</FITID><NAME>precise High</NAME></STMTTRN>'
@@ -2979,21 +3005,18 @@ class ImportOnboarding(unittest.TestCase):
         self.assertIn('delete', help_text)
         self.assertNotEqual(self.run_fin('accounts', '--help', check=False).returncode, 0)
 
-    def test_scripts_require_label_and_never_prompt(self):
+    def test_scripts_never_prompt(self):
         help_text = self.run_fin('import', '--help=plain').stdout
         self.assertIn('INSTITUTION', help_text)
         self.assertIn('--account-id', help_text)
         self.assertNotEqual(self.run_fin('bank', 'sync', '--help', check=False).returncode, 0)
-        result = self.run_fin('import', 'revolut', self.csv, check=False)
-        self.assertNotEqual(result.returncode, 0)
-        self.assertIn('--account-id LABEL', result.stderr)
-        self.run_fin('import', 'revolut', self.csv, '--account-id', 'main')
+        refused = self.run_fin('import', 'revolut', self.csv, '--account-id', 'main', check=False)
+        self.assertNotEqual(refused.returncode, 0)
+        self.run_fin('import', 'revolut', self.csv)
         self.assertTrue(all(row['iban'] is None for row in self.accounts()))
 
-    def test_label_and_iban_retry_once_for_two_currencies(self):
+    def test_iban_retry_once_for_two_currencies(self):
         output = self.terminal(['import', 'revolut', self.csv, self.usd], [
-            ('Label for this account', 'bad label'),
-            ('Label for this account', 'main'),
             ('IBAN (Enter to skip):', 'invalid'),
             ('IBAN (Enter to skip):', IBAN),
         ])
@@ -3003,20 +3026,18 @@ class ImportOnboarding(unittest.TestCase):
         self.assertTrue(all(row['iban'] == IBAN for row in self.accounts()))
         history = json.loads(self.run_fin('account', 'history').stdout)
         self.assertEqual(len(history), 2)
-        replay = self.terminal(['import', 'revolut', self.csv, self.usd,
-                                '--account-id', 'main'], [])
+        replay = self.terminal(['import', 'revolut', self.csv, self.usd], [])
         self.assertNotIn('IBAN (Enter to skip):', replay)
 
     def test_skip_is_not_repeated(self):
-        self.terminal(['import', 'revolut', self.csv, '--account-id', 'main'],
+        self.terminal(['import', 'revolut', self.csv],
                       [('IBAN (Enter to skip):', '')])
-        replay = self.terminal(['import', 'revolut', self.csv,
-                                '--account-id', 'main'], [])
+        replay = self.terminal(['import', 'revolut', self.csv], [])
         self.assertNotIn('IBAN (Enter to skip):', replay)
         self.assertIsNone(self.accounts()[0]['iban'])
 
     def test_snapshot_import_is_explicit_and_supports_dry_run(self):
-        self.terminal(['import', 'revolut', self.csv, '--account-id', 'main'],
+        self.terminal(['import', 'revolut', self.csv],
                       [('IBAN (Enter to skip):', '')])
         snapshot = self.root / 'saved-accounts.json'
         self.run_fin('account', 'export', '-o', snapshot)
@@ -3029,13 +3050,13 @@ class ImportOnboarding(unittest.TestCase):
         self.assertEqual(self.accounts()[0]['iban'], IBAN)
         self.assertNotEqual(self.run_fin('account', 'import', check=False).returncode, 0)
         before = snapshot.read_bytes()
-        self.terminal(['import', 'revolut', self.usd, '--account-id', 'main'],
+        self.terminal(['import', 'revolut', self.usd],
                       [('IBAN (Enter to skip):', IBAN)])
         self.assertEqual(snapshot.read_bytes(), before)
         self.assertFalse(self.config.exists())
 
     def test_restore_recovers_settings_reviews_and_evidence(self):
-        self.terminal(['import', 'revolut', self.csv, '--account-id', 'main'],
+        self.terminal(['import', 'revolut', self.csv],
                       [('IBAN (Enter to skip):', IBAN)])
         review = json.loads(self.run_fin('operation', 'review', '--json').stdout)
         decisions = self.root / 'decisions.json'
@@ -3070,7 +3091,7 @@ class ImportOnboarding(unittest.TestCase):
                          expected['accounts'])
 
     def test_restore_requires_confirmation_and_clears_stale_outputs(self):
-        self.run_fin('import', 'revolut', self.csv, '--account-id', 'main')
+        self.run_fin('import', 'revolut', self.csv)
         self.run_fin('backup', self.root / 'backups')
         backup = next((self.root / 'backups').glob('fin-backup-*'))
         expected = self.accounts()
@@ -3123,7 +3144,7 @@ class ImportOnboarding(unittest.TestCase):
     def test_legacy_config_is_not_used_or_changed(self):
         self.config.parent.mkdir(parents=True)
         self.config.write_text('Not a settings input')
-        self.terminal(['import', 'revolut', self.csv, '--account-id', 'main'],
+        self.terminal(['import', 'revolut', self.csv],
                       [('IBAN (Enter to skip):', IBAN)])
         self.assertEqual(self.config.read_text(), 'Not a settings input')
         self.assertEqual(self.accounts()[0]['iban'], IBAN)
@@ -3134,7 +3155,7 @@ class ImportOnboarding(unittest.TestCase):
                                         check=False).returncode, 0)
 
     def test_editor_saves_only_to_database_and_recovers_draft(self):
-        self.run_fin('import', 'revolut', self.csv, '--account-id', 'main')
+        self.run_fin('import', 'revolut', self.csv)
         draft = self.root / 'data/fin/fin.sqlite3.edit'
         self.env['VISUAL'] = 'false'
         self.assertNotEqual(self.run_fin('account', 'edit', check=False).returncode, 0)
@@ -3156,7 +3177,7 @@ class ImportOnboarding(unittest.TestCase):
         self.assertFalse(draft.exists())
 
     def test_backup_and_delete_preserve_exported_snapshots(self):
-        self.terminal(['import', 'revolut', self.csv, '--account-id', 'main'],
+        self.terminal(['import', 'revolut', self.csv],
                       [('IBAN (Enter to skip):', IBAN)])
         snapshot = self.root / 'data/fin/accounts.json'
         self.run_fin('account', 'export', '-o', snapshot)
@@ -3192,7 +3213,7 @@ class ImportOnboarding(unittest.TestCase):
 
     def test_zip_cli_outcomes_and_history(self):
         archive = self.root / 'export.zip'
-        args = ['import', 'revolut', archive, '--account-id', 'main']
+        args = ['import', 'revolut', archive]
         with zipfile.ZipFile(archive, 'w', compression=zipfile.ZIP_DEFLATED) as z:
             z.writestr('statement.csv', FIXTURE)
             z.writestr('README.txt', 'An unrelated file')

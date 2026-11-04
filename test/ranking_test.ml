@@ -66,14 +66,7 @@ let other_iban = "DE89370400440532013000"
 let replace s a b = String.substr_replace_all s ~pattern:a ~with_:b
 
 let import db institution path contents =
-  ignore
-    (ok
-       (Import.import_bank_file
-          ?account_label:(Option.some_if (String.equal institution "revolut") "main")
-          db
-          ~institution
-          ~path
-          ~contents))
+  ignore (ok (Import.import_bank_file db ~institution ~path ~contents))
 ;;
 
 let seed db =
@@ -99,7 +92,7 @@ let identity iban =
     (Account_identity.create
        ~institution:"revolut"
        ~bank_id:"revolut"
-       ~account_id:"main"
+       ~account_id:"personal"
        ~account_type:"current-EUR"
        ~iban:(ok (Iban.of_string iban)))
 ;;
@@ -241,7 +234,7 @@ let shared_iban () =
         (Account_identity.create
            ~institution:"revolut"
            ~bank_id:"revolut"
-           ~account_id:"main"
+           ~account_id:"personal"
            ~account_type:"current-USD"
            ~iban:(ok (Iban.of_string counterpart_iban)))
     in
@@ -278,11 +271,10 @@ let shared_iban () =
     ignore
       (ok
          (Import.import_bank_file
-            ~account_label:"other"
             db
             ~institution:"revolut"
             ~path:"other.csv"
-            ~contents:csv));
+            ~contents:(Test_support.revolut_account ~account:"other" csv)));
     let other =
       ok
         (Account_identity.create

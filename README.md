@@ -715,7 +715,7 @@ Use the same bank-prefixed layout for every institution:
 | BoursoBank | `personal/boursobank/inbox/` | OFX movements, optional CSV enrichment |
 | Wise | `personal/wise/inbox/` | CAMT.053 XML movements, optional CSV enrichment |
 | Bunq | `personal/bunq/inbox/` | MT940 movements, optional seven-column CSV companion |
-| Revolut | `personal/revolut/inbox/` | Completed Current-account CSV, explicit account label |
+| Revolut | `personal/revolut/inbox/` | Completed Current-account CSV |
 
 Keep the shared database, journal, configuration, and reports outside these inboxes.
 Pass the institution explicitly when importing. All `personal/` contents are
@@ -819,15 +819,11 @@ Bunq uses the same persisted account mappings and reviewed categories as other b
 Place the ten-column Revolut CSV export in `personal/revolut/inbox/`:
 
 ```sh
-fin import revolut personal/revolut/inbox \
-  --account-id main --journal personal/bank.journal
+fin import revolut personal/revolut/inbox --journal personal/bank.journal
 ```
 
-The CSV has no account identifier. Supply a stable label (`main` here) for that
-specific account every time; different accounts need different labels and inboxes.
-A previously imported document cannot be reassigned to another label. Currency is
-part of the account identity, so one label covers an account's balances in every
-currency; Revolut exports one file per currency. Completed `Current` transactions
+A person has one personal Revolut account, so no label is needed: its balances, one file per
+currency, appear as `assets:bank:revolut:revolut:current-EUR:personal` and so on. Completed `Current` transactions
 are imported. Reverted ones, which Revolut lists with no completion date and no
 balance because they never moved money, are skipped; the stored document keeps them.
 Pending transactions or other products reject the file for review.

@@ -46,8 +46,20 @@ def main():
                     stamp = clock.strftime('%Y-%m-%d %H:%M:%S')
                     writer.writerow(['Transfer', 'Current', stamp, stamp, f'Payment {account}-{i}',
                                      str(amount), '0', 'EUR', 'COMPLETED', str(balance)])
-            run('import', 'revolut', path, '--account-id', f'account-{account}',
-                '--database', db)
+            definition = root / f'account-{account}.json'
+            definition.write_text(json.dumps({
+                'format': 'fin-csv-converter', 'version': 1, 'institution': 'revolut',
+                'institution_type': 'bank', 'header': header,
+                'account': {'id': f'account-{account}', 'type': 'current',
+                            'currency': {'fiat': 'Currency'}},
+                'occurred': {'column': 'Completed Date', 'layout': 'iso-datetime'},
+                'cases': [{'movements': [{'role': 'primary', 'quantity': {'column': 'Amount'},
+                                          'commodity': {'fiat': 'Currency'}}]}],
+                'descriptions': ['Description'], 'balance_after': 'Balance',
+            }))
+            records = root / f'account-{account}.jsonl'
+            run('convert', '--definition', definition, path, '-o', records)
+            run('import', 'revolut', records, '--database', db)
         def status():
             before = resource.getrusage(resource.RUSAGE_CHILDREN)
             start = time.monotonic()

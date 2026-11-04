@@ -25,6 +25,28 @@ let registry =
   |> Or_error.ok_exn
 ;;
 
+(** A Revolut statement as a records file naming another account, for a second account of one
+    currency: a records file can say which account it is, and a Revolut export cannot. *)
+let revolut_account ~account contents =
+  let definition =
+    List.find_exn (Lazy.force Csv_converter.bundled) ~f:(fun d ->
+      String.equal (Csv_converter.institution d) "revolut")
+  in
+  let t =
+    Csv_converter.convert definition ~name:"revolut.csv" contents |> Or_error.ok_exn
+  in
+  let id currency = account ^ "-" ^ currency in
+  Records.to_string
+    { t with
+      accounts =
+        List.map t.accounts ~f:(fun (a : Records.account) ->
+          { a with id = id a.id; number = Some account })
+    ; records =
+        List.map t.records ~f:(fun (r : Records.record) ->
+          { r with account = id r.account })
+    }
+;;
+
 (** Imports through the normal path; a rejected or unsupported file is an
     error, as the caller expects evidence to be stored. *)
 let import ?account_label db ~institution ~path contents =

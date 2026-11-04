@@ -28,14 +28,15 @@ let rejected report =
     (Poly.equal report.Bank_import.outcome Rejected)
 ;;
 
-let import_revolut ?(account_id = "main") db contents =
+let import_revolut ?account_id db contents =
   ok
     (Import.import_bank_file
-       ~account_label:account_id
        db
        ~institution:"revolut"
        ~path:"revolut.csv"
-       ~contents)
+       ~contents:
+         (Option.value_map account_id ~default:contents ~f:(fun account ->
+            Test_support.revolut_account ~account contents)))
 ;;
 
 let import_bunq db contents =
@@ -161,28 +162,17 @@ let utc_clocks () =
        ~account_id:"main"
        (replace (csv ()) "2026-01-01 09:00:00" "2026-02-30 09:00:00"));
   memory (fun db ->
-    let event =
-      List.find_exn
-        (ok (Ledger.events db))
-        ~f:(fun (_, e) ->
-          String.equal e.Source_event.venue "revolut"
-          && String.equal e.source_id tx.source_id)
-      |> snd
+    (* A clock with no stated offset says nothing about the instant, so a record states its date. *)
+    let occurred =
+      List.map (ok (Ledger.events db)) ~f:(fun (_, e) -> e.Source_event.occurred)
     in
-    let decoded = ok (Revolut_csv.source_transaction event) in
     Alcotest.(check bool)
-      "stored start decodes as same instant"
+      "stored as dates"
       true
-      (Ptime.equal tx.started_at decoded.started_at);
-    Alcotest.(check bool)
-      "stored completion decodes as same instant"
-      true
-      (Ptime.equal tx.completed_at decoded.completed_at);
-    Alcotest.(check string) "source payload unchanged" tx.payload decoded.payload;
-    check
-      "UTC assumption does not duplicate movements"
-      4
-      (import_revolut db (csv ())).existing)
+      (List.for_all occurred ~f:(function
+         | Temporal.Date _ -> true
+         | Temporal.Instant _ -> false));
+    check "a reimport adds nothing" 4 (import_revolut db (csv ())).existing)
 ;;
 
 let import_and_fees () =
@@ -192,16 +182,8 @@ let import_and_fees () =
     check "reused four events" 4 replay.existing;
     accepted (import_revolut db ("\239\187\191" ^ csv ()));
     check "no new source events" 8 (List.length (ok (Ledger.events db)));
-    rejected (import_revolut ~account_id:"other" db (csv ()));
     rejected
       (import_revolut db (replace (csv ()) "Initial deposit" "Changed initial deposit"));
-    rejected
-      (ok
-         (Import.import_bank_file
-            db
-            ~institution:"revolut"
-            ~path:"no-context.csv"
-            ~contents:(csv ())));
     rejected
       (ok
          (Import.import_bank_file

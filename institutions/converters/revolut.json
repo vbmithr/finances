@@ -26,6 +26,8 @@
   "account": {
     "id": "current-{Currency}",
     "bank": "revolut",
+    "number": "personal",
+    "type": "current-{Currency}",
     "currency": {
       "fiat": "Currency"
     }

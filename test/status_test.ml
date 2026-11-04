@@ -69,7 +69,6 @@ let import db institution path =
   ignore
     (ok
        (Import.import_bank_file
-          ?account_label:(Option.some_if (String.equal institution "revolut") "main")
           db
           ~institution
           ~path

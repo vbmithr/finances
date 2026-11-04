@@ -37,7 +37,16 @@ let of_definitions definitions =
   ( (fun contents -> Option.is_some (find contents))
   , fun ~name contents ->
       match find contents with
-      | Some definition -> Csv_converter.convert definition ~name contents
+      | Some definition ->
+        (match Csv_converter.filtered_rows definition contents with
+         | Ok count when count > 0 ->
+           Stdio.eprintf
+             "left out %d row%s of %s that this layout's `only` does not cover\n"
+             count
+             (if count = 1 then "" else "s")
+             name
+         | Ok _ | Error _ -> ());
+        Csv_converter.convert definition ~name contents
       | None ->
         Or_error.error_string "no CSV layout of this converter recognizes the file" )
 ;;
