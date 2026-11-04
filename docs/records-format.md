@@ -1,7 +1,7 @@
 # Records format
 
-Status: version 1 draft, 2026-11-04. The schema and examples exist; fin does not read
-the format yet.
+Status: version 1 draft, 2026-11-04. `fin records check FILE` validates a file and `fin
+convert wise FILE` prints one. Fin does not import the format yet.
 
 A records file is what one institution's statement says, as JSON Lines: every entry of
 the statement becomes one record. A **converter** reads a statement and prints the file; fin
@@ -16,7 +16,8 @@ There are two kinds of converter, with the same output and the same checks:
 - **Your own.** For any other institution, write a program in any language, needing no
   fin code, and import what it prints: `fin import records.json`.
 
-These commands are the plan; none exists yet.
+`fin convert` exists for Wise and opens ZIP files. Importing records, including through `fin import`, is the
+plan.
 
 - Schema: [`formats/records/fin-records.schema.json`](../formats/records/fin-records.schema.json)
 - Examples: [`formats/records/examples`](../formats/records/examples). `valid/` is
@@ -120,7 +121,7 @@ unique pair adds the observation's `details` to the record, in either import ord
 pair that is ambiguous or conflicts stays visible for review; it is neither merged nor
 counted. An observation with no pair is kept, and it is reported as unmatched.
 
-The Wise converter will mark its CSV rows this way. The CSV names a currency and no account,
+The Wise converter marks its CSV rows this way. The CSV names a currency and no account,
 so these rows use an account `balance-EUR` that holds no counted record, and they pair by
 reference. That reference alone can be shared by a payment and its refund, so pairing also
 compares quantity and date. The CSV clock has no offset, so a row's `occurred` is its date

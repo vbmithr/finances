@@ -728,6 +728,44 @@ to `assets:cards:PROVIDER:ACCOUNT` and credit cards to
 `liabilities:cards:PROVIDER:ACCOUNT`. Account settings can map either to another
 asset or liability account.
 
+### Print a statement as records
+
+`fin convert` prints statement files as records, in JSON Lines. It stores nothing and needs
+no database. Wise is the only institution with a converter so far:
+
+```sh
+fin convert wise statement.xml | grep CARD-1
+fin convert wise ~/statements/wise -o wise.jsonl.zst
+```
+
+A directory is walked recursively in name order, leaving out hidden and partial files and
+symbolic links, and a `.zip` file is opened in memory. In either, every statement is
+converted, and anything the converter does not recognize, such as Wise's MT940 files, is
+named on standard error and skipped. A corrupt or encrypted member, a nested archive, a
+statement that fails to parse, or finding no statement at all stops the command.
+
+A row that several files state appears once. If they state it differently, or any file
+cannot be read, nothing is printed.
+
+A CAMT file gives one counted record per entry, and a CSV gives observations describing
+those entries. A CSV with no rows, as Wise exports for a balance with no activity, gives a
+document with no records. Keep the output private: it holds your statement's names and references.
+
+### Check a records file
+
+A converter turns one institution's statement into a records file, in the format
+described in [records-format.md](records-format.md). Validate its output while you write
+one:
+
+```sh
+fin records check records.jsonl
+```
+
+A valid file prints one summary line per institution. Anything else prints where the file is wrong, such
+as `records.jsonl: line 4: occurred: invalid date or instant: "2025-02-31"`, and exits
+with status 124. The command needs no database and stores nothing; fin cannot import
+records files yet.
+
 ## Delete an account
 
 `fin account list` shows a short ID alongside each account. Use that ID to
@@ -1721,6 +1759,8 @@ above; no automatic migration runs.
 | `fin institution --help` | Institution list and generic import setup |
 | `fin operation --help` | Imported transaction listing |
 | `fin statement --help` | Statement reconciliation and companion files |
+| `fin convert INSTITUTION PATH...` | Print statement files, directories and ZIPs as records |
+| `fin records check FILE` | Validate a statement converter's output |
 | `fin reversal --help` | Withdrawal reversal candidates and review |
 | `fin operation --help` | Transaction listing, review and categories |
 | `fin transfer --help` | Candidates, preview and explicit decisions |

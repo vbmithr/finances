@@ -5,7 +5,7 @@ its status: tick off finished work, add discovered work, and refresh the "Where 
 are" figures when they move. History belongs in `CHANGES.md`; designs stay in the
 other documents, which this one links to rather than repeats.
 
-Last updated: 2026-11-03.
+Last updated: 2026-11-04.
 
 ## Direction
 
@@ -488,11 +488,16 @@ position observations, derive positions from fills, or calculate funding.
 - [x] Describe CDC as data (`cdc.json`) interpreted by the generic
   `Movement_csv`, with no institution-specific OCaml.
 - [ ] Unified records format with converters ([records-format.md](records-format.md)):
-  every statement entry becomes a record, one file in and one file out, and fin matches
-  across all stored records. Built-in converters keep `fin import wise FILE` working;
+  every statement entry becomes a record, and fin matches across all stored records. Built-in converters keep `fin import wise FILE` working;
   other institutions write their own. Schema, spec and examples drafted 2026-11-03.
-  Next: `fin import` for records beside the current adapters, then Wise as the first
-  built-in converter, and retire adapters one at a time.
+  Done (2026-11-04): `Records` reads and checks the format, JSON Lines plain or compressed
+  with zstd; `fin records check FILE` exposes it, and a test compares fin and the schema on
+  mutated examples. `fin convert wise PATH...` is the first built-in converter. On real
+  statements, reference, quantity, currency and date pair 2002 of 2003 CSV rows with exactly
+  one CAMT record, and none with several; the other row's CSV reference has a
+  `CARD_ORDER_CHECKOUT-` prefix the CAMT lacks.
+  Next: `fin import` for records beside the current adapters, then retire adapters one at
+  a time.
 - [ ] Group movements into operations by evidence strength, covering transfers,
   CDC exchanges and Wise conversions: design proposed 2026-11-03 in
   [operation-transactions.md](operation-transactions.md#grouping-movements-into-operations-proposal),

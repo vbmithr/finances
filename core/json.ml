@@ -58,10 +58,32 @@ let rec unique_members =
        ())
 ;;
 
-let decode codec text =
-  Or_error.try_with (fun () ->
-    Jsont_bytesrw.decode_string (Lazy.force unique_members) text |> value_exn;
-    Jsont_bytesrw.decode_string codec text |> value_exn)
+(* Decoding errors reach terminals, logs and tests as plain text. *)
+let () = Jsont.Error.disable_ansi_styler ()
+
+(* [records[0].occurred: message], rather than Jsont's trace of every enclosing
+   value. A syntax error has no path, and keeps its location in the text. *)
+let error_message file ((context, _, kind) as error : Jsont.Error.t) =
+  let index path : Jsont.Path.index -> string = function
+    | Mem (name, _) -> if String.is_empty path then name else path ^ "." ^ name
+    | Nth (position, _) -> Printf.sprintf "%s[%d]" path position
+  in
+  let located =
+    match List.fold context ~init:"" ~f:(fun path (_, step) -> index path step) with
+    | "" -> Jsont.Error.to_string error
+    | path -> path ^ ": " ^ Jsont.Error.kind_to_string kind
+  in
+  Option.value_map file ~default:located ~f:(fun file -> file ^ ": " ^ located)
+;;
+
+let decode ?file codec text =
+  Or_error.join
+    (Or_error.try_with (fun () ->
+       let decode codec =
+         Jsont_bytesrw.decode_string' ?file codec text
+         |> Result.map_error ~f:(fun error -> Error.of_string (error_message file error))
+       in
+       Result.bind (decode (Lazy.force unique_members)) ~f:(fun () -> decode codec)))
 ;;
 
 let encode ?(format = Jsont.Minify) codec value =

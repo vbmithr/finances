@@ -1,7 +1,6 @@
 (library
  (name finances_import)
  (public_name finances.import)
- (private_modules zip_archive)
  (flags
   (:standard -open Finances_core))
  (libraries

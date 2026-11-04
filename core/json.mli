@@ -1,8 +1,9 @@
 open Base
 
 (** Decode directly to the described OCaml type. Repeated object members are
-    rejected before typed decoding, including in nested objects. *)
-val decode : 'a Jsont.t -> string -> 'a Or_error.t
+    rejected before typed decoding, including in nested objects. [file] names
+    the input in error locations. *)
+val decode : ?file:string -> 'a Jsont.t -> string -> 'a Or_error.t
 
 val encode : ?format:Jsont.format -> 'a Jsont.t -> 'a -> string
 

@@ -460,6 +460,18 @@
 (rule
  (alias runtest)
  (deps
+  records_differential_test.py
+  (source_tree ../formats/records))
+ (action
+  (run
+   python3
+   %{dep:records_differential_test.py}
+   %{exe:../bin/main.exe}
+   ../formats/records)))
+
+(rule
+ (alias runtest)
+ (deps
   records_schema_test.py
   (source_tree ../formats/records))
  (action
@@ -480,3 +492,36 @@
  (modules camt_test)
  (deps fixtures/wise.xml)
  (libraries finances.camt base stdio alcotest))
+
+(test
+ (name records_test)
+ (modules records_test)
+ (deps
+  (source_tree ../formats/records))
+ (flags
+  (:standard -open Finances_core))
+ (libraries finances.core base re stdio alcotest))
+
+(test
+ (name wise_converter_test)
+ (modules wise_converter_test)
+ (deps
+  (glob_files fixtures/*))
+ (flags
+  (:standard -open Finances_core -open Finances_institutions))
+ (libraries finances.core finances.institutions base stdio alcotest))
+
+(rule
+ (alias runtest)
+ (deps
+  records_convert_test.py
+  fixtures/wise.xml
+  fixtures/wise.csv
+  (source_tree ../formats/records))
+ (action
+  (run
+   python3
+   %{dep:records_convert_test.py}
+   %{exe:../bin/main.exe}
+   ../formats/records
+   fixtures)))

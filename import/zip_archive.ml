@@ -63,3 +63,30 @@ let contents file =
     then Ok bytes
     else Or_error.error_string "ZIP member expanded size differs from metadata")
 ;;
+
+let files ~max_bytes archive =
+  let open Or_error.Let_syntax in
+  let%bind members = decode ~max_bytes archive in
+  List.filter_map members ~f:(fun member ->
+    let name = Zipc.Member.path member in
+    let failure message = Some (Or_error.errorf "%S: %s" name message) in
+    if not (valid_path name)
+    then failure "unsafe ZIP member path"
+    else if ignored_path name
+    then None
+    else (
+      match Zipc.Member.kind member with
+      | Dir -> None
+      | File file ->
+        if not (Zipc.File.can_extract file)
+        then failure "encrypted ZIP member or unsupported compression"
+        else if is_zip name
+        then failure "nested ZIP archives are not supported"
+        else
+          Some
+            (contents file
+             |> Result.map ~f:(fun contents -> name, contents)
+             |> Result.map_error ~f:(fun error ->
+               Error.tag error ~tag:(Printf.sprintf "%S" name)))))
+  |> Or_error.all
+;;

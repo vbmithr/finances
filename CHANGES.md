@@ -8,8 +8,23 @@ short line of their own.
 
 ## Unreleased
 
-- Internal: draft of the records format (`docs/records-format.md`, a JSON Schema and
-  examples) for statements converted outside fin's adapters. fin does not read it yet.
+- New `fin convert wise PATH...` prints Wise CAMT and CSV files as records, without a
+  database and without storing anything. `-o FILE` writes a file instead, compressed if
+  its name ends in `.zst`. A row stated by several files appears once; if they disagree,
+  nothing is printed. A statement with no entries adds no records and is not an error.
+  A `.zip` file or a directory is opened and every statement inside is converted; other
+  files are named on standard error and skipped.
+- Building fin now needs zstd: `opam install conf-zstd` rebuilds `bytesrw` with it, and
+  the Arch package depends on `zstd`.
+- New `fin records check FILE` validates a records file, the JSON Lines format in
+  `docs/records-format.md`, plain or compressed with zstd. It needs no database and stores
+  nothing. fin cannot import records files yet.
+- Errors from JSON input now name the place and nothing else, such as
+  `movements[0].quantity: Expected string but found number`, instead of a trace of
+  every enclosing value with terminal escape codes. This applies to every JSON file fin
+  reads.
+- Internal: the records format (`docs/records-format.md`, a JSON Schema and examples)
+  for statements converted outside fin's adapters.
 - Wise rows the bank states belong together now read as one operation: a conversion's
   debit, its credit in the other currency and its `FEE-` row appear as one row in
   `fin operation list`, and `fin operation show` works from any of their IDs. They
