@@ -505,15 +505,14 @@ position observations, derive positions from fills, or calculate funding.
   have converters, so every file seen so far converts.
   `Records_adapter` imports records through the usual pipeline, for every bundled institution, pairing
   observations and storing balances; stated totals stay in the archived file.
-  `test/records_compare.ml` imports real files through an old adapter and through records: every
+  Comparing real files through the old adapters and through records showed every
   posting's date and amount already agrees for Wise, bunq, BoursoBank and Revolut, and records pairs
   19 BoursoBank rows the adapter leaves ambiguous.
   Every bundled institution has moved; all files of all institutions import together into one
   database, and all 10 statements with balances reconcile.
-  `test/records_translate.ml` carries exports across the move; it needs the old adapters, so they
-  stay until the user's database has migrated.
-  Next: delete the old adapters, parsers' companions and `--inspect`, which nothing imports through
-  any more, and match transfers across institutions.
+  The user's database has migrated (2026-11-04): all 1851 decisions came across.
+  Next: decide what becomes of user-installed definitions, which are all that still reach the
+  other old adapters, then match transfers across institutions.
 - [ ] Group movements into operations by evidence strength, covering transfers,
   CDC exchanges and Wise conversions: design proposed 2026-11-03 in
   [operation-transactions.md](operation-transactions.md#grouping-movements-into-operations-proposal),

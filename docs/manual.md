@@ -767,51 +767,6 @@ Observations in a records file are paired with its counted records, and balances
 `fin statement balances` lists them as JSON. Stated totals, and a statement with no opening and
 closing such as BoursoBank's OFX, stay in the archived file for now.
 
-### Upgrading to records
-
-Rows imported through records have new identities, so decisions exported before this version need
-translating. While your current `fin` still works, export everything:
-
-```sh
-fin operation export > decisions.json
-fin transfer export > transfers.json
-fin operation exchange export > exchanges.json
-fin account export > accounts.json
-fin rule export > rules.json
-fin category export > categories.json
-fin backup
-```
-
-Then, from a checkout of this version, translate. Name every institution you imported, with the
-folders holding the same statements. It reads each row through both the old and the new path, and
-checks each pair by date and amount:
-
-```sh
-X="dune exec test/records_translate.exe --"
-S="wise=$HOME/statements/wise boursobank=$HOME/statements/bourso bunq=$HOME/statements/bunq \
-   revolut=$HOME/statements/revolut cdc=$HOME/statements/cdc"
-$X decisions.json decisions.new.json $S
-$X transfers.json transfers.new.json $S
-$X exchanges.json exchanges.new.json $S
-$X accounts.json accounts.new.json
-```
-
-Each prints counts. `unknown`, `old-payload-differs`, `unequal-rows` and `unequal-files` should all
-be 0: `unknown` means a decision's row is not in those statements. Install this version, then
-rebuild and restore, checking what each restore previews:
-
-```sh
-fin delete
-fin init
-fin import wise ~/statements/wise     # and each other institution
-fin category restore categories.json
-fin rule restore rules.json
-fin account import accounts.new.json
-fin operation restore decisions.new.json
-fin transfer restore transfers.new.json
-fin operation exchange restore exchanges.new.json
-```
-
 ### Check a records file
 
 A converter turns one institution's statement into a records file, in the format

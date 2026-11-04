@@ -562,20 +562,6 @@
  (action
   (run python3 %{dep:records_import_test.py} %{exe:../bin/main.exe})))
 
-(executable
- (name records_compare)
- (modules records_compare)
- (flags
-  (:standard -open Finances_core -open Finances_institutions))
- (libraries
-  finances
-  finances.store
-  finances.import
-  finances.institutions
-  finances.core
-  base
-  stdio))
-
 (test
  (name records_adapter_test)
  (modules records_adapter_test)
@@ -591,20 +577,3 @@
   base
   stdio
   alcotest))
-
-(executable
- (name records_translate)
- (modules records_translate)
- (flags
-  (:standard -open Finances_core -open Finances_institutions))
- (preprocess
-  (pps ppx_compare))
- (libraries
-  finances
-  finances.store
-  finances.import
-  finances.institutions
-  finances.core
-  base
-  stdio
-  digestif))
