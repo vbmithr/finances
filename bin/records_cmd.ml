@@ -28,7 +28,31 @@ let records_check_cmd =
       $ Arg.(required & pos 0 (some string) None & info [] ~docv:"FILE"))
 ;;
 
-let converters = [ "wise", (Wise_converter.recognizes, Wise_converter.convert) ]
+(* An institution may have several layouts; a file is whichever one recognizes it. *)
+let of_definitions definitions =
+  let find contents =
+    List.find definitions ~f:(fun definition ->
+      Csv_converter.recognizes definition contents)
+  in
+  ( (fun contents -> Option.is_some (find contents))
+  , fun ~name contents ->
+      match find contents with
+      | Some definition -> Csv_converter.convert definition ~name contents
+      | None ->
+        Or_error.error_string "no CSV layout of this converter recognizes the file" )
+;;
+
+let converters () =
+  let csv =
+    Lazy.force Csv_converter.bundled
+    |> List.map ~f:(fun definition -> Csv_converter.institution definition, definition)
+    |> List.filter ~f:(fun (name, _) -> not (String.equal name "wise"))
+    |> Map.of_alist_multi (module String)
+    |> Map.to_alist
+    |> List.map ~f:(fun (name, definitions) -> name, of_definitions definitions)
+  in
+  ("wise", (Wise_converter.recognizes, Wise_converter.convert)) :: csv
+;;
 
 (* The same bound as fin import's default, on a file and on what an archive expands to. *)
 let convert_read_limit = 67108864L
@@ -90,17 +114,34 @@ let rec convert_input ((recognizes, convert) as converter) ~explicit path =
   | _ -> skip "not a regular file or directory"
 ;;
 
-let convert_statements institution paths output =
-  let%bind convert =
-    match
-      List.Assoc.find converters ~equal:String.equal (String.lowercase institution)
-    with
-    | Some convert -> Ok convert
-    | None ->
-      Or_error.errorf
-        "no converter for %s; fin has one for: %s"
-        institution
-        (String.concat ~sep:", " (List.map converters ~f:fst))
+let convert_statements definition arguments output =
+  let%bind convert, paths =
+    match definition, arguments with
+    | Some file, paths ->
+      let%bind text = read_file file in
+      let%map definition =
+        Result.map_error (Csv_converter.of_string text) ~f:(fun error ->
+          Error.of_string (file ^ ": " ^ Error.to_string_hum error))
+      in
+      of_definitions [ definition ], paths
+    | None, institution :: paths ->
+      let converters = converters () in
+      (match
+         List.Assoc.find converters ~equal:String.equal (String.lowercase institution)
+       with
+       | Some convert -> Ok (convert, paths)
+       | None ->
+         Or_error.errorf
+           "no converter for %s; fin has one for: %s; or give a CSV layout with \
+            --definition"
+           institution
+           (String.concat ~sep:", " (List.map converters ~f:fst)))
+    | None, [] -> Or_error.error_string "name an institution, or use --definition"
+  in
+  let%bind () =
+    if List.is_empty paths
+    then Or_error.error_string "give at least one file or directory"
+    else Ok ()
   in
   let%bind documents =
     List.map paths ~f:(convert_input convert ~explicit:true)
@@ -148,14 +189,26 @@ let convert_cmd =
            and skipped. A corrupt or encrypted member, a nested archive, a statement \
            that fails to parse, or finding no statement at all stops the command."
       ; `P
+          "A CSV-only institution needs no code. $(b,--definition) names a file that \
+           says which column means what, and fin's own CSV layouts are written the same \
+           way."
+      ; `P
           "With $(b,--output), writes the file instead and prints a summary. A name \
            ending in $(b,.zst) compresses it with zstd. Everything that reads records \
            accepts both forms."
       ]
     Term.(
       const convert_statements
-      $ Arg.(required & pos 0 (some string) None & info [] ~docv:"INSTITUTION")
-      $ Arg.(non_empty & pos_right 0 string [] & info [] ~docv:"PATH")
+      $ Arg.(
+          value
+          & opt (some string) None
+          & info
+              [ "definition" ]
+              ~docv:"FILE"
+              ~doc:
+                "Use the CSV layout this file describes, instead of naming an \
+                 institution.")
+      $ Arg.(non_empty & pos_all string [] & info [] ~docv:"INSTITUTION PATH")
       $ Arg.(
           value
           & opt (some string) None

@@ -1,0 +1,19 @@
+open Base
+
+(** Statement CSVs as records, described by a config file instead of code. A definition says
+    which columns mean what; it holds no logic beyond conditions on a cell. A source it cannot
+    describe needs a converter of its own, whose output gets the same checks.
+    See docs/records-format.md. *)
+type t
+
+val of_string : string -> t Or_error.t
+val institution : t -> string
+
+(** Whether this is a CSV the definition describes, judged from its header. *)
+val recognizes : t -> string -> bool
+
+(** Every row of the CSV as a record. [name] is the source's name in the result. *)
+val convert : t -> name:string -> string -> Records.t Or_error.t
+
+(** The bundled definitions: every CSV layout fin knows, with its institution. *)
+val bundled : t list Lazy.t

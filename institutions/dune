@@ -16,6 +16,22 @@
    %{targets}
    "let boursobank = {fin|%{read:boursobank.json}|fin}\n\nlet wise = {fin|%{read:wise.json}|fin}\n\nlet revolut = {fin|%{read:revolut.json}|fin}\n\nlet bunq = {fin|%{read:bunq.json}|fin}\n\nlet cdc = {fin|%{read:cdc.json}|fin}\n")))
 
+; Bundled CSV converters are definitions too, one per CSV layout.
+
+(rule
+ (targets bundled_converters.ml)
+ (deps
+  converters/boursobank.json
+  converters/bunq.json
+  converters/cdc.json
+  converters/fdm.json
+  converters/revolut.json
+  converters/wise.json)
+ (action
+  (write-file
+   %{targets}
+   "let all = [{fin|%{read:converters/boursobank.json}|fin}; {fin|%{read:converters/bunq.json}|fin}; {fin|%{read:converters/cdc.json}|fin}; {fin|%{read:converters/fdm.json}|fin}; {fin|%{read:converters/revolut.json}|fin}; {fin|%{read:converters/wise.json}|fin}]\n")))
+
 ; Adapters are pure: no Rel or SQLite dependency, enforced here.
 
 (library

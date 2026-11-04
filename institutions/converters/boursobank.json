@@ -1,0 +1,69 @@
+{
+  "format": "fin-csv-converter",
+  "version": 1,
+  "institution": "boursobank",
+  "separator": ";",
+  "decimal": "comma",
+  "header": [
+    "Date Opération",
+    "Date Valeur",
+    "Libellé",
+    "Libellé Suggéré",
+    "Catégorie",
+    "Catégorie Parente",
+    "Solde",
+    "Commentaire",
+    "Numéro Compte",
+    "Libellé Compte",
+    "Solde",
+    "Pointage"
+  ],
+  "observation": true,
+  "account": {
+    "id": "{Numéro Compte}",
+    "bank": "boursobank",
+    "currency": {
+      "code": "EUR"
+    }
+  },
+  "occurred": {
+    "column": "Date Opération",
+    "layout": "iso-date"
+  },
+  "value_on": {
+    "column": "Date Valeur",
+    "layout": "iso-date"
+  },
+  "cases": [
+    {
+      "movements": [
+        {
+          "role": "primary",
+          "quantity": {
+            "column": "Solde"
+          },
+          "commodity": {
+            "code": "EUR"
+          }
+        }
+      ]
+    }
+  ],
+  "descriptions": [
+    "Libellé",
+    "Libellé Suggéré"
+  ],
+  "balances": [
+    {
+      "type": "day_end",
+      "quantity": "Solde#2",
+      "commodity": {
+        "code": "EUR"
+      },
+      "as_of": {
+        "column": "Date Valeur",
+        "layout": "iso-date"
+      }
+    }
+  ]
+}

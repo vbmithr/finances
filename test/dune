@@ -537,3 +537,18 @@
    %{dep:import_empty_test.py}
    %{exe:../bin/main.exe}
    ../institutions)))
+
+(rule
+ (alias runtest)
+ (deps
+  csv_converter_test.py
+  fixtures/wise.xml
+  fixtures/wise.csv
+  (source_tree ../formats/records))
+ (action
+  (run
+   python3
+   %{dep:csv_converter_test.py}
+   %{exe:../bin/main.exe}
+   ../formats/records
+   fixtures)))

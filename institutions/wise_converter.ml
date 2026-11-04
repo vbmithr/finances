@@ -1,9 +1,9 @@
 open Base
 
-(* Wise states one payment in two files. CAMT is the statement, so its entries are
-   the counted records. The CSV has more to say about the same rows, so its entries
-   are observations. Which rows belong together is fin's business, not this file's,
-   apart from what Wise's own references state. *)
+(* Wise states one payment in two files. CAMT is the statement, so its entries are the counted
+   records, and this file turns them into records. The CSV has more to say about the same rows,
+   so its entries are observations; converters/wise.json describes it. Which rows belong
+   together is fin's business, apart from what Wise's own references state. *)
 
 let preset =
   lazy
@@ -134,139 +134,38 @@ let of_camt (preset : Camt_institution_preset.t) contents =
   , records )
 ;;
 
-(* The CSV names no account, only a currency in each row, so a CSV with no rows has
-   no accounts. An observation pairs by its reference across the institution, so this
-   account never holds a counted record. *)
-let csv_account currency : Records.account =
-  { id = "balance-" ^ Iso4217.to_alpha_code currency
-  ; bank = Some "wise"
-  ; number = None
-  ; account_type = None
-  ; currency = Some currency
-  ; iban = Unstated
-  }
-;;
-
-let csv_details ~credit ~reference ~balance_after (fields : (string * string) list)
-  : Records.details
-  =
-  let stated name =
-    List.Assoc.find fields ~equal:String.equal name
-    |> Option.filter ~f:(fun value -> not (String.is_empty value))
-  in
-  let quantity name =
-    Option.bind (stated name) ~f:(fun text ->
-      Option.try_with (fun () -> Quantity.of_string text)
-      |> Option.filter ~f:Quantity.(fun value -> value >= zero))
-  in
-  let exchange : Records.exchange option =
-    match stated "Exchange From", stated "Exchange To" with
-    | Some source, Some target ->
-      Some
-        { source
-        ; target
-        ; rate = quantity "Exchange Rate"
-        ; target_quantity = quantity "Exchange To Amount"
-        }
-    | _ -> None
-  in
-  let counterparty : Records.counterparty option =
-    let name = stated (if credit then "Payer Name" else "Payee Name") in
-    let iban =
-      if credit
-      then None
-      else
-        Option.filter (stated "Payee Account Number") ~f:(fun number ->
-          Result.is_ok (Iban.of_string number))
-    in
-    Option.some_if
-      (Option.is_some name || Option.is_some iban)
-      ({ name; iban } : Records.counterparty)
-  in
-  { no_details with
-    descriptions = List.filter_opt [ stated "Description"; stated "Merchant" ]
-  ; counterparty
-  ; references = Some (references reference (stated "Payment Reference"))
-  ; exchange
-  ; balance_after = Some balance_after
-  ; fields = List.filter fields ~f:(fun (_, value) -> not (String.is_empty value))
-  }
-;;
-
-(* The CSV clock is a local wall clock with no offset, so the row states a date and
-   the clock stays in its fields. Total fees repeats a figure that has its own row,
-   and stays there too. *)
-let csv_record (preset : Camt_institution_preset.t) (row : Csv_clock_companion.row)
-  : Records.record
-  =
-  let profile = preset.csv_profile in
-  let fields = List.zip_exn profile.header row.fields in
-  let stated column = List.Assoc.find_exn fields ~equal:String.equal column in
-  let direction = stated profile.columns.direction in
-  { id =
-      String.concat ~sep:"/" [ row.reference; stated profile.columns.datetime; direction ]
-  ; account = (csv_account row.currency).id
-  ; statements = []
-  ; occurred = Records.of_date (Ptime.to_date ~tz_offset_s:0 row.booked_at)
-  ; value_on = None
-  ; movements = [ movement row.amount row.currency ]
-  ; fee = None
-  ; group = None
-  ; supporting = false
-  ; observation = true
-  ; details =
-      csv_details
-        ~credit:(String.equal direction "CREDIT")
-        ~reference:row.reference
-        ~balance_after:row.running_balance
-        fields
-  }
-;;
-
-let of_csv (preset : Camt_institution_preset.t) contents =
-  let open Or_error.Let_syntax in
-  let%map rows =
-    Csv_clock_companion.parse preset.csv_profile preset.camt_profile contents
-  in
-  let currencies =
-    List.map rows ~f:(fun (row : Csv_clock_companion.row) ->
-      Iso4217.to_alpha_code row.currency, row.currency)
-    |> List.dedup_and_sort ~compare:(fun (a, _) (b, _) -> String.compare a b)
-  in
-  ( List.map currencies ~f:(fun (_, currency) -> csv_account currency)
-  , []
-  , []
-  , List.map rows ~f:(csv_record preset) )
-;;
-
 let is_camt contents =
   String.is_substring (String.prefix contents 4096) ~substring:"camt.053"
 ;;
 
+let csv =
+  lazy
+    (List.find_exn (Lazy.force Csv_converter.bundled) ~f:(fun definition ->
+       String.equal (Csv_converter.institution definition) "wise"))
+;;
+
 let recognizes contents =
-  let preset = Lazy.force preset in
-  is_camt contents
-  || Csv_clock_companion.recognizes preset.csv_profile preset.camt_profile contents
+  is_camt contents || Csv_converter.recognizes (Lazy.force csv) contents
 ;;
 
 let convert ~name contents =
   let open Or_error.Let_syntax in
   let preset = Lazy.force preset in
-  let%map accounts, statements, balances, records =
-    if is_camt contents
-    then of_camt preset contents
-    else if recognizes contents
-    then of_csv preset contents
+  if not (is_camt contents)
+  then
+    if recognizes contents
+    then Csv_converter.convert (Lazy.force csv) ~name contents
     else Or_error.error_string "not a Wise CAMT.053 statement or CSV export"
-  in
-  ({ institution = preset.institution
-   ; identity = Source
-   ; converter = Some { name = "fin wise"; version = Some "1" }
-   ; sources = [ { name; sha256 = Digestif.SHA256.(digest_string contents |> to_hex) } ]
-   ; accounts
-   ; statements
-   ; balances
-   ; records
-   }
-   : Records.t)
+  else (
+    let%map accounts, statements, balances, records = of_camt preset contents in
+    ({ institution = preset.institution
+     ; identity = Source
+     ; converter = Some { name = "fin wise"; version = Some "1" }
+     ; sources = [ { name; sha256 = Digestif.SHA256.(digest_string contents |> to_hex) } ]
+     ; accounts
+     ; statements
+     ; balances
+     ; records
+     }
+     : Records.t))
 ;;

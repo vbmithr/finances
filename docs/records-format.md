@@ -14,10 +14,13 @@ There are two kinds of converter, with the same output and the same checks:
 - **Built in.** Institutions fin ships with keep working directly: `fin import wise
   FILE` runs the built-in converter, then imports its records. `fin convert wise FILE`
   prints those records without importing them.
-- **Your own.** For any other institution, write a program in any language, needing no
-  fin code, and import what it prints: `fin import records.json`.
+- **A CSV definition.** A CSV-only institution needs no code, only a file saying which column
+  means what: `fin convert --definition mine.json FILE`, see [below](#csv-definitions).
+- **Your own.** For anything else, write a program in any language, needing no fin code, and
+  import what it prints: `fin import records.jsonl`.
 
-`fin convert` exists for Wise and opens ZIP files. Importing records, including through `fin import`, is the
+`fin convert` opens directories and ZIP files, and reads the CSV layouts of the institutions
+below. CAMT and CSV work for Wise; BoursoBank OFX and bunq MT940 have no converter yet. Importing records, including through `fin import`, is the
 plan.
 
 - Schema: [`formats/records/fin-records.schema.json`](../formats/records/fin-records.schema.json)
@@ -200,7 +203,8 @@ source file is often no statement at all, only a list of movements.
 | CDC CSV | Row list of up to two legs, stated fiat values, some hashes | `valuations`, `references.hash`, a signed exchange target |
 | FDM CSV | Card rows with local and USD amounts, a final total row | `exchange`, a `statement` with a `total` |
 
-Only Wise has been converted so far; the others are mapped from their structure.
+All of these CSV files have been converted, and CAMT; OFX and MT940 are still only mapped from
+their structure.
 
 Measured, so these are not guesses: Wise and Revolut running balances reconcile on every
 consecutive pair, with Revolut's balance moving by `Amount` minus `Fee`. BoursoBank has
@@ -211,6 +215,55 @@ evidence, not a running total. FDM's last row is the exact sum of its dated rows
 For pairing, reference and date do not always decide. On bunq, which has no references, date
 and quantity pair all 332 rows only on the value date, and 113 of them share a key with
 another row; BoursoBank has 13 such keys. Fin will need the descriptions or the source order.
+
+## CSV definitions
+
+A definition describes one CSV layout. It holds no logic beyond conditions on a cell, so it
+stays readable; what it cannot say needs a converter of its own. The bundled ones are in
+[`institutions/converters`](../institutions/converters). Fin refuses a definition with an
+unknown member or a column not in its header.
+
+```json
+{
+  "format": "fin-csv-converter",
+  "version": 1,
+  "institution": "mine",
+  "header": ["When", "What", "Currency", "Text"],
+  "account": { "id": "main-{Currency}", "currency": { "fiat": "Currency" } },
+  "occurred": { "column": "When", "layout": "day-first" },
+  "cases": [
+    {
+      "movements": [
+        { "role": "primary", "quantity": { "column": "What" }, "commodity": { "fiat": "Currency" } }
+      ]
+    }
+  ],
+  "descriptions": ["Text"]
+}
+```
+
+| Member | Meaning |
+|---|---|
+| `header` | The exact header; a file with another one is not this layout |
+| `separator`, `decimal` | Default `,` and `dot`; spaces that group digits are ignored |
+| `observation` | The rows describe rows stated elsewhere |
+| `only` | Conditions a row must meet to be part of this source at all |
+| `account` | `id`, where `{Column}` is that row's value, and `bank`, `type`, `currency` |
+| `id` | `{"columns": [...]}` or `{"row_hash": true}`; absent means `inventory` identity |
+| `occurred`, `value_on` | `column`, `fallback`, `layout` (`iso-date`, `iso-datetime`, `day-first`), and `utc` |
+| `cases` | The first whose `when` conditions hold gives `movements` and `fee` |
+| `reported` | `quantity` and `symbol` columns for a row no case takes |
+| `total` | `when` conditions of a row stating what the others add up to, with its `quantity` and `commodity` |
+| `balance_after`, `balances` | Running balance column, and `balance` lines to state from each row |
+| `descriptions`, `type`, `counterparty_name`, `counterparty_iban`, `references`, `exchange`, `valuations` | Columns for those members of `details`; the first filled `counterparty_name` wins |
+
+- A column name repeated in the header is `Solde#2` for the second one.
+- A quantity is `column`, with optional `negate` and `minus` (another column).
+- A commodity is `{"fiat": column}`, `{"code": "USD"}`, or `{"reported": column, "provider": name}`.
+- A condition is `column` with `in`, `sign` (`positive`, `negative`) or `filled`.
+- A clock with no stated offset gives a date, unless `utc` says the column is in UTC.
+
+Every column stays in `fields`, as stated.
 
 ## From CAMT
 

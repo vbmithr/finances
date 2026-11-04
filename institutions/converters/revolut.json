@@ -1,0 +1,72 @@
+{
+  "format": "fin-csv-converter",
+  "version": 1,
+  "institution": "revolut",
+  "header": [
+    "Type",
+    "Product",
+    "Started Date",
+    "Completed Date",
+    "Description",
+    "Amount",
+    "Fee",
+    "Currency",
+    "State",
+    "Balance"
+  ],
+  "only": [
+    {
+      "column": "Product",
+      "in": [
+        "Current"
+      ]
+    }
+  ],
+  "account": {
+    "id": "current-{Currency}",
+    "bank": "revolut",
+    "currency": {
+      "fiat": "Currency"
+    }
+  },
+  "occurred": {
+    "column": "Completed Date",
+    "fallback": "Started Date",
+    "layout": "iso-datetime"
+  },
+  "cases": [
+    {
+      "when": [
+        {
+          "column": "State",
+          "in": [
+            "COMPLETED"
+          ]
+        }
+      ],
+      "movements": [
+        {
+          "role": "primary",
+          "quantity": {
+            "column": "Amount",
+            "minus": "Fee"
+          },
+          "commodity": {
+            "fiat": "Currency"
+          }
+        }
+      ],
+      "fee": {
+        "column": "Fee"
+      }
+    }
+  ],
+  "reported": {
+    "quantity": "Amount",
+    "symbol": "Currency"
+  },
+  "descriptions": [
+    "Description"
+  ],
+  "balance_after": "Balance"
+}

@@ -732,11 +732,22 @@ asset or liability account.
 ### Print a statement as records
 
 `fin convert` prints statement files as records, in JSON Lines. It stores nothing and needs
-no database. Wise is the only institution with a converter so far:
+no database. It reads Wise CAMT and the CSV files of Wise, Revolut, CDC, FDM, BoursoBank
+and bunq:
 
 ```sh
 fin convert wise statement.xml | grep CARD-1
 fin convert wise ~/statements/wise -o wise.jsonl.zst
+```
+
+`-o` writes a file and prints a summary, and a name ending in `.zst` compresses it with
+zstd. Fin reads plain and compressed files alike, and concatenated files too.
+
+A CSV-only institution needs no code. A definition file says which column means what, as
+described in [records-format.md](records-format.md#csv-definitions):
+
+```sh
+fin convert --definition mine.json statement.csv
 ```
 
 A directory is walked recursively in name order, leaving out hidden and partial files and
@@ -1760,7 +1771,7 @@ above; no automatic migration runs.
 | `fin institution --help` | Institution list and generic import setup |
 | `fin operation --help` | Imported transaction listing |
 | `fin statement --help` | Statement reconciliation and companion files |
-| `fin convert INSTITUTION PATH...` | Print statement files, directories and ZIPs as records |
+| `fin convert INSTITUTION PATH...` | Print statement files, directories and ZIPs as records; `--definition` for any other CSV |
 | `fin records check FILE` | Validate a statement converter's output |
 | `fin reversal --help` | Withdrawal reversal candidates and review |
 | `fin operation --help` | Transaction listing, review and categories |

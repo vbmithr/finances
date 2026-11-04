@@ -60,21 +60,24 @@ let valid_hex ~length text =
     | _ -> false)
 ;;
 
+let normalize_hex (config : Camt_profile.hex_normalization) ~description reference =
+  match String.chop_prefix reference ~prefix:config.prefix with
+  | Some id ->
+    let id = String.filter id ~f:(fun c -> not (Char.equal c '-')) in
+    if not (valid_hex ~length:config.length id)
+    then failwith "invalid normalized reference";
+    config.prefix ^ String.lowercase id
+  | None
+    when valid_hex ~length:config.length reference
+         && String.Caseless.equal (String.strip description) config.description ->
+    config.prefix ^ String.lowercase reference
+  | None -> reference
+;;
+
 let normalize_reference (profile : Camt_profile.t) ~description reference =
   match profile.reference_normalization with
   | Camt_profile.Preserve -> reference
-  | Canonical_hex config ->
-    (match String.chop_prefix reference ~prefix:config.prefix with
-     | Some id ->
-       let id = String.filter id ~f:(fun c -> not (Char.equal c '-')) in
-       if not (valid_hex ~length:config.length id)
-       then failwith "invalid normalized reference";
-       config.prefix ^ String.lowercase id
-     | None
-       when valid_hex ~length:config.length reference
-            && String.Caseless.equal (String.strip description) config.description ->
-       config.prefix ^ String.lowercase reference
-     | None -> reference)
+  | Canonical_hex config -> normalize_hex config ~description reference
 ;;
 
 let timestamp = Timestamp.of_rfc3339_exn
