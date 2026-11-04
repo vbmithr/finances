@@ -164,6 +164,39 @@ let merging () =
     true
     (Result.is_error (Records.merge [ wise; { wise with institution = "other" } ]));
   Alcotest.(check bool) "nothing to merge" true (Result.is_error (Records.merge []));
+  (* One file knows an account's IBAN and another only its number. *)
+  let account_of id : Records.account =
+    { id
+    ; bank = None
+    ; number = None
+    ; account_type = None
+    ; currency = None
+    ; iban = Unstated
+    }
+  in
+  let accounts_of accounts =
+    { wise with accounts; records = []; statements = []; balances = [] }
+  in
+  let filled =
+    Records.merge
+      [ accounts_of [ account_of "a" ]
+      ; accounts_of [ { (account_of "a") with number = Some "1"; iban = Iban "X" } ]
+      ]
+    |> Or_error.ok_exn
+  in
+  Alcotest.(check int) "one account" 1 (List.length filled.accounts);
+  Alcotest.(check (option string))
+    "filled in"
+    (Some "1")
+    (List.hd_exn filled.accounts).number;
+  Alcotest.(check bool)
+    "an account's number can disagree"
+    true
+    (Result.is_error
+       (Records.merge
+          [ accounts_of [ { (account_of "a") with number = Some "1" } ]
+          ; accounts_of [ { (account_of "a") with number = Some "2" } ]
+          ]));
   (* Each export names its statement differently, and a row can be in both. *)
   let renamed (t : Records.t) =
     { t with

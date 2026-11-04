@@ -667,11 +667,71 @@ let merge documents =
           ~key:(fun (s : source) -> s.name ^ "\000" ^ s.sha256)
           (all (fun t -> t.sources))
     ; accounts =
-        once
-          (fun (a : account) -> Printf.sprintf "account %S" a.id)
-          account_codec
-          ~key:(fun (a : account) -> a.id)
-          (all (fun t -> t.accounts))
+        (* One file may know an account's IBAN and another only its number. *)
+        (let known = Hashtbl.create (module String) in
+         let order = Queue.create () in
+         let either id what a b =
+           match a, b with
+           | Some a, Some b when not (String.equal a b) ->
+             Queue.enqueue
+               problems
+               (Printf.sprintf
+                  "account %S: %s is stated differently by two files"
+                  id
+                  what);
+             Some a
+           | Some a, _ -> Some a
+           | None, b -> b
+         in
+         List.iter
+           (all (fun t -> t.accounts))
+           ~f:(fun (a : account) ->
+             match Hashtbl.find known a.id with
+             | None ->
+               Queue.enqueue order a.id;
+               Hashtbl.set known ~key:a.id ~data:a
+             | Some (b : account) ->
+               let id = a.id in
+               let iban =
+                 match b.iban, a.iban with
+                 | Unstated, iban | iban, Unstated -> iban
+                 | Iban x, Iban y when not (String.equal x y) ->
+                   Queue.enqueue
+                     problems
+                     (Printf.sprintf
+                        "account %S: iban is stated differently by two files"
+                        id);
+                   b.iban
+                 | Iban _, No_iban | No_iban, Iban _ ->
+                   Queue.enqueue
+                     problems
+                     (Printf.sprintf
+                        "account %S: iban is stated differently by two files"
+                        id);
+                   b.iban
+                 | iban, _ -> iban
+               in
+               let currency =
+                 either
+                   id
+                   "currency"
+                   (Option.map b.currency ~f:Iso4217.to_alpha_code)
+                   (Option.map a.currency ~f:Iso4217.to_alpha_code)
+               in
+               Hashtbl.set
+                 known
+                 ~key:id
+                 ~data:
+                   { id
+                   ; bank = either id "bank" b.bank a.bank
+                   ; number = either id "number" b.number a.number
+                   ; account_type = either id "type" b.account_type a.account_type
+                   ; currency =
+                       Option.bind currency ~f:(fun code ->
+                         Validation.currency "currency" code |> Result.ok)
+                   ; iban
+                   });
+         Queue.to_list order |> List.map ~f:(Hashtbl.find_exn known))
     ; statements =
         once
           (fun (s : statement) -> Printf.sprintf "statement %S" s.id)
@@ -715,6 +775,18 @@ let merge documents =
   if Queue.is_empty problems
   then Ok merged
   else Or_error.error_string (String.concat ~sep:"\n" (Queue.to_list problems))
+;;
+
+let merge_all documents =
+  let same (a : t) (b : t) =
+    String.equal a.institution b.institution && Poly.equal a.identity b.identity
+  in
+  (* Sections that can be one document are: this is what a concatenated overlap needs, and
+     it is where they are compared. *)
+  List.fold documents ~init:[] ~f:(fun groups t ->
+    if List.exists groups ~f:(same t) then groups else t :: groups)
+  |> List.rev_map ~f:(fun group -> List.filter documents ~f:(same group) |> merge)
+  |> Or_error.all
 ;;
 
 let zstd_magic = "\x28\xB5\x2F\xFD"
@@ -818,21 +890,7 @@ let of_string ?file contents =
     let%bind text = decompressed contents in
     let%bind sections = sections text in
     let%bind () = List.map sections ~f:check |> Or_error.all_unit in
-    (* Sections that can be one document are: this is what a concatenated overlap
-       needs, and it is where they are compared. *)
-    let institutions =
-      List.fold sections ~init:[] ~f:(fun groups t ->
-        let same (g : t) =
-          String.equal g.institution t.institution && Poly.equal g.identity t.identity
-        in
-        if List.exists groups ~f:same then groups else t :: groups)
-      |> List.rev
-    in
-    List.map institutions ~f:(fun (g : t) ->
-      List.filter sections ~f:(fun t ->
-        String.equal g.institution t.institution && Poly.equal g.identity t.identity)
-      |> merge)
-    |> Or_error.all
+    merge_all sections
   in
   Result.map_error result ~f:(fun error ->
     match file with

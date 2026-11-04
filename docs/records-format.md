@@ -20,7 +20,7 @@ There are two kinds of converter, with the same output and the same checks:
   import what it prints: `fin import records.jsonl`.
 
 `fin convert` opens directories and ZIP files, and reads the CSV layouts of the institutions
-below. CAMT and CSV work for Wise; BoursoBank OFX and bunq MT940 have no converter yet. Importing records, including through `fin import`, is the
+below, Wise CAMT, BoursoBank OFX and bunq MT940. Importing records, including through `fin import`, is the
 plan.
 
 - Schema: [`formats/records/fin-records.schema.json`](../formats/records/fin-records.schema.json)
@@ -51,7 +51,8 @@ them, lines come in any order, so a converter can print a row as soon as it read
 Files can be concatenated, compressed ones included: `cat a.jsonl b.jsonl` is a file.
 Sections of one institution and identity read as one document. What two of them both state
 counts once, and it is an error if they state it differently, apart from the `statements`
-of a record, which add up.
+of a record, which add up, and what one says of an account and another does not. A source with
+row IDs and one without make separate sections.
 
 The `end` line counts the section's records, because a file cut between two lines is
 otherwise valid JSON Lines. A file with no `end` line is refused.
@@ -203,8 +204,8 @@ source file is often no statement at all, only a list of movements.
 | CDC CSV | Row list of up to two legs, stated fiat values, some hashes | `valuations`, `references.hash`, a signed exchange target |
 | FDM CSV | Card rows with local and USD amounts, a final total row | `exchange`, a `statement` with a `total` |
 
-All of these CSV files have been converted, and CAMT; OFX and MT940 are still only mapped from
-their structure.
+All of these have been converted from real files. bunq's opening balance plus its rows equals
+its closing balance exactly.
 
 Measured, so these are not guesses: Wise and Revolut running balances reconcile on every
 consecutive pair, with Revolut's balance moving by `Amount` minus `Fee`. BoursoBank has
@@ -212,9 +213,9 @@ exactly one balance per value date on every account. It reconciles from day to d
 days of two accounts and hardly ever on a third, apparently a card, so it is stated
 evidence, not a running total. FDM's last row is the exact sum of its dated rows.
 
-For pairing, reference and date do not always decide. On bunq, which has no references, date
-and quantity pair all 332 rows only on the value date, and 113 of them share a key with
-another row; BoursoBank has 13 such keys. Fin will need the descriptions or the source order.
+For pairing, reference and date do not always decide. bunq has no references: account, booking
+date and quantity pair all 332 rows, 22 of which share a key with another row, against 113 on
+the value date. Fin will need the descriptions or the source order for those.
 
 ## CSV definitions
 

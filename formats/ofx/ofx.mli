@@ -44,6 +44,7 @@ type statement =
   ; transactions : transaction list
   ; ledger_balance : balance option
   ; available_balance : balance option
+  ; period : (string * string) option (** DTSTART and DTEND, as written. *)
   }
 
 (** Requires successful SONRS/STMTTRNRS statuses and at least one statement. *)

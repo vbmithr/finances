@@ -695,7 +695,12 @@ let record t ~positions ~statements row : Records.record =
       let key = account ^ "\000" ^ day in
       let position = Hashtbl.find positions key |> Option.value ~default:0 in
       Hashtbl.set positions ~key ~data:(position + 1);
-      Printf.sprintf "%s/%d" day (position + 1)
+      (* An observation describes a row stated elsewhere, which can use this same scheme. *)
+      Printf.sprintf
+        "%s%s/%d"
+        (if t.observation then "observation/" else "")
+        day
+        (position + 1)
   in
   let case = List.find t.cases ~f:(fun case -> holds_all t row case.conditions) in
   let movements =

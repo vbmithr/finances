@@ -732,8 +732,8 @@ asset or liability account.
 ### Print a statement as records
 
 `fin convert` prints statement files as records, in JSON Lines. It stores nothing and needs
-no database. It reads Wise CAMT and the CSV files of Wise, Revolut, CDC, FDM, BoursoBank
-and bunq:
+no database. It reads Wise CAMT, BoursoBank OFX, bunq MT940, and the CSV files of Wise, Revolut,
+CDC, FDM, BoursoBank and bunq:
 
 ```sh
 fin convert wise statement.xml | grep CARD-1

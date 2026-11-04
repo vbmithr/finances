@@ -34,6 +34,7 @@ type statement = private
   ; transactions : transaction list
   ; ledger_balance : balance option
   ; available_balance : balance option
+  ; period : (Date.t * Date.t) option (** DTSTART and DTEND, if both are stated. *)
   }
 
 type t = private

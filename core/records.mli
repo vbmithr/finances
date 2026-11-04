@@ -162,12 +162,15 @@ val check : t -> unit Or_error.t
 (** One document stating what the given documents state, in order, for one
     institution and identity. Files can overlap: what several state is kept once, and
     it is an error if they state it differently, apart from which statements list a
-    record, which adds up. *)
+    record, which adds up, and what one file says of an account and another does not. *)
 val merge : t list -> t Or_error.t
 
+(** {!merge} what can be one document: one result per institution and identity, in order of
+    first appearance. A source with row IDs and one without cannot share a section. *)
+val merge_all : t list -> t list Or_error.t
+
 (** Read a records file, plain or compressed with zstd, which is told from its first
-    bytes. Each section is {!check}ed, and sections of one institution and identity are
-    {!merge}d, so the result has one document per institution. [file] names the input
+    bytes. Each section is {!check}ed, and the sections then go through {!merge_all}. [file] names the input
     in errors. *)
 val of_string : ?file:string -> string -> t list Or_error.t
 

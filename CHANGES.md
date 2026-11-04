@@ -10,7 +10,8 @@ short line of their own.
 
 - Internal: `bin/main.ml` is split into one module per command group. No user-visible
   change.
-- `fin convert` also reads the CSV files of Revolut, CDC, FDM, BoursoBank and bunq, and
+- `fin convert` also reads BoursoBank OFX, bunq MT940 and the CSV files of Revolut, CDC,
+  FDM, BoursoBank and bunq, and
   `--definition FILE` reads any other CSV from a file saying which column means what.
 - New `fin convert wise PATH...` prints Wise CAMT and CSV files as records, without a
   database and without storing anything. `-o FILE` writes a file instead, compressed if

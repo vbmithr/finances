@@ -1,5 +1,6 @@
 #!/usr/bin/env python3
 """CSV converters: what a definition says, and that bundled ones produce valid records."""
+from decimal import Decimal
 import json
 import pathlib
 import subprocess
@@ -124,6 +125,36 @@ csv = kind(convert("wise", FIXTURES / "wise.csv"), "record")
 assert all(r["observation"] for r in csv)
 assert {details(r)["references"]["servicer"] for r in csv} == {
     details(r)["references"]["servicer"] for r in camt}
+
+# bunq: MT940 and CSV name one account; each file adds what it knows, and IDs do not collide.
+lines = convert("bunq", FIXTURES / "bunq.mt940", FIXTURES / "bunq.csv")
+assert len(kind(lines, "header")) == 1
+assert len(kind(lines, "account")) == 1, kind(lines, "account")
+assert kind(lines, "account")[0].get("type"), "from the MT940"
+counted = [r for r in kind(lines, "record") if not r.get("observation")]
+observed = [r for r in kind(lines, "record") if r.get("observation")]
+assert counted and observed and all(r["id"].startswith("observation/") for r in observed)
+assert all(r["value_on"] for r in counted)
+statement = kind(lines, "statement")[0]
+assert all(statement["id"] in r["statements"] for r in counted)
+balances = {b["type"]: Decimal(b["quantity"]) for b in kind(lines, "balance")}
+assert set(balances) == {"opening", "closing"}
+assert balances["opening"] + sum(
+    Decimal(r["movements"][0]["quantity"]) for r in counted) == balances["closing"]
+
+# BoursoBank: OFX has row IDs and its CSV does not, so they are two sections of one file.
+lines = convert("boursobank", FIXTURES / "bank.ofx", bourso)
+assert [h["identity"] for h in kind(lines, "header")] == ["source", "inventory"], lines[0]
+assert len(kind(lines, "end")) == 2
+ofx = [r for r in kind(lines, "record") if not r.get("observation")]
+assert ofx and all(details(r)["references"]["servicer"] == r["id"] for r in ofx)
+with_output = root / "bourso.jsonl"
+done = subprocess.run([FIN, "convert", "boursobank", str(FIXTURES / "bank.ofx"), str(bourso),
+                       "-o", str(with_output)], capture_output=True, text=True, check=True)
+assert len(done.stdout.splitlines()) == 2, done.stdout
+check = subprocess.run([FIN, "records", "check", str(with_output)],
+                       capture_output=True, text=True, check=True)
+assert check.stdout == done.stdout
 
 # A header alone is a statement of no activity.
 empty = write("empty.csv", revolut.read_text().splitlines()[0] + "\n")

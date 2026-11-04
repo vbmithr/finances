@@ -42,16 +42,45 @@ let of_definitions definitions =
         Or_error.error_string "no CSV layout of this converter recognizes the file" )
 ;;
 
+(* Several sources of one institution: a file is the first that recognizes it. *)
+let first_of parts =
+  let find contents = List.find parts ~f:(fun (recognizes, _) -> recognizes contents) in
+  ( (fun contents -> Option.is_some (find contents))
+  , fun ~name contents ->
+      match find contents with
+      | Some (_, convert) -> convert ~name contents
+      | None -> Or_error.error_string "not a file of this institution" )
+;;
+
 let converters () =
+  let structured =
+    let mt940 institution =
+      Builtin.mt940_profile institution
+      |> Option.map ~f:(fun profile ->
+        institution, (Mt940_converter.recognizes profile, Mt940_converter.convert profile))
+    in
+    List.filter_opt
+      [ Some
+          ( "boursobank"
+          , (Ofx_converter.recognizes, Ofx_converter.convert ~institution:"boursobank") )
+      ; mt940 "bunq"
+      ]
+  in
   let csv =
     Lazy.force Csv_converter.bundled
     |> List.map ~f:(fun definition -> Csv_converter.institution definition, definition)
     |> List.filter ~f:(fun (name, _) -> not (String.equal name "wise"))
     |> Map.of_alist_multi (module String)
-    |> Map.to_alist
-    |> List.map ~f:(fun (name, definitions) -> name, of_definitions definitions)
+    |> Map.map ~f:of_definitions
   in
-  ("wise", (Wise_converter.recognizes, Wise_converter.convert)) :: csv
+  let with_structured =
+    List.fold structured ~init:csv ~f:(fun converters (name, part) ->
+      Map.update converters name ~f:(function
+        | Some csv -> first_of [ part; csv ]
+        | None -> part))
+  in
+  ("wise", (Wise_converter.recognizes, Wise_converter.convert))
+  :: Map.to_alist with_structured
 ;;
 
 (* The same bound as fin import's default, on a file and on what an archive expands to. *)
@@ -153,9 +182,9 @@ let convert_statements definition arguments output =
     then Or_error.error_string "no recognized statement in what was given"
     else Ok ()
   in
-  let%bind records = Records.merge documents in
+  let%bind sections = Records.merge_all documents in
   (* A built-in converter passes the same checks as anyone else's output. *)
-  let text = Records.to_string records in
+  let text = List.map sections ~f:Records.to_string |> String.concat in
   let%bind (_ : Records.t list) = Records.of_string text in
   match output with
   | None ->
@@ -166,7 +195,7 @@ let convert_statements definition arguments output =
       if String.is_suffix path ~suffix:".zst" then Records.compress text else Ok text
     in
     let%map () = write_file path contents in
-    print_records_summary records
+    List.iter sections ~f:print_records_summary
 ;;
 
 let convert_cmd =

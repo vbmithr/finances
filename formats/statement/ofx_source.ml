@@ -28,6 +28,7 @@ type statement =
   ; transactions : transaction list
   ; ledger_balance : balance option
   ; available_balance : balance option
+  ; period : (Date.t * Date.t) option
   }
 
 type t =
@@ -208,6 +209,7 @@ let parse_statement (statement : Ofx.statement) =
   ; transactions
   ; ledger_balance = parse_balance statement.ledger_balance
   ; available_balance = parse_balance statement.available_balance
+  ; period = Option.map statement.period ~f:(fun (first, last) -> date first, date last)
   }
 ;;
 

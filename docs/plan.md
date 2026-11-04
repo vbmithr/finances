@@ -502,7 +502,7 @@ position observations, derive positions from fills, or calculate funding.
   [records-format.md](records-format.md#coverage)). The format now holds what it found.
   `Csv_converter` reads any CSV a definition file describes; the bundled definitions cover
   all CSV files seen, and reproduce fin's CDC interpretation and the Wise rows. OFX and MT940
-  have no converter yet.
+  have converters, so every file seen so far converts.
   Next: `fin import` for records beside the current adapters, and retire adapters one at a
   time.
 - [ ] Group movements into operations by evidence strength, covering transfers,

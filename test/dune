@@ -544,6 +544,9 @@
   csv_converter_test.py
   fixtures/wise.xml
   fixtures/wise.csv
+  fixtures/bank.ofx
+  fixtures/bunq.mt940
+  fixtures/bunq.csv
   (source_tree ../formats/records))
  (action
   (run

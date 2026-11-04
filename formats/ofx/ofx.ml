@@ -33,6 +33,7 @@ type statement =
   ; transactions : transaction list
   ; ledger_balance : balance option
   ; available_balance : balance option
+  ; period : (string * string) option
   }
 
 let date_syntax =
@@ -208,6 +209,10 @@ let read_statement node =
   ; transactions
   ; ledger_balance = read_balance "LEDGERBAL" node
   ; available_balance = read_balance "AVAILBAL" node
+  ; period =
+      (match optional "DTSTART" transaction_list, optional "DTEND" transaction_list with
+       | Some first, Some last -> Some (checked_date first, checked_date last)
+       | _ -> None)
   }
 ;;
 
