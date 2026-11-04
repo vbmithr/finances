@@ -29,6 +29,19 @@ let statements_cmd =
     Term.(const statements $ database $ institution_filter)
 ;;
 
+let balances database institution =
+  with_database database (fun db ->
+    let%map balances = Ledger.stated_balances ?institution db in
+    Report_json.print (Jsont.list Report_json.stated_balance) balances)
+;;
+
+let balances_cmd =
+  command
+    "balances"
+    "Show the balances imported sources stated, as JSON."
+    Term.(const balances $ database $ institution_filter)
+;;
+
 let companions database institution review =
   with_database database (fun db ->
     let%bind observations = Ledger.companion_observations ?institution db in
@@ -102,5 +115,5 @@ let cmd =
   group
     "statement"
     "Inspect and reconcile imported statements and companion files."
-    [ statements_cmd; companions_cmd; match_companions_cmd ]
+    [ statements_cmd; balances_cmd; companions_cmd; match_companions_cmd ]
 ;;

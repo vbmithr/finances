@@ -10,6 +10,9 @@ val of_string : string -> t Or_error.t
 val institution : t -> string
 val institution_type : t -> Institution_type.t
 
+(** Journal tags, as tag name and column, that a paired row of this layout adds. *)
+val journal_tags : t -> (string * string) list
+
 (** How overlapping files of this layout are reconciled. *)
 val overlap : t -> Adapter.overlap
 

@@ -67,6 +67,8 @@ type balance_type =
   | Available
   | Day_end (** One balance per day, whichever rows it follows. *)
 
+val balance_type_to_string : balance_type -> string
+
 (** A balance a source states at a point in time. *)
 type balance =
   { account : string

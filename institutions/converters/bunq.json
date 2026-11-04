@@ -50,5 +50,8 @@
   "counterparty_name": [
     "Name"
   ],
-  "counterparty_iban": "Counterparty"
+  "counterparty_iban": "Counterparty",
+  "journal_tags": {
+    "bunq-counterparty": "Counterparty"
+  }
 }

@@ -63,8 +63,8 @@
     }
   ],
   "descriptions": [
-    "Description",
-    "Merchant"
+    "Merchant",
+    "Description"
   ],
   "counterparty_name": [
     "Payee Name",
@@ -91,5 +91,10 @@
     "rate": "Exchange Rate",
     "target_quantity": "Exchange To Amount"
   },
-  "balance_after": "Running Balance"
+  "balance_after": "Running Balance",
+  "journal_tags": {
+    "wise-merchant": "Merchant",
+    "wise-payment-reference": "Payment Reference",
+    "wise-reported-fees": "Total fees"
+  }
 }

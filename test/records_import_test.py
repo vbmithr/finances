@@ -72,11 +72,4 @@ Total,,,,,,20.90
     assert "imported=0" in done.stdout or done.returncode != 0, done.stdout
     assert "end line" in done.stdout + done.stderr, done.stdout + done.stderr
 
-    # Observations wait for pairing, and say so rather than being counted.
-    bank = root / "observations.jsonl"
-    bank.write_text("\n".join(
-        line.replace('"kind":"record",', '"kind":"record","observation":true,')
-        for line in records.parent.joinpath("records.jsonl").read_text().splitlines()) + "\n")
-    done = run("import", "fdm", bank, "-d", database, "--journal", root / "r.journal", check=False)
-    assert "observations" in done.stdout + done.stderr, done.stdout + done.stderr
 print("Verified the records import")

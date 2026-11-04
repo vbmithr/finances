@@ -53,6 +53,13 @@ type balance_type =
   | Available
   | Day_end
 
+let balance_type_to_string = function
+  | Opening -> "opening"
+  | Closing -> "closing"
+  | Available -> "available"
+  | Day_end -> "day_end"
+;;
+
 type balance =
   { account : string
   ; balance_type : balance_type

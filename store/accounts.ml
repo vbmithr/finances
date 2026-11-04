@@ -1001,6 +1001,7 @@ let delete_account ?(dry_run = false) db (mapping : Bank_account_mapping.t) =
           ; "movements"
           ; "import_documents"
           ; "statements"
+          ; "stated_balances"
           ; "day_inventories"
           ; "bank_import_attempts"
           ; "document_contexts"
@@ -1076,6 +1077,7 @@ let delete_account ?(dry_run = false) db (mapping : Bank_account_mapping.t) =
             ^ doc_ids
             ^ "))"
           ; "DELETE FROM statements WHERE document_id IN (" ^ doc_ids ^ ")"
+          ; "DELETE FROM stated_balances WHERE document_id IN (" ^ doc_ids ^ ")"
           ; "DELETE FROM import_document_events WHERE event_id IN (" ^ event_ids ^ ")"
           ; "DELETE FROM day_inventories WHERE " ^ local
           ; "DELETE FROM bank_import_attempts WHERE document_id IN (" ^ doc_ids ^ ")"

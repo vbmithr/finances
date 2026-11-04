@@ -3,7 +3,7 @@ open Rel
 
 (** One current experimental baseline; older databases must be reimported. Banks
     have no tables of their own. *)
-let version = 33
+let version = 34
 
 let timestamp = `Expr "(strftime('%Y-%m-%dT%H:%M:%f','now') || '000000000Z')"
 
@@ -1358,6 +1358,82 @@ module Statements = struct
   ;;
 
   let definition = Sqlite_schema.table ~immutable:"statements are immutable" table
+end
+
+module Stated_balances = struct
+  type t =
+    { document_id : int64
+    ; institution : string
+    ; account : string
+    ; balance_type : string
+    ; commodity_json : string
+    ; quantity : string
+    ; as_of : Temporal.t
+    }
+
+  let document_id = Col.make "document_id" Type.int64 (fun (r : t) -> r.document_id)
+  let institution = Col.make "institution" Type.text (fun (r : t) -> r.institution)
+  let account = Col.make "account" Type.text (fun (r : t) -> r.account)
+  let balance_type = Col.make "balance_type" Type.text (fun (r : t) -> r.balance_type)
+
+  let commodity_json =
+    Col.make "commodity_json" Type.text (fun (r : t) -> r.commodity_json)
+  ;;
+
+  let quantity = Col.make "quantity" Type.text (fun (r : t) -> r.quantity)
+  let as_of = Col.make "as_of" statement_time (fun (r : t) -> r.as_of)
+
+  let row =
+    Row.(
+      unit
+        (fun document_id institution account balance_type commodity_json quantity as_of ->
+           { document_id
+           ; institution
+           ; account
+           ; balance_type
+           ; commodity_json
+           ; quantity
+           ; as_of
+           })
+      * document_id
+      * institution
+      * account
+      * balance_type
+      * commodity_json
+      * quantity
+      * as_of)
+  ;;
+
+  let table =
+    Table.make
+      ~primary_key:
+        (Table.Primary_key.make
+           [ Col.Def document_id
+           ; Col.Def account
+           ; Col.Def balance_type
+           ; Col.Def commodity_json
+           ; Col.Def as_of
+           ])
+      ~foreign_keys:
+        [ Table.Foreign_key.make
+            ~cols:[ Col.Def document_id ]
+            ~parent:
+              (Table.Foreign_key.Table
+                 (Import_documents.table, [ Col.Def Import_documents.id ]))
+            ()
+        ]
+      "stated_balances"
+      row
+  ;;
+
+  let definition =
+    Sqlite_schema.table
+      ~checks:
+        Sqlite_schema.Check.
+          [ one_of balance_type [ "opening"; "closing"; "available"; "day_end" ] ]
+      ~immutable:"stated balances are immutable"
+      table
+  ;;
 end
 
 module Statement_events = struct
@@ -2850,6 +2926,7 @@ let definitions =
   ; Bank_account_mappings.definition
   ; Bank_account_mapping_changes.definition
   ; Statements.definition
+  ; Stated_balances.definition
   ; Statement_events.definition
   ; Companion_rows.definition
   ; Companion_matches.definition

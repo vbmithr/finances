@@ -539,6 +539,35 @@ let store_companion_rows db ~document_id ~institution ~format ~context:_ ~compan
   store 0 0 rows
 ;;
 
+let store_balance db ~document_id ~institution (b : Document.balance) =
+  let insert =
+    Rel_sql.Stmt.(
+      func
+        "INSERT INTO \
+         stated_balances(document_id,institution,account,balance_type,commodity_json,quantity,as_of) \
+         VALUES (?,?,?,?,?,?,?) ON CONFLICT DO NOTHING"
+        (int64
+         @-> text
+         @-> text
+         @-> text
+         @-> text
+         @-> text
+         @-> Db_schema.statement_time
+         @-> unit))
+  in
+  db_result
+    (Db.exec
+       db.conn
+       (insert
+          document_id
+          institution
+          b.account
+          (Records.balance_type_to_string b.balance_type)
+          (Json.encode Commodity.codec b.commodity)
+          (Quantity.to_string b.quantity)
+          b.as_of))
+;;
+
 (* Statement dates and instants use Rel codecs at the SQLite boundary. *)
 let store_statement db ~document_id ~ordinal ~institution (s : Document.statement) =
   let insert =
@@ -781,6 +810,10 @@ let import_document
            in
            ingest_linked db ~document_id ~statement_id statement.events)
         (List.mapi document.statements ~f:(fun i s -> i, s))
+    in
+    let* () =
+      List.fold_result document.balances ~init:() ~f:(fun () balance ->
+        store_balance db ~document_id ~institution balance)
     in
     let* loose = ingest_linked db ~document_id document.events in
     let counts = loose :: counts in

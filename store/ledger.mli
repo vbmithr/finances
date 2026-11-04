@@ -58,6 +58,19 @@ val companion_observations
   -> t
   -> companion_observation list Or_error.t
 
+(** A balance a source stated, by the source's own name for the account. *)
+type stated_balance =
+  { institution : string
+  ; account : string
+  ; balance_type : string
+  ; commodity : Commodity.t
+  ; quantity : Quantity.t
+  ; as_of : Temporal.t
+  }
+
+(** Oldest first, for one institution or all. *)
+val stated_balances : ?institution:string -> t -> stated_balance list Or_error.t
+
 (** Matched companion rows and review counts needed for journal export. *)
 type journal_companions =
   { rows : (int64 * Companion.row) list

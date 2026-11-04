@@ -1,7 +1,8 @@
 # Records format
 
 Status: version 1 draft, 2026-11-04. `fin records check FILE` validates a file and `fin convert`
-prints one. Fin imports records for FDM; other institutions still import through their adapters.
+prints one. Fin imports records, pairs observations and stores balances, for FDM so far; other institutions
+still import through their adapters.
 
 A records file is what one institution's document says, as JSON Lines: every entry becomes
 one record. The document may be a statement, or only a list of movements with no stated
@@ -133,17 +134,18 @@ each row is a `balance` line instead.
 Some institutions report one payment in two files, such as an OFX statement and a CSV
 export with more text. A converter marks the rows of the secondary one `observation`. Each states its one movement, for matching, and its `details`.
 
-Fin pairs an observation with a counted record of the institution: by
-`references.servicer` when both have it, otherwise by account, date and quantity. A
-unique pair adds the observation's `details` to the record, in either import order. A
-pair that is ambiguous or conflicts stays visible for review; it is neither merged nor
+Fin pairs an observation with a counted record of the institution. A shared `references.servicer`
+pairs across the institution's accounts, since files can name them differently; otherwise the
+account has to agree. Either way the booking date, quantity and commodity must too. Where several
+rows fit, a shared description settles it, and rows that cannot be told apart pair in source order,
+since they are interchangeable. A unique pair adds the observation's `details` to the record, in
+either import order. Another export of one row is no competition. A pair that stays ambiguous, or
+two exports that state a row differently, stays visible for review and is neither merged nor
 counted. An observation with no pair is kept, and it is reported as unmatched.
 
-The Wise converter marks its CSV rows this way. The CSV names a currency and no account,
-so these rows use an account `balance-EUR` that holds no counted record, and they pair by
-reference. That reference alone can be shared by a payment and its refund, so pairing also
-compares quantity and date. The CSV clock has no offset, so a row's `occurred` is its date
-and the clock stays in `fields`.
+The Wise converter marks its CSV rows this way. The CSV names a currency and no account, so these
+rows use an account `balance-EUR` that holds no counted record, and they pair by reference. The CSV
+clock has no offset, so a row's `occurred` is its date and the clock stays in `fields`.
 
 ## Matching
 
@@ -258,6 +260,7 @@ unknown member or a column not in its header.
 | `reported` | `quantity` and `symbol` columns for a row no case takes |
 | `total` | `when` conditions of a row stating what the others add up to, with its `quantity` and `commodity` |
 | `balance_after`, `balances` | Running balance column, and `balance` lines to state from each row |
+| `journal_tags` | Tag name to column: what a paired row adds to its journal entry |
 | `descriptions`, `type`, `counterparty_name`, `counterparty_iban`, `references`, `exchange`, `valuations` | Columns for those members of `details`; the first filled `counterparty_name` wins |
 
 - A column name repeated in the header is `Solde#2` for the second one.

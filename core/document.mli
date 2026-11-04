@@ -16,8 +16,19 @@ type statement =
   ; events : Source_event.t list
   }
 
+(** A balance the source states at a point in time. [account] is the source's own name for
+    the account, so that files naming one account differently stay comparable later. *)
+type balance =
+  { account : string
+  ; balance_type : Records.balance_type
+  ; commodity : Commodity.t
+  ; quantity : Quantity.t
+  ; as_of : Temporal.t
+  }
+
 type t =
   { statements : statement list
+  ; balances : balance list
   ; events : Source_event.t list (** Movements outside any statement. *)
   ; companion_rows : (int * string list) list (** Row number and raw fields. *)
   ; context : (string * string) list

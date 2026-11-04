@@ -17,7 +17,13 @@ let account (account : Ofx_source.account) : Records.account =
   ; number = Option.some_if (not is_iban) account.account_id
   ; account_type = Some account.account_type
   ; currency = Some account.currency
-  ; iban = (if is_iban then Iban account.account_id else Unstated)
+  ; iban =
+      (* OFX credit-card accounts are card numbers, never IBANs. *)
+      (if String.equal account.account_type "CREDITCRD"
+       then No_iban
+       else if is_iban
+       then Iban account.account_id
+       else Unstated)
   }
 ;;
 

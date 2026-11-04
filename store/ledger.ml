@@ -761,6 +761,49 @@ let decode_csv_match (row_id, event_id, state, reason, candidates, policy) =
 (* One table holds every bank's companion observations, told apart by format. *)
 (* One table holds every bank's companion observations, told apart by
    institution and format. *)
+type stated_balance =
+  { institution : string
+  ; account : string
+  ; balance_type : string
+  ; commodity : Commodity.t
+  ; quantity : Quantity.t
+  ; as_of : Temporal.t
+  }
+
+let stated_balances ?institution db =
+  let* rows =
+    collect
+      db
+      Rel_sql.Stmt.(
+        func
+          "SELECT DISTINCT \
+           institution,account,balance_type,commodity_json,quantity,as_of FROM \
+           stated_balances ORDER BY as_of,institution,account,balance_type"
+          (ret
+             Row.(
+               t6
+                 (text "institution")
+                 (text "account")
+                 (text "balance_type")
+                 (text "commodity_json")
+                 (text "quantity")
+                 (Rel.Col.make "as_of" Db_schema.statement_time Fn.id))))
+  in
+  traverse
+    (fun (institution, account, balance_type, commodity, quantity, as_of) ->
+       let* commodity = Json.decode Commodity.codec commodity in
+       Ok
+         { institution
+         ; account
+         ; balance_type
+         ; commodity
+         ; quantity = Quantity.of_string quantity
+         ; as_of
+         })
+    (List.filter rows ~f:(fun (name, _, _, _, _, _) ->
+       Option.for_all institution ~f:(String.equal name)))
+;;
+
 let companion_rows db ~institution ~format =
   let* rows =
     collect

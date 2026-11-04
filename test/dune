@@ -561,3 +561,33 @@
  (deps records_import_test.py)
  (action
   (run python3 %{dep:records_import_test.py} %{exe:../bin/main.exe})))
+
+(executable
+ (name records_compare)
+ (modules records_compare)
+ (flags
+  (:standard -open Finances_core -open Finances_institutions))
+ (libraries
+  finances
+  finances.store
+  finances.import
+  finances.institutions
+  finances.core
+  base
+  stdio))
+
+(test
+ (name records_adapter_test)
+ (modules records_adapter_test)
+ (flags
+  (:standard -open Finances_core -open Finances_institutions))
+ (preprocess
+  (pps ppx_compare))
+ (libraries
+  finances
+  finances.store
+  finances.institutions
+  finances.core
+  base
+  stdio
+  alcotest))

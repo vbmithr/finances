@@ -66,5 +66,10 @@
         "layout": "iso-date"
       }
     }
-  ]
+  ],
+  "journal_tags": {
+    "bank-category": "Catégorie",
+    "bank-parent-category": "Catégorie Parente",
+    "bank-suggested-description": "Libellé Suggéré"
+  }
 }

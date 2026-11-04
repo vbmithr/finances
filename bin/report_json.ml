@@ -319,6 +319,20 @@ let statement =
   |> Jsont.Object.finish
 ;;
 
+let stated_balance =
+  let field name codec (enc : Ledger.stated_balance -> _) map =
+    Jsont.Object.mem name codec ~enc map
+  in
+  Jsont.Object.enc_only ()
+  |> field "institution" Jsont.string (fun b -> b.institution)
+  |> field "account" Jsont.string (fun b -> b.account)
+  |> field "type" Jsont.string (fun b -> b.balance_type)
+  |> field "commodity" Commodity.codec (fun b -> b.commodity)
+  |> field "quantity" Json.quantity (fun b -> b.quantity)
+  |> field "as_of" temporal (fun b -> b.as_of)
+  |> Jsont.Object.finish
+;;
+
 let statements =
   let field name codec (enc : Review.statement_reconciliation list -> _) map =
     Jsont.Object.mem name codec ~enc map

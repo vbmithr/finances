@@ -773,8 +773,9 @@ fin import fdm ~/statements/fdm
 fin import fdm records.jsonl.zst
 ```
 
-Balances and stated totals stay in the archived file for now, and observations are not imported
-yet. Other institutions still import through their own adapters.
+Observations in a records file are paired with its counted records, and balances are stored:
+`fin statement balances` lists them as JSON. Stated totals stay in the archived file for now.
+Other institutions still import through their own adapters.
 
 ### Check a records file
 
@@ -1783,7 +1784,7 @@ above; no automatic migration runs.
 | `fin account --help` | Account listing, config and history |
 | `fin institution --help` | Institution list and generic import setup |
 | `fin operation --help` | Imported transaction listing |
-| `fin statement --help` | Statement reconciliation and companion files |
+| `fin statement --help` | Statement reconciliation, stated balances and companion files |
 | `fin convert INSTITUTION PATH...` | Print statement files, directories and ZIPs as records; `--definition` for any other CSV |
 | `fin records check FILE` | Validate a statement converter's output |
 | `fin reversal --help` | Withdrawal reversal candidates and review |

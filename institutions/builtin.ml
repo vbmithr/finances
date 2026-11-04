@@ -81,7 +81,11 @@ let records_institutions =
 let adapters : (module Adapter.S) list =
   List.map definitions ~f:Institution_definition.adapter
   @ List.map movement_profiles ~f:(fun profile -> Movement_csv_adapter.make profile ())
-  @ List.map records_institutions ~f:Records_adapter.make
+  @ List.map records_institutions ~f:(fun definition ->
+    Records_adapter.make
+      ~institution:(Csv_converter.institution definition)
+      ~overlap:(Csv_converter.overlap definition)
+      [ Records_adapter.of_definition "csv" definition ])
   @ [ (module Csv_adapter) ]
 ;;
 

@@ -8,6 +8,10 @@ short line of their own.
 
 ## Unreleased
 
+- New `fin statement balances` lists the balances imported sources stated. Records files now
+  import with their observations paired and their balances stored. **Action required:** schema 34
+  requires a database rebuild: export your decisions, delete the database and import again, as for
+  schema 33 below.
 - `fin import fdm` imports a new institution through records, from its CSV or from a records
   file. It is the first to do so; the others keep their adapters until their records give the
   same result.

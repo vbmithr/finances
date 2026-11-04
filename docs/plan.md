@@ -503,10 +503,13 @@ position observations, derive positions from fills, or calculate funding.
   `Csv_converter` reads any CSV a definition file describes; the bundled definitions cover
   all CSV files seen, and reproduce fin's CDC interpretation and the Wise rows. OFX and MT940
   have converters, so every file seen so far converts.
-  `Records_adapter` imports records through the usual pipeline, for FDM so far; it stores no
-  balances or stated totals yet, and refuses observations.
-  Next: pair observations and store balances, then move each institution over once its records
-  give what its adapter gives, and retire the adapters.
+  `Records_adapter` imports records through the usual pipeline, for FDM so far, pairing
+  observations and storing balances; stated totals stay in the archived file.
+  `test/records_compare.ml` imports real files through an old adapter and through records: every
+  posting's date and amount already agrees for Wise, bunq, BoursoBank and Revolut, and records pairs
+  19 BoursoBank rows the adapter leaves ambiguous.
+  Next: settle the remaining differences (Revolut's account names and some headers), move each
+  institution over, and retire the adapters.
 - [ ] Group movements into operations by evidence strength, covering transfers,
   CDC exchanges and Wise conversions: design proposed 2026-11-03 in
   [operation-transactions.md](operation-transactions.md#grouping-movements-into-operations-proposal),
