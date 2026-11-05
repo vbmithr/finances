@@ -771,38 +771,76 @@ let cdc_reimport_validates_movements () =
         (List.mem quantities "-999" ~equal:String.equal)))
 ;;
 
+(* Groups are the grouped_operations view over stored rows: operations, their sources, and
+   transfer links between their movements. Operation N has event N and movement N. *)
 let operation_groups () =
-  let create ?(stated = []) links = Operation_groups.create ~links ~stated in
-  let groups = ok (create [ 9L, 4L; 2L, 3L ]) in
-  let check = Alcotest.(check (list int64)) in
-  check "an unlinked operation is alone" [ 7L ] (Operation_groups.members groups 7L);
-  Alcotest.(check int64) "alone reads as itself" 7L (Operation_groups.canonical groups 7L);
-  (* The canonical ID is the link's first, even when it is not the smallest. *)
-  Alcotest.(check int64) "member reads as first" 9L (Operation_groups.canonical groups 4L);
-  check "first comes first" [ 9L; 4L ] (Operation_groups.members groups 4L);
-  check "same group from either side" [ 9L; 4L ] (Operation_groups.members groups 9L);
-  let refused links =
-    Alcotest.(check bool)
-      "an operation belongs to one group"
-      true
-      (Result.is_error (create links))
-  in
-  refused [ 1L, 2L; 2L, 3L ];
-  refused [ 1L, 2L; 3L, 2L ];
-  refused [ 1L, 2L; 1L, 3L ];
-  refused [ 1L, 1L ];
-  (* A stated group has any size, and a person's link outranks it. *)
-  let stated =
-    ok (create ~stated:[ [ 5L; 6L; 8L ]; [ 20L; 21L; 22L ]; [ 30L ] ] [ 21L, 40L ])
-  in
-  check "three operations" [ 5L; 6L; 8L ] (Operation_groups.members stated 8L);
-  check "a linked operation leaves" [ 20L; 22L ] (Operation_groups.members stated 22L);
-  check "the link stands" [ 21L; 40L ] (Operation_groups.members stated 21L);
-  Alcotest.(check (list (pair int64 int64)))
-    "noncanonical members respect decisions and stated groups"
-    [ 6L, 5L; 8L, 5L; 22L, 20L; 40L, 21L ]
-    (Operation_groups.noncanonical_members stated);
-  check "a group of one is alone" [ 30L ] (Operation_groups.members stated 30L)
+  with_database (fun path ->
+    with_store path (fun _ -> ());
+    let operation ?group ?(supporting = false) id =
+      let payload =
+        match group with
+        | None -> "{}"
+        | Some key ->
+          Printf.sprintf
+            {|{"format":"fin-records-row","record":{"group":"%s","supporting":%d}}|}
+            key
+            (Bool.to_int supporting)
+      in
+      Printf.sprintf
+        "INSERT INTO source_events(id,venue,account,kind,source_id,occurred_on,payload) \
+         VALUES (%d,'v','a','k','s%d','2026-01-01',CAST('%s' AS BLOB)); INSERT INTO \
+         operations(id,occurred) VALUES (%d,'2026-01-01'); INSERT INTO \
+         operation_sources(operation_id,event_id) VALUES (%d,%d); INSERT INTO \
+         operation_movements(id,operation_id,anchor_event_id,role,commodity,quantity) \
+         VALUES (%d,%d,%d,'primary','{}','1');"
+        id
+        id
+        payload
+        id
+        id
+        id
+        id
+        id
+        id
+    in
+    let link first second =
+      Printf.sprintf
+        "INSERT INTO \
+         operation_transfer_links(first_movement_id,second_movement_id,reason) VALUES \
+         (%d,%d,'r');"
+        first
+        second
+    in
+    raw path (fun db ->
+      sql
+        db
+        (String.concat
+           (List.map [ 9; 4; 2; 3; 7; 40 ] ~f:(fun id -> operation id)
+            @ List.map [ 5; 6; 8 ] ~f:(fun id ->
+              operation ~group:"a" ~supporting:(id = 5) id)
+            @ List.map [ 20; 21; 22 ] ~f:(fun id -> operation ~group:"b" id)
+            @ [ operation ~group:"c" 30; link 9 4; link 2 3; link 21 40 ])));
+    with_store path (fun db ->
+      let check name expected id =
+        Alcotest.(check (pair int64 (list int64)))
+          name
+          expected
+          (ok (Operations.operation_group db id))
+      in
+      check "an unlinked operation is alone" (7L, [ 7L ]) 7L;
+      (* The canonical ID is the link's first, even when it is not the smallest. *)
+      check "member reads as first" (9L, [ 9L; 4L ]) 4L;
+      check "same group from either side" (9L, [ 9L; 4L ]) 9L;
+      (* A stated group has any size; supporting rows come last; a link outranks it. *)
+      check "three operations" (6L, [ 6L; 8L; 5L ]) 5L;
+      check "a linked operation leaves" (20L, [ 20L; 22L ]) 22L;
+      check "the link stands" (21L, [ 21L; 40L ]) 40L;
+      check "a group of one is alone" (30L, [ 30L ]) 30L);
+    (* Fin never writes these; a store changed by hand is refused on read. *)
+    raw path (fun db -> sql db (operation 50 ^ operation 51 ^ link 50 51 ^ link 51 4));
+    with_store path (fun db ->
+      error (Operations.operation_group db 50L);
+      error (Operations.operation_group db 9L)))
 ;;
 
 let exchange_accounting () =
@@ -912,13 +950,13 @@ let () =
           ; "immutable evidence", immutable_evidence
           ; "future schema", future_schema
           ; "operation storage and rollback", operation_storage
+          ; "operation groups", operation_groups
           ; "cdc imports through the unified path", cdc_import_unified
           ; "cdc reimport validates stored movements", cdc_reimport_validates_movements
           ]
           ~f:(fun (name, f) -> Alcotest.test_case name `Quick f) )
     ; ( "model"
-      , [ Alcotest.test_case "operation groups" `Quick operation_groups
-        ; Alcotest.test_case "shared temporal codec" `Quick temporal_codec
+      , [ Alcotest.test_case "shared temporal codec" `Quick temporal_codec
         ; Alcotest.test_case "commodity identity" `Quick commodity_identity
         ; Alcotest.test_case "multi-movement operations" `Quick operation_model
         ; Alcotest.test_case "accounting invariants" `Quick accounting_invariants

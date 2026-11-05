@@ -774,39 +774,6 @@ let operation_transfer_links db =
     rows
 ;;
 
-let operation_groups db =
-  let* links =
-    collect
-      db
-      (statement
-         "SELECT a.operation_id,b.operation_id FROM operation_transfer_links l JOIN \
-          operation_movements a ON a.id=l.first_movement_id JOIN operation_movements b \
-          ON b.id=l.second_movement_id ORDER BY l.first_movement_id,l.second_movement_id"
-         Row.(t2 (int64 "first_operation_id") (int64 "second_operation_id")))
-  in
-  let* stated =
-    collect
-      db
-      (statement
-         "SELECT e.venue,e.payload->>'$.record.group',o.id, \
-          coalesce(e.payload->>'$.record.supporting',0) FROM operations o JOIN \
-          operation_sources s ON s.operation_id=o.id JOIN source_events e ON \
-          e.id=s.event_id WHERE CASE WHEN json_valid(e.payload) THEN \
-          e.payload->>'$.format'='fin-records-row' AND e.payload->>'$.record.group' IS \
-          NOT NULL ELSE 0 END ORDER BY o.id"
-         Row.(t4 (text "venue") (text "group") (int64 "id") (int "supporting")))
-  in
-  let groups = Hashtbl.Poly.create () in
-  List.iter stated ~f:(fun (venue, key, operation_id, supporting) ->
-    Hashtbl.add_multi groups ~key:(venue, key) ~data:(supporting <> 0, operation_id));
-  Operation_groups.create
-    ~links
-    ~stated:
-      (Hashtbl.data groups
-       |> List.map ~f:(fun group ->
-         List.sort group ~compare:[%compare: bool * int64] |> List.map ~f:snd))
-;;
-
 let operation_ids_for_events db event_ids =
   let* rows =
     collect

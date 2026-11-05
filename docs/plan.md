@@ -513,7 +513,10 @@ position observations, derive positions from fills, or calculate funding.
   both compared every movement against every other in OCaml. Seven commands that act on one or two
   movements read only those (`Review.reviews_of_events`). Still loading every review: the category
   queue and `fin operation review` (one linear filter each), similarity, rule application, transfer
-  linking, decisions and restore, which use most rows. Short inline statements stay where they are.
+  linking, decisions and restore, which use most rows. Operation groups are stated once, in the
+  `grouped_operations` view, which `fin operation show` and linking read; `Operation_groups` is gone,
+  and its test checks the view on stored rows. Next: the journal's descriptions from `reviews`.
+  Short inline statements stay where they are.
 - [x] Costs that grew with the square of the data, found by comparing two sizes, which a test now
   does: lists read from JSON were joined without an index, and `operation_movements` has no index on
   `operation_id`, so a query driven from operations scans it per operation. The list and status are

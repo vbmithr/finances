@@ -88,13 +88,49 @@ let get_operation_in_transaction db operation_id =
     ~movements
 ;;
 
-let grouped_operation_in_transaction db groups operation_id =
-  let canonical = Operation_groups.canonical groups operation_id in
-  let* operations =
-    traverse
-      (get_operation_in_transaction db)
-      (Operation_groups.members groups operation_id)
+(* The operations that read as one with [operation_id], canonical first, from the
+   grouped_operations view. Fin links only single-movement operations whose movement is in no
+   other link, so an operation named by two links means the store was changed by hand. *)
+let operation_group db operation_id =
+  let canonical_of =
+    Rel_sql.Stmt.(
+      func
+        "SELECT canonical FROM grouped_operations WHERE member=?"
+        (int64 @-> ret Row.(t1 (int64 "canonical"))))
   in
+  let members_of =
+    Rel_sql.Stmt.(
+      func
+        "SELECT member FROM grouped_operations WHERE canonical=? ORDER BY position,member"
+        (int64 @-> ret Row.(t1 (int64 "member"))))
+  in
+  let twice_linked =
+    Rel_sql.Stmt.(
+      func
+        "SELECT id FROM (SELECT first AS id FROM linked_operations UNION ALL SELECT \
+         second FROM linked_operations) WHERE id IN (SELECT value FROM json_each(?)) \
+         GROUP BY id HAVING count(*)>1 ORDER BY id"
+        (text @-> ret Row.(t1 (int64 "id"))))
+  in
+  let* found = collect db (canonical_of operation_id) in
+  let* canonical =
+    match found with
+    | [] -> Ok operation_id
+    | [ canonical ] -> Ok canonical
+    | _ -> Or_error.errorf "operation %Ld belongs to more than one group" operation_id
+  in
+  let* others = collect db (members_of canonical) in
+  let group = canonical :: others in
+  let ids = "[" ^ String.concat ~sep:"," (List.map group ~f:Int64.to_string) ^ "]" in
+  let* twice = collect db (twice_linked ids) in
+  match twice with
+  | [] -> Ok (canonical, group)
+  | id :: _ -> Or_error.errorf "operation %Ld belongs to more than one group" id
+;;
+
+let grouped_operation_in_transaction db operation_id =
+  let* canonical, members = operation_group db operation_id in
+  let* operations = traverse (get_operation_in_transaction db) members in
   match operations with
   | [ only ] -> Ok (canonical, only)
   | operations ->
@@ -113,8 +149,7 @@ let grouped_operation_in_transaction db groups operation_id =
 
 let get_operation db operation_id =
   transaction db (fun db ->
-    let* groups = operation_groups db in
-    let* _, operation = grouped_operation_in_transaction db groups operation_id in
+    let* _, operation = grouped_operation_in_transaction db operation_id in
     Ok operation)
 ;;
 
@@ -128,12 +163,11 @@ let operations_for_event db event_id =
           (int64 @-> ret Row.(t1 (int64 "operation_id"))))
     in
     let* ids = collect db (query event_id) in
-    let* groups = operation_groups db in
+    let* groups = traverse (operation_group db) ids in
     let canonical =
-      List.map ids ~f:(Operation_groups.canonical groups)
-      |> List.dedup_and_sort ~compare:Int64.compare
+      List.map groups ~f:fst |> List.dedup_and_sort ~compare:Int64.compare
     in
-    traverse (grouped_operation_in_transaction db groups) canonical)
+    traverse (grouped_operation_in_transaction db) canonical)
 ;;
 
 type general_transfer_leg =

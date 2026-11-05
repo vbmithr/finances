@@ -42,7 +42,7 @@ Some logic lives in OCaml because the database does not hold what a query needs:
 | An account's short ID | a SHA-256 prefix computed in OCaml, passed in as a temporary table | stored next to the ledger name, as `public_id` |
 | A transfer's destination account | computed per read, passed in as a temporary table | a join on the stored ledger name |
 | A companion row's display name | `annotate` in OCaml, or a field lookup in the query | `companion_rows.display_name`, from `annotate` at import |
-| Operation groups | `Operation_groups` in OCaml, passed as a temporary table | the `grouped_operations` view: a link pairs two operations and a stated group is a window over the records, with no transitivity to compute |
+| Operation groups | `Operation_groups` in OCaml, passed as a temporary table | the `grouped_operations` view, read by the listing, `fin operation show` and linking: a link pairs two operations and a stated group is a window over the records, with no transitivity to compute |
 
 The read queries now take no parameters from OCaml beyond filters, as one JSON object.
 
@@ -112,10 +112,10 @@ connection and transactions.
 3. Done: settlement and reversal suggestions as queries; commands on one or two movements read
    only those. Short statements stay inline: they read well where they are, and a file is for a
    query too big or complicated to read in a string.
-4. Rewrite commands one by one onto the views, each checked byte-for-byte against the previous
-   build on a scratch rebuild of real statements, as done for `fin operation list` and `fin transfer
-   unmatched`: settlement suggestions, `fin status`, transfer candidates, the category queue's
-   selection, then `Review.bank_review`, which most commands still load whole.
+4. Done: operation groups stated once, in `grouped_operations`. Next: the journal's descriptions
+   from `reviews`, then the large single queries.
+Each step is checked byte for byte against the previous build on scratch rebuilds of real
+statements: one with only imports, one with transfers confirmed and settlements recorded.
 
 ## Not in scope
 

@@ -7,6 +7,11 @@ open Handle
     File-row references are inspection-only and cannot be persisted. *)
 val add_operation : t -> Operation.t -> int64 Or_error.t
 
+(** The operations that read as one with this one, as its group's canonical ID and its
+    members, canonical first: a confirmed transfer link joins two, and an institution's
+    records may state a group of any size, which a link outranks. *)
+val operation_group : t -> int64 -> (int64 * int64 list) Or_error.t
+
 (** Reload an operation, validating its commodities, quantities and references.
     Confirmed transfers combine both bank operations using the first event's
     operation ID; either component ID retrieves the grouped operation. *)
