@@ -2347,6 +2347,10 @@ class ImportOnboarding(unittest.TestCase):
             ('Staged expenses:coffee', 'q'),
         ])
         self.assertIn('Category queue', output)
+        # Lines start at the left edge, so that shortcuts and categories line up.
+        plain = re.sub(r'\x1b\[[0-9;?]*[a-zA-Z]', '', output)
+        self.assertRegex(plain, r'\x1bE  f  expenses:food')
+        self.assertNotRegex(plain, r' {4,}(Category queue|Categories:|f  expenses:food)')
         after = json.loads(self.run_fin('operation', 'list', '--json').stdout)
         accounts = [row['counter_account'] for row in after]
         self.assertEqual(accounts.count('expenses:food'), 1)

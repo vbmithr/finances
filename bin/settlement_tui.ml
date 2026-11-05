@@ -37,7 +37,7 @@ let run choices =
           let width = Int.max 0 width
           and height = Int.max 0 height in
           let line ?(attr = Notty.A.empty) value =
-            Notty.I.hsnap width (Notty.I.string attr (safe_text value))
+            Notty.I.hsnap ~align:`Left width (Notty.I.string attr (safe_text value))
           in
           let wrap value =
             if width = 0
@@ -48,7 +48,7 @@ let run choices =
               List.init
                 (Int.max 1 ((size + width - 1) / width))
                 ~f:(fun index ->
-                  Notty.I.hsnap width (Notty.I.hcrop (index * width) 0 image)))
+                  Notty.I.hsnap ~align:`Left width (Notty.I.hcrop (index * width) 0 image)))
           in
           let detail_images = List.concat_map choices.(!selected).details ~f:wrap in
           let can_confirm =
@@ -89,7 +89,7 @@ let run choices =
               in
               Notty.I.vcat ([ header ] @ list @ [ separator ] @ shown_details @ [ footer ]))
           in
-          Notty_unix.Term.image terminal (Notty.I.vsnap height image);
+          Notty_unix.Term.image terminal (Notty.I.vsnap ~align:`Top height image);
           match Notty_unix.Term.event terminal with
           | `Key (`ASCII ('c' | 'C'), mods) when List.mem mods `Ctrl ~equal:Poly.equal ->
             None

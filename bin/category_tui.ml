@@ -154,7 +154,10 @@ let run db rows categories specifications =
           let width = Int.max 0 width
           and height = Int.max 0 height in
           let line ?(attr = Notty.A.empty) value =
-            Notty.I.hsnap width (Notty.I.string attr (Settlement_tui.safe_text value))
+            Notty.I.hsnap
+              ~align:`Left
+              width
+              (Notty.I.string attr (Settlement_tui.safe_text value))
           in
           let wrap ?(attr = Notty.A.empty) value =
             if width = 0
@@ -164,7 +167,7 @@ let run db rows categories specifications =
               let count = Int.max 1 ((Notty.I.width image + width - 1) / width) in
               List.init count ~f:(fun i ->
                 let right = Int.max 0 (Notty.I.width image - ((i + 1) * width)) in
-                Notty.I.hsnap width (Notty.I.hcrop (i * width) right image)))
+                Notty.I.hsnap ~align:`Left width (Notty.I.hcrop (i * width) right image)))
           in
           let transaction =
             match !pending with
@@ -304,7 +307,7 @@ let run db rows categories specifications =
                  @ [ line !message ]
                  @ footer))
           in
-          Notty_unix.Term.image terminal (Notty.I.vsnap height image);
+          Notty_unix.Term.image terminal (Notty.I.vsnap ~align:`Top height image);
           let edit text key =
             match key with
             | `ASCII c when Char.to_int c >= 32 && Char.to_int c < 127 ->
