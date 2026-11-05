@@ -1058,9 +1058,10 @@ let operation_groups db =
       (statement
          "SELECT e.venue,e.payload->>'$.record.group',o.id, \
           coalesce(e.payload->>'$.record.supporting',0) FROM operations o JOIN \
-          source_events e ON e.id=o.bank_event_id WHERE CASE WHEN json_valid(e.payload) \
-          THEN e.payload->>'$.format'='fin-records-row' AND e.payload->>'$.record.group' \
-          IS NOT NULL ELSE 0 END ORDER BY o.id"
+          operation_sources s ON s.operation_id=o.id JOIN source_events e ON \
+          e.id=s.event_id WHERE CASE WHEN json_valid(e.payload) THEN \
+          e.payload->>'$.format'='fin-records-row' AND e.payload->>'$.record.group' IS \
+          NOT NULL ELSE 0 END ORDER BY o.id"
          Row.(t4 (text "venue") (text "group") (int64 "id") (int "supporting")))
   in
   let groups = Hashtbl.Poly.create () in

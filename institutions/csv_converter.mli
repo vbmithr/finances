@@ -9,7 +9,10 @@ type t
 val codec : t Jsont.t
 val of_string : string -> t Or_error.t
 val institution : t -> string
+
+(** Every column of any header this layout accepts. *)
 val header : t -> string list
+
 val institution_type : t -> Institution_type.t
 
 (** What the definition reads: each role with its columns, in order. *)

@@ -433,6 +433,21 @@ first, so previously stored records cannot be silently reinterpreted. Source ide
 primary CSV uses day inventories, OFX uses its source IDs, and CAMT uses the
 configured reference and clock policy. Backups include installed definitions.
 
+### Import Kraken
+
+Kraken is bundled, for spot ledger exports of either era:
+
+```sh
+fin import kraken ~/kraken/ledgers.zip
+```
+
+Each row of the ledger is a movement, on one account per asset. A trade's rows read as one operation,
+such as `-500 EUR → -2 FEE → +0.01 BTC`, with its fee credit as a supporting row. Euros and other listed
+currencies are real currencies, which transfers with your banks can pair on; other assets stay as
+Kraken's symbols, translated from codes like `XXBT`, until you resolve them. A row with no `txid` is left
+out: Kraken lists a deposit or withdrawal again without one before it settles. Anything but spot `currency`
+rows is refused, and each file's balances must add up. Trade exports are not read yet.
+
 ### Configure a CSV companion
 
 If an institution supplies both OFX and a CSV with additional transaction

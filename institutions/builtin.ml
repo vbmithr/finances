@@ -10,6 +10,7 @@ let definitions : Institution_definition.t list =
     ; Bundled_definitions.revolut
     ; Bundled_definitions.bunq
     ; Bundled_definitions.cdc
+    ; Bundled_definitions.kraken
     ; Bundled_definitions.fdm
     ]
     ~f:(fun json -> Json.decode Institution_definition.codec json |> Or_error.ok_exn)

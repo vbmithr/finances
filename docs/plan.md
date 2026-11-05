@@ -499,6 +499,9 @@ position observations, derive positions from fills, or calculate funding.
   `fin db sources` instead of a separate `fin crypto` group.
 - [x] Describe CDC as data (`cdc.json`) interpreted by the generic
   `Movement_csv`, with no institution-specific OCaml.
+- [x] Kraken spot ledgers, as a definition with no code. Real files of two eras convert with every
+  balance adding up. Layouts gained `headers`, `values`, `fiat_codes` and `group`. Not done: reading
+  trade exports as observations, posting a grouped trade as an exchange, and margin or derivatives.
 - [x] `fin decisions export/restore`: everything a person decided, as one file applied in one
   transaction, replacing six export and restore pairs whose names described fin's internals. Settlements
   and reversals gained a portable form. On real statements, a rebuild from the file alone gave

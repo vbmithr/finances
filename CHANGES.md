@@ -8,6 +8,10 @@ short line of their own.
 
 ## Unreleased
 
+- `fin import kraken` reads spot ledger exports, old and new. A trade's rows read as one operation, and
+  listed currencies are real currencies that can pair with your banks. Trade exports are not read yet.
+- CSV layouts gain `headers`, listing each header a source has used; `values`, translating a column's
+  codes; `fiat_codes` on a reported commodity; and `group`, joining a source's rows into one operation.
 - `fin convert` says why a CSV doesn't fit a layout, naming missing and extra columns and listing the
   file's header, or the separator it uses, where it said only "not a recognized statement".
 - Transfer candidates read the way the money goes, with what leaves first: `2076 → 1252  500 EUR`.

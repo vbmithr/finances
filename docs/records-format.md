@@ -259,7 +259,8 @@ header nearly fits a layout.
 | Member | Meaning |
 |---|---|
 | `institution_type` | `bank` or `crypto-exchange` |
-| `header` | The exact header; a file with another one is not this layout |
+| `header`, `headers` | The exact header, or `headers` listing each one the source has used, such as old and new exports; a file with another one is not this layout. Every column the layout uses must be in all of them |
+| `values` | `[{"column": "asset", "map": {"ZEUR": "EUR"}}]`: codes translated wherever the column is read, so that two eras' codes are one account. `fields` keeps what the file states |
 | `separator`, `decimal` | Default `,` and `dot`; spaces that group digits are ignored. Under `comma`, a dot in a number is refused |
 | `observation` | The rows describe rows stated elsewhere |
 | `only` | Conditions a row must meet to be part of this source at all; `fin convert` says how many it left out |
@@ -270,6 +271,7 @@ header nearly fits a layout.
 | `cases` | The first whose `when` conditions hold gives `movements` and `fee` |
 | `reported` | `quantity` and `symbol` columns for a row no case takes |
 | `total` | `when` conditions of a row stating what the others add up to, with its `quantity` and `commodity` |
+| `group` | `column` whose value joins rows that are one activity, `when` it applies, and `supporting_when` for rows that only support the group, such as a fee |
 | `balance_after`, `balances` | Running balance column, and `balance` lines to state from each row. A `balances` entry may name its own `decimal` |
 | `conflict_columns` | Columns two exports of one row must agree on; others, such as a note, may differ |
 | `journal_tags`, `journal_description` | Tag name to column, and the column that replaces the description, in the journal entry of a paired row |
@@ -285,7 +287,9 @@ to each other is left to a definition, because those columns are not in the reco
 
 - A column name repeated in the header is `Solde#2` for the second one.
 - A quantity is `column`, with optional `negate` and `minus` (another column).
-- A commodity is `{"fiat": column}`, `{"code": "USD"}`, or `{"reported": column, "provider": name}`.
+- A commodity is `{"fiat": column}`, `{"code": "USD"}`, or `{"reported": column, "provider": name}`,
+  which may add `"fiat_codes": ["EUR"]`: those values are currencies. They are listed because a crypto
+  ticker can also be an ISO code.
 - A condition is `column` with `in`, `sign` (`positive`, `negative`) or `filled`.
 - A clock with no stated offset gives a date, unless `utc` says the column is in UTC.
 

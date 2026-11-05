@@ -11,10 +11,12 @@ FIN, INSTITUTIONS = sys.argv[1], pathlib.Path(sys.argv[2])
 
 
 def profiles(value):
-    """Every CSV layout a definition declares: those with a header."""
+    """Every CSV layout a definition declares, once for each header it accepts."""
     if isinstance(value, dict):
         if isinstance(value.get("header"), list) and value["header"]:
             yield value
+        for header in value.get("headers", []) if isinstance(value.get("headers"), list) else []:
+            yield {**value, "header": header}
         for child in value.values():
             yield from profiles(child)
 

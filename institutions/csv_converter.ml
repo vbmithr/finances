@@ -28,6 +28,7 @@ type commodity_spec =
   | Reported_column of
       { column : string
       ; provider : string
+      ; fiat_codes : string list
       }
 
 type sign =
@@ -103,6 +104,12 @@ type balance_spec =
   ; as_of : date_spec
   }
 
+type group_spec =
+  { column : string
+  ; applies : condition list
+  ; supporting : condition list
+  }
+
 type account_spec =
   { id : string
   ; bank : string option
@@ -128,7 +135,8 @@ type t =
   ; institution_type : Institution_type.t
   ; separator : char
   ; decimal : decimal
-  ; header : string list
+  ; headers : string list list
+  ; values : (string * (string * string) list) list
   ; observation : bool
   ; only : condition list
   ; require : requirement list
@@ -141,6 +149,7 @@ type t =
   ; reported : reported_spec option
   ; descriptions : string list
   ; movement_type : string option
+  ; group : group_spec option
   ; counterparty_name : string list
   ; counterparty_iban : string option
   ; references : reference_spec option
@@ -154,7 +163,14 @@ type t =
   }
 
 let institution t = t.institution
-let header t = t.header
+
+(* Every column of any header this layout accepts, each once. *)
+let header t =
+  List.fold (List.concat t.headers) ~init:[] ~f:(fun seen column ->
+    if List.mem seen column ~equal:String.equal then seen else column :: seen)
+  |> List.rev
+;;
+
 let institution_type t = t.institution_type
 let journal_tags t = t.journal_tags
 let journal_description t = t.journal_description
@@ -174,7 +190,7 @@ let roles t =
     | Value _ -> []
   in
   let named template =
-    List.filter t.header ~f:(fun column ->
+    List.filter (header t) ~f:(fun column ->
       String.is_substring template ~substring:("{" ^ column ^ "}"))
   in
   let account = t.account in
@@ -190,7 +206,8 @@ let roles t =
       @ Option.value_map account.currency ~default:[] ~f:commodity )
   ; ( "row ID"
     , match t.id with
-      | Columns columns -> List.filter columns ~f:(List.mem t.header ~equal:String.equal)
+      | Columns columns ->
+        List.filter columns ~f:(List.mem (header t) ~equal:String.equal)
       | Inventory | Row_hash -> [] )
   ; "date", date t.occurred
   ; "value date", Option.value_map t.value_on ~default:[] ~f:date
@@ -203,6 +220,7 @@ let roles t =
     , Option.value_map t.reported ~default:[] ~f:(fun r -> [ r.quantity; r.symbol ]) )
   ; "description", t.descriptions
   ; "type", opt t.movement_type
+  ; "group", Option.value_map t.group ~default:[] ~f:(fun g -> [ g.column ])
   ; "counterparty", t.counterparty_name @ opt t.counterparty_iban
   ; ( "reference"
     , of_references (fun r ->
@@ -284,11 +302,12 @@ let quantity_codec =
 ;;
 
 let commodity_codec =
-  Jsont.Object.map (fun fiat code reported provider ->
+  Jsont.Object.map (fun fiat code reported provider fiat_codes ->
     match fiat, code, reported, provider with
     | Some column, None, None, None -> Fiat_column column
     | None, Some code, None, None -> Fiat_code code
-    | None, None, Some column, Some provider -> Reported_column { column; provider }
+    | None, None, Some column, Some provider ->
+      Reported_column { column; provider; fiat_codes }
     | _ ->
       Jsont.Error.msgf
         Jsont.Meta.none
@@ -297,6 +316,7 @@ let commodity_codec =
   |> opt "code" Jsont.string
   |> opt "reported" Jsont.string
   |> opt "provider" Jsont.string
+  |> list_or_empty "fiat_codes" Jsont.string
   |> finish
 ;;
 
@@ -488,6 +508,22 @@ let total_codec =
   |> finish
 ;;
 
+let group_codec =
+  Jsont.Object.map (fun column applies supporting : group_spec ->
+    { column; applies; supporting })
+  |> dec_only "column" Jsont.string
+  |> list_or_empty "when" condition_codec
+  |> list_or_empty "supporting_when" condition_codec
+  |> finish
+;;
+
+let values_codec =
+  Jsont.Object.map (fun column map -> column, map)
+  |> dec_only "column" Jsont.string
+  |> dec_only "map" Json.string_map
+  |> finish
+;;
+
 let typed_codec =
   Jsont.Object.map
     (fun
@@ -498,6 +534,8 @@ let typed_codec =
          separator
          decimal
          header
+         headers
+         values
          observation
          only
          require
@@ -510,6 +548,7 @@ let typed_codec =
          reported
          descriptions
          movement_type
+         group
          counterparty_name
          counterparty_iban
          references
@@ -526,7 +565,12 @@ let typed_codec =
        ; institution_type
        ; separator
        ; decimal
-       ; header
+       ; headers =
+           (match header, headers with
+            | Some header, None -> [ header ]
+            | None, Some (_ :: _ as headers) -> headers
+            | _ -> Jsont.Error.msgf Jsont.Meta.none "a layout has header or headers")
+       ; values
        ; observation
        ; only
        ; require
@@ -539,6 +583,7 @@ let typed_codec =
        ; reported
        ; descriptions
        ; movement_type
+       ; group
        ; counterparty_name
        ; counterparty_iban
        ; references
@@ -556,7 +601,9 @@ let typed_codec =
   |> dec_only "institution_type" Institution_type.jsont
   |> Jsont.Object.mem "separator" separator_codec ~dec_absent:','
   |> Jsont.Object.mem "decimal" decimal_codec ~dec_absent:Dot
-  |> dec_only "header" (Jsont.list Jsont.string)
+  |> opt "header" (Jsont.list Jsont.string)
+  |> opt "headers" (Jsont.list (Jsont.list Jsont.string))
+  |> list_or_empty "values" values_codec
   |> flag "observation"
   |> list_or_empty "only" condition_codec
   |> list_or_empty "require" requirement_codec
@@ -569,6 +616,7 @@ let typed_codec =
   |> opt "reported" reported_codec
   |> list_or_empty "descriptions" Jsont.string
   |> opt "type" Jsont.string
+  |> opt "group" group_codec
   |> list_or_empty "counterparty_name" Jsont.string
   |> opt "counterparty_iban" Jsont.string
   |> opt "references" references_codec
@@ -639,6 +687,9 @@ let named_columns t =
     ; Option.value_map t.reported ~default:[] ~f:(fun r -> [ r.quantity; r.symbol ])
     ; t.descriptions
     ; Option.to_list t.movement_type
+    ; Option.value_map t.group ~default:[] ~f:(fun g ->
+        g.column :: (conditions g.applies @ conditions g.supporting))
+    ; List.map t.values ~f:fst
     ; t.counterparty_name
     ; Option.to_list t.counterparty_iban
     ; Option.value_map t.references ~default:[] ~f:(fun r ->
@@ -657,9 +708,11 @@ let named_columns t =
 ;;
 
 let check t =
+  (* Whichever header a file has, the columns used must be there. *)
   match
     List.filter (named_columns t) ~f:(fun name ->
-      Option.is_none (column_index t.header name))
+      List.exists t.headers ~f:(fun header -> Option.is_none (column_index header name)))
+    |> List.dedup_and_sort ~compare:String.compare
   with
   | [] -> ()
   | unknown ->
@@ -688,17 +741,25 @@ let of_string = Json.decode codec
 
 type row =
   { number : int
+  ; header : string list
   ; cells : string list
   }
 
-let raw_cell t row name =
-  match column_index t.header name with
+let raw_cell row name =
+  match column_index row.header name with
   | Some index -> Option.value (List.nth row.cells index) ~default:""
   | None -> Printf.failwithf "column %s is not in the header" name ()
 ;;
 
 (* Stripped to interpret it. What the record states as text keeps the source's spelling. *)
-let cell t row name = String.strip (raw_cell t row name)
+let cell t row name =
+  let value = String.strip (raw_cell row name) in
+  match List.Assoc.find t.values name ~equal:String.equal with
+  | None -> value
+  | Some map ->
+    Option.value (List.Assoc.find map value ~equal:String.equal) ~default:value
+;;
+
 let filled text = Option.some_if (not (String.is_empty text)) text
 
 let quantity_in decimal text =
@@ -740,8 +801,11 @@ let commodity_of t row = function
     Validation.currency column (cell t row column) |> Or_error.ok_exn |> Commodity.fiat
   | Fiat_code code ->
     Validation.currency "commodity" code |> Or_error.ok_exn |> Commodity.fiat
-  | Reported_column { column; provider } ->
-    Commodity.reported ~provider ~symbol:(cell t row column) |> Or_error.ok_exn
+  | Reported_column { column; provider; fiat_codes } ->
+    let symbol = cell t row column in
+    if List.mem fiat_codes symbol ~equal:String.equal
+    then Validation.currency column symbol |> Or_error.ok_exn |> Commodity.fiat
+    else Commodity.reported ~provider ~symbol |> Or_error.ok_exn
 ;;
 
 let holds t row (condition : condition) =
@@ -835,7 +899,7 @@ let details t row : Records.details =
   in
   { descriptions =
       List.filter t.descriptions ~f:(fun column -> Option.is_some (stated column))
-      |> List.map ~f:(raw_cell t row)
+      |> List.map ~f:(raw_cell row)
   ; movement_type =
       Option.map (Option.bind t.movement_type ~f:stated) ~f:Movement_type.of_string
   ; counterparty =
@@ -873,7 +937,7 @@ let details t row : Records.details =
           ~f:(fun quantity : Records.amount ->
             { quantity; commodity = commodity_of t row v.commodity }))
   ; fields =
-      List.filter_map (List.zip_exn t.header row.cells) ~f:(fun (name, value) ->
+      List.filter_map (List.zip_exn row.header row.cells) ~f:(fun (name, value) ->
         Option.some_if (not (String.is_empty (String.strip value))) (name, value))
   }
 ;;
@@ -942,8 +1006,15 @@ let record t ~positions ~statements row : Records.record =
       Option.bind case ~f:(fun case -> case.fee)
       |> Option.map ~f:(quantity_of_spec t row)
       |> Option.filter ~f:(Fn.non Quantity.is_zero)
-  ; group = None
-  ; supporting = false
+  ; group =
+      Option.bind t.group ~f:(fun g ->
+        if holds_all t row g.applies then filled (cell t row g.column) else None)
+  ; supporting =
+      Option.exists t.group ~f:(fun g ->
+        (not (List.is_empty g.supporting))
+        && holds_all t row g.applies
+        && holds_all t row g.supporting
+        && Option.is_some (filled (cell t row g.column)))
   ; observation = t.observation
   ; details
   }
@@ -972,18 +1043,19 @@ let rows_of t contents =
   match lines with
   | [] -> failwith "the CSV has no header"
   | header :: rows ->
-    if not (List.equal String.equal header t.header)
+    if not (List.mem t.headers header ~equal:(List.equal String.equal))
     then Printf.failwithf "not the %s CSV layout" t.institution ();
     List.filter_mapi rows ~f:(fun index cells ->
       if List.for_all cells ~f:(fun cell -> String.is_empty (String.strip cell))
       then None
-      else if List.length cells <> List.length t.header
+      else if List.length cells <> List.length header
       then Printf.failwithf "row %d has the wrong number of columns" (index + 1) ()
-      else Some { number = index + 1; cells })
+      else Some { number = index + 1; header; cells })
 ;;
 
 let recognizes t contents =
-  Csv_reader.recognizes ~separator:t.separator ~trim:false ~header:t.header contents
+  List.exists t.headers ~f:(fun header ->
+    Csv_reader.recognizes ~separator:t.separator ~trim:false ~header contents)
 ;;
 
 let header_difference t contents =
@@ -1006,11 +1078,18 @@ let header_difference t contents =
     let lacking names others =
       List.filter names ~f:(fun name -> not (List.mem others name ~equal:String.equal))
     in
-    let missing = lacking t.header found
-    and unexpected = lacking found t.header in
-    if List.equal String.equal found t.header
+    (* Compared with the header it is closest to. *)
+    let closest =
+      List.max_elt t.headers ~compare:(fun a b ->
+        let shared header = List.length header - List.length (lacking header found) in
+        Int.compare (shared a) (shared b))
+      |> Option.value_exn
+    in
+    let missing = lacking closest found
+    and unexpected = lacking found closest in
+    if List.mem t.headers found ~equal:(List.equal String.equal)
     then None
-    else if List.length missing = List.length t.header
+    else if List.length missing = List.length closest
     then separators
     else (
       let listed label = function

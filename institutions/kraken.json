@@ -1,0 +1,164 @@
+{
+  "version": 1,
+  "kind": "records",
+  "type": "crypto-exchange",
+  "records": {
+    "institution": "kraken",
+    "aliases": [],
+    "csv": {
+      "format": "fin-csv-converter",
+      "version": 1,
+      "institution": "kraken",
+      "institution_type": "crypto-exchange",
+      "headers": [
+        [
+          "txid",
+          "refid",
+          "time",
+          "type",
+          "subtype",
+          "aclass",
+          "asset",
+          "amount",
+          "fee",
+          "balance"
+        ],
+        [
+          "txid",
+          "refid",
+          "time",
+          "type",
+          "subtype",
+          "aclass",
+          "subclass",
+          "asset",
+          "wallet",
+          "amount",
+          "fee",
+          "balance",
+          "amountusd",
+          "feeusd",
+          "balanceusd",
+          "feecurrency"
+        ]
+      ],
+      "values": [
+        {
+          "column": "asset",
+          "map": {
+            "ZEUR": "EUR",
+            "ZUSD": "USD",
+            "ZGBP": "GBP",
+            "ZCAD": "CAD",
+            "ZAUD": "AUD",
+            "ZJPY": "JPY",
+            "XXBT": "BTC",
+            "XBT": "BTC",
+            "XETH": "ETH",
+            "XZEC": "ZEC",
+            "XXLM": "XLM",
+            "XXRP": "XRP",
+            "XLTC": "LTC",
+            "XXMR": "XMR",
+            "XETC": "ETC",
+            "XREP": "REP",
+            "XMLN": "MLN",
+            "XDAO": "DAO",
+            "KFEE": "FEE"
+          }
+        }
+      ],
+      "only": [
+        {
+          "column": "txid",
+          "filled": true
+        }
+      ],
+      "require": [
+        {
+          "column": "aclass",
+          "in": [
+            "currency"
+          ]
+        },
+        {
+          "column": "type",
+          "in": [
+            "trade",
+            "deposit",
+            "withdrawal",
+            "transfer"
+          ]
+        }
+      ],
+      "account": {
+        "id": "{asset}",
+        "bank": "kraken"
+      },
+      "id": {
+        "columns": [
+          "txid"
+        ]
+      },
+      "occurred": {
+        "column": "time",
+        "layout": "iso-datetime",
+        "utc": true
+      },
+      "cases": [
+        {
+          "movements": [
+            {
+              "role": "primary",
+              "quantity": {
+                "column": "amount",
+                "minus": "fee"
+              },
+              "commodity": {
+                "reported": "asset",
+                "provider": "kraken",
+                "fiat_codes": [
+                  "EUR",
+                  "USD",
+                  "GBP",
+                  "CAD",
+                  "AUD",
+                  "JPY",
+                  "CHF"
+                ]
+              }
+            }
+          ],
+          "fee": {
+            "column": "fee"
+          }
+        }
+      ],
+      "descriptions": [
+        "type"
+      ],
+      "type": "type",
+      "group": {
+        "column": "refid",
+        "when": [
+          {
+            "column": "type",
+            "in": [
+              "trade"
+            ]
+          }
+        ],
+        "supporting_when": [
+          {
+            "column": "asset",
+            "in": [
+              "FEE"
+            ]
+          }
+        ]
+      },
+      "balance_after": "balance"
+    }
+  },
+  "rules": []
+}

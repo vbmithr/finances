@@ -157,7 +157,8 @@ def layout(**members):
         "balance_after": "After",
     }
     path = ROOT / "definition.json"
-    path.write_text(json.dumps({**base, **members}))
+    merged = {k: v for k, v in {**base, **members}.items() if v is not None}
+    path.write_text(json.dumps(merged))
     return ["--definition", str(path)]
 
 sample = ["Date", "Amount", "After", "Kind"]
@@ -230,9 +231,65 @@ with zipfile.ZipFile(ROOT / "archive.zip", "w") as archive:
 zipped = subprocess.run([FIN, "convert", *plain, str(ROOT / "archive.zip")], env=ENV, capture_output=True, text=True)
 assert zipped.returncode != 0 and "missing Kind" in " ".join(zipped.stderr.split()), zipped.stderr
 
+# Kraken: two eras of one ledger, one mapping.
+old_header = ["txid", "refid", "time", "type", "subtype", "aclass", "asset", "amount", "fee", "balance"]
+new_header = ["txid", "refid", "time", "type", "subtype", "aclass", "subclass", "asset", "wallet", "amount",
+              "fee", "balance", "amountusd", "feeusd", "balanceusd", "feecurrency"]
+def kraken_new(**row):
+    return [row.get(c, "") for c in new_header]
+old_file = text(old_header, [
+    ["", "F1", "2020-01-02 10:00:00", "deposit", "", "currency", "ZEUR", "100.00", "0.00", ""],
+    ["L1", "F1", "2020-01-02 10:05:00", "deposit", "", "currency", "ZEUR", "100.00", "0.00", "100.00"],
+    ["L2", "T1", "2020-01-03 09:00:00", "trade", "", "currency", "ZEUR", "-50.00", "1.00", "49.00"],
+    ["L3", "T1", "2020-01-03 09:00:00", "trade", "", "currency", "XXBT", "0.01", "0", "0.01"],
+    ["L4", "T1", "2020-01-03 09:00:00", "trade", "", "currency", "KFEE", "-2", "0", "8"],
+])
+new_file = text(new_header, [kraken_new(
+    txid="L5", refid="W1", time="2025-06-01 09:00:00", type="withdrawal", aclass="currency", asset="EUR",
+    amount="-10.00", fee="0.00", balance="39.00", wallet="spot / main", amountusd="-11", feeusd="0",
+    balanceusd="40", feecurrency="EUR")])
+result = run(old_file, "kraken")
+assert result.returncode == 0, result.stderr
+assert "left out 1 row" in " ".join(result.stderr.split()), result.stderr
+lines = [json.loads(line) for line in result.stdout.splitlines()]
+records = {l["id"]: l for l in lines if l["kind"] == "record"}
+assert sorted(records) == ["L1", "L2", "L3", "L4"]
+# Codes are translated where they are read, and stay as stated in the fields.
+assert {l["id"] for l in lines if l["kind"] == "account"} == {"EUR", "BTC", "FEE"}
+assert records["L1"]["movements"][0]["commodity"] == {"kind": "fiat", "code": "EUR"}
+assert records["L3"]["movements"][0]["commodity"]["kind"] == "reported"
+assert records["L3"]["movements"][0]["commodity"]["code"] == "BTC"
+assert ["asset", "XXBT"] in records["L3"]["details"]["fields"]
+# A trade's rows are one group, its fee credit only supporting it; a deposit is alone.
+assert {records[i].get("group") for i in ("L2", "L3", "L4")} == {"T1"}
+assert records["L1"].get("group") is None
+assert records["L4"].get("supporting") is True and not records["L2"].get("supporting")
+assert records["L2"]["fee"] == "1"
+accepts("kraken newer header", new_file, "kraken")
+# The eras are one account: the newer file's rows land on the same EUR.
+first, second = ROOT / "old.csv", ROOT / "new.csv"
+first.write_text(old_file)
+second.write_text(new_file)
+both = subprocess.run([FIN, "convert", "kraken", str(first), str(second)], env=ENV, capture_output=True, text=True)
+assert both.returncode == 0, both.stderr
+assert sum('"kind":"account"' in l.replace(" ", "") and '"id":"EUR"' in l.replace(" ", "") for l in both.stdout.splitlines()) == 1
+# Each file's balances are checked, whichever header it has.
+refuses("kraken balance", "states a balance", old_file.replace("49.00", "48.00"), "kraken")
+refuses("kraken derivative row", "unexpected aclass", old_file.replace("currency,KFEE", "future,KFEE"), "kraken")
+
+# Layout members for these.
+eras = {"header": None, "headers": [["Date", "Amount", "After", "Kind"], ["Date", "Amount", "After", "Kind", "New"]]}
+accepts("second header", text(sample + ["New"], [["2026-01-02", "1.00", "1.00", "a", "x"]]), *layout(**eras))
+accepts("first header", text(sample, [["2026-01-02", "1.00", "1.00", "a"]]), *layout(**eras))
+refuses("no header fits", "not in the layout Other", text(sample + ["Other"], [["2026-01-02", "1.00", "1.00", "a", "x"]]), *layout(**eras))
+
 # A definition's mistakes are refused when it is read.
 for label, members, reason in [
     ("pattern", {"require": [{"column": "Kind", "matches": "("}]}, "invalid pattern"),
+    ("both header and headers", {"headers": [["Date", "Amount", "After", "Kind"]]}, "a layout has header or headers"),
+    ("column absent from one era", {"header": None, "headers": [["Date", "Amount", "After", "Kind"], ["Date", "After", "Kind"]]}, "not in the header"),
+    ("value column", {"values": [{"column": "Nope", "map": {"a": "b"}}]}, "not in the header"),
+    ("group column", {"group": {"column": "Nope"}}, "not in the header"),
     ("two tests", {"require": [{"column": "Kind", "filled": True, "matches": "a"}]}, "a condition is one of"),
     ("related column", {"require": [{"column": "Kind", "not_before": "Nope"}]}, "not in the header"),
     ("condition in when", {"require": [{"when": [{"column": "Nope", "filled": True}], "column": "Kind", "filled": True}]}, "not in the header"),
