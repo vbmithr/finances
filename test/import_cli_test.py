@@ -64,7 +64,24 @@ class ImportOnboarding(unittest.TestCase):
         self.run_fin('convert', '--definition', definition, path, '-o', records)
         return self.run_fin('import', 'revolut', records, *args)
 
+    def add_category_for_set(self, args):
+        """fin operation category set needs its category; most tests are about something else."""
+        args = [str(a) for a in args]
+        positional = [a for a in args if a != '--yes']
+        database = args[args.index('--database'):args.index('--database') + 2] if '--database' in args else []
+        subprocess.run([FIN, 'category', 'add', positional[0], *database], env=self.env,
+                       stdin=subprocess.DEVNULL, capture_output=True, text=True)
+
     def run_fin(self, *args, check=True):
+        if [str(a) for a in args[:3]] == ['operation', 'category', 'set']:
+            self.add_category_for_set(args[3:])
+        if [str(a) for a in args[:2]] in (['operation', 'category'], ['op', 'category']) and str(args[2]) == 'apply':
+            try:
+                accounts = {d['account'] for d in json.loads(Path(args[3]).read_text())}
+            except (ValueError, KeyError, TypeError, OSError):
+                accounts = set()
+            for account in accounts:
+                self.add_category_for_set([account])
         result = subprocess.run([FIN, *map(str, args)], env=self.env,
                                 stdin=subprocess.DEVNULL, capture_output=True, text=True)
         if check:
@@ -860,6 +877,7 @@ class ImportOnboarding(unittest.TestCase):
         self.assertEqual(len(ids), 2)
 
         def set_from_input(contents, *args):
+            self.add_category_for_set(args)
             return subprocess.run([FIN, 'operation', 'category', 'set', '--yes', *map(str, args)],
                                   input=contents, env=self.env, capture_output=True, text=True)
 
@@ -1232,6 +1250,7 @@ class ImportOnboarding(unittest.TestCase):
         updated = next(r for r in json.loads(self.run_fin('operation', 'list', '--json').stdout) if r['operation_id'] == row['operation_id'])
         self.assertEqual((updated['counter_account'], updated['movement_type']), ('expenses:food', 'fee'))
         selected = json.dumps([row])
+        self.add_category_for_set(['expenses:other'])
         piped = subprocess.run([FIN, 'operation', 'category', 'set', 'expenses:other', '-', '--yes'],
                                input=selected, env=self.env, capture_output=True, text=True)
         self.assertEqual(piped.returncode, 0, piped.stderr)
@@ -2405,6 +2424,7 @@ class ImportOnboarding(unittest.TestCase):
 
     def piped_set(self, listing, answer, *options):
         """fin operation category set - with this listing piped in, answering on a terminal."""
+        self.add_category_for_set(['expenses:books'])
         master, slave = pty.openpty()
         def own_terminal():
             os.setsid()
@@ -2451,10 +2471,11 @@ class ImportOnboarding(unittest.TestCase):
         pipe = lambda *options: subprocess.run(
             [FIN, 'operation', 'category', 'set', 'expenses:books', '-', *options], env=self.env,
             input=rows, capture_output=True, text=True, start_new_session=True)
+        self.add_category_for_set(['expenses:books'])
         refused = pipe()
         self.assertNotEqual(refused.returncode, 0)
         self.assertIn('pass --yes', ' '.join(refused.stderr.split()))
-        self.assertEqual(json.loads(self.run_fin('cat', 'list', '--json').stdout), [])
+        self.assertEqual(json.loads(self.run_fin('operation', 'list', '--decision', 'category', '--json').stdout), [])
         self.assertIn('category_changes=', pipe('--yes').stdout)
         # Nothing left to change, so nothing to ask.
         self.assertIn('category_changes=0', pipe().stdout)
@@ -2499,6 +2520,40 @@ class ImportOnboarding(unittest.TestCase):
         self.assertNotEqual(older.returncode, 0)
         self.assertIn('undo the later change first', ' '.join(older.stderr.split()))
         self.assertNotEqual(self.run_fin('operation', 'category', 'undo', '999999', '--yes', check=False).returncode, 0)
+
+    def test_category_set_refuses_a_category_not_in_the_catalog(self):
+        self.run_fin('import', 'revolut', self.csv)
+        row = json.loads(self.run_fin('operation', 'list', '--json').stdout)[0]
+        direct = lambda account, *rest: subprocess.run(
+            [FIN, 'operation', 'category', 'set', account, str(row['operation_id']), *rest],
+            env=self.env, stdin=subprocess.DEVNULL, capture_output=True, text=True)
+        refused = direct('expenses:typo')
+        self.assertNotEqual(refused.returncode, 0)
+        message = ' '.join(refused.stderr.split())
+        self.assertIn('no category expenses:typo', message)
+        self.assertIn('fin category add expenses:typo', message)
+        self.assertEqual(json.loads(self.run_fin('cat', 'list', '--json').stdout), [])
+        self.assertEqual(json.loads(self.run_fin('operation', 'list', '--decision', 'category', '--json').stdout), [])
+        # A pipe is refused before anything is asked.
+        piped = subprocess.run([FIN, 'operation', 'category', 'set', 'expenses:typo', '-', '--yes'],
+                               env=self.env, input=json.dumps([row]), capture_output=True, text=True)
+        self.assertNotEqual(piped.returncode, 0)
+        self.assertNotIn('This sets', piped.stderr)
+        self.run_fin('cat', 'add', 'expenses:real')
+        self.assertIn('category_changes=1', direct('expenses:real').stdout)
+        # Resetting a row needs no category.
+        self.assertEqual(direct('equity:unclassified').returncode, 0)
+        # A file is held to the same rule, naming all it lacks, and applies nothing.
+        decisions = self.root / 'typos.json'
+        decisions.write_text(json.dumps([
+            {'event_id': row['event_id'], 'account': 'expenses:typo', 'reason': 'Reviewed'},
+            {'event_id': row['event_id'], 'account': 'income:typo', 'reason': 'Reviewed'}]))
+        applied = subprocess.run([FIN, 'operation', 'category', 'apply', str(decisions)], env=self.env,
+                                 stdin=subprocess.DEVNULL, capture_output=True, text=True)
+        self.assertNotEqual(applied.returncode, 0)
+        message = ' '.join(applied.stderr.split())
+        self.assertIn('no categories expenses:typo, income:typo', message)
+        self.assertNotIn('expenses:typo', self.run_fin('cat', 'list', '--json').stdout)
 
     def test_category_queue_takes_one_institution(self):
         self.run_fin('import', 'revolut', self.csv)

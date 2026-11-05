@@ -624,7 +624,7 @@ Transfer candidates are shown by descending score and exclude movements already
 assigned an income or expense category. Reset a category to `equity:unclassified` before reviewing it as a
 transfer.
 
-Use `fin operation category set expenses:food OPERATION-ID...` to assign or change categories;
+Use `fin operation category set expenses:food OPERATION-ID...`, with a category from your catalog, to assign or change categories;
 all provided transactions are updated atomically. Use `equity:unclassified`
 to return them to review.
 

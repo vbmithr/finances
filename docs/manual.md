@@ -867,8 +867,12 @@ To assign or change categories without the interactive batch review, put the
 account first, followed by one or more operation IDs:
 
 ```sh
+fin category add expenses:food:restaurants
 fin operation category set expenses:food:restaurants 123 456
 ```
+
+The category must already be in your catalog, for `set` and `apply` alike, so that a typo cannot
+create a new one; add it with `fin category add`. Only `equity:unclassified`, which returns a movement to review, needs no entry.
 
 To assign the transactions selected by any `fin operation list` filters, pipe its JSON
 output into `set` using `-` in place of an operation ID:

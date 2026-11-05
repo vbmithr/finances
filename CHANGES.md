@@ -8,6 +8,8 @@ short line of their own.
 
 ## Unreleased
 
+- **Action required for scripts:** `fin operation category set` and `apply` refuse a category that is
+  not in your catalog, where they used to add it. Add it first with `fin category add`.
 - `fin operation category undo` puts back the last batch of category changes, or the batch holding a
   change from the history, after showing it. Works on changes made before this version.
 - **Action required for scripts:** `fin operation category set ACCOUNT -` now shows what a piped

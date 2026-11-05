@@ -6,10 +6,38 @@ open Cmdliner
 open Or_error.Let_syntax
 open Cli
 
+(* A typo must not create a category, so assigning names only what the catalog holds. Only
+   equity:unclassified, which returns a movement to review, needs no entry. *)
+let require_categories db accounts =
+  let%bind known = Setup.categories db in
+  match
+    List.dedup_and_sort accounts ~compare:String.compare
+    |> List.filter ~f:(fun account ->
+      not
+        (String.equal account "equity:unclassified"
+         || List.mem known account ~equal:String.equal))
+  with
+  | [] -> Ok ()
+  | [ account ] ->
+    Or_error.errorf
+      "no category %s; see fin category list, or add it with fin category add %s"
+      account
+      account
+  | unknown ->
+    Or_error.errorf
+      "no categories %s; see fin category list, or add them with fin category add"
+      (String.concat ~sep:", " unknown)
+;;
+
 let categorize_bank database path =
   let%bind contents = read_file path in
   let%bind decisions = Bank_category.of_json contents in
   with_database database (fun db ->
+    let%bind () =
+      require_categories
+        db
+        (List.map decisions ~f:(fun (d : Bank_category.t) -> d.account))
+    in
     let%bind changed = Review.set_bank_categories db decisions in
     printf "category_changes=%d\n" changed;
     Ok ())
@@ -117,6 +145,7 @@ let category_set database account yes inputs =
         ~reason:"Set with fin operation category set"
     in
     with_database database (fun db ->
+      let%bind () = require_categories db [ account ] in
       let%bind event_ids = bank_event_ids_for_operations db operation_ids in
       let%bind decisions =
         List.map event_ids ~f:(fun event_id ->
@@ -235,7 +264,7 @@ let category_set_cmd =
           & info
               []
               ~docv:"ACCOUNT"
-              ~doc:"Income or expense account, or equity:unclassified to reset.")
+              ~doc:"A category from fin category list, or equity:unclassified to reset.")
       $ Arg.(
           value
           & flag
