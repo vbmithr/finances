@@ -122,7 +122,6 @@ let list_transactions
           ; to_date
           ; search
           }
-        ~accounts
         ~order:sort_columns
         ~ascending:order
         ?limit

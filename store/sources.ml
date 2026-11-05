@@ -44,6 +44,15 @@ let insert_source =
         ]
 ;;
 
+let name_account =
+  Rel_sql.Stmt.(
+    func
+      "INSERT OR IGNORE INTO \
+       bank_account_mappings(institution,source_account,ledger_account,public_id) VALUES \
+       (?,?,?,?)"
+      (text @-> text @-> text @-> text @-> unit))
+;;
+
 let insert_movement =
   let open Db_schema.Movements in
   let insert = Rel_sql.insert_into_cols Db.dialect table in
@@ -684,6 +693,23 @@ let ingest_in_transaction db (e : Source_event.t) =
         let* raw = Registry.movement ~source_typing:raw_profile db.registry e in
         let m = Source_typing.apply profile raw in
         let* () = db_result (Db.exec db.conn (insert_movement id e m)) in
+        (* An account's ledger name is fixed when the account first appears, so that queries
+           read it and a later naming rule never renames it. *)
+        let* name = Bank_projection.ledger_account ~institution:e.venue m.account in
+        let* mapping =
+          Bank_account_mapping.create
+            ~institution:e.venue
+            ~bank_id:m.account.bank_id
+            ~account_id:m.account.account_id
+            ~account_type:m.account.account_type
+            ~ledger_account:name
+        in
+        let* () =
+          db_result
+            (Db.exec
+               db.conn
+               (name_account e.venue e.account name (Bank_account_mapping.id mapping)))
+        in
         let* () = store_bank_operation db id e m in
         let* rules = source_evidence_rules db e.venue in
         let evidence = Source_evidence.apply rules m in

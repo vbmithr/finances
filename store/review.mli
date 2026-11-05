@@ -205,11 +205,9 @@ type operation_order =
   | By_event
 
 (** The operations a filter selects, in SQL, ending with the operation ID in the same
-    direction. Only the rows returned are read in full. [accounts] gives, as institution,
-    source account and ID, what [By_account] sorts on. *)
+    direction. Only the rows returned are read in full. *)
 val operations
   :  ?filter:operation_filter
-  -> ?accounts:(string * string * string) list
   -> ?order:operation_order list
   -> ?ascending:bool
   -> ?limit:int

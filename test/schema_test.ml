@@ -45,7 +45,7 @@ let initialize () =
          check "fresh database empty" 0 (List.length (ok (Ledger.events db)));
          Ok ()));
     raw path (fun db ->
-      check "latest baseline" 35 (scalar db "PRAGMA user_version");
+      check "latest baseline" 36 (scalar db "PRAGMA user_version");
       check
         "all tables are strict"
         50
@@ -456,6 +456,11 @@ let no_bank_schema () =
       Alcotest.(check (list string)) "no institution-named table or column" [] offending))
 ;;
 
+let queries_compile () =
+  workspace (fun path ->
+    ok (Setup.with_open ~registry:Test_support.registry path Setup.check_queries))
+;;
+
 let () =
   Alcotest.run
     "Latest experimental schema"
@@ -469,6 +474,7 @@ let () =
           ; "atomic initialization rollback", initialization_rollback
           ; "reopen preserves reviewed state and audit", persistent_state
           ; "no bank-specific tables or columns", no_bank_schema
+          ; "SQL files compile", queries_compile
           ]
           ~f:(fun (name, f) -> Alcotest.test_case name `Quick f) )
     ]

@@ -4,7 +4,7 @@
 (library
  (name finances_store)
  (public_name finances.store)
- (private_modules db_schema sqlite_schema)
+ (private_modules db_schema sqlite_schema sql)
  (foreign_stubs
   (language c)
   (names sqlite_decimal sqlite_decimal_stubs)
@@ -30,3 +30,14 @@
   iso4217)
  (preprocess
   (pps ppx_sexp_conv ppx_compare ppx_let)))
+
+; Queries and views live in sql/, one per file, read by the generated Sql module.
+
+(rule
+ (target sql.ml)
+ (deps
+  (glob_files sql/*.sql))
+ (action
+  (with-stdout-to
+   %{target}
+   (run gen/embed_sql.exe %{deps}))))

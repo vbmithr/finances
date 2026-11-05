@@ -336,10 +336,14 @@ let mapping_errors () =
     with_store root (fun db ->
       error (Ledger.set_bank_account_mappings db [ remap "first" first; unknown ]));
     raw (database root) (fun db ->
+      (* Every account has its generated name from import; none may have been renamed. *)
       Alcotest.(check int)
         "unknown mapping rolls back earlier mapping"
         0
-        (scalar db "SELECT count(*) FROM bank_account_mappings"));
+        (scalar
+           db
+           "SELECT count(*) FROM bank_account_mappings WHERE ledger_account LIKE \
+            '%first%'"));
     error
       (Bank_account_mapping.create
          ~institution:first.institution
@@ -376,7 +380,10 @@ let mapping_conflict_preserves_journal () =
       Alcotest.(check int)
         "mapping transaction rolled back"
         0
-        (scalar db "SELECT count(*) FROM bank_account_mappings");
+        (scalar
+           db
+           "SELECT count(*) FROM bank_account_mappings WHERE ledger_account LIKE \
+            '%changed-%'");
       Alcotest.(check int)
         "audit rolled back"
         0

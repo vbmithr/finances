@@ -1,0 +1,4 @@
+; Embeds the store's SQL files as OCaml strings, one value per file.
+
+(executable
+ (name embed_sql))

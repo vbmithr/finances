@@ -497,8 +497,8 @@ let accepted_document =
 let encode_fields = Json.encode (Jsont.list Jsont.string)
 let decode_fields = Json.decode (Jsont.list Jsont.string)
 
-let store_companion_rows db ~document_id ~institution ~format ~context:_ ~companions rows =
-  let* (_ : Companion.t) =
+let store_companion_rows db ~document_id ~institution ~format ~context ~companions rows =
+  let* (companion : Companion.t) =
     List.find companions ~f:(fun (c : Companion.t) -> String.equal c.format format)
     |> Or_error.of_option ~error:(Error.of_string "unregistered companion format")
   in
@@ -509,7 +509,7 @@ let store_companion_rows db ~document_id ~institution ~format ~context:_ ~compan
   let insert =
     let open Db_schema.Companion_rows in
     let insert = Rel_sql.insert_into_cols Db.dialect table in
-    fun v_document_id v_row_number v_institution v_format v_fields ->
+    fun v_document_id v_row_number v_institution v_format v_fields v_display_name ->
       insert
         Col.
           [ Value (document_id, v_document_id)
@@ -517,12 +517,27 @@ let store_companion_rows db ~document_id ~institution ~format ~context:_ ~compan
           ; Value (institution, v_institution)
           ; Value (format, v_format)
           ; Value (fields_json, v_fields)
+          ; Value (display_name, v_display_name)
           ]
+  in
+  (* The row is not stored yet, so it has no ID; annotating never reads one. *)
+  let display_name row_number fields =
+    match companion.display_name with
+    | No_display_name -> Ok None
+    | Stored_field _ | From_annotation ->
+      let* annotation =
+        companion.annotate
+          { row_id = 0L; document_id; institution; format; row_number; fields; context }
+      in
+      Ok
+        (Option.bind annotation.display_name ~f:(fun name ->
+           let name = String.strip name in
+           Option.some_if (not (String.is_empty name)) name))
   in
   let rec store added reused = function
     | [] -> Ok (added, reused)
-    | (row_number, fields) :: rest ->
-      let fields = encode_fields fields in
+    | (row_number, raw) :: rest ->
+      let fields = encode_fields raw in
       let* previous = db_result (Db.first db.conn (find document_id row_number)) in
       (match previous with
        | Some previous when String.equal previous fields -> store added (reused + 1) rest
@@ -530,9 +545,12 @@ let store_companion_rows db ~document_id ~institution ~format ~context:_ ~compan
          Or_error.error_string
            "stored companion observation differs from the archived row"
        | None ->
+         let* name = display_name row_number raw in
          let* () =
            db_result
-             (Db.exec db.conn (insert document_id row_number institution format fields))
+             (Db.exec
+                db.conn
+                (insert document_id row_number institution format fields name))
          in
          store (added + 1) reused rest)
   in

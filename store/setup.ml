@@ -407,7 +407,14 @@ let with_open ~registry path f =
       }
     in
     let* () = initialize db in
+    let* () = db_result (Db.exec_sql db.conn Sql.views) in
     f db)
+;;
+
+let check_queries db =
+  List.fold_result Sql.queries ~init:() ~f:(fun () (name, query) ->
+    db_result (Db.exec_sql db.conn ("EXPLAIN " ^ query))
+    |> Or_error.tag ~tag:(name ^ ".sql"))
 ;;
 
 let backup source path =

@@ -229,10 +229,7 @@ let general_transfer_leg ?(allow_linked = false) db ~operation_id ~role =
         db_result (Db.first db.conn (find_mapping source.venue source.account))
       in
       let* account =
-        match mapping with
-        | Some account -> Ok account
-        | None ->
-          Bank_projection.ledger_account ~institution:source.venue movement.account
+        Or_error.of_option mapping ~error:(Error.of_string "account has no ledger name")
       in
       let* symbol =
         match movement.account.currency with

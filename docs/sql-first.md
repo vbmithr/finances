@@ -1,6 +1,7 @@
 # Database work in SQL
 
-Status: proposal, 2026-11-05. Needs one schema change, so one rebuild through `fin decisions`.
+Status: in progress, 2026-11-05. Schema 36 holds the stored facts; the views and the first query files
+are in. See the plan for what is left.
 
 ## Why
 
@@ -35,52 +36,58 @@ A command should read with one or two queries returning what it shows. OCaml the
 
 Some logic lives in OCaml because the database does not hold what a query needs:
 
-| Fact | Today | Proposal |
+| Fact | Before | Now |
 |---|---|---|
 | An account's ledger name | `Bank_projection.ledger_account`, computed on read | stored in `bank_account_mappings` when an account first appears |
+| An account's short ID | a SHA-256 prefix computed in OCaml, passed in as a temporary table | stored next to the ledger name, as `public_id` |
 | A transfer's destination account | computed per read, passed in as a temporary table | a join on the stored ledger name |
-| A CSV companion layout's display name | `annotate` in OCaml | stored on the matched companion row at import |
-| Operation groups | `Operation_groups` in OCaml, passed as a temporary table | a stored `operation_group` column, written at import and on link |
+| A companion row's display name | `annotate` in OCaml, or a field lookup in the query | `companion_rows.display_name`, from `annotate` at import |
+| Operation groups | `Operation_groups` in OCaml, passed as a temporary table | the `grouped_operations` view: a link pairs two operations and a stated group is a window over the records, with no transitivity to compute |
 
-Once those are stored, the read queries need no parameters from OCaml beyond filters.
+The read queries now take no parameters from OCaml beyond filters, as one JSON object.
 
 ## Queries in SQL files
 
-Every query goes in its own file under `store/sql/`, such as `store/sql/unmatched_transfers.sql`,
-embedded at build time the way bundled institutions already are (`institutions/dune` reads JSON
-files into a generated module with `%{read:…}`), so no new dependency. `ppx_blob` would do the
-same with a ppx. A file holds plain SQL with `?1`… parameters; the OCaml next to it declares the
-row type and nothing else.
+Every query goes in its own file under `store/sql/`, such as `store/sql/unmatched_transfers.sql`.
+A dune rule runs `store/gen/embed_sql.exe` over the directory and generates the `Sql` module, one
+string per file, with no new dependency. A file holds plain SQL with `?1` parameters; the OCaml next
+to it declares the row type and nothing else. Where a user picks the sort, the caller appends an
+`ORDER BY` of view columns.
 
 Two checks keep files honest:
 
-- a test prepares every file against a fresh database, so a typo or a renamed column fails the
-  test suite, not a user's command;
+- a test compiles every file against a fresh database (`Setup.check_queries`), so a typo or a renamed
+  column fails the test suite, not a user's command;
 - `test/status_perf_test.py` already compares two sizes and fails a command whose cost grows
   faster than the data.
 
 What files cannot do is share a fragment: SQLite has no include. That is what views are for.
 
-## Views in the schema
+## Views
 
-The shared reads become views, defined once in the schema:
+The shared reads are views, in `store/sql/views.sql`:
 
-- `reviews`: each movement with its decision, counter-account and effective description, the
-  query now assembled as a string in `Review.reviews_sql`;
-- `operation_rows`: each operation's group, primary movement and display fields;
-- `transfer_pairs`: exact opposite principals across accounts, already a query.
+- `reviews`: each movement with its decision, counter-account and effective description;
+- `transfer_sides`: a movement's confirmed transfer, with the other side's account;
+- `linked_operations`, `stated_operations` and `grouped_operations`: which operations read as one;
+- `operation_anchors` and `operation_rows`: each operation's group, primary movement and display
+  fields;
+- `group_reviews`: the review of every movement in a group, for filters that hold when any one does.
 
-A command's file then reads from views, short enough to review. A view must not hide a scan
-inside a loop; the scaling test covers that.
+They are temporary views that each connection creates when it opens. A view holds no data, so a
+change to one needs neither a schema version nor a rebuild, which a view in the schema would.
+
+A command's file reads from views, short enough to review. A view must not hide a scan inside a
+loop; the scaling test covers that, and lookups by event or operation inside a view are correlated
+subqueries on an index.
 
 ## Indexes
 
-The same schema change adds the indexes the bugs above lacked:
-
-- `operation_movements(operation_id)`, which every per-operation lookup scans today;
-- `movements(currency, booked_on)`, for date windows such as the fee search;
-- `companion_matches(event_id)`, `bank_transfer_memberships(event_id)` and
-  `operation_transfer_memberships(movement_id)`, joined by event or movement today without one.
+Schema 35 added the indexes the bugs above lacked: `operation_movements(operation_id)`, which
+every per-operation lookup scanned; `movements(currency, booked_on)`, for date windows such as the
+fee search and `fin transfer unmatched`; and `companion_matches(event_id)`. The other two named here
+before needed none: `bank_transfer_memberships` is keyed by event, and
+`operation_transfer_memberships` by movement.
 
 ## Rel
 
@@ -92,9 +99,10 @@ connection and transactions.
 
 ## Order
 
-1. Schema change: stored ledger names, display names and groups; the indexes; the views. One
-   rebuild, with `fin decisions export` before and `fin decisions restore` after.
-2. Move existing queries to `store/sql/` unchanged, with the preparation test.
+1. Done: schema change for stored ledger names, account IDs and display names, and the indexes;
+   the views; the preparation test; reviews, `fin operation list` and `fin transfer unmatched` on
+   files.
+2. Move the remaining queries to `store/sql/` unchanged.
 3. Rewrite commands one by one onto the views, each checked byte-for-byte against the previous
    build on a scratch rebuild of real statements, as done for `fin operation list` and `fin transfer
    unmatched`: settlement suggestions, `fin status`, transfer candidates, the category queue's
@@ -110,7 +118,5 @@ connection and transactions.
 
 ## Open questions
 
-- Whether `effective description` can be a plain view once display names are stored, or still needs
-  the per-companion field lookup.
 - Whether transfer candidates' IBAN evidence can be stated in SQL, or stays a check in OCaml on the
   candidates a query returns.

@@ -827,14 +827,9 @@ let bank_account_ids db =
   in
   traverse
     (fun (venue, source, bank_id, account_id, account_type, currency, mapped) ->
-       let* currency = Validation.currency "currency" currency in
+       let* (_ : Iso4217.t) = Validation.currency "currency" currency in
        let* ledger_account =
-         match mapped with
-         | Some name -> Ok name
-         | None ->
-           Bank_projection.ledger_account
-             ~institution:venue
-             { bank_id; account_id; account_type; currency }
+         Or_error.of_option mapped ~error:(Error.of_string "account has no ledger name")
        in
        let* mapping =
          Bank_account_mapping.create

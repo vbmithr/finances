@@ -6,6 +6,10 @@ open Handle
     names none. *)
 val with_open : registry:Registry.t -> string -> (t -> 'a Or_error.t) -> 'a Or_error.t
 
+(** Compiles every query under [store/sql/] without running it, so that a typo or a
+    renamed column fails a test, not a command. *)
+val check_queries : t -> unit Or_error.t
+
 (** [backup source path] writes a consistent copy of the database file [source] to
     [path], a new file, with SQLite's [VACUUM INTO]; other connections may be using
     the database meanwhile. It does not check the schema version, so it works on

@@ -8,10 +8,19 @@ short line of their own.
 
 ## Unreleased
 
-- **Action required: rebuild.** Schema 35 adds the indexes whose absence made reads scan whole tables:
-  movements by operation, movements by currency and day, and companion matches by event. Before
-  installing, with your current fin, run `fin backup DIR` and `fin decisions export FILE`; then run
-  `fin delete`, `fin init`, import your statements again and `fin decisions restore FILE`.
+- **Action required: rebuild.** Schema 36 adds the indexes whose absence made reads scan whole tables
+  (movements by operation, movements by currency and day, companion matches by event), and stores what
+  queries used to ask OCaml for: each account's ledger name and short ID, and each companion row's
+  display name. Before installing, with your current fin, run `fin backup DIR` and
+  `fin decisions export FILE`; then run `fin delete`, `fin init`, import your statements again and
+  `fin decisions restore FILE`.
+- An account's ledger name is fixed when the account first appears. A later change to the naming rules
+  no longer renames it; `fin account edit` still does.
+- `fin operation list --json` lists an operation's movements in the order they were stored, where it
+  listed them in reverse. Everything else it prints is unchanged.
+- `fin transfer unmatched` takes about half the time.
+- Internal: queries live in `store/sql/`, one per file, and the reads commands share are views; a test
+  compiles every file.
 - `fin settlement review --all` checks everything once and records the batch in one transaction, all or
   nothing: 54 settlements take about 0.3 s instead of 5.5 s, which grew with every row you had.
 - `fin transfer unmatched` lists unclassified transfers that have no candidate, with the nearest thing to

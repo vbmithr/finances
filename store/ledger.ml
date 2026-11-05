@@ -573,9 +573,7 @@ let bank_accounts_from db source_events ~movement =
          db_result (Db.first db.conn (find_mapping event.venue event.account))
        in
        let* ledger_account =
-         match mapped with
-         | Some name -> Ok name
-         | None -> Bank_projection.ledger_account ~institution:event.venue account
+         Or_error.of_option mapped ~error:(Error.of_string "account has no ledger name")
        in
        Bank_account_mapping.create
          ~institution:event.venue
@@ -594,10 +592,11 @@ let bank_accounts db =
 let upsert_mapping =
   Rel_sql.Stmt.(
     func
-      "INSERT INTO bank_account_mappings(institution,source_account,ledger_account) \
-       VALUES (?,?,?) ON CONFLICT(institution,source_account) DO UPDATE SET \
+      "INSERT INTO \
+       bank_account_mappings(institution,source_account,ledger_account,public_id) VALUES \
+       (?,?,?,?) ON CONFLICT(institution,source_account) DO UPDATE SET \
        ledger_account=excluded.ledger_account"
-      (text @-> text @-> text @-> unit))
+      (text @-> text @-> text @-> text @-> unit))
 ;;
 
 let audit_mapping =
@@ -664,12 +663,9 @@ let set_bank_account_mappings_in_transaction db mappings =
             else Ok ()
           in
           let* previous_name =
-            match previous with
-            | Some name -> Ok name
-            | None ->
-              let* transaction = movement db (fst (List.hd_exn matching)) in
-              let account = transaction.account in
-              Bank_projection.ledger_account ~institution:mapping.institution account
+            Or_error.of_option
+              previous
+              ~error:(Error.of_string "account has no ledger name")
           in
           let* _ =
             traverse
@@ -706,7 +702,8 @@ let set_bank_account_mappings_in_transaction db mappings =
                  (upsert_mapping
                     mapping.institution
                     source_account
-                    mapping.ledger_account))
+                    mapping.ledger_account
+                    (Bank_account_mapping.id mapping)))
           in
           let* () =
             db_result

@@ -3,7 +3,7 @@ open Rel
 
 (** One current experimental baseline; older databases must be reimported. Banks
     have no tables of their own. *)
-let version = 35
+let version = 36
 
 let timestamp = `Expr "(strftime('%Y-%m-%dT%H:%M:%f','now') || '000000000Z')"
 
@@ -1153,6 +1153,7 @@ module Bank_account_mappings = struct
     { institution : string
     ; source_account : string
     ; ledger_account : string
+    ; public_id : string
     }
 
   let institution = Col.make "institution" Type.text (fun (r : t) -> r.institution)
@@ -1165,13 +1166,18 @@ module Bank_account_mappings = struct
     Col.make "ledger_account" Type.text (fun (r : t) -> r.ledger_account)
   ;;
 
+  (* [Bank_account_mapping.id]: the short ID commands show, stored because SQLite cannot
+     compute it. *)
+  let public_id = Col.make "public_id" Type.text (fun (r : t) -> r.public_id)
+
   let row =
     Row.(
-      unit (fun institution source_account ledger_account ->
-        { institution; source_account; ledger_account })
+      unit (fun institution source_account ledger_account public_id ->
+        { institution; source_account; ledger_account; public_id })
       * institution
       * source_account
-      * ledger_account)
+      * ledger_account
+      * public_id)
   ;;
 
   let table =
@@ -1487,6 +1493,7 @@ module Companion_rows = struct
     ; institution : string
     ; format : string
     ; fields_json : string
+    ; display_name : string option
     }
 
   let id = Col.make "id" Type.int64 (fun (r : t) -> r.id)
@@ -1496,16 +1503,23 @@ module Companion_rows = struct
   let format = Col.make "format" Type.text (fun (r : t) -> r.format)
   let fields_json = Col.make "fields_json" Type.text (fun (r : t) -> r.fields_json)
 
+  (* The name the companion gives this row, from its annotation at import, so that a
+     query can read a movement's effective description without the companion's code. *)
+  let display_name =
+    Col.make "display_name" Type.(option text) (fun (r : t) -> r.display_name)
+  ;;
+
   let row =
     Row.(
-      unit (fun id document_id row_number institution format fields_json ->
-        { id; document_id; row_number; institution; format; fields_json })
+      unit (fun id document_id row_number institution format fields_json display_name ->
+        { id; document_id; row_number; institution; format; fields_json; display_name })
       * id
       * document_id
       * row_number
       * institution
       * format
-      * fields_json)
+      * fields_json
+      * display_name)
   ;;
 
   let table =
