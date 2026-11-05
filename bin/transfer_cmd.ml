@@ -141,10 +141,8 @@ let review_transfers database path =
                        (Int64.max c.first_event_id c.second_event_id))
               then loop pending rest
               else (
-                printf
-                  "\nCurrent pair: #%Ld and #%Ld\n"
-                  c.first_event_id
-                  c.second_event_id;
+                let (from_id, _, _), (to_id, _, _) = Terminal.transfer_sides c in
+                printf "\nCurrent pair: #%Ld → #%Ld\n" from_id to_id;
                 Terminal.transfer c;
                 printf
                   "  Score: %d; confidence: %s; assignment: %s\n"

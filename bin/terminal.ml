@@ -268,28 +268,38 @@ let operations ?(out = stdout) rows =
          ]))
 ;;
 
+(* What leaves, then what arrives. *)
+let transfer_sides (c : Transfers.transfer_candidate) =
+  let first = c.first_event_id, c.first, c.first_transaction
+  and second = c.second_event_id, c.second, c.second_transaction in
+  if Quantity.(Movement.principal c.first_transaction < zero)
+  then first, second
+  else second, first
+;;
+
 let transfer (c : Transfers.transfer_candidate) =
+  let (from_id, from_, from_tx), (to_id, to_, to_tx) = transfer_sides c in
   Stdio.printf
-    "%Ld <-> %Ld  principal %s %s  (%d days apart)\n"
-    c.first_event_id
-    c.second_event_id
-    (Quantity.to_string (Movement.principal c.first_transaction))
-    (text (Iso4217.to_alpha_code c.first_transaction.account.currency))
+    "%Ld → %Ld  %s %s  (%d days apart)\n"
+    from_id
+    to_id
+    (Quantity.to_string (Movement.principal to_tx))
+    (text (Iso4217.to_alpha_code from_tx.account.currency))
     c.days_apart;
   Stdio.printf
-    "  %s / %s (%s) <-> %s / %s (%s)\n"
-    (text c.first.venue)
-    (text c.first_transaction.account.account_id)
-    (Date.to_string c.first_transaction.booked_on)
-    (text c.second.venue)
-    (text c.second_transaction.account.account_id)
-    (Date.to_string c.second_transaction.booked_on);
+    "  %s / %s (%s) → %s / %s (%s)\n"
+    (text from_.venue)
+    (text from_tx.account.account_id)
+    (Date.to_string from_tx.booked_on)
+    (text to_.venue)
+    (text to_tx.account.account_id)
+    (Date.to_string to_tx.booked_on);
   Stdio.printf
     "  Fees: %s / %s %s\n"
-    (Quantity.to_string c.first_transaction.fee)
-    (Quantity.to_string c.second_transaction.fee)
-    (text (Iso4217.to_alpha_code c.first_transaction.account.currency));
-  List.iter [ c.first_transaction; c.second_transaction ] ~f:(fun tx ->
+    (Quantity.to_string from_tx.fee)
+    (Quantity.to_string to_tx.fee)
+    (text (Iso4217.to_alpha_code from_tx.account.currency));
+  List.iter [ from_tx; to_tx ] ~f:(fun tx ->
     let description = String.concat ~sep:" | " tx.descriptions in
     if not (String.is_empty description) then Stdio.printf "  %s\n" (text description));
   List.iter c.iban_evidence ~f:(fun evidence -> Stdio.printf "  %s\n" (text evidence))

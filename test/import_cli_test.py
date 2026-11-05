@@ -1702,7 +1702,8 @@ class ImportOnboarding(unittest.TestCase):
                                 (int(right['first']['event_id']), int(right['second']['event_id'])))
         first = candidates[0]
         output = self.terminal(['transfer', 'review'], [('Current pair or batch choice [c/r/s/a/d/q]:', 'q')])
-        self.assertIn(f"Current pair: #{first['first']['event_id']} and #{first['second']['event_id']}", output)
+        a, b = first['first']['event_id'], first['second']['event_id']
+        self.assertRegex(output, rf'Current pair: #({a} → #{b}|{b} → #{a})')
 
     def test_transfer_candidates_exclude_categorized_movements(self):
         header = 'Type,Product,Started Date,Completed Date,Description,Amount,Fee,Currency,State,Balance\n'
@@ -2570,6 +2571,10 @@ class ImportOnboarding(unittest.TestCase):
         self.run_fin('import', 'revolut', self.csv)
         pair = next(c for c in json.loads(self.run_fin('transfer', 'candidates', '--json').stdout)['candidates']
                     if {c['first']['institution'], c['second']['institution']} == {'boursobank', 'revolut'})
+        # A candidate reads the way the money goes.
+        candidates = self.run_fin('transfer', 'candidates').stdout
+        self.assertRegex(candidates, r'\d+ → \d+  150 EUR')
+        self.assertRegex(candidates, r'boursobank / \S+ \(2026-01-01\) → revolut / ')
         decisions = self.root / 'between.json'
         decisions.write_text(json.dumps([{'first_event_id': pair['first']['event_id'],
                                           'second_event_id': pair['second']['event_id'],

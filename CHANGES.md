@@ -8,6 +8,7 @@ short line of their own.
 
 ## Unreleased
 
+- Transfer candidates read the way the money goes, with what leaves first: `2076 → 1252  500 EUR`.
 - `fin operation list` keeps its columns aligned when a cell holds an arrow or an accent. An operation
   with several movements now reads the way the money goes, as `-70 EUR → +70 EUR`, where it printed
   the opposite order. A transfer between two institutions shows both, as `bunq → wise`.
