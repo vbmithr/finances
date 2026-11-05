@@ -2330,6 +2330,22 @@ class ImportOnboarding(unittest.TestCase):
         self.assertEqual(by_id[other]['counter_account'], 'equity:unclassified')
         self.assertEqual([h['event_id'] for h in json.loads(self.run_fin('settlement', 'history').stdout)], [chosen])
 
+    def test_category_queue_takes_one_institution(self):
+        self.run_fin('import', 'revolut', self.csv)
+        self.run_fin('import', 'boursobank', 'fixtures/bank.ofx')
+        self.run_fin('cat', 'add', 'expenses:food')
+        output = self.fullscreen(['operation', 'category', 'queue', '--institution', 'boursobank',
+                                  '--key', 'f=expenses:food'],
+                                 [('Category queue', 'f'), ('Staged expenses:food', 'q')])
+        self.assertIn('Category queue', output)
+        rows = json.loads(self.run_fin('operation', 'list', '--json').stdout)
+        done = [r for r in rows if r['counter_account'] == 'expenses:food']
+        self.assertTrue(done)
+        self.assertEqual({r['institution'] for r in done}, {'boursobank'})
+        self.assertTrue(any(r['institution'] == 'revolut' and r['decision'] == 'unclassified' for r in rows))
+        with self.assertRaisesRegex(AssertionError, 'unknown institution: nosuch'):
+            self.terminal(['operation', 'category', 'queue', '--institution', 'nosuch'], [])
+
     def test_fullscreen_category_queue(self):
         self.run_fin('import', 'revolut', self.csv)
         self.run_fin('cat', 'add', 'expenses:food')

@@ -995,13 +995,14 @@ For a fast, one-at-a-time workflow, run:
 fin operation category queue
 fin operation category queue --type card
 fin operation category queue --type card --type withdrawal
+fin operation category queue --type card --institution boursobank
 fin operation category queue --key f=expenses:food:restaurants --key r=expenses:home:rent
 ```
 
 Use `--type` to include only movements of a given effective type; repeat it to
 include multiple types. This includes manual type overrides and provider-specific
 types, and `--type unknown` selects movements without a type. The count in the
-queue covers the filtered selection.
+queue covers the filtered selection. `--institution` takes one provider the same way.
 
 The full-screen queue shows unclassified transactions, with incoming amounts in
 green and outgoing amounts in red (zero is uncolored). Set `NO_COLOR` to a
@@ -1011,7 +1012,7 @@ unclassified transactions with the same effective description in the current
 queue, across institutions. Matching ignores ASCII case and repeated whitespace;
 empty descriptions are never matched. The screen shows the number of other exact
 matches. Press `x` to toggle this batching for the session; `u` undoes the entire
-last batch. A `--type` filter limits the batch to the filtered queue, and skipped
+last batch. A `--type` or `--institution` filter limits the batch to the filtered queue, and skipped
 transactions are not included. `s` skips a transaction until the next session. `/` searches all categories: type a substring, use Up and Down, and
 press Enter to assign the highlighted category. `b` browses the hierarchy from
 `expenses` and `income`: use Up and Down to select, Enter or Right to open a

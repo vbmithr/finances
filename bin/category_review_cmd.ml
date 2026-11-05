@@ -473,7 +473,7 @@ let category_review database operation_id =
                  Ok ())))))
 ;;
 
-let category_queue database shortcuts types =
+let category_queue database shortcuts types institution =
   if not (Unix.isatty Unix.stdin && Unix.isatty Unix.stdout)
   then Or_error.error_string "the category queue requires a terminal"
   else (
@@ -482,10 +482,23 @@ let category_queue database shortcuts types =
       |> Or_error.combine_errors
     in
     with_database database (fun db ->
+      let%bind institution =
+        match institution with
+        | None -> Ok None
+        | Some name ->
+          (match
+             List.find (Registry.institutions db.registry) ~f:(fun known ->
+               String.equal known name
+               || List.mem (Registry.aliases db.registry known) name ~equal:String.equal)
+           with
+           | Some known -> Ok (Some known)
+           | None -> Or_error.errorf "unknown institution: %s" name)
+      in
       let%bind rows = Review.bank_review db in
       let rows =
         List.filter rows ~f:(fun (row : Review.bank_review) ->
           Poly.equal row.classification Review.Unclassified
+          && Option.for_all institution ~f:(String.equal row.institution)
           && (List.is_empty types
               || List.exists types ~f:(fun filter ->
                 Operation_list_cmd.matches_movement_type_filter filter row.movement_type)
@@ -530,7 +543,11 @@ let category_queue_cmd =
               ~docv:"TYPE"
               ~doc:
                 "Only movements of this effective type, or unknown for no type; repeat \
-                 to include multiple types."))
+                 to include multiple types.")
+      $ Arg.(
+          value
+          & opt (some string) None
+          & info [ "institution" ] ~docv:"NAME" ~doc:"Only movements from this provider."))
 ;;
 
 let category_review_cmd =

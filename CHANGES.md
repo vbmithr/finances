@@ -10,6 +10,7 @@ short line of their own.
 
 - The full-screen category queue and settlement review start at the top left instead of centering
   each line, so that shortcuts and categories line up.
+- `fin operation category queue --institution NAME` reviews one provider's movements.
 - `fin settlement review --all` records every settlement `fin settlement candidates` lists at one
   confirmation, setting up each card once.
 - Speed up limited `fin operation list` pages by reviewing only selected
