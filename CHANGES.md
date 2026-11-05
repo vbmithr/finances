@@ -8,6 +8,9 @@ short line of their own.
 
 ## Unreleased
 
+- `fin operation list` keeps its columns aligned when a cell holds an arrow or an accent. An operation
+  with several movements now reads the way the money goes, as `-70 EUR → +70 EUR`, where it printed
+  the opposite order. A transfer between two institutions shows both, as `bunq → wise`.
 - **Action required for scripts:** `fin operation category set` and `apply` refuse a category that is
   not in your catalog, where they used to add it. Add it first with `fin category add`.
 - `fin operation category undo` puts back the last batch of category changes, or the batch holding a

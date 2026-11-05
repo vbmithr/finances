@@ -1191,7 +1191,12 @@ class ImportOnboarding(unittest.TestCase):
         self.assertEqual(len(exchange['movement_rows']), 0)
         table = self.run_fin('operation', 'list').stdout
         self.assertIn('AMOUNTS', table)
-        self.assertIn('0.2 EUR → -2 CRO', table)
+        self.assertIn('-2 CRO → +0.2 EUR', table)
+        # An arrow takes one column, so the columns after it still line up.
+        lines = table.splitlines()
+        start = lines[0].index('INSTITUTION')
+        row = next(line for line in lines if '→' in line)
+        self.assertEqual(row[start:start + 3], 'cdc')
         self.assertIn('unresolved', table)
         self.assertIn('ID', table)
         reward = next(r for r in rows if r['description'] == 'Reward')
@@ -2554,6 +2559,33 @@ class ImportOnboarding(unittest.TestCase):
         message = ' '.join(applied.stderr.split())
         self.assertIn('no categories expenses:typo, income:typo', message)
         self.assertNotIn('expenses:typo', self.run_fin('cat', 'list', '--json').stdout)
+
+    def test_transfer_between_institutions_shows_both(self):
+        ofx = self.root / 'other-bank.ofx'
+        ofx.write_text(Path('fixtures/bank.ofx').read_text().replace('</BANKTRANLIST>',
+            '<STMTTRN><DTPOSTED>20260101</DTPOSTED><TRNTYPE>DEBIT</TRNTYPE>'
+            '<TRNAMT>-150.00</TRNAMT><FITID>to-revolut</FITID>'
+            '<NAME>To my other account</NAME></STMTTRN></BANKTRANLIST>', 1))
+        self.run_fin('import', 'boursobank', ofx)
+        self.run_fin('import', 'revolut', self.csv)
+        pair = next(c for c in json.loads(self.run_fin('transfer', 'candidates', '--json').stdout)['candidates']
+                    if {c['first']['institution'], c['second']['institution']} == {'boursobank', 'revolut'})
+        decisions = self.root / 'between.json'
+        decisions.write_text(json.dumps([{'first_event_id': pair['first']['event_id'],
+                                          'second_event_id': pair['second']['event_id'],
+                                          'decision': 'confirm', 'reason': 'Mine'}]))
+        self.run_fin('transfer', 'review', decisions)
+        lines = self.run_fin('operation', 'list').stdout.splitlines()
+        row = next(line for line in lines if '→' in line)
+        self.assertIn('-150 EUR → +150 EUR', row)
+        self.assertIn('boursobank → revolut', row)
+        # Columns line up past both arrows.
+        self.assertEqual(row[lines[0].index('ACCOUNT ID') - 2:lines[0].index('ACCOUNT ID')], '  ')
+        for institution in ('boursobank', 'revolut'):
+            listed = self.run_fin('operation', 'list', '--institution', institution).stdout
+            self.assertIn('boursobank → revolut', listed)
+        record = next(r for r in json.loads(self.run_fin('operation', 'list', '--json').stdout) if len(r['movements']) == 2)
+        self.assertIn(record['institution'], ('boursobank', 'revolut'))
 
     def test_category_queue_takes_one_institution(self):
         self.run_fin('import', 'revolut', self.csv)

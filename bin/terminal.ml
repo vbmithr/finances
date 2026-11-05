@@ -9,6 +9,15 @@ let text s =
   String.map s ~f:(fun c -> if Char.to_int c < 32 || Char.to_int c = 127 then ' ' else c)
 ;;
 
+(* Columns on a terminal, not bytes: an arrow or an accent takes one column and several bytes. *)
+let display_width cell =
+  if String.for_all cell ~f:(fun c -> Char.to_int c < 128)
+  then String.length cell
+  else (
+    try Notty.I.width (Notty.I.string Notty.A.empty cell) with
+    | _ -> String.length cell)
+;;
+
 let table ?(out = stdout) headers rows =
   let rows = List.map (headers :: rows) ~f:(List.map ~f:text) in
   let widths =
@@ -16,7 +25,7 @@ let table ?(out = stdout) headers rows =
       (List.tl_exn rows)
       ~init:(List.map headers ~f:String.length)
       ~f:(fun widths row ->
-        List.map2_exn widths row ~f:(fun width cell -> Int.max width (String.length cell)))
+        List.map2_exn widths row ~f:(fun width cell -> Int.max width (display_width cell)))
   in
   List.iteri rows ~f:(fun i row ->
     if i = 1
@@ -29,7 +38,8 @@ let table ?(out = stdout) headers rows =
       out
       (String.concat
          ~sep:"  "
-         (List.map2_exn widths row ~f:(fun width cell -> String.pad_right cell ~len:width)));
+         (List.map2_exn widths row ~f:(fun width cell ->
+            cell ^ String.make (Int.max 0 (width - display_width cell)) ' ')));
     Out_channel.output_char out '\n')
 ;;
 
@@ -167,14 +177,41 @@ let operation_amounts (row : Report_json.operation_row) =
      | Some amount, Some currency -> text amount ^ " " ^ text currency ^ " (reported)"
      | Some amount, None -> text amount ^ " (reported)"
      | _ -> "-")
+  | [ (m : Review.operation_movement_review) ] ->
+    Printf.sprintf
+      "%s %s"
+      (Quantity.to_string m.quantity)
+      (text (Commodity.display m.commodity))
   | movements ->
+    (* The way the money goes: what leaves, then what arrives. *)
+    let outgoing, incoming =
+      List.partition_tf movements ~f:(fun (m : Review.operation_movement_review) ->
+        Quantity.(m.quantity < zero))
+    in
     String.concat
       ~sep:" → "
-      (List.map movements ~f:(fun (m : Review.operation_movement_review) ->
+      (List.map (outgoing @ incoming) ~f:(fun (m : Review.operation_movement_review) ->
          Printf.sprintf
-           "%s %s"
+           "%s%s %s"
+           (if Quantity.(m.quantity > zero) then "+" else "")
            (Quantity.to_string m.quantity)
            (text (Commodity.display m.commodity))))
+;;
+
+(* Who the operation involves, the way the money goes. A transfer belongs to both sides. *)
+let operation_institutions (row : Report_json.operation_row) =
+  let institutions side =
+    List.filter_map row.operation.movements ~f:(fun m ->
+      Option.bind m.Review.review ~f:(fun (r : Review.bank_review) ->
+        Option.some_if (side m.quantity) r.institution))
+    |> List.dedup_and_sort ~compare:String.compare
+  in
+  match
+    ( institutions (fun q -> Quantity.(q < zero))
+    , institutions (fun q -> Quantity.(q > zero)) )
+  with
+  | [ from_ ], [ to_ ] when not (String.equal from_ to_) -> from_ ^ " → " ^ to_
+  | _ -> row.operation.institution
 ;;
 
 let operation_counter_account (row : Report_json.operation_row) =
@@ -221,7 +258,7 @@ let operations ?(out = stdout) rows =
          [ Int64.to_string operation.operation_id
          ; occurrence operation.occurred
          ; operation_amounts row
-         ; operation.institution
+         ; operation_institutions row
          ; Option.value row.account_id ~default:"-"
          ; Option.value_map operation.review ~default:"-" ~f:(fun r ->
              Option.value_map r.movement_type ~default:"-" ~f:Movement_type.to_string)
