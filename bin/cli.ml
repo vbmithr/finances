@@ -42,6 +42,28 @@ let confirm ~yes ~destructive question =
       question
 ;;
 
+(* The same question when standard input is taken, as in a pipe: it goes to the terminal
+   itself. Enter declines, because a pipe can select far more than was meant. *)
+let confirm_on_terminal ~yes question =
+  if yes
+  then Ok true
+  else (
+    match Unix.openfile "/dev/tty" [ Unix.O_RDWR ] 0 with
+    | exception Unix.Unix_error _ ->
+      Or_error.errorf
+        "cannot ask \"%s\" without a terminal; pass --yes to confirm it"
+        question
+    | terminal ->
+      Exn.protect
+        ~finally:(fun () -> Unix.close terminal)
+        ~f:(fun () ->
+          let text = question ^ " [y/N]: " in
+          ignore (Unix.write_substring terminal text 0 (String.length text) : int);
+          match Stdlib.input_line (Unix.in_channel_of_descr terminal) with
+          | answer -> Ok (confirm_default_no answer)
+          | exception End_of_file -> Ok false))
+;;
+
 let paths =
   let home =
     match Sys.getenv "HOME" with

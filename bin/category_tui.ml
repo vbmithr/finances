@@ -30,30 +30,59 @@ let parse_shortcuts categories specifications =
   else Ok shortcuts
 ;;
 
+(* Past the letters [--key] can name, so that a full menu can still offer a new category. *)
+let automatic_keys = shortcut_keys @ String.to_list "ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789"
+
+let free_key bindings category =
+  let available =
+    List.filter automatic_keys ~f:(fun key ->
+      not (List.Assoc.mem bindings key ~equal:Char.equal))
+  in
+  let last = String.split category ~on:':' |> List.last_exn in
+  String.to_list (String.lowercase last)
+  |> List.find ~f:(fun key ->
+    Char.is_alpha key && List.mem available key ~equal:Char.equal)
+  |> fun preferred -> Option.first_some preferred (List.hd available)
+;;
+
 let add_shortcuts shortcuts categories =
   List.fold categories ~init:shortcuts ~f:(fun bindings category ->
     if List.exists bindings ~f:(fun (_, value) -> String.equal value category)
     then bindings
     else (
-      let available =
-        List.filter shortcut_keys ~f:(fun key ->
-          not (List.Assoc.mem bindings key ~equal:Char.equal))
-      in
-      let last = String.split category ~on:':' |> List.last_exn in
-      let preferred =
-        String.to_list (String.lowercase last)
-        |> List.find ~f:(fun key -> List.mem available key ~equal:Char.equal)
-      in
-      match Option.first_some preferred (List.hd available) with
+      match free_key bindings category with
       | None -> bindings
       | Some key -> bindings @ [ key, category ]))
+;;
+
+(* This category first, as the menu shows what fits from the top. It keeps its key if it has
+   one; if none is free, it takes the key of the category furthest down. *)
+let bring_to_top bindings category =
+  let mine, others =
+    List.partition_tf bindings ~f:(fun (_, value) -> String.equal value category)
+  in
+  match mine with
+  | binding :: _ -> binding :: others
+  | [] ->
+    (match free_key others category with
+     | Some key -> (key, category) :: others
+     | None ->
+       (match List.rev others with
+        | (key, _) :: rest -> (key, category) :: List.rev rest
+        | [] -> []))
 ;;
 
 type mode =
   | Normal
   | Search of string * int
   | Browse of string * int
-  | Add of string
+  | Add of string * string * int
+
+(* One line of adding a category: what to do with the segment at this level. *)
+type add_row =
+  | Finish
+  | Existing of string
+  | New_segment of string
 
 let remove_last_utf8 value =
   if String.is_empty value
@@ -144,6 +173,54 @@ let run db rows categories specifications =
     match String.rsplit2 name ~on:':' with
     | None -> ""
     | Some (prefix, _) -> prefix
+  in
+  let under prefix segment =
+    if String.is_empty prefix then segment else prefix ^ ":" ^ segment
+  in
+  (* What exists first, so that a typo reaches the real category unless a new one is chosen. *)
+  let add_rows prefix text =
+    let text = String.strip text in
+    let last category = String.split category ~on:':' |> List.last_exn in
+    let segments =
+      List.map (children prefix) ~f:last
+      @ if String.is_empty prefix then [ "expenses"; "income" ] else []
+    in
+    let existing =
+      List.dedup_and_sort segments ~compare:String.compare
+      |> List.filter ~f:(fun segment ->
+        String.Caseless.is_substring segment ~substring:text)
+    in
+    (if String.is_empty text && not (String.is_empty prefix) then [ Finish ] else [])
+    @ List.map existing ~f:(fun segment -> Existing segment)
+    @
+    if String.is_empty text || List.mem existing text ~equal:String.equal
+    then []
+    else [ New_segment text ]
+  in
+  let add_category value =
+    match Bank_category.create ~event_id:1L ~account:value ~reason:"category queue" with
+    | Error error -> message := Error.to_string_hum error
+    | Ok category when String.equal category.account "equity:unclassified" ->
+      message := "Unclassified is not a category."
+    | Ok category ->
+      let value = category.account in
+      let known = List.mem !categories value ~equal:String.equal in
+      if not known
+      then (
+        new_categories := value :: !new_categories;
+        categories := List.dedup_and_sort (value :: !categories) ~compare:String.compare);
+      bindings := bring_to_top !bindings value;
+      let key =
+        List.find_map !bindings ~f:(fun (key, category) ->
+          Option.some_if (String.equal category value) key)
+      in
+      message
+      := Printf.sprintf
+           "%s %s%s"
+           (if known then "Already have" else "Added")
+           value
+           (Option.value_map key ~default:"" ~f:(Printf.sprintf ": press %c"));
+      mode := Normal
   in
   let outcome =
     Exn.protect
@@ -296,8 +373,34 @@ let run db rows categories specifications =
                   , [ line ("Browse: " ^ if String.is_empty prefix then "root" else prefix)
                     ; line "Up/Down Enter open Space set Left back"
                     ] )
-                | Add value ->
-                  [], [ line ("New category: " ^ value); line "Enter: add  Esc: back" ]
+                | Add (prefix, text, selected) ->
+                  let rows = add_rows prefix text in
+                  let shown index row =
+                    let label =
+                      match row with
+                      | Finish -> "= add " ^ prefix
+                      | Existing segment ->
+                        let name = under prefix segment in
+                        (if has_children name then "> " else "  ") ^ name
+                      | New_segment segment -> "+ new: " ^ under prefix segment
+                    in
+                    wrap
+                      ~attr:
+                        (if index = selected
+                         then Notty.A.st Notty.A.reverse
+                         else Notty.A.empty)
+                      label
+                  in
+                  let lines = List.concat_mapi rows ~f:shown in
+                  let first = Int.max 0 (selected - available + 1) in
+                  ( List.take (List.drop lines first) available
+                  , [ line
+                        ("New category: "
+                         ^ (if String.is_empty prefix then "" else prefix ^ ":")
+                         ^ text)
+                    ; line "Up/Down choose  Enter select  Right or : deeper"
+                    ; line "Left back  Esc cancel"
+                    ] )
               in
               Notty.I.vcat
                 ([ header ]
@@ -357,7 +460,7 @@ let run db rows categories specifications =
                mode := Search ("", 0)
              | Normal, `ASCII 'b', [] when not (List.is_empty !pending) ->
                mode := Browse ("", 0)
-             | Normal, `ASCII 'a', [] -> mode := Add ""
+             | Normal, `ASCII 'a', [] -> mode := Add ("", "", 0)
              | Normal, `ASCII 'u', [] -> undo ()
              | Normal, `ASCII 'x', [] -> match_exact := not !match_exact
              | Normal, `ASCII key, [] ->
@@ -422,27 +525,34 @@ let run db rows categories specifications =
                    then mode := Browse (category, 0)
                    else if is_category category
                    then assign category)
-             | Add value, `Enter, [] ->
-               let value = String.strip value in
-               (match
-                  Bank_category.create
-                    ~event_id:1L
-                    ~account:value
-                    ~reason:"category queue"
-                with
-                | Error error -> message := Error.to_string_hum error
-                | Ok category when String.equal category.account "equity:unclassified" ->
-                  message := "Unclassified is not a category."
-                | Ok category ->
-                  let value = category.account in
-                  if not (List.mem !categories value ~equal:String.equal)
-                  then new_categories := value :: !new_categories;
-                  categories
-                  := List.dedup_and_sort (value :: !categories) ~compare:String.compare;
-                  bindings := add_shortcuts !bindings [ value ];
-                  mode := Normal;
-                  message := "Added " ^ value)
-             | Add value, key, [] -> mode := Add (edit value key)
+             | Add (prefix, text, selected), `Arrow `Up, [] ->
+               mode := Add (prefix, text, Int.max 0 (selected - 1))
+             | Add (prefix, text, selected), `Arrow `Down, [] ->
+               mode
+               := Add
+                    ( prefix
+                    , text
+                    , Int.min
+                        (Int.max 0 (List.length (add_rows prefix text) - 1))
+                        (selected + 1) )
+             | Add (prefix, "", _), (`Arrow `Left | `Backspace), [] ->
+               mode := Add (parent prefix, "", 0)
+             | Add (prefix, text, selected), `Enter, [] ->
+               (match List.nth (add_rows prefix text) selected with
+                | None -> ()
+                | Some Finish -> add_category prefix
+                | Some (New_segment segment) -> add_category (under prefix segment)
+                | Some (Existing segment) ->
+                  let name = under prefix segment in
+                  if is_category name && not (has_children name)
+                  then add_category name
+                  else mode := Add (name, "", 0))
+             | Add (prefix, text, selected), (`Arrow `Right | `ASCII ':'), [] ->
+               (match List.nth (add_rows prefix text) selected with
+                | Some (Existing segment | New_segment segment) ->
+                  mode := Add (under prefix segment, "", 0)
+                | Some Finish | None -> ())
+             | Add (prefix, text, _), key, [] -> mode := Add (prefix, edit text key, 0)
              | _ -> ());
             loop ()
           | _ -> loop ()

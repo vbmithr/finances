@@ -860,7 +860,7 @@ class ImportOnboarding(unittest.TestCase):
         self.assertEqual(len(ids), 2)
 
         def set_from_input(contents, *args):
-            return subprocess.run([FIN, 'operation', 'category', 'set', *map(str, args)],
+            return subprocess.run([FIN, 'operation', 'category', 'set', '--yes', *map(str, args)],
                                   input=contents, env=self.env, capture_output=True, text=True)
 
         result = set_from_input(selected, 'expenses:food', '-')
@@ -1232,7 +1232,7 @@ class ImportOnboarding(unittest.TestCase):
         updated = next(r for r in json.loads(self.run_fin('operation', 'list', '--json').stdout) if r['operation_id'] == row['operation_id'])
         self.assertEqual((updated['counter_account'], updated['movement_type']), ('expenses:food', 'fee'))
         selected = json.dumps([row])
-        piped = subprocess.run([FIN, 'operation', 'category', 'set', 'expenses:other', '-'],
+        piped = subprocess.run([FIN, 'operation', 'category', 'set', 'expenses:other', '-', '--yes'],
                                input=selected, env=self.env, capture_output=True, text=True)
         self.assertEqual(piped.returncode, 0, piped.stderr)
         self.assertIn('category_changes=1', piped.stdout)
@@ -2354,6 +2354,110 @@ class ImportOnboarding(unittest.TestCase):
         self.assertTrue(by_id[chosen]['counter_account'].startswith('liabilities:cards:'))
         self.assertEqual(by_id[other]['counter_account'], 'equity:unclassified')
         self.assertEqual([h['event_id'] for h in json.loads(self.run_fin('settlement', 'history').stdout)], [chosen])
+
+    def test_category_queue_adds_a_category_segment_by_segment(self):
+        self.run_fin('import', 'revolut', self.csv)
+        self.run_fin('cat', 'add', 'expenses:food')
+        down, right, left = '\x1b[B', '\x1b[C', '\x1b[D'
+        output = self.fullscreen(['operation', 'category', 'queue'], [
+            ('Category queue', 'a'),
+            # Reuse by choosing, then add below what exists.
+            ('New category:', '\r'),
+            ('New category: expenses:', 'fo'),
+            ('  expenses:food', right),
+            ('New category: expenses:food:', 'bar\r'),
+            ('Added expenses:food:bar', 'a'),
+            # A whole path can be typed, with new segments on the way.
+            ('New category:', 'income:gifts:family\r'),
+            ('Added income:gifts:family', 'a'),
+            # What exists comes first, so a new one is chosen on purpose.
+            ('New category:', 'expenses:foo'),
+            ('+ new: expenses:foo', down + '\r'),
+            ('Added expenses:foo', 'a'),
+            # A group can become a category itself, and Left goes back up.
+            ('New category:', 'expenses:typo:'),
+            ('New category: expenses:typo:', left),
+            ('New category: expenses:', 'food:\r'),
+            ('Already have expenses:food', 'a'),
+            ('New category:', 'income:'),
+            ('New category: income:', '\x1b'),
+            ('Letter: assign', 'q'),
+        ])
+        categories = json.loads(self.run_fin('cat', 'list', '--json').stdout)
+        for name in ('expenses:food', 'expenses:food:bar', 'income:gifts:family', 'expenses:foo'):
+            self.assertIn(name, categories)
+        self.assertNotIn('expenses:typo', categories)
+
+    def test_category_queue_offers_a_new_category_with_a_full_menu(self):
+        self.run_fin('import', 'revolut', self.csv)
+        for i in range(28):
+            self.run_fin('cat', 'add', f'expenses:group{i:02}')
+        output = self.fullscreen(['operation', 'category', 'queue'], [
+            ('Category queue', 'a'),
+            ('New category:', 'expenses:brandnew\r'),
+            # 20 lowercase letters, then capitals for the rest of the 28.
+            ('Added expenses:brandnew: press I', 'I'),
+            ('Staged expenses:brandnew', 'q'),
+        ])
+        self.assertIn('I  expenses:brandnew', output)
+        rows = json.loads(self.run_fin('operation', 'list', '--decision', 'category', '--json').stdout)
+        self.assertEqual({r['counter_account'] for r in rows}, {'expenses:brandnew'})
+
+    def piped_set(self, listing, answer, *options):
+        """fin operation category set - with this listing piped in, answering on a terminal."""
+        master, slave = pty.openpty()
+        def own_terminal():
+            os.setsid()
+            fcntl.ioctl(slave, termios.TIOCSCTTY, 0)
+        child = subprocess.Popen(
+            [FIN, 'operation', 'category', 'set', 'expenses:books', '-', *options],
+            env=self.env, stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+            preexec_fn=own_terminal, text=True)
+        child.stdin.write(listing)
+        child.stdin.close()
+        prompt = b''
+        while b'[y/N]:' not in prompt:
+            prompt += os.read(master, 4096)
+        os.write(master, answer.encode() + b'\n')
+        stdout = child.stdout.read()
+        stderr = child.stderr.read()
+        child.wait(timeout=20)
+        os.close(slave)
+        os.close(master)
+        return child.returncode, stdout, stderr, prompt.decode()
+
+    def test_piped_category_set_shows_the_change_and_asks(self):
+        self.run_fin('import', 'revolut', self.csv)
+        rows = self.run_fin('operation', 'list', '--json').stdout
+        count = len(json.loads(rows))
+        unclassified = lambda: len(json.loads(self.run_fin('operation', 'list', '--decision', 'unclassified', '--json').stdout))
+        self.assertEqual(unclassified(), count)
+        for answer in ('', 'n'):
+            code, stdout, stderr, prompt = self.piped_set(rows, answer)
+            self.assertEqual(code, 0, stderr)
+            self.assertIn('Nothing changed.', stdout)
+            self.assertIn(f'Set {count} transaction(s) to expenses:books?', prompt)
+            self.assertIn(f'This sets {count} transaction(s) to expenses:books.', stderr)
+            self.assertIn('equity:unclassified', stderr)
+            self.assertIn('For example:', stderr)
+            self.assertEqual(unclassified(), count)
+        code, stdout, stderr, _ = self.piped_set(rows, 'y')
+        self.assertIn(f'category_changes={count}', stdout)
+        self.assertEqual(unclassified(), 0)
+
+    def test_piped_category_set_without_a_terminal_needs_yes(self):
+        self.run_fin('import', 'revolut', self.csv)
+        rows = self.run_fin('operation', 'list', '--json').stdout
+        pipe = lambda *options: subprocess.run(
+            [FIN, 'operation', 'category', 'set', 'expenses:books', '-', *options], env=self.env,
+            input=rows, capture_output=True, text=True, start_new_session=True)
+        refused = pipe()
+        self.assertNotEqual(refused.returncode, 0)
+        self.assertIn('pass --yes', ' '.join(refused.stderr.split()))
+        self.assertEqual(json.loads(self.run_fin('cat', 'list', '--json').stdout), [])
+        self.assertIn('category_changes=', pipe('--yes').stdout)
+        # Nothing left to change, so nothing to ask.
+        self.assertIn('category_changes=0', pipe().stdout)
 
     def test_category_queue_takes_one_institution(self):
         self.run_fin('import', 'revolut', self.csv)

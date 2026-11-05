@@ -54,7 +54,33 @@ let bank_event_ids_for_operations ?source_event_id db operation_ids =
   |> Or_error.combine_errors
 ;;
 
-let category_set database account inputs =
+(* What a piped selection would change, shown before asking. *)
+let category_set_preview db account event_ids =
+  let%map rows = Review.bank_review db in
+  let selected = Set.of_list (module Int64) event_ids in
+  let changing =
+    List.filter rows ~f:(fun (r : Review.bank_review) ->
+      Set.mem selected r.event_id && not (String.equal r.counter_account account))
+  in
+  if not (List.is_empty changing)
+  then (
+    eprintf
+      "This sets %d transaction(s) to %s.\nNow:\n"
+      (List.length changing)
+      (Terminal.text account);
+    List.map changing ~f:(fun r -> r.counter_account)
+    |> List.sort_and_group ~compare:String.compare
+    |> List.map ~f:(fun group -> List.length group, List.hd_exn group)
+    |> List.sort ~compare:(fun (a, _) (b, _) -> Int.compare b a)
+    |> List.iter ~f:(fun (count, name) ->
+      eprintf "  %6d  %s\n" count (Terminal.text name));
+    eprintf "For example:\n";
+    List.iter (List.take changing 3) ~f:(fun r ->
+      eprintf "  %s\n" (Terminal.text r.description)));
+  List.length changing
+;;
+
+let category_set database account yes inputs =
   let stdin_count = List.count inputs ~f:(String.equal "-") in
   if stdin_count > 1
   then Or_error.error_string "standard input can only be specified once"
@@ -100,9 +126,25 @@ let category_set database account inputs =
             ~reason:"Set with fin operation category set")
         |> Or_error.combine_errors
       in
-      let%bind changed = Review.set_bank_categories db decisions in
-      printf "category_changes=%d\n" changed;
-      Ok ()))
+      let%bind confirmed =
+        if stdin_count = 0
+        then Ok true
+        else (
+          match%bind category_set_preview db account event_ids with
+          | 0 -> Ok true
+          | count ->
+            confirm_on_terminal
+              ~yes
+              (Printf.sprintf "Set %d transaction(s) to %s?" count account))
+      in
+      if not confirmed
+      then (
+        print_endline "Nothing changed.";
+        Ok ())
+      else (
+        let%bind changed = Review.set_bank_categories db decisions in
+        printf "category_changes=%d\n" changed;
+        Ok ())))
 ;;
 
 let category_set_cmd =
@@ -120,6 +162,10 @@ let category_set_cmd =
               ~docv:"ACCOUNT"
               ~doc:"Income or expense account, or equity:unclassified to reset.")
       $ Arg.(
+          value
+          & flag
+          & info [ "yes" ] ~doc:"With -, confirm without asking, for scripts.")
+      $ Arg.(
           non_empty
           & pos_right 0 string []
           & info
@@ -127,7 +173,7 @@ let category_set_cmd =
               ~docv:"OPERATION-ID|-"
               ~doc:
                 "Operation IDs, or - to read fin operation list --json from standard \
-                 input."))
+                 input, which shows what would change and asks first."))
 ;;
 
 let categorize_bank_cmd =

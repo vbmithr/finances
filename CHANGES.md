@@ -8,6 +8,12 @@ short line of their own.
 
 ## Unreleased
 
+- **Action required for scripts:** `fin operation category set ACCOUNT -` now shows what a piped
+  selection would change and asks `[y/N]` on the terminal. Pass `--yes` in scripts.
+- Adding a category in `fin operation category queue` goes one segment at a time: each level lists
+  what exists and typing filters it, so that reusing a segment is the easy path and a new one is
+  chosen on purpose. Typing a whole path with `:` still works. The category then comes first in the
+  menu with its key, even when the shortcut letters have run out.
 - **Action required:** saving your work is now one file. `fin decisions export FILE` saves account
   settings, the category catalog, rules, assignments, card settlements, reversals, exchanges and
   transfers; `fin decisions restore FILE` re-applies them in the right order, all or nothing.

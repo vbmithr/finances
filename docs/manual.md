@@ -878,6 +878,10 @@ fin operation list --type withdrawal --decision unclassified --json |
   fin operation category set expenses:cash-withdrawals -
 ```
 
+With `-`, fin shows how many transactions would change, what they are categorized as now and a few
+examples, then asks `[y/N]` on the terminal. `--yes` skips this for scripts; without a terminal the
+command fails unless you pass it. Operation IDs you type are not asked about.
+
 Both commands must use the same database. You can combine `-` with explicit
 operation IDs. An empty list makes no changes. Like `set` with explicit IDs, this
 replaces existing categories; include `--decision unclassified` if you only
@@ -928,8 +932,11 @@ press Enter to assign the highlighted category. `b` browses the hierarchy from
 `expenses` and `income`: use Up and Down to select, Enter or Right to open a
 branch or assign a leaf, and Left or Backspace to go up. Space assigns a selected
 category even when it has children. A `+` marks a branch; intermediate groups
-that are not catalog categories cannot be assigned. `a` adds a category and
-returns to the same transaction, and `u` undoes the last staged assignment.
+that are not catalog categories cannot be assigned. `a` adds a category one segment at a time and
+returns to the same transaction: each level lists what exists, typing filters it, and `+ new` adds
+what you typed. `Enter` or `Right` goes deeper, `:` does too while typing a whole path, `Left` goes
+back, and `= add` makes the level you are on a category. The category then comes first in the
+menu with its key, ready to assign, using capitals and digits once lowercase letters run out. `u` undoes the last staged assignment.
 Assignments and newly added categories remain in memory until `q` saves them
 atomically and quits. Ctrl-C or terminal disconnection discards staged changes.
 If a transaction changes elsewhere during the session, saving is refused and the

@@ -4,6 +4,11 @@ open Base
 
 val prompt : string -> string option
 val confirm : yes:bool -> destructive:bool -> string -> bool Or_error.t
+
+(** [confirm] when standard input is in use, such as by a pipe: asks on the terminal, and Enter
+    declines. *)
+val confirm_on_terminal : yes:bool -> string -> bool Or_error.t
+
 val paths : Finances.App_paths.t
 val require_database : String.t -> unit Or_error.t
 
