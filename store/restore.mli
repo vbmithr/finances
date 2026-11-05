@@ -62,9 +62,15 @@ val find_transfer_decision
   -> int64
   -> (int64 * int64 * string * string) Rel_sql.Stmt.t
 
+(** Every account's IBAN, for [transfer_iban_evidence]. It visits every movement: read it
+    once per batch. *)
+val known_ibans
+  :  Handle.t
+  -> (Source_event.t * Movement.account * Iban.t option) list Or_error.t
+
 val transfer_iban_evidence
   :  Handle.t
-  -> (int64 * Source_event.t) List.t
+  -> (Source_event.t * Movement.account * Iban.t option) list
   -> Source_event.t
   -> Movement.t
   -> Source_event.t

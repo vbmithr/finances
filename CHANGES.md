@@ -26,6 +26,11 @@ short line of their own.
   only those, not every review.
 - Internal: which operations read as one is stated once, in the `grouped_operations` view.
   `fin operation show` and linking read it there; the OCaml `Operation_groups` module is gone.
+- Internal: the journal takes each movement's description from the `reviews` view, so it can no longer
+  describe a movement differently from the listings.
+- Batches no longer slow down with the square of their size: confirming transfers, applying categories,
+  previewing a settlement rule, and `fin decisions export` and `restore`, which searched every
+  imported row once per decision. Restoring real decisions takes 1.0 s instead of 1.4 s.
 - `fin settlement review --all` checks everything once and records the batch in one transaction, all or
   nothing: 54 settlements take about 0.3 s instead of 5.5 s, which grew with every row you had.
 - `fin transfer unmatched` lists unclassified transfers that have no candidate, with the nearest thing to

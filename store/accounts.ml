@@ -65,14 +65,36 @@ let preview_classification_rule ?(force = false) db (rule : Classification_rule.
         Ok (id, movement.movement_type))
     | _ -> Ok []
   in
+  let raw_types = Hashtbl.of_alist_exn (module Int64) raw_types in
+  (* Movements the card's own account shows being paid: transfers, not settlements. *)
+  let* card_paid =
+    match settlement_card with
+    | None -> Ok (Hash_set.create (module Int64))
+    | Some card ->
+      let query =
+        Rel_sql.Stmt.(
+          func
+            "SELECT DISTINCT event_id FROM opposite_payments WHERE venue=? AND bank_id=? \
+             AND account_id=? AND account_type=?"
+            (text @-> text @-> text @-> text @-> ret Row.(t1 (int64 "event_id"))))
+      in
+      let* ids =
+        collect
+          db
+          (query
+             card.mapping.institution
+             card.mapping.bank_id
+             card.mapping.account_id
+             card.mapping.account_type)
+      in
+      Ok (Hash_set.of_list (module Int64) ids)
+  in
   let matched =
     List.filter rows ~f:(fun row ->
       let matched_type =
         match rule.mode, rule.action, rule.match_type with
         | Automatic, (Type _ | Type_and_category _), Some _ ->
-          Option.value
-            (List.Assoc.find raw_types row.event_id ~equal:Int64.equal)
-            ~default:None
+          Option.value (Hashtbl.find raw_types row.event_id) ~default:None
         | _ -> row.movement_type
       in
       Option.value_map rule.institution ~default:true ~f:(String.equal row.institution)
@@ -145,16 +167,7 @@ let preview_classification_rule ?(force = false) db (rule : Classification_rule.
                || Quantity.(movement.amount >= zero)
                || not (Quantity.is_zero movement.fee)
              then Some "not a fee-free debit in the card currency"
-             else if
-               List.exists rows ~f:(fun other ->
-                 let tx = other.transaction in
-                 String.equal other.institution card.mapping.institution
-                 && String.equal tx.account.bank_id card.mapping.bank_id
-                 && String.equal tx.account.account_id card.mapping.account_id
-                 && String.equal tx.account.account_type card.mapping.account_type
-                 && Iso4217.equal tx.account.currency account.currency
-                 && Quantity.equal tx.amount (Quantity.neg movement.amount)
-                 && Int.abs (Date.diff tx.booked_on movement.booked_on) <= 7)
+             else if Hash_set.mem card_paid row.event_id
              then Some "matching card-side payment exists; review as a transfer"
              else None)
        in
@@ -389,6 +402,7 @@ let set_bank_account_identities_in_transaction db identities =
     in
     let* changed = apply 0 identities in
     let* transfers = bank_transfer_decisions db in
+    let* known = known_ibans db in
     let* _ =
       traverse
         (fun (d : Bank_transfer.decision) ->
@@ -396,15 +410,14 @@ let set_bank_account_identities_in_transaction db identities =
            then Ok ()
            else (
              let get id =
-               Or_error.of_option
-                 (List.Assoc.find source id ~equal:Int64.equal)
-                 ~error:(Error.of_string "missing transfer source")
+               let* event = find_event db id in
+               Or_error.of_option event ~error:(Error.of_string "missing transfer source")
              in
              let* a = get d.first_event_id in
              let* b = get d.second_event_id in
              let* ta = movement db d.first_event_id in
              let* tb = movement db d.second_event_id in
-             let* compatible, _, _ = transfer_iban_evidence db source a ta b tb in
+             let* compatible, _, _ = transfer_iban_evidence db known a ta b tb in
              if compatible
              then Ok ()
              else

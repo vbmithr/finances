@@ -120,8 +120,8 @@ let events_with_order ?order db =
 
 let events db = events_with_order db
 
-(* One source event, without decoding the others. *)
-let event_by_id db event_id =
+(* One source event, if stored, without decoding the others. *)
+let find_event db event_id =
   let* rows =
     collect
       db
@@ -147,11 +147,17 @@ let event_by_id db event_id =
            Db_schema.Source_event_fields.row)
     in
     Ok
-      (Source_event.with_fields
-         event
-         (List.map stored ~f:(fun (f : Db_schema.Source_event_fields.t) ->
-            f.name, f.value)))
-  | _ -> Or_error.error_string "unknown transaction event ID"
+      (Some
+         (Source_event.with_fields
+            event
+            (List.map stored ~f:(fun (f : Db_schema.Source_event_fields.t) ->
+               f.name, f.value))))
+  | _ -> Ok None
+;;
+
+let event_by_id db event_id =
+  let* event = find_event db event_id in
+  Or_error.of_option event ~error:(Error.of_string "unknown transaction event ID")
 ;;
 
 type source_evidence_change =
@@ -501,26 +507,19 @@ let journal_movements db =
     collect
       db
       (statement
-         "SELECT e.kind,m.event_id,m.value_on,m.descriptions,m.main_description FROM \
-          movements m JOIN source_events e ON e.id=m.event_id"
+         "SELECT r.kind,r.event_id,m.value_on,r.description FROM reviews r JOIN \
+          movements m ON m.event_id=r.event_id ORDER BY r.event_id"
          Row.(
-           t5
+           t4
              (text "kind")
              (int64 "event_id")
              (option Rel.Type.text "value_on")
-             (text "descriptions")
-             (int "main_description")))
+             (text "description")))
   in
-  List.filter rows ~f:(fun (kind, _, _, _, _) ->
-    Registry.is_movement_kind db.registry kind)
-  |> traverse (fun (_, event_id, value_on, descriptions, main_description) ->
-    let* descriptions = Json.decode (Jsont.list Jsont.string) descriptions in
+  List.filter rows ~f:(fun (kind, _, _, _) -> Registry.is_movement_kind db.registry kind)
+  |> traverse (fun (_, event_id, value_on, description) ->
     let* value_on = Or_error.try_with (fun () -> Option.map value_on ~f:Date.of_string) in
-    Ok
-      { event_id
-      ; value_on
-      ; description = Option.value (List.nth descriptions main_description) ~default:""
-      })
+    Ok { event_id; value_on; description })
 ;;
 
 type projection_report =

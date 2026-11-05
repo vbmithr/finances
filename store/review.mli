@@ -106,10 +106,6 @@ type bank_review =
   ; reason : string option
   }
 
-(** Choose a consistent nonempty companion display name, or the movement's
-    primary description when companion names are absent or disagree. *)
-val effective_description : string -> Companion.annotation list -> string
-
 val bank_review : t -> bank_review list Or_error.t
 
 (** The reviews of these movements only, in listing order. *)

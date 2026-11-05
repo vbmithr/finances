@@ -273,14 +273,7 @@ let export db =
     Hashtbl.add_multi metadata ~key:event_id ~data:annotation);
   let descriptions = Hashtbl.create (module Int64) in
   List.iter movements ~f:(fun (movement : Ledger.journal_movement) ->
-    let annotations =
-      Option.value (Hashtbl.find metadata movement.event_id) ~default:[]
-      |> List.map ~f:snd
-    in
-    Hashtbl.set
-      descriptions
-      ~key:movement.event_id
-      ~data:(Review.effective_description movement.description annotations));
+    Hashtbl.set descriptions ~key:movement.event_id ~data:movement.description);
   List.iter transfer_links ~f:(fun (d : Review.operation_transfer_link) ->
     if Hashtbl.mem pairs d.first_event_id
     then (

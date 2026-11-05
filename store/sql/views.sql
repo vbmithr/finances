@@ -170,3 +170,14 @@ SELECT coalesce(g.canonical, m.operation_id) AS canonical, x.*
 FROM reviews x
 JOIN operation_movements m ON m.anchor_event_id = x.event_id
 LEFT JOIN grouped_operations g ON g.member = m.operation_id;
+
+-- Each movement with every account showing the opposite amount in the same currency within
+-- seven days. For card spending on a bank account, a row on the card's own account is the
+-- card being paid: a transfer, not a settlement.
+CREATE TEMP VIEW opposite_payments(event_id, venue, bank_id, account_id, account_type) AS
+SELECT m.event_id, p.venue, p.bank_id, p.account_id, p.account_type
+FROM movements m
+JOIN movements p
+  ON p.currency = m.currency
+  AND p.booked_on BETWEEN date(m.booked_on, '-7 days') AND date(m.booked_on, '+7 days')
+  AND decimal_cmp(p.amount, decimal_sub('0', m.amount)) = 0;

@@ -138,14 +138,12 @@ let set_bank_categories_in_transaction ?(only_unclassified = false) db decisions
   then Or_error.error_string "duplicate event_id in category batch"
   else (
     let apply_batch db =
-      let* source = events db in
       let rec apply changed = function
         | [] -> Ok changed
         | (d : Bank_category.t) :: rest ->
+          let* event = find_event db d.event_id in
           let* event =
-            Or_error.of_option
-              (List.Assoc.find source d.event_id ~equal:Int64.equal)
-              ~error:(Error.of_string "unknown category event_id")
+            Or_error.of_option event ~error:(Error.of_string "unknown category event_id")
           in
           let* transfer = linked_transfer db d.event_id in
           let linked_query =
@@ -489,18 +487,6 @@ type bank_review =
   ; counter_account : string
   ; reason : string option
   }
-
-let effective_description fallback annotations =
-  let preferred =
-    List.filter_map annotations ~f:(fun (a : Companion.annotation) ->
-      Option.bind a.display_name ~f:(fun name ->
-        Option.some_if (not (String.is_empty (String.strip name))) name))
-    |> List.dedup_and_sort ~compare:String.compare
-  in
-  match preferred with
-  | [ name ] -> name
-  | _ -> fallback
-;;
 
 (* Values a query reads as one JSON parameter, however many there are. *)
 let json_text = Json.encode Jsont.string

@@ -75,6 +75,9 @@ The shared reads are views, in `store/sql/views.sql`:
 - `operation_anchors` and `operation_rows`: each operation's group, primary movement and display
   fields;
 - `group_reviews`: the review of every movement in a group, for filters that hold when any one does.
+- `opposite_payments`: each movement with the accounts showing the opposite amount within seven
+  days, which tells card spending already paid by the card from a settlement, for both settlement
+  suggestions and settlement rules.
 
 They are temporary views that each connection creates when it opens. A view holds no data, so a
 change to one needs neither a schema version nor a rebuild, which a view in the schema would.
@@ -112,8 +115,8 @@ connection and transactions.
 3. Done: settlement and reversal suggestions as queries; commands on one or two movements read
    only those. Short statements stay inline: they read well where they are, and a file is for a
    query too big or complicated to read in a string.
-4. Done: operation groups stated once, in `grouped_operations`. Next: the journal's descriptions
-   from `reviews`, then the large single queries.
+4. Done: operation groups stated once, in `grouped_operations`; the journal's descriptions read
+   from `reviews`. Next: the large single queries.
 Each step is checked byte for byte against the previous build on scratch rebuilds of real
 statements: one with only imports, one with transfers confirmed and settlements recorded.
 

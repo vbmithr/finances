@@ -515,7 +515,13 @@ position observations, derive positions from fills, or calculate funding.
   queue and `fin operation review` (one linear filter each), similarity, rule application, transfer
   linking, decisions and restore, which use most rows. Operation groups are stated once, in the
   `grouped_operations` view, which `fin operation show` and linking read; `Operation_groups` is gone,
-  and its test checks the view on stored rows. Next: the journal's descriptions from `reviews`.
+  and its test checks the view on stored rows. The journal reads descriptions from `reviews`;
+  `effective_description` is gone, and exports were byte-identical on both real rebuilds.
+- [x] Quadratic code fixed on sight, not measured first: per-decision searches over every event,
+  review or rule in transfer and category batches, the settlement rule preview, and decisions export
+  and restore now use lookups built once, or one query (card-side payments). Real decisions export,
+  restore preview and restore gave identical results and restored databases. Next: the large single
+  queries (transfer linking, operation summary).
   Short inline statements stay where they are.
 - [x] Costs that grew with the square of the data, found by comparing two sizes, which a test now
   does: lists read from JSON were joined without an index, and `operation_movements` has no index on

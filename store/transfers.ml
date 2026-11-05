@@ -49,10 +49,9 @@ let reversal_change db ~original ~reversal ~undo =
   let original_id = original
   and reversal_id = reversal in
   transaction db (fun db ->
-    let* source = events db in
     let get id =
-      List.Assoc.find source id ~equal:Int64.equal
-      |> Or_error.of_option ~error:(Error.of_string "unknown event ID")
+      let* event = find_event db id in
+      Or_error.of_option event ~error:(Error.of_string "unknown event ID")
     in
     let* a = get original in
     let* b = get reversal in
@@ -266,12 +265,11 @@ let set_bank_transfers_internal
   then Or_error.error_string "duplicate transfer pair in batch"
   else
     (if in_transaction then fun f -> f db else transaction db) (fun db ->
-      let* source = events db in
       let get id =
-        Or_error.of_option
-          (List.Assoc.find source id ~equal:Int64.equal)
-          ~error:(Error.of_string "unknown transfer event_id")
+        let* event = find_event db id in
+        Or_error.of_option event ~error:(Error.of_string "unknown transfer event_id")
       in
+      let* known = known_ibans db in
       let upsert =
         Rel_sql.Stmt.(
           func
@@ -360,7 +358,7 @@ let set_bank_transfers_internal
               Option.exists previous ~f:(fun (_, _, state, _) ->
                 String.equal state "confirmed")
             in
-            let* iban_compatible, _, _ = transfer_iban_evidence db source a ta b tb in
+            let* iban_compatible, _, _ = transfer_iban_evidence db known a ta b tb in
             let* () =
               if confirming && not iban_compatible
               then
@@ -898,10 +896,7 @@ let confirm_card_settlement_in_transaction
   let* event =
     match source_event with
     | Some event -> Ok event
-    | None ->
-      let* source = events db in
-      List.Assoc.find source event_id ~equal:Int64.equal
-      |> Or_error.of_option ~error:(Error.of_string "unknown transaction event ID")
+    | None -> event_by_id db event_id
   in
   let* existing = verify_bank_entry db event_id event in
   let* reason_value = Validation.text "settlement reason" reason in
@@ -969,10 +964,9 @@ let undo_card_settlement db event_id =
         info
         ~error:(Error.of_string "no confirmed settlement for this transaction")
     in
-    let* source = events db in
+    let* event = find_event db event_id in
     let* event =
-      List.Assoc.find source event_id ~equal:Int64.equal
-      |> Or_error.of_option ~error:(Error.of_string "unknown transaction")
+      Or_error.of_option event ~error:(Error.of_string "unknown transaction")
     in
     let* existing = verify_bank_entry db event_id event in
     let delete =

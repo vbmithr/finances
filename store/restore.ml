@@ -269,10 +269,11 @@ let preview_category_restore db (snapshot : Category_portable.t) =
     | Error e -> problem (Error.to_string_hum e)
     | Ok _ -> ());
   let categories_to_add =
+    let existing = Set.of_list (module String) existing_categories in
     List.dedup_and_sort
       (snapshot.categories @ referenced_categories)
       ~compare:String.compare
-    |> List.filter ~f:(fun c -> not (List.mem existing_categories c ~equal:String.equal))
+    |> List.filter ~f:(fun c -> not (Set.mem existing c))
   in
   if
     List.contains_dup
@@ -305,11 +306,13 @@ let preview_category_restore db (snapshot : Category_portable.t) =
        | _ -> problem ("settlement rule card ID is ambiguous: " ^ rule.name))
     | _ -> ());
   let rules_to_add =
+    let existing =
+      Hashtbl.of_alist_multi
+        (module String)
+        (List.map existing_rules ~f:(fun (r : Classification_rule.t) -> r.name, r))
+    in
     List.filter snapshot.rules ~f:(fun r ->
-      match
-        List.find existing_rules ~f:(fun current ->
-          String.equal current.Classification_rule.name r.name)
-      with
+      match Option.bind (Hashtbl.find existing r.name) ~f:List.hd with
       | None -> true
       | Some current when Poly.equal current r -> false
       | Some _ ->
@@ -328,6 +331,14 @@ let preview_category_restore db (snapshot : Category_portable.t) =
   then problem "duplicate transaction identities";
   let unchanged = ref 0 in
   let types_to_apply = ref [] in
+  let imported_types =
+    Hash_set.of_list
+      (module String)
+      (List.filter_map review ~f:(fun r ->
+         match r.imported_movement_type with
+         | Some (Movement_type.Other value) -> Some value
+         | _ -> None))
+  in
   let decisions_to_apply =
     List.filter_map snapshot.decisions ~f:(fun d ->
       let label = d.institution ^ "/" ^ d.source_id in
@@ -388,12 +399,7 @@ let preview_category_restore db (snapshot : Category_portable.t) =
                  then problem ("invalid type override: " ^ label)
                  else if
                    match kind with
-                   | Other value ->
-                     not
-                       (List.exists review ~f:(fun r ->
-                          Poly.equal
-                            r.imported_movement_type
-                            (Some (Movement_type.Other value))))
+                   | Other value -> not (Hash_set.mem imported_types value)
                    | _ -> false
                  then problem ("unknown movement type: " ^ label)
                  else (
@@ -886,11 +892,17 @@ let transfer_iban_evidence_with known ~a_iban ~b_iban a ta b tb =
   Ok (List.is_empty conflicts, List.exists evidence ~f:fst, List.map evidence ~f:snd)
 ;;
 
-let transfer_iban_evidence db source a ta b tb =
+(* Every account's IBAN as evidence for pairings. Read once per batch: it visits every
+   movement. *)
+let known_ibans db =
+  let* source = events db in
+  let source = List.filter source ~f:(fun (_, e) -> Registry.is_movement db.registry e) in
+  known_account_ibans db source ~movement:(movement db)
+;;
+
+let transfer_iban_evidence db known a ta b tb =
   let* a_iban, _ = account_iban db a ta in
   let* b_iban, _ = account_iban db b tb in
-  let source = List.filter source ~f:(fun (_, e) -> Registry.is_movement db.registry e) in
-  let* known = known_account_ibans db source ~movement:(movement db) in
   transfer_iban_evidence_with known ~a_iban ~b_iban a ta b tb
 ;;
 
