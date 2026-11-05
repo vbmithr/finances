@@ -57,6 +57,17 @@ type category_change =
 
 val bank_category_history : t -> category_change list Or_error.t
 
+(** Movements with a category decision now; an undone one has history but no decision. *)
+val categorized_events : t -> (int64, Int64.comparator_witness) Set.t Or_error.t
+
+(** The category changes one command made: the latest, or the one holding this change from
+    the history. Empty if nothing has changed. *)
+val category_batch : ?change_id:int64 -> t -> category_change list Or_error.t
+
+(** Put these rows back as they were before this batch, atomically. Refused if any changed
+    later. Undoing an undo redoes it. Returns how many changed. *)
+val undo_category_batch : t -> category_change list -> int Or_error.t
+
 type review_classification =
   | Unclassified
   | Category

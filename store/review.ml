@@ -330,6 +330,95 @@ let bank_category_history db =
        row)
 ;;
 
+let categorized_events db =
+  let* rows =
+    collect
+      db
+      (statement "SELECT event_id FROM bank_categories" Row.(t1 (int64 "event_id")))
+  in
+  Ok (Set.of_list (module Int64) rows)
+;;
+
+(* Rows one command wrote follow within moments, and their reasons can differ. History says
+   no more than this, so two commands within a moment read as one batch; the preview shows
+   what would be undone. *)
+let category_batch ?change_id db =
+  let* history = bank_category_history db in
+  let same (a : category_change) (b : category_change) =
+    Float.( <= )
+      (Float.abs (Ptime.Span.to_float_s (Ptime.diff a.changed_at b.changed_at)))
+      1.
+  in
+  let groups = List.group history ~break:(fun a b -> not (same a b)) in
+  match change_id with
+  | None -> Ok (Option.value (List.last groups) ~default:[])
+  | Some id ->
+    List.find
+      groups
+      ~f:(List.exists ~f:(fun (c : category_change) -> Int64.equal c.id id))
+    |> Or_error.of_option ~error:(Error.createf "no category change %Ld" id)
+;;
+
+(* Each row goes back to what it was: its earlier category and reason, or no decision at all,
+   so that it is eligible for whatever an undecided row is. *)
+let undo_category_batch db batch =
+  transaction db (fun db ->
+    let* history = bank_category_history db in
+    let first = Hashtbl.create (module Int64) in
+    let last = Hashtbl.create (module Int64) in
+    List.iter batch ~f:(fun (c : category_change) ->
+      Hashtbl.update first c.event_id ~f:(function
+        | None -> c
+        | Some earlier -> earlier);
+      Hashtbl.set last ~key:c.event_id ~data:c);
+    let earlier_reason (c : category_change) =
+      List.filter history ~f:(fun (h : category_change) ->
+        Int64.equal h.event_id c.event_id && Int64.( < ) h.id c.id)
+      |> List.last
+      |> Option.map ~f:(fun (h : category_change) -> h.reason)
+    in
+    let undone (c : category_change) = Printf.sprintf "Undid change %Ld" c.id in
+    let* () =
+      traverse
+        (fun (c : category_change) ->
+           let* current = db_result (Db.first db.conn (find_category c.event_id)) in
+           let account = Option.value_map current ~default:"equity:unclassified" ~f:fst in
+           if String.equal account c.account
+           then Ok ()
+           else
+             Or_error.errorf
+               "transaction %Ld changed after this batch; undo the later change first"
+               c.event_id)
+        (Hashtbl.data last)
+      |> Or_error.map ~f:ignore
+    in
+    let* decisions =
+      traverse
+        (fun (c : category_change) ->
+           Bank_category.create
+             ~event_id:c.event_id
+             ~account:(Option.value c.previous_account ~default:"equity:unclassified")
+             ~reason:
+               (match c.previous_account with
+                | None -> undone c
+                | Some _ -> Option.value (earlier_reason c) ~default:(undone c)))
+        (Hashtbl.data first)
+    in
+    let* changed = set_bank_categories_in_transaction db decisions in
+    let clear =
+      Rel_sql.Stmt.(func "DELETE FROM bank_categories WHERE event_id=?" (int64 @-> unit))
+    in
+    let* _ =
+      traverse
+        (fun (c : category_change) ->
+           if Option.is_none c.previous_account
+           then db_result (Db.exec db.conn (clear c.event_id))
+           else Ok ())
+        (Hashtbl.data first)
+    in
+    Ok changed)
+;;
+
 type review_classification =
   | Unclassified
   | Category

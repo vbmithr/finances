@@ -147,6 +147,81 @@ let category_set database account yes inputs =
         Ok ())))
 ;;
 
+let category_undo database change_id yes =
+  with_database database (fun db ->
+    let%bind batch = Review.category_batch ?change_id db in
+    match List.hd batch with
+    | None ->
+      print_endline "No category changes to undo.";
+      Ok ()
+    | Some first ->
+      let%bind rows = Review.bank_review db in
+      let description =
+        Hashtbl.of_alist_multi
+          (module Int64)
+          (List.map rows ~f:(fun (r : Review.bank_review) -> r.event_id, r.description))
+      in
+      printf
+        "Last changed %s: %s\nThis puts back %d transaction(s):\n"
+        (Timestamp.to_rfc3339 first.changed_at)
+        (Terminal.text first.reason)
+        (List.length batch);
+      List.map batch ~f:(fun (c : Review.category_change) ->
+        Option.value c.previous_account ~default:"(no decision)", c.account)
+      |> List.sort_and_group ~compare:[%compare: string * string]
+      |> List.iter ~f:(fun group ->
+        let previous, account = List.hd_exn group in
+        printf
+          "  %6d  %s <- %s\n"
+          (List.length group)
+          (Terminal.text previous)
+          (Terminal.text account));
+      print_endline "For example:";
+      List.iter (List.take batch 3) ~f:(fun (c : Review.category_change) ->
+        printf
+          "  %s\n"
+          (Terminal.text
+             (Option.value
+                (Option.bind (Hashtbl.find description c.event_id) ~f:List.hd)
+                ~default:"")));
+      let%bind confirmed = confirm ~yes ~destructive:true "Undo this batch?" in
+      if not confirmed
+      then (
+        print_endline "Nothing changed.";
+        Ok ())
+      else (
+        let%bind changed = Review.undo_category_batch db batch in
+        printf "category_changes=%d\n" changed;
+        Ok ()))
+;;
+
+let category_undo_cmd =
+  command
+    "undo"
+    "Undo the last batch of category changes; shows it and asks first."
+    ~man:
+      [ `S Manpage.s_description
+      ; `P
+          "Puts back what one command changed: each transaction returns to its earlier \
+           category and reason, or to having no decision. Changes within a second of \
+           each other count as one batch, so check what it shows. Undoing an undo redoes \
+           it. $(b,fin operation category history) lists change IDs; an older batch can \
+           be undone only if nothing in it changed since."
+      ]
+    Term.(
+      const category_undo
+      $ database
+      $ Arg.(
+          value
+          & pos 0 (some int64) None
+          & info
+              []
+              ~docv:"CHANGE-ID"
+              ~doc:
+                "Undo the batch holding this change from the history, not the last one.")
+      $ Arg.(value & flag & info [ "yes" ] ~doc:"Undo without asking, for scripts."))
+;;
+
 let category_set_cmd =
   command
     "set"

@@ -2459,6 +2459,47 @@ class ImportOnboarding(unittest.TestCase):
         # Nothing left to change, so nothing to ask.
         self.assertIn('category_changes=0', pipe().stdout)
 
+    def test_category_undo_puts_a_batch_back(self):
+        self.run_fin('import', 'revolut', self.csv)
+        self.assertIn('No category changes to undo.', self.run_fin('operation', 'category', 'undo').stdout)
+        rows = json.loads(self.run_fin('operation', 'list', '--json').stdout)
+        ids = [r['operation_id'] for r in rows]
+        self.run_fin('operation', 'category', 'set', 'expenses:food', ids[0])
+        time.sleep(1.5)
+        # The audit tag points at the latest change, so it moves; nothing else may.
+        journal = lambda: re.sub(r'category-decision-id: \d+', 'category-decision-id: N', self.run_fin('journal', 'export').stdout)
+        state = lambda: (self.run_fin('operation', 'list', '--json').stdout,
+                         journal(),
+                         self.run_fin('transfer', 'candidates', '--json').stdout)
+        before = state()
+        self.assertIn('category_changes=', self.run_fin('operation', 'category', 'set', 'expenses:books', *ids).stdout)
+        self.assertNotEqual(state(), before)
+        time.sleep(1.5)
+
+        refused = self.run_fin('operation', 'category', 'undo', check=False)
+        self.assertNotEqual(refused.returncode, 0)
+        self.assertIn('pass --yes', ' '.join(refused.stderr.split()))
+        output = self.terminal(['operation', 'category', 'undo'], [('Undo this batch? [y/N]:', '')])
+        self.assertIn(f'This puts back {len(ids)} transaction(s):', output)
+        self.assertIn('expenses:food <- expenses:books', output)
+        self.assertIn('(no decision) <- expenses:books', output)
+        self.assertIn('Nothing changed.', output)
+        self.assertNotEqual(state(), before)
+
+        self.assertIn(f'category_changes={len(ids)}', self.run_fin('operation', 'category', 'undo', '--yes').stdout)
+        self.assertEqual(state(), before)
+        history = json.loads(self.run_fin('operation', 'category', 'history').stdout)
+        self.assertEqual(len(history), 1 + 2 * len(ids))
+
+        # Undoing the undo redoes it, and an older batch can't be undone past later changes.
+        time.sleep(1.5)
+        self.assertIn(f'category_changes={len(ids)}', self.run_fin('operation', 'category', 'undo', '--yes').stdout)
+        self.assertEqual({r['counter_account'] for r in json.loads(self.run_fin('operation', 'list', '--json').stdout)}, {'expenses:books'})
+        older = self.run_fin('operation', 'category', 'undo', str(history[0]['id']), '--yes', check=False)
+        self.assertNotEqual(older.returncode, 0)
+        self.assertIn('undo the later change first', ' '.join(older.stderr.split()))
+        self.assertNotEqual(self.run_fin('operation', 'category', 'undo', '999999', '--yes', check=False).returncode, 0)
+
     def test_category_queue_takes_one_institution(self):
         self.run_fin('import', 'revolut', self.csv)
         self.run_fin('import', 'boursobank', 'fixtures/bank.ofx')

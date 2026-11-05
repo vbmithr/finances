@@ -8,6 +8,8 @@ short line of their own.
 
 ## Unreleased
 
+- `fin operation category undo` puts back the last batch of category changes, or the batch holding a
+  change from the history, after showing it. Works on changes made before this version.
 - **Action required for scripts:** `fin operation category set ACCOUNT -` now shows what a piped
   selection would change and asks `[y/N]` on the terminal. Pass `--yes` in scripts.
 - Adding a category in `fin operation category queue` goes one segment at a time: each level lists

@@ -430,6 +430,7 @@ let cmd =
         [ Category_review_cmd.categorize_bank_cmd
         ; Category_review_cmd.category_set_cmd
         ; Category_review_cmd.category_history_cmd
+        ; Category_review_cmd.category_undo_cmd
         ; Category_review_cmd.category_similar_cmd
         ; Category_review_cmd.category_review_cmd
         ; Category_review_cmd.category_queue_cmd

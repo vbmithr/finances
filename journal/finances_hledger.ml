@@ -99,6 +99,7 @@ let export db =
   let%bind entries = Ledger.entries db in
   let%bind observations = Ledger.journal_companions db in
   let%bind category_history = Review.bank_category_history db in
+  let%bind categorized = Review.categorized_events db in
   let%bind movements = Ledger.journal_movements db in
   let%bind transfer_links = Review.operation_transfer_links db in
   let%bind general_transfers = Operations.general_transfer_entries db in
@@ -257,7 +258,8 @@ let export db =
         Option.value previous ~default:[] @ tags)));
   let latest_categories = Hashtbl.create (module Int64) in
   List.iter category_history ~f:(fun (decision : Review.category_change) ->
-    Hashtbl.set latest_categories ~key:decision.event_id ~data:decision);
+    if Set.mem categorized decision.event_id
+    then Hashtbl.set latest_categories ~key:decision.event_id ~data:decision);
   Hashtbl.iteri latest_categories ~f:(fun ~key:event_id ~data:decision ->
     let tags =
       [ "category-decision-id: " ^ Int64.to_string decision.id

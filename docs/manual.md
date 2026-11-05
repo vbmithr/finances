@@ -882,6 +882,18 @@ With `-`, fin shows how many transactions would change, what they are categorize
 examples, then asks `[y/N]` on the terminal. `--yes` skips this for scripts; without a terminal the
 command fails unless you pass it. Operation IDs you type are not asked about.
 
+To put back the last batch of category changes:
+
+```sh
+fin operation category undo
+fin operation category undo CHANGE-ID   # the batch holding this change in the history
+```
+
+It shows what would change and asks `[y/N]`; `--yes` is for scripts. Each transaction returns to its
+earlier category and reason, or to having no decision. Changes within a second of each other count as
+one batch. An older batch is refused if any of its transactions changed since,
+and undoing an undo redoes it. Decisions on transfers and settlements are not undone this way.
+
 Both commands must use the same database. You can combine `-` with explicit
 operation IDs. An empty list makes no changes. Like `set` with explicit IDs, this
 replaces existing categories; include `--decision unclassified` if you only
