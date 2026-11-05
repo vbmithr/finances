@@ -986,6 +986,50 @@ let recognizes t contents =
   Csv_reader.recognizes ~separator:t.separator ~trim:false ~header:t.header contents
 ;;
 
+let header_difference t contents =
+  let separators =
+    match Csv_reader.detect_separator contents with
+    | Some found when not (Char.equal found t.separator) ->
+      Some
+        (Printf.sprintf
+           "the file separates columns with %C, this layout with %C"
+           found
+           t.separator)
+    | _ -> None
+  in
+  match
+    Or_error.try_with (fun () ->
+      Csv.next (Csv_reader.channel ~separator:t.separator contents))
+  with
+  | Error _ -> separators
+  | Ok found ->
+    let lacking names others =
+      List.filter names ~f:(fun name -> not (List.mem others name ~equal:String.equal))
+    in
+    let missing = lacking t.header found
+    and unexpected = lacking found t.header in
+    if List.equal String.equal found t.header
+    then None
+    else if List.length missing = List.length t.header
+    then separators
+    else (
+      let listed label = function
+        | [] -> []
+        | names -> [ label ^ " " ^ String.concat ~sep:", " names ]
+      in
+      let differences =
+        listed "missing" missing @ listed "not in the layout" unexpected
+        |> function
+        | [] -> [ "same columns in another order" ]
+        | differences -> differences
+      in
+      Some
+        (Printf.sprintf
+           "its header differs from this layout's: %s. The file has: %s"
+           (String.concat ~sep:"; " differences)
+           (String.concat ~sep:", " found)))
+;;
+
 let filtered_rows t contents =
   Or_error.try_with (fun () ->
     List.count (rows_of t contents) ~f:(fun row -> not (holds_all t row t.only)))

@@ -11,6 +11,7 @@ import pathlib
 import subprocess
 import sys
 import tempfile
+import zipfile
 
 FIN = os.path.abspath(sys.argv[1])
 INSTITUTIONS = pathlib.Path(sys.argv[2])
@@ -216,6 +217,18 @@ refuses("require", "unexpected Kind", two, *layout(require=[{"column": "Kind", "
 narrow = [{"when": [{"column": "Kind", "in": ["b"]}], "column": "Amount", "sign": "not-positive"}]
 refuses("when holds", "unexpected Amount", two, *layout(require=narrow))
 accepts("when does not hold", text(sample, [["2026-01-02", "1.00", "1.00", "a"]]), *layout(require=narrow))
+
+# A file that nearly fits says what differs, as a file or inside an archive.
+close = text(["Date", "Amount", "Extra", "After"], [["2026-01-02", "1.00", "x", "1.00"]])
+refuses("header", "missing Kind; not in the layout Extra", close, *plain)
+refuses("header lists the file's", "The file has: Date, Amount, Extra, After", close, *plain)
+refuses("column order", "same columns in another order", text(["Amount", "Date", "After", "Kind"], [["1.00", "2026-01-02", "1.00", "a"]]), *plain)
+refuses("separator", "separates columns with ';'", text(sample, [["2026-01-02", "1.00", "1.00", "a"]], ";"), *plain)
+refuses("unrelated", "not a recognized statement", "nothing like it\n", *plain)
+with zipfile.ZipFile(ROOT / "archive.zip", "w") as archive:
+    archive.writestr("ledger.csv", close)
+zipped = subprocess.run([FIN, "convert", *plain, str(ROOT / "archive.zip")], env=ENV, capture_output=True, text=True)
+assert zipped.returncode != 0 and "missing Kind" in " ".join(zipped.stderr.split()), zipped.stderr
 
 # A definition's mistakes are refused when it is read.
 for label, members, reason in [

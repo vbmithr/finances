@@ -8,6 +8,8 @@ short line of their own.
 
 ## Unreleased
 
+- `fin convert` says why a CSV doesn't fit a layout, naming missing and extra columns and listing the
+  file's header, or the separator it uses, where it said only "not a recognized statement".
 - Transfer candidates read the way the money goes, with what leaves first: `2076 → 1252  500 EUR`.
 - `fin operation list` keeps its columns aligned when a cell holds an arrow or an accent. An operation
   with several movements now reads the way the money goes, as `-70 EUR → +70 EUR`, where it printed

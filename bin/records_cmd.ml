@@ -33,10 +33,14 @@ let of_sources (sources : Records_adapter.source list) =
   let find ~filename contents =
     List.find sources ~f:(fun source -> source.recognizes ~filename contents)
   in
+  let refused contents =
+    List.find_map sources ~f:(fun source -> source.refusal contents)
+    |> Option.value ~default:"not a recognized statement"
+  in
   ( (fun ~name contents -> Option.is_some (find ~filename:name contents))
-  , fun ~name contents ->
+  , (fun ~name contents ->
       match find ~filename:name contents with
-      | None -> Or_error.error_string "not a file of this institution"
+      | None -> Or_error.error_string (refused contents)
       | Some source ->
         let count = source.left_out contents in
         if count > 0
@@ -46,7 +50,8 @@ let of_sources (sources : Records_adapter.source list) =
             count
             (if count = 1 then "" else "s")
             name;
-        source.convert ~name contents )
+        source.convert ~name contents)
+  , refused )
 ;;
 
 let converters () =
@@ -62,7 +67,7 @@ let convert_read_limit = 67108864L
 (* What one input states. A directory or an archive holds whatever was put in it, so
    a file the converter does not recognize is reported and skipped; a file named on the
    command line was meant to be converted. *)
-let rec convert_input ((recognizes, convert) as converter) ~explicit path =
+let rec convert_input ((recognizes, convert, refused) as converter) ~explicit path =
   let tagged path result =
     Result.map_error result ~f:(fun error ->
       Error.of_string (path ^ ": " ^ Error.to_string_hum error))
@@ -102,8 +107,8 @@ let rec convert_input ((recognizes, convert) as converter) ~explicit path =
       List.partition_tf members ~f:(fun (member, contents) ->
         recognizes ~name:member contents)
     in
-    List.iter skipped ~f:(fun (member, _) ->
-      Stdio.eprintf "skipped %s/%s: not a recognized statement\n" path member);
+    List.iter skipped ~f:(fun (member, contents) ->
+      Stdio.eprintf "skipped %s/%s: %s\n" path member (refused contents));
     if List.is_empty members then Stdio.eprintf "skipped %s: empty archive\n" path;
     List.map known ~f:(fun (member, contents) ->
       convert ~name:(name ^ "/" ^ member) contents |> tagged (path ^ "/" ^ member))
@@ -112,7 +117,7 @@ let rec convert_input ((recognizes, convert) as converter) ~explicit path =
     let%bind contents = read_file path in
     if explicit || recognizes ~name contents
     then Result.map (convert ~name contents |> tagged path) ~f:List.return
-    else skip "not a recognized statement"
+    else skip (refused contents)
   | _ when explicit -> tagged path (Or_error.error_string "not a file or directory")
   | _ -> skip "not a regular file or directory"
 ;;

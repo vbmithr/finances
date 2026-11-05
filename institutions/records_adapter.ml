@@ -443,6 +443,7 @@ type source =
   ; journal_description : string option
   ; conflict_columns : string list
   ; left_out : string -> int
+  ; refusal : string -> string option
   }
 
 (* A statement format, with nothing a CSV layout adds. *)
@@ -454,6 +455,7 @@ let statement_source format ~recognizes ~convert =
   ; journal_description = None
   ; conflict_columns = []
   ; left_out = (fun _ -> 0)
+  ; refusal = (fun _ -> None)
   }
 ;;
 
@@ -462,6 +464,7 @@ let of_definition format definition =
   ; recognizes =
       (fun ~filename:_ contents -> Csv_converter.recognizes definition contents)
   ; convert = Csv_converter.convert definition
+  ; refusal = Csv_converter.header_difference definition
   ; tags = Csv_converter.journal_tags definition
   ; journal_description = Csv_converter.journal_description definition
   ; conflict_columns = Csv_converter.conflict_columns definition

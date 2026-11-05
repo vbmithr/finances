@@ -31,6 +31,10 @@ val overlap : t -> Adapter.overlap
 (** Whether this is a CSV the definition describes, judged from its header. *)
 val recognizes : t -> string -> bool
 
+(** Why this looks like a CSV of this layout that went wrong, for a file {!recognizes} refused:
+    which columns differ, or the separator. [None] if nothing suggests it was meant to be one. *)
+val header_difference : t -> string -> string option
+
 (** How many rows [only] leaves out of this file, so that they do not vanish unnoticed. *)
 val filtered_rows : t -> string -> int Or_error.t
 

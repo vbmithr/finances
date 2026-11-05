@@ -231,9 +231,10 @@ the value date. Fin will need the descriptions or the source order for those.
 ## CSV definitions
 
 A definition describes one CSV layout. It holds no logic beyond conditions on a cell, so it
-stays readable; what it cannot say needs a converter of its own. The bundled ones are in
-[`institutions/converters`](../institutions/converters). Fin refuses a definition with an
-unknown member or a column not in its header.
+stays readable; what it cannot say needs a converter of its own. The bundled ones are the
+`csv` member of [`institutions`](../institutions)' files. Fin refuses a definition with an
+unknown member or a column not in its header. `fin convert` says what differs when a file's
+header nearly fits a layout.
 
 ```json
 {
