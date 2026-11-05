@@ -255,3 +255,21 @@ val review_metadata
        Result.t
 
 val operation_fields : Handle.t -> int64 -> ((string * string) List.t, Error.t) Result.t
+
+type unmatched_transfer =
+  { event_id : int64
+  ; institution : string
+  ; booked_on : Date.t
+  ; principal : Quantity.t
+  ; currency : string
+  ; description : string
+  ; kind : string (** [decided], [rejected], [excluded], [days], [amount] or [none]. *)
+  ; related : int64 option
+  ; related_decision : string option
+  ; days : int option
+  ; difference : Quantity.t option
+  }
+
+(** Unclassified transfers, deposits and withdrawals no candidate offers, each with the
+    nearest thing to a partner, in one query. [offered] are the candidates' event IDs. *)
+val unmatched_transfers : t -> offered:int64 list -> unmatched_transfer list Or_error.t

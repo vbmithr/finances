@@ -1041,6 +1041,12 @@ unclassified and have no fee. Bank-to-bank pairs use `fin transfer review` and
 source identity and refuses missing, ambiguous or changed evidence. Rejected candidates and audit
 history are not saved; `fin backup` keeps those.
 
+`fin transfer unmatched` lists each unclassified transfer, deposit or withdrawal that has no candidate,
+and why: the opposite amount is already decided or was ruled out, the same amount is up to 30 days
+away, an amount differs by what may be a fee, or nothing among your imported statements is a partner.
+The last is usually a payment to or from someone else, or an account you have not imported. Add
+`--institution NAME` to take one provider, or `--json`.
+
 `fin transfer candidates` shows possible pairs of unclassified movements, their
 evidence and ranking. Categorized movements are excluded until returned to
 `equity:unclassified`; previously reviewed pairs remain visible with `--all` and

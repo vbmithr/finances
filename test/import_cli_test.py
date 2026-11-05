@@ -2592,6 +2592,52 @@ class ImportOnboarding(unittest.TestCase):
         record = next(r for r in json.loads(self.run_fin('operation', 'list', '--json').stdout) if len(r['movements']) == 2)
         self.assertIn(record['institution'], ('boursobank', 'revolut'))
 
+    def test_unmatched_transfers_say_why(self):
+        rows, balance = [], 1000
+        for day, amount, text in [('2026-02-01', 100, 'Late'), ('2026-03-01', 50, 'Fee'),
+                                  ('2026-04-01', 70, 'Decided'), ('2026-05-01', 30, 'Alone'),
+                                  ('2026-06-01', 40, 'Paired')]:
+            balance += amount
+            rows.append(f'Transfer,Current,{day} 09:00:00,{day} 09:00:00,{text},{amount}.00,0.00,EUR,COMPLETED,{balance}.00')
+        bank = self.root / 'unmatched.csv'
+        bank.write_text('Type,Product,Started Date,Completed Date,Description,Amount,Fee,Currency,State,Balance\n'
+                        + '\n'.join(rows) + '\n')
+        entry = ('<STMTTRN><DTPOSTED>{}</DTPOSTED><TRNTYPE>DEBIT</TRNTYPE><TRNAMT>-{}</TRNAMT>'
+                 '<FITID>{}</FITID><NAME>VIR {}</NAME></STMTTRN>')
+        ofx = self.root / 'unmatched.ofx'
+        ofx.write_text(Path('fixtures/bank.ofx').read_text().replace('</BANKTRANLIST>', ''.join(
+            entry.format(day, amount, fitid, fitid) for day, amount, fitid in [
+                ('20260213', '100.00', 'late'), ('20260301', '51.00', 'fee'),
+                ('20260402', '70.00', 'decided'), ('20260601', '40.00', 'paired')]) + '</BANKTRANLIST>', 1))
+        self.run_fin('import', 'revolut', bank)
+        self.run_fin('import', 'boursobank', ofx)
+        listed = json.loads(self.run_fin('operation', 'list', '--json').stdout)
+        decided = next(r for r in listed if r['description'] == 'VIR decided')
+        self.run_fin('cat', 'add', 'expenses:gift')
+        self.run_fin('operation', 'category', 'set', 'expenses:gift', decided['operation_id'])
+        found = {u['description']: u for u in json.loads(self.run_fin('transfer', 'unmatched', '--json').stdout)}
+        self.assertEqual(found['Late']['kind'], 'days')
+        self.assertIn('12 days away', found['Late']['reason'])
+        self.assertEqual(found['Fee']['kind'], 'amount')
+        self.assertIn('is 1 away in amount', found['Fee']['reason'])
+        self.assertEqual(found['Decided']['kind'], 'decided')
+        self.assertEqual(found['Decided']['related_event_id'], decided['event_id'])
+        self.assertEqual(found['Alone']['kind'], 'none')
+        self.assertNotIn('Paired', found)
+        self.assertNotIn('VIR paired', found)
+        table = self.run_fin('transfer', 'unmatched').stdout
+        self.assertIn('without a partner:', table)
+        self.assertNotIn('Alone', self.run_fin('transfer', 'unmatched', '--institution', 'boursobank').stdout)
+        # With nothing left to review, review points here.
+        pair = json.loads(self.run_fin('transfer', 'candidates', '--json').stdout)['proposed_pairs'][0]
+        decisions = self.root / 'unmatched-pair.json'
+        decisions.write_text(json.dumps([{'first_event_id': pair['first_event_id'], 'second_event_id': pair['second_event_id'],
+                                          'decision': 'confirm', 'reason': 'Mine'}]))
+        self.run_fin('transfer', 'review', decisions)
+        output = self.terminal(['transfer', 'review'], [])
+        self.assertIn('No transfer candidates left to review.', output)
+        self.assertIn('have no partner; fin transfer unmatched says why.', output)
+
     def test_category_queue_takes_one_institution(self):
         self.run_fin('import', 'revolut', self.csv)
         self.run_fin('import', 'boursobank', 'fixtures/bank.ofx')

@@ -151,7 +151,8 @@ with tempfile.TemporaryDirectory(prefix='fin-scaling-') as directory:
     small = scaling_database(Path(directory) / 'small', 750) if (Path(directory) / 'small').mkdir() is None else None
     large = scaling_database(Path(directory) / 'large', 3000) if (Path(directory) / 'large').mkdir() is None else None
     for args in (['status'], ['operation', 'list', '--limit', '20'], ['operation', 'list', '--json'],
-                 ['operation', 'review', '--all', '--json'], ['journal', 'export']):
+                 ['operation', 'review', '--all', '--json'], ['journal', 'export'],
+                 ['transfer', 'unmatched', '--json']):
         at_small, at_large = cpu(small, *args), cpu(large, *args)
         print(f"{' '.join(args)}: {at_small * 1000:.0f} ms, then {at_large * 1000:.0f} ms at 4x", flush=True)
         if at_large > max(8 * at_small, 0.25):

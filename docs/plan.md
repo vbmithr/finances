@@ -499,6 +499,9 @@ position observations, derive positions from fills, or calculate funding.
   `fin db sources` instead of a separate `fin crypto` group.
 - [x] Describe CDC as data (`cdc.json`) interpreted by the generic
   `Movement_csv`, with no institution-specific OCaml.
+- [ ] Database work in SQL ([sql-first.md](sql-first.md)): queries in `store/sql/` files, shared reads as
+  views, stored ledger names, display names and groups, and the missing indexes, in one schema
+  change. `fin transfer unmatched` is the first command written as one query.
 - [x] Costs that grew with the square of the data, found by comparing two sizes, which a test now
   does: lists read from JSON were joined without an index, and `operation_movements` has no index on
   `operation_id`, so a query driven from operations scans it per operation. The list and status are

@@ -1466,6 +1466,184 @@ let operations
 
 let operation_review db = operations db
 
+type unmatched_transfer =
+  { event_id : int64
+  ; institution : string
+  ; booked_on : Date.t
+  ; principal : Quantity.t
+  ; currency : string
+  ; description : string
+  ; kind : string
+  ; related : int64 option
+  ; related_decision : string option
+  ; days : int option
+  ; difference : Quantity.t option
+  }
+
+(* For each unclassified transfer, deposit or withdrawal not offered as a candidate, the
+   nearest thing to a partner: the opposite principal within 7 days (decided, rejected or
+   otherwise excluded), within 30 days, or a principal within a fee (2 or 2%) within 7 days.
+   [offered] are the event IDs of current candidates. *)
+let unmatched_transfers db ~offered =
+  let* context = review_context db in
+  let* () =
+    load_lookup
+      db
+      ~table:"fin_offered"
+      ~columns:"event_id INTEGER"
+      ~primary_key:"event_id"
+      ~reads:"value"
+      (List.map offered ~f:Int64.to_string)
+  in
+  (* Movements by currency and day, so that looking around a date is a range in an index. *)
+  let* () =
+    db_result
+      (Db.exec_sql
+         db.conn
+         "DROP TABLE IF EXISTS temp.fin_dated; CREATE TEMP TABLE fin_dated AS SELECT \
+          event_id,venue,account,currency,principal_sign,principal_magnitude, \
+          CAST(julianday(booked_on) AS INTEGER) AS day FROM movements; CREATE INDEX \
+          temp.fin_dated_day ON fin_dated(currency,day)")
+  in
+  let day_gap = "abs(o.day-r.day)" in
+  let opposite =
+    "o.currency=r.currency AND o.principal_sign<>r.principal_sign AND NOT \
+     (o.venue=r.venue AND o.account=r.account)"
+  in
+  let difference = "decimal_sub(o.principal_magnitude,r.principal_magnitude)" in
+  let magnitude value =
+    Printf.sprintf
+      "CASE WHEN decimal_cmp(%s,'0')<0 THEN decimal_sub('0',%s) ELSE %s END"
+      value
+      value
+      value
+  in
+  let* rows =
+    collect
+      db
+      (Rel_sql.Stmt.(
+         func
+           ("WITH "
+            ^ reviews_sql ()
+            ^ ", own AS MATERIALIZED (SELECT x.event_id,x.institution,x.description, \
+               m.booked_on,m.currency,m.venue,m.account,m.principal_sign, \
+               m.principal_magnitude,CAST(julianday(m.booked_on) AS INTEGER) AS day FROM \
+               reviews x JOIN movements m ON m.event_id=x.event_id WHERE \
+               x.decision='unclassified' AND x.movement_type IN \
+               ('transfer','deposit','withdrawal') AND x.event_id NOT IN (SELECT \
+               event_id FROM temp.fin_offered)), exact AS (SELECT r.event_id, o.event_id \
+               AS other,"
+            ^ day_gap
+            ^ " AS days,row_number() OVER (PARTITION BY r.event_id ORDER BY "
+            ^ day_gap
+            ^ ",o.event_id) AS rank FROM own r JOIN temp.fin_dated o ON \
+               o.principal_magnitude=r.principal_magnitude AND "
+            ^ opposite
+            ^ " WHERE "
+            ^ day_gap
+            ^ "<=30), near AS (SELECT r.event_id,o.event_id AS other,"
+            ^ day_gap
+            ^ " AS days,"
+            ^ magnitude difference
+            ^ " AS difference,row_number() OVER (PARTITION BY r.event_id ORDER BY "
+            ^ day_gap
+            ^ ",o.event_id) AS rank FROM own r JOIN temp.fin_dated o ON o.day BETWEEN \
+               r.day-7 AND r.day+7 AND "
+            ^ opposite
+            ^ " WHERE NOT EXISTS (SELECT 1 FROM exact e WHERE e.event_id=r.event_id) AND \
+               (decimal_cmp("
+            ^ magnitude difference
+            ^ ",'2')<=0 OR decimal_cmp("
+            ^ magnitude difference
+            ^ ",decimal_mul(r.principal_magnitude,'0.02'))<=0)) SELECT \
+               r.event_id,r.institution,r.booked_on,r.principal_sign, \
+               r.principal_magnitude,r.currency,r.description,CASE WHEN e.days<=7 THEN \
+               CASE WHEN ox.decision<>'unclassified' THEN 'decided' WHEN EXISTS (SELECT \
+               1 FROM bank_transfer_decisions d WHERE d.state='rejected' AND \
+               d.first_event_id=min(r.event_id,e.other) AND \
+               d.second_event_id=max(r.event_id,e.other)) THEN 'rejected' ELSE \
+               'excluded' END WHEN e.other IS NOT NULL THEN 'days' WHEN n.other IS NOT \
+               NULL THEN 'amount' ELSE 'none' END AS kind,coalesce(e.other,n.other) AS \
+               related,ox.decision AS related_decision,CAST(coalesce(e.days,n.days) AS \
+               INTEGER) AS days,n.difference FROM own r LEFT JOIN exact e ON \
+               e.event_id=r.event_id AND e.rank=1 LEFT JOIN near n ON \
+               n.event_id=r.event_id AND n.rank=1 LEFT JOIN reviews ox ON \
+               ox.event_id=e.other ORDER BY r.booked_on DESC,r.event_id DESC")
+           (text
+            @-> ret
+                  Row.(
+                    unit
+                      (fun
+                          event_id
+                           institution
+                           booked_on
+                           sign
+                           magnitude
+                           currency
+                           description
+                           kind
+                           related
+                           related_decision
+                           days
+                           difference
+                         ->
+                         ( event_id
+                         , institution
+                         , booked_on
+                         , sign
+                         , magnitude
+                         , currency
+                         , description
+                         , kind
+                         , related
+                         , related_decision
+                         , days
+                         , difference ))
+                    * int64 "event_id"
+                    * text "institution"
+                    * text "booked_on"
+                    * text "principal_sign"
+                    * text "principal_magnitude"
+                    * text "currency"
+                    * text "description"
+                    * text "kind"
+                    * option Rel.Type.int64 "related"
+                    * option Rel.Type.text "related_decision"
+                    * option Rel.Type.int "days"
+                    * option Rel.Type.text "difference")))
+         (json_object context))
+  in
+  traverse
+    (fun ( event_id
+         , institution
+         , booked_on
+         , sign
+         , magnitude
+         , currency
+         , description
+         , kind
+         , related
+         , related_decision
+         , days
+         , difference ) ->
+       Or_error.try_with (fun () ->
+         let magnitude = Quantity.of_string magnitude in
+         { event_id
+         ; institution
+         ; booked_on = Date.of_string booked_on
+         ; principal =
+             (if String.equal sign "-" then Quantity.neg magnitude else magnitude)
+         ; currency
+         ; description
+         ; kind
+         ; related
+         ; related_decision
+         ; days
+         ; difference = Option.map difference ~f:Quantity.of_string
+         }))
+    rows
+;;
+
 let validate_commodity_symbol commodity symbol =
   let* symbol = Validation.token "commodity symbol" symbol in
   match commodity with

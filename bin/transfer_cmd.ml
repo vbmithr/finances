@@ -58,6 +58,133 @@ let transfer_candidates database all json_output =
     Ok ())
 ;;
 
+(* The candidates' events, which are not unmatched; the query explains the rest. *)
+let unmatched_transfers db =
+  let%bind candidates = Transfers.transfer_candidates db in
+  Review.unmatched_transfers
+    db
+    ~offered:
+      (List.concat_map candidates ~f:(fun (c : Transfers.transfer_candidate) ->
+         [ c.first_event_id; c.second_event_id ]))
+;;
+
+let unmatched_reason (u : Review.unmatched_transfer) =
+  let related = Option.value_map u.related ~default:"" ~f:(Printf.sprintf "#%Ld ") in
+  match u.kind with
+  | "decided" ->
+    related
+    ^ "has the opposite amount, but is already a "
+    ^ Option.value u.related_decision ~default:"decision"
+  | "rejected" -> related ^ "has the opposite amount; you rejected that pair"
+  | "excluded" ->
+    related
+    ^ "has the opposite amount, but is not offered: registered IBANs or an earlier \
+       decision rule it out"
+  | "days" ->
+    related
+    ^ Printf.sprintf
+        "has the opposite amount %d days away"
+        (Option.value u.days ~default:0)
+  | "amount" ->
+    related
+    ^ Printf.sprintf
+        "is %s away in amount, %d days apart: a fee?"
+        (Option.value_map u.difference ~default:"?" ~f:Quantity.to_string)
+        (Option.value u.days ~default:0)
+  | _ -> "no other side among imported statements"
+;;
+
+let transfer_unmatched database institution json_output =
+  with_database database (fun db ->
+    let%map unmatched = unmatched_transfers db in
+    let unmatched =
+      List.filter unmatched ~f:(fun (u : Review.unmatched_transfer) ->
+        Option.for_all institution ~f:(String.equal u.institution))
+    in
+    if json_output
+    then
+      Report_json.print
+        (Jsont.list
+           (Jsont.Object.enc_only ()
+            |> Jsont.Object.mem
+                 "event_id"
+                 Json.int64_codec
+                 ~enc:(fun (u : Review.unmatched_transfer) -> u.event_id)
+            |> Jsont.Object.mem
+                 "institution"
+                 Jsont.string
+                 ~enc:(fun (u : Review.unmatched_transfer) -> u.institution)
+            |> Jsont.Object.mem
+                 "booked_on"
+                 Json.date
+                 ~enc:(fun (u : Review.unmatched_transfer) -> u.booked_on)
+            |> Jsont.Object.mem
+                 "amount"
+                 Json.quantity
+                 ~enc:(fun (u : Review.unmatched_transfer) -> u.principal)
+            |> Jsont.Object.mem
+                 "currency"
+                 Jsont.string
+                 ~enc:(fun (u : Review.unmatched_transfer) -> u.currency)
+            |> Jsont.Object.mem
+                 "description"
+                 Jsont.string
+                 ~enc:(fun (u : Review.unmatched_transfer) -> u.description)
+            |> Jsont.Object.mem
+                 "kind"
+                 Jsont.string
+                 ~enc:(fun (u : Review.unmatched_transfer) -> u.kind)
+            |> Jsont.Object.opt_mem
+                 "related_event_id"
+                 Json.int64_codec
+                 ~enc:(fun (u : Review.unmatched_transfer) -> u.related)
+            |> Jsont.Object.mem "reason" Jsont.string ~enc:unmatched_reason
+            |> Jsont.Object.finish))
+        unmatched
+    else if List.is_empty unmatched
+    then print_endline "Every unclassified transfer has a candidate."
+    else (
+      Terminal.table
+        [ "EVENT"; "DATE"; "AMOUNT"; "INSTITUTION"; "DESCRIPTION"; "WHY" ]
+        (List.map unmatched ~f:(fun (u : Review.unmatched_transfer) ->
+           [ Int64.to_string u.event_id
+           ; Date.to_string u.booked_on
+           ; Quantity.to_string u.principal ^ " " ^ u.currency
+           ; u.institution
+           ; String.prefix u.description 40
+           ; unmatched_reason u
+           ]));
+      printf "\n%d without a partner:" (List.length unmatched);
+      List.map unmatched ~f:(fun (u : Review.unmatched_transfer) -> u.kind)
+      |> List.sort_and_group ~compare:String.compare
+      |> List.iter ~f:(fun group ->
+        printf " %s %d" (List.hd_exn group) (List.length group));
+      print_endline ""))
+;;
+
+let transfer_unmatched_cmd =
+  command
+    "unmatched"
+    "List unclassified transfers with no candidate, and why."
+    ~man:
+      [ `S Manpage.s_description
+      ; `P
+          "For each unclassified transfer, deposit or withdrawal that $(b,fin transfer \
+           candidates) does not offer, shows the nearest thing to a partner: the \
+           opposite amount already decided or ruled out, the same amount up to 30 days \
+           away, an amount differing by a fee, or nothing among imported statements. \
+           Kinds in $(b,--json): decided, rejected, excluded, days, amount, none."
+      ]
+    Term.(
+      const transfer_unmatched
+      $ database
+      $ Arg.(
+          value
+          & opt (some string) None
+          & info [ "institution" ] ~docv:"NAME" ~doc:"Only movements from this provider.")
+      $ json_output)
+;;
+
 let transfer_candidates_cmd =
   command
     "candidates"
@@ -91,6 +218,19 @@ let review_transfers database path =
         else (
           let%bind candidates = Transfers.transfer_candidates db in
           let%bind ranked = Transfer_ranking.analyze (Accounts.registry db) candidates in
+          let%bind () =
+            if List.is_empty ranked
+            then (
+              let%map unmatched = unmatched_transfers db in
+              print_endline "No transfer candidates left to review.";
+              if not (List.is_empty unmatched)
+              then
+                printf
+                  "%d unclassified transfer(s) have no partner; fin transfer unmatched \
+                   says why.\n"
+                  (List.length unmatched))
+            else Ok ()
+          in
           print_endline
             "Review one candidate pair at a time. Choices are staged until you confirm \
              the whole batch.";
@@ -425,6 +565,7 @@ let cmd =
     "transfer"
     "Review transfer candidates and decisions."
     [ transfer_candidates_cmd
+    ; transfer_unmatched_cmd
     ; review_transfers_cmd
     ; transfer_link_cmd
     ; transfer_unlink_cmd

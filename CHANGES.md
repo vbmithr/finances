@@ -10,6 +10,8 @@ short line of their own.
 
 - `fin settlement review --all` checks everything once and records the batch in one transaction, all or
   nothing: 54 settlements take about 0.3 s instead of 5.5 s, which grew with every row you had.
+- `fin transfer unmatched` lists unclassified transfers that have no candidate, with the nearest thing to
+  a partner and why it isn't one. `fin transfer review` points to it when nothing is left to review.
 - `fin operation list` and `fin status` no longer slow down with the square of your data. On about 6,700
   rows with 183 confirmed transfers, the list takes 0.18 s instead of 0.48 s, and a 20-row page 0.06 s
   instead of 0.33 s. Output is unchanged.
