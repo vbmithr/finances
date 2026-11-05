@@ -14,32 +14,35 @@ type reversal_candidate =
   }
 
 let reversal_candidates db =
-  let* rows = bank_review db in
-  let eligible r = Poly.equal r.classification Unclassified && Option.is_none r.reason in
-  let originals =
-    List.filter rows ~f:(fun r ->
-      eligible r && Poly.equal r.movement_type (Some Movement_type.Withdrawal))
+  let* pairs =
+    collect
+      db
+      (statement Sql.reversal_candidates Row.(t2 (int64 "original") (int64 "reversal")))
   in
-  let reversals =
-    List.filter rows ~f:(fun r ->
-      eligible r
-      && Poly.equal r.movement_type (Some Movement_type.Withdrawal)
-      && Quantity.(r.transaction.amount > zero)
-      && r.source_evidence.withdrawal_reversal)
+  let* reviews =
+    reviews_of_events db (List.concat_map pairs ~f:(fun (a, b) -> [ a; b ]))
+  in
+  let by_id =
+    Hashtbl.of_alist_exn (module Int64) (List.map reviews ~f:(fun r -> r.event_id, r))
   in
   Ok
-    (List.concat_map reversals ~f:(fun reversal ->
-       List.filter_map originals ~f:(fun original ->
-         let a = original.transaction
-         and b = reversal.transaction in
-         Option.some_if
-           (String.equal original.institution reversal.institution
-            && Poly.equal a.account b.account
-            && Quantity.(a.amount < zero && b.amount > zero && a.amount + b.amount = zero)
-            && Quantity.is_zero a.fee
-            && Quantity.is_zero b.fee
-            && Date.compare a.booked_on b.booked_on <= 0)
-           { original; reversal })))
+    (List.map pairs ~f:(fun (original, reversal) ->
+       { original = Hashtbl.find_exn by_id original
+       ; reversal = Hashtbl.find_exn by_id reversal
+       }))
+;;
+
+(* Card spending that may be a settlement, in listing order; see
+   [Sql.settlement_candidates]. *)
+let settlement_candidates db =
+  let* ids =
+    collect db (statement Sql.settlement_candidates Row.(t1 (int64 "event_id")))
+  in
+  let* reviews = reviews_of_events db ids in
+  let by_id =
+    Hashtbl.of_alist_exn (module Int64) (List.map reviews ~f:(fun r -> r.event_id, r))
+  in
+  Ok (List.map ids ~f:(Hashtbl.find_exn by_id))
 ;;
 
 let reversal_change db ~original ~reversal ~undo =
@@ -535,112 +538,75 @@ type transfer_candidate =
   ; iban_evidence : string list
   }
 
-(* Movement pairs that may be one transfer between owned accounts: exactly opposite
-   principals in one currency, on different accounts, booked at most seven days
-   apart. Bank_transfer.eligible states the same rule for confirmations. Pairs come
-   in the order of a scan over events in their listing order: later first
-   movements first, then their counterparts in order. *)
-let transfer_pairs =
-  statement
-    "WITH ordered AS (SELECT id, row_number() OVER (ORDER BY coalesce(occurred_on, \
-     substr(occurred_at, 1, 10)), occurred_at, id) AS position FROM source_events) \
-     SELECT a.event_id, b.event_id FROM movements a JOIN movements b ON b.currency = \
-     a.currency AND b.principal_magnitude = a.principal_magnitude AND b.principal_sign \
-     <> a.principal_sign JOIN ordered oa ON oa.id = a.event_id JOIN ordered ob ON ob.id \
-     = b.event_id WHERE oa.position < ob.position AND a.principal_magnitude <> '0' AND \
-     NOT EXISTS (SELECT 1 FROM card_settlement_decisions s WHERE s.event_id IN \
-     (a.event_id,b.event_id)) AND NOT (a.venue = b.venue AND a.account = b.account) AND \
-     NOT EXISTS (SELECT 1 FROM reversal_pairs r WHERE r.original IN \
-     (a.event_id,b.event_id) OR r.reversal IN (a.event_id,b.event_id)) AND \
-     abs(julianday(a.booked_on) - julianday(b.booked_on)) <= 7 ORDER BY oa.position \
-     DESC, ob.position"
-    Row.(
-      t2
-        (Col.make "first" Type.int64 Col.no_proj)
-        (Col.make "second" Type.int64 Col.no_proj))
+(* See [Sql.transfer_candidates]; the IBAN check is the caller's. *)
+let candidate_pairs ?(include_reviewed = false) db =
+  let* rows =
+    collect
+      db
+      (Rel_sql.Stmt.(
+         func
+           Sql.transfer_candidates
+           (bool
+            @-> ret
+                  Row.(
+                    t4
+                      (int64 "first")
+                      (int64 "second")
+                      (option Rel.Type.text "state")
+                      (option Rel.Type.text "reason"))))
+         include_reviewed)
+  in
+  traverse
+    (fun (first, second, state, reason) ->
+       let* state =
+         match state with
+         | None -> Ok None
+         | Some state ->
+           Bank_transfer.state_of_string state |> Or_error.map ~f:Option.some
+       in
+       Ok (first, second, state, reason))
+    rows
 ;;
 
-let transfer_candidates_from
-      ?pairs
-      ?(include_reviewed = false)
-      db
-      source
-      table
-      categories
-      transfers
-  =
+let transfer_candidates_from ?(include_reviewed = false) db source table pairs =
   let* known = known_account_ibans db source ~movement:(stored table) in
-  let* items =
-    traverse
-      (fun (id, e) ->
-         let* tx = stored table id in
-         Ok (id, (id, e, tx, Hashtbl.mem transfers id)))
-      (List.filter source ~f:(fun (id, _) -> Hashtbl.mem table id))
-  in
-  let items = Hashtbl.of_alist_exn (module Int64) items in
-  let* decisions = bank_transfer_decisions db in
-  let indexed = Hashtbl.Poly.create () in
-  List.iter decisions ~f:(fun d ->
-    Hashtbl.set indexed ~key:(d.Bank_transfer.first_event_id, d.second_event_id) ~data:d);
-  let candidate (id, a, ta, la) (other, b, tb, lb) =
-    let id, a, ta, other, b, tb =
-      if Int64.(id < other) then id, a, ta, other, b, tb else other, b, tb, id, a, ta
-    in
-    let decision = Hashtbl.find indexed (id, other) in
-    let categorized event_id =
-      Option.exists (Hashtbl.find categories event_id) ~f:(fun (account, _) ->
-        not (String.equal account "equity:unclassified"))
-    in
-    let unavailable = categorized id || categorized other in
-    if unavailable && ((not include_reviewed) || Option.is_none decision)
-    then Ok None
-    else
-      let* a_iban, _ = account_iban db a ta in
-      let* b_iban, _ = account_iban db b tb in
-      let* iban_compatible, iban_match, iban_evidence =
-        transfer_iban_evidence_with known ~a_iban ~b_iban a ta b tb
-      in
-      if
-        (not include_reviewed)
-        && (la || lb || Option.is_some decision || not iban_compatible)
-      then Ok None
-      else
-        Ok
-          (Some
-             { first_event_id = id
-             ; second_event_id = other
-             ; first = a
-             ; second = b
-             ; first_transaction = ta
-             ; second_transaction = tb
-             ; days_apart = Int.abs (Date.diff ta.booked_on tb.booked_on)
-             ; state = Option.map decision ~f:(fun d -> d.state)
-             ; reason = Option.map decision ~f:(fun d -> d.reason)
-             ; unique = false
-             ; iban_compatible
-             ; iban_match
-             ; iban_evidence
-             })
-  in
-  let* pairs =
-    match pairs with
-    | Some pairs -> Ok pairs
-    | None -> collect db transfer_pairs
+  let events = Hashtbl.of_alist_exn (module Int64) source in
+  let movement id =
+    match Hashtbl.find events id with
+    | Some event ->
+      let* tx = stored table id in
+      Ok (event, tx)
+    | None -> Or_error.error_string "missing transfer movement"
   in
   let* found =
     traverse
-      (fun (first, second) ->
-         let* x =
-           Or_error.of_option
-             (Hashtbl.find items first)
-             ~error:(Error.of_string "missing transfer movement")
+      (fun (first, second, state, reason) ->
+         let* a, ta = movement first in
+         let* b, tb = movement second in
+         let* a_iban, _ = account_iban db a ta in
+         let* b_iban, _ = account_iban db b tb in
+         let* iban_compatible, iban_match, iban_evidence =
+           transfer_iban_evidence_with known ~a_iban ~b_iban a ta b tb
          in
-         let* y =
-           Or_error.of_option
-             (Hashtbl.find items second)
-             ~error:(Error.of_string "missing transfer movement")
-         in
-         candidate x y)
+         if (not include_reviewed) && not iban_compatible
+         then Ok None
+         else
+           Ok
+             (Some
+                { first_event_id = first
+                ; second_event_id = second
+                ; first = a
+                ; second = b
+                ; first_transaction = ta
+                ; second_transaction = tb
+                ; days_apart = Int.abs (Date.diff ta.booked_on tb.booked_on)
+                ; state
+                ; reason
+                ; unique = false
+                ; iban_compatible
+                ; iban_match
+                ; iban_evidence
+                }))
       pairs
   in
   let candidates = List.filter_opt found in
@@ -654,18 +620,14 @@ let transfer_candidates_from
          unique =
            Hashtbl.find_exn claims c.first_event_id = 1
            && Hashtbl.find_exn claims c.second_event_id = 1
-       })
-     |> List.sort ~compare:(fun a b ->
-       [%compare: int64 * int64]
-         (a.first_event_id, a.second_event_id)
-         (b.first_event_id, b.second_event_id)))
+       }))
 ;;
 
 let transfer_candidates ?include_reviewed db =
   let* source = movement_source db in
   let* table = movement_table db in
-  let* categories, transfers, _, _ = review_metadata db in
-  transfer_candidates_from ?include_reviewed db source table categories transfers
+  let* pairs = candidate_pairs ?include_reviewed db in
+  transfer_candidates_from ?include_reviewed db source table pairs
 ;;
 
 let find_settlement =
@@ -735,23 +697,13 @@ let status_summaries db source =
     collect
       db
       (statement
-         "SELECT \
-          min(m.event_id),m.venue,m.account,count(*),min(m.booked_on),max(m.booked_on),sum(CASE \
-          WHEN t.event_id IS NULL AND s.event_id IS NULL AND r.original IS NULL AND \
-          coalesce(c.account,'equity:unclassified')='equity:unclassified' THEN 1 ELSE 0 \
-          END) FROM movements m JOIN source_events e ON e.id=m.event_id LEFT JOIN \
-          bank_categories c ON c.event_id=m.event_id LEFT JOIN (SELECT \
-          om.anchor_event_id AS event_id FROM operation_movements om JOIN \
-          operation_transfer_memberships ot ON ot.movement_id=om.id) t ON \
-          t.event_id=m.event_id LEFT JOIN card_settlement_decisions s ON \
-          s.event_id=m.event_id LEFT JOIN reversal_pairs r ON r.original=m.event_id OR \
-          r.reversal=m.event_id GROUP BY m.venue,m.account,e.kind"
+         Sql.account_summaries
          Row.(
            unit (fun id venue account count first last unclassified ->
              id, venue, account, count, first, last, unclassified)
            * int64 "event_id"
-           * text "venue"
-           * text "account"
+           * text "institution"
+           * text "source"
            * int "count"
            * text "first"
            * text "last"
@@ -851,7 +803,7 @@ let bank_account_info db =
 ;;
 
 let card_settlement_preview ?card_id db event_id =
-  let* reviews = bank_review db in
+  let* reviews = reviews_of_events db [ event_id ] in
   let* row =
     List.find reviews ~f:(fun r -> Int64.equal r.event_id event_id)
     |> Or_error.of_option ~error:(Error.of_string "unknown transaction event ID")

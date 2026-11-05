@@ -10,6 +10,10 @@ type reversal_candidate =
 
 val reversal_candidates : t -> reversal_candidate list Or_error.t
 
+(** Card spending on a bank account that may be a card's settlement: undecided, naming a card
+    whose own account shows no payment of it. Matching the accounts is the caller's. *)
+val settlement_candidates : t -> bank_review list Or_error.t
+
 val reversal_change
   :  t
   -> original:int64
@@ -131,7 +135,6 @@ val confirm_card_settlement_in_transaction
   -> Int64.t
   -> (unit, Error.t) Result.t
 
-val transfer_pairs : (int64 * int64) Rel_sql.Stmt.t
 val account_representatives : (Int64.t * Source_event.t) List.t -> Int64.t Hash_set.t
 
 val selected_movements
@@ -153,14 +156,17 @@ val bank_account_info_from
   -> (int64, Movement.t) Hashtbl.t
   -> (bank_account_info list, Error.t) Result.t
 
-val transfer_candidates_from
-  :  ?pairs:(Int64.t Hashtbl.key * Int64.t Hashtbl.key) List.t
-  -> ?include_reviewed:bool
+val candidate_pairs
+  :  ?include_reviewed:bool
   -> Handle.t
-  -> (Int64.t Hashtbl.key * Source_event.t) List.t
+  -> ((int64 * int64 * Bank_transfer.state option * string option) list, Error.t) Result.t
+
+val transfer_candidates_from
+  :  ?include_reviewed:bool
+  -> Handle.t
+  -> (int64 * Source_event.t) List.t
   -> (Int64.t, Movement.t) Hashtbl.t
-  -> (Int64.t, String.t * 'a) Hashtbl.t
-  -> (Int64.t Hashtbl.key, 'b) Hashtbl.t
+  -> (int64 * int64 * Bank_transfer.state option * string option) list
   -> (transfer_candidate List.t, Error.t) Result.t
 
 val find_settlement : string -> string -> string Rel_sql.Stmt.t

@@ -186,7 +186,6 @@ val same_entry : Accounting.entry -> Accounting.entry -> bool
 val stored : (int64, 'a) Hashtbl.t -> int64 Hashtbl.key -> 'a Or_error.t
 val find_mapping : string -> string -> string Rel_sql.Stmt.t
 val movement : Handle.t -> int64 -> (Movement.t, Error.t) Result.t
-val reversal_account : int64 -> int64 -> string
 
 val events_with_order
   :  ?order:bank_review_order_column Base__List.t * bool

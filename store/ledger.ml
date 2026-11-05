@@ -406,10 +406,6 @@ let card_settlement db event_id =
   db_result (Db.first db.conn (find_card_settlement event_id))
 ;;
 
-let reversal_account original reversal =
-  Printf.sprintf "assets:reversals:pair-%Ld-%Ld" original reversal
-;;
-
 let linked_reversal db event_id =
   let query =
     Rel_sql.Stmt.(
@@ -424,18 +420,14 @@ let linked_reversal db event_id =
 ;;
 
 let counter_account db event_id =
-  let* reversal = linked_reversal db event_id in
-  match reversal with
-  | Some (original, reversal, _) -> Ok (Some (reversal_account original reversal))
-  | None ->
-    let* transfer = linked_transfer db event_id in
-    (match transfer with
-     | Some (first, second, _) -> Ok (Some (Bank_transfer.account first second))
-     | None ->
-       let* settlement = card_settlement db event_id in
-       (match settlement with
-        | Some (account, _) -> Ok (Some account)
-        | None -> category_account db event_id))
+  let query =
+    Rel_sql.Stmt.(
+      func
+        "SELECT posting_account FROM reviews WHERE event_id=?"
+        (int64 @-> ret Row.(t1 (option Rel.Type.text "posting_account"))))
+  in
+  let* row = db_result (Db.first db.conn (query event_id)) in
+  Ok (Option.join row)
 ;;
 
 let mapped_bank_entry db event_id (event : Source_event.t) =

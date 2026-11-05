@@ -112,7 +112,7 @@ let transaction_type_show database operation_id source_event_id =
         [ operation_id ]
       |> Result.map ~f:List.hd_exn
     in
-    let%bind rows = Review.bank_review db in
+    let%bind rows = Review.reviews_of_events db [ event_id ] in
     let%map row =
       List.find rows ~f:(fun r -> Int64.equal r.Review.event_id event_id)
       |> Or_error.of_option ~error:(Error.of_string "unknown transaction event ID")

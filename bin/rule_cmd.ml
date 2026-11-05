@@ -126,7 +126,7 @@ let rule_from_category database operation_id name contains institution yes =
       Category_review_cmd.bank_event_ids_for_operations db [ operation_id ]
       |> Result.map ~f:List.hd_exn
     in
-    let%bind rows = Review.bank_review db in
+    let%bind rows = Review.reviews_of_events db [ event_id ] in
     let%bind seed =
       List.find rows ~f:(fun (r : Review.bank_review) -> Int64.equal r.event_id event_id)
       |> Or_error.of_option ~error:(Error.of_string "unknown transaction event ID")

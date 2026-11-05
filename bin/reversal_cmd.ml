@@ -25,7 +25,7 @@ let reversal_candidates_cmd =
 
 let reversal_review database original reversal undo yes =
   with_database database (fun db ->
-    let%bind rows = Review.bank_review db in
+    let%bind rows = Review.reviews_of_events db [ original; reversal ] in
     let find id =
       List.find rows ~f:(fun r -> Int64.equal r.Review.event_id id)
       |> Or_error.of_option ~error:(Error.of_string "unknown transaction event ID")

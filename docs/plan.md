@@ -504,8 +504,16 @@ position observations, derive positions from fills, or calculate funding.
   (reviews, operation groups, operation rows) as views each connection creates; reviews, `fin operation
   list` and `fin transfer unmatched` read from `store/sql/` files, which a test compiles. On a rebuild
   of real statements with 54 settlements and confirmed transfers, 44 command outputs matched the
-  previous build, apart from the order of an operation's movements in JSON. Next: settlement and
-  transfer candidates, status, then the remaining inline statements.
+  previous build, apart from the order of an operation's movements in JSON. The decision rule is
+  stated once, in `reviews`: both status commands count from it and the journal reads its posting
+  account there, byte-identical on a fresh real rebuild. Transfer candidates are one query over
+  `reviews` (`store/sql/transfer_candidates.sql`); only the IBAN check stays in OCaml, and
+  `review_metadata` is gone. Identical output on real data untouched, after 40 transfer decisions
+  and after categorizing six candidate sides. Settlement and reversal suggestions are queries too;
+  both compared every movement against every other in OCaml. Seven commands that act on one or two
+  movements read only those (`Review.reviews_of_events`). Still loading every review: the category
+  queue and `fin operation review` (one linear filter each), similarity, rule application, transfer
+  linking, decisions and restore, which use most rows. Short inline statements stay where they are.
 - [x] Costs that grew with the square of the data, found by comparing two sizes, which a test now
   does: lists read from JSON were joined without an index, and `operation_movements` has no index on
   `operation_id`, so a query driven from operations scans it per operation. The list and status are

@@ -20,7 +20,10 @@ short line of their own.
   listed them in reverse. Everything else it prints is unchanged.
 - `fin transfer unmatched` takes about half the time.
 - Internal: queries live in `store/sql/`, one per file, and the reads commands share are views; a test
-  compiles every file.
+  compiles every file. A movement's decision is stated once, in the `reviews` view: `fin status`,
+  `fin operation status`, the journal's posting account, and transfer, settlement and reversal
+  suggestions read it there instead of restating it. Commands acting on one or two movements read
+  only those, not every review.
 - `fin settlement review --all` checks everything once and records the batch in one transaction, all or
   nothing: 54 settlements take about 0.3 s instead of 5.5 s, which grew with every row you had.
 - `fin transfer unmatched` lists unclassified transfers that have no candidate, with the nearest thing to

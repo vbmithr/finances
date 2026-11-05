@@ -112,6 +112,9 @@ val effective_description : string -> Companion.annotation list -> string
 
 val bank_review : t -> bank_review list Or_error.t
 
+(** The reviews of these movements only, in listing order. *)
+val reviews_of_events : t -> int64 list -> bank_review list Or_error.t
+
 val bank_review_ordered
   :  t
   -> columns:bank_review_order_column list
@@ -242,16 +245,6 @@ val resolve_operation_movement_internal
   -> (bool, Error.t) Result.t
 
 val movement_source : Handle.t -> ((int64 * Source_event.t) List.t, Error.t) Result.t
-
-val review_metadata
-  :  Handle.t
-  -> ( (Int64.t, string * string) Hashtbl.t
-       * (Int64.t, int64 * int64 * string * string option) Hashtbl.t
-       * (Int64.t, string * string) Hashtbl.t
-       * (Int64.t, int64 * int64 * string) Hashtbl.t
-       , Error.t )
-       Result.t
-
 val operation_fields : Handle.t -> int64 -> ((string * string) List.t, Error.t) Result.t
 
 type unmatched_transfer =

@@ -213,7 +213,7 @@ let general_transfer_leg ?(allow_linked = false) db ~operation_id ~role =
         then Or_error.error_string "transfers with bank fees require separate review"
         else Ok ()
       in
-      let* reviews = bank_review db in
+      let* reviews = reviews_of_events db [ id ] in
       let* row =
         List.find reviews ~f:(fun r -> Int64.equal r.event_id id)
         |> Or_error.of_option ~error:(Error.of_string "bank movement review missing")

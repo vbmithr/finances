@@ -67,8 +67,10 @@ What files cannot do is share a fragment: SQLite has no include. That is what vi
 
 The shared reads are views, in `store/sql/views.sql`:
 
-- `reviews`: each movement with its decision, counter-account and effective description;
-- `transfer_sides`: a movement's confirmed transfer, with the other side's account;
+- `reviews`: each movement with its decision, counter-account, posting account and effective
+  description. It is the only statement of the decision rule; counts and the journal read it;
+- `operation_transfer_sides`: a bank movement's link to an operation without one, with the account
+  resolved on that side;
 - `linked_operations`, `stated_operations` and `grouped_operations`: which operations read as one;
 - `operation_anchors` and `operation_rows`: each operation's group, primary movement and display
   fields;
@@ -79,7 +81,10 @@ change to one needs neither a schema version nor a rebuild, which a view in the 
 
 A command's file reads from views, short enough to review. A view must not hide a scan inside a
 loop; the scaling test covers that, and lookups by event or operation inside a view are correlated
-subqueries on an index.
+subqueries on an index. SQLite computes a view whole when it sits on the right of a `LEFT JOIN`
+and is itself a join or a `UNION`, even to look up one row, so `reviews` joins tables directly and
+reads `operation_transfer_sides` as a correlated subquery. `EXPLAIN QUERY PLAN` of a one-event
+lookup in `reviews` shows no scan.
 
 ## Indexes
 
@@ -102,8 +107,12 @@ connection and transactions.
 1. Done: schema change for stored ledger names, account IDs and display names, and the indexes;
    the views; the preparation test; reviews, `fin operation list` and `fin transfer unmatched` on
    files.
-2. Move the remaining queries to `store/sql/` unchanged.
-3. Rewrite commands one by one onto the views, each checked byte-for-byte against the previous
+2. Done: one decision rule, in `reviews`, read by both status commands, the journal and transfer
+   candidates.
+3. Done: settlement and reversal suggestions as queries; commands on one or two movements read
+   only those. Short statements stay inline: they read well where they are, and a file is for a
+   query too big or complicated to read in a string.
+4. Rewrite commands one by one onto the views, each checked byte-for-byte against the previous
    build on a scratch rebuild of real statements, as done for `fin operation list` and `fin transfer
    unmatched`: settlement suggestions, `fin status`, transfer candidates, the category queue's
    selection, then `Review.bank_review`, which most commands still load whole.
@@ -118,5 +127,5 @@ connection and transactions.
 
 ## Open questions
 
-- Whether transfer candidates' IBAN evidence can be stated in SQL, or stays a check in OCaml on the
-  candidates a query returns.
+- Whether transfer candidates' IBAN evidence can be stated in SQL. For now it stays a check in
+  OCaml on the pairs `transfer_candidates.sql` returns.

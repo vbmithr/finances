@@ -84,7 +84,7 @@ let bank_event_ids_for_operations ?source_event_id db operation_ids =
 
 (* What a piped selection would change, shown before asking. *)
 let category_set_preview db account event_ids =
-  let%map rows = Review.bank_review db in
+  let%map rows = Review.reviews_of_events db event_ids in
   let selected = Set.of_list (module Int64) event_ids in
   let changing =
     List.filter rows ~f:(fun (r : Review.bank_review) ->

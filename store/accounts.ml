@@ -293,18 +293,15 @@ let apply_classification_rule ?(force = false) db ~expected ~selected =
 
 let bank_overview db =
   let* source = movement_source db in
-  let* pairs = collect db transfer_pairs in
+  let* pairs = candidate_pairs db in
   let needed = account_representatives source in
-  List.iter pairs ~f:(fun (a, b) ->
+  List.iter pairs ~f:(fun (a, b, _, _) ->
     Hash_set.add needed a;
     Hash_set.add needed b);
   let* table = selected_movements db needed in
-  let* categories, transfers, _, _ = review_metadata db in
   let* summaries, movements, unclassified = status_summaries db source in
   let* accounts = bank_account_info_from ~summaries db source table in
-  let* candidates =
-    transfer_candidates_from ~pairs db source table categories transfers
-  in
+  let* candidates = transfer_candidates_from db source table pairs in
   Ok (accounts, movements, unclassified, List.length candidates)
 ;;
 

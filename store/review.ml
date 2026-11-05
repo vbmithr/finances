@@ -437,23 +437,10 @@ type transaction_status =
   }
 
 let transaction_status db =
-  let sql =
-    "SELECT e.kind, CASE WHEN EXISTS (SELECT 1 FROM reversal_pairs r WHERE \
-     r.original=m.event_id OR r.reversal=m.event_id) THEN 'reversal' WHEN EXISTS (SELECT \
-     1 FROM operation_movements om JOIN operation_transfer_memberships t ON \
-     t.movement_id=om.id WHERE om.anchor_event_id=m.event_id) THEN 'transfer' WHEN \
-     EXISTS (SELECT 1 FROM card_settlement_decisions s WHERE s.event_id=m.event_id) THEN \
-     'settlement' WHEN c.account IS NOT NULL AND c.account <> 'equity:unclassified' THEN \
-     'category' ELSE 'unclassified' END AS decision, coalesce(c.account,''), \
-     coalesce(o.movement_type,m.movement_type,'unknown'), count(*) FROM movements m JOIN \
-     source_events e ON e.id=m.event_id LEFT JOIN bank_categories c ON \
-     c.event_id=m.event_id LEFT JOIN movement_type_overrides o ON o.event_id=m.event_id \
-     GROUP BY 1,2,3,4"
-  in
   let row =
     Row.(t5 (text "kind") (text "decision") (text "category") (text "type") (int "count"))
   in
-  let* groups = collect db (statement sql row) in
+  let* groups = collect db (statement Sql.decision_counts row) in
   let totals = Hashtbl.create (module String) in
   let categories = Hashtbl.create (module String) in
   let types = Hashtbl.create (module String) in
@@ -502,94 +489,6 @@ type bank_review =
   ; counter_account : string
   ; reason : string option
   }
-
-(* Read review metadata once, rather than issuing two queries per movement. *)
-let review_metadata db =
-  let* categories =
-    collect
-      db
-      (statement
-         "SELECT event_id,account,reason FROM bank_categories"
-         Row.(
-           t3
-             (read_column Db_schema.Bank_categories.event_id)
-             (read_column Db_schema.Bank_categories.account)
-             (read_column Db_schema.Bank_categories.reason)))
-  in
-  let* transfers =
-    collect
-      db
-      (statement
-         "SELECT m.event_id,m.first_event_id,m.second_event_id,d.reason FROM \
-          bank_transfer_memberships m JOIN bank_transfer_decisions d ON \
-          d.first_event_id=m.first_event_id AND d.second_event_id=m.second_event_id \
-          WHERE d.state='confirmed'"
-         Row.(
-           t4
-             (read_column Db_schema.Bank_transfer_memberships.event_id)
-             (read_column Db_schema.Bank_transfer_memberships.first_event_id)
-             (read_column Db_schema.Bank_transfer_memberships.second_event_id)
-             (read_column Db_schema.Bank_transfer_decisions.reason)))
-  in
-  let* general_transfers =
-    collect
-      db
-      (statement
-         "SELECT \
-          own.anchor_event_id,a.anchor_event_id,b.anchor_event_id,l.reason,r.account \
-          FROM operation_transfer_links l JOIN operation_movements a ON \
-          a.id=l.first_movement_id JOIN operation_movements b ON \
-          b.id=l.second_movement_id JOIN operation_movements own ON own.id IN \
-          (a.id,b.id) JOIN operations o ON o.id=own.operation_id AND \
-          o.bank_event_id=own.anchor_event_id JOIN operation_movements other ON \
-          other.id=CASE WHEN own.id=a.id THEN b.id ELSE a.id END JOIN operations oo ON \
-          oo.id=other.operation_id AND oo.bank_event_id IS NULL JOIN \
-          operation_movement_resolutions r ON r.movement_id=other.id"
-         Row.(
-           t5
-             (int64 "event_id")
-             (int64 "first_event_id")
-             (int64 "second_event_id")
-             (text "reason")
-             (text "account")))
-  in
-  let* settlements =
-    collect
-      db
-      (statement
-         "SELECT event_id,ledger_account,reason FROM card_settlement_decisions"
-         Row.(
-           t3
-             (read_column Db_schema.Card_settlement_decisions.event_id)
-             (read_column Db_schema.Card_settlement_decisions.ledger_account)
-             (read_column Db_schema.Card_settlement_decisions.reason)))
-  in
-  let* reversals =
-    collect
-      db
-      (statement
-         "SELECT original,reversal,reason FROM reversal_pairs"
-         Db_schema.Reversal_pairs.row)
-  in
-  let reversal_map = Hashtbl.create (module Int64) in
-  List.iter reversals ~f:(fun (r : Db_schema.Reversal_pairs.t) ->
-    Hashtbl.set reversal_map ~key:r.original ~data:(r.original, r.reversal, r.reason);
-    Hashtbl.set reversal_map ~key:r.reversal ~data:(r.original, r.reversal, r.reason));
-  Ok
-    ( Hashtbl.of_alist_exn
-        (module Int64)
-        (List.map categories ~f:(fun (id, account, reason) -> id, (account, reason)))
-    , Hashtbl.of_alist_exn
-        (module Int64)
-        (List.map transfers ~f:(fun (id, first, second, reason) ->
-           id, (first, second, reason, None))
-         @ List.map general_transfers ~f:(fun (id, first, second, reason, account) ->
-           id, (first, second, reason, Some account)))
-    , Hashtbl.of_alist_exn
-        (module Int64)
-        (List.map settlements ~f:(fun (id, account, reason) -> id, (account, reason)))
-    , reversal_map )
-;;
 
 let effective_description fallback annotations =
   let preferred =
@@ -748,6 +647,20 @@ let bank_review_with_order ?order db =
 ;;
 
 let bank_review db = bank_review_with_order db
+
+let reviews_of_events db event_ids =
+  let* stored =
+    Ledger.movement_rows
+      db
+      (" WHERE event_id IN ("
+       ^ String.concat ~sep:"," (List.map event_ids ~f:Int64.to_string)
+       ^ ")")
+  in
+  select_reviews
+    db
+    (Rel_sql.Stmt.(func Sql.event_reviews (text @-> ret review_row)) (json_ids event_ids))
+    ~movements:(Hashtbl.of_alist_exn (module Int64) stored)
+;;
 
 let bank_review_ordered db ~columns ~ascending =
   bank_review_with_order ~order:(columns, ascending) db
@@ -1104,19 +1017,7 @@ let operations
     List.map movement_rows ~f:(fun (_, _, anchor, _, _, _, _) -> anchor)
     |> List.dedup_and_sort ~compare:Int64.compare
   in
-  let* stored_movements =
-    Ledger.movement_rows
-      db
-      (" WHERE event_id IN ("
-       ^ String.concat ~sep:"," (List.map anchors ~f:Int64.to_string)
-       ^ ")")
-  in
-  let* reviews =
-    select_reviews
-      db
-      (Rel_sql.Stmt.(func Sql.event_reviews (text @-> ret review_row)) (json_ids anchors))
-      ~movements:(Hashtbl.of_alist_exn (module Int64) stored_movements)
-  in
+  let* reviews = reviews_of_events db anchors in
   let review_by_event =
     Hashtbl.of_alist_exn
       (module Int64)

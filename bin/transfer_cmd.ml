@@ -498,7 +498,7 @@ let transfer_undo database first second yes =
       |> Or_error.of_option
            ~error:(Error.of_string "no confirmed transfer for these event IDs")
     in
-    let%bind rows = Review.bank_review db in
+    let%bind rows = Review.reviews_of_events db [ first; second ] in
     let pair =
       List.filter rows ~f:(fun r ->
         Int64.equal r.Review.event_id first || Int64.equal r.event_id second)

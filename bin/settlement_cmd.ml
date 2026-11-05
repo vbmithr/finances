@@ -21,59 +21,39 @@ let account_reference (mapping : Bank_account_mapping.t) =
 ;;
 
 let settlement_suggestions db =
-  let%bind rows = Review.bank_review db in
+  let%bind rows = Transfers.settlement_candidates db in
   let%bind accounts = Transfers.bank_account_info db in
   let suggestions =
     List.filter_map rows ~f:(fun (row : Review.bank_review) ->
       let movement = row.transaction in
-      let hint = row.source_evidence.card_reference in
-      Option.bind hint ~f:(fun hint ->
-        if
-          (not (String.equal row.counter_account "equity:unclassified"))
-          || Option.is_some row.reason
-          || Quantity.(movement.amount >= zero)
-          || not (Quantity.is_zero movement.fee)
-        then None
-        else (
-          let banks =
-            List.filter accounts ~f:(fun a ->
-              String.equal a.Transfers.mapping.institution row.institution
-              && String.equal a.mapping.bank_id movement.account.bank_id
-              && String.equal a.mapping.account_id movement.account.account_id
-              && String.equal a.mapping.account_type movement.account.account_type)
+      Option.bind row.source_evidence.card_reference ~f:(fun hint ->
+        let banks =
+          List.filter accounts ~f:(fun a ->
+            String.equal a.Transfers.mapping.institution row.institution
+            && String.equal a.mapping.bank_id movement.account.bank_id
+            && String.equal a.mapping.account_id movement.account.account_id
+            && String.equal a.mapping.account_type movement.account.account_type)
+        in
+        match banks with
+        | [ bank ] when not (String.equal bank.iban_source "not_applicable") ->
+          let parent = account_reference bank.mapping in
+          let cards =
+            List.filter accounts ~f:(fun card ->
+              String.equal card.Transfers.mapping.institution row.institution
+              && String.equal card.mapping.bank_id movement.account.bank_id
+              && String.equal card.mapping.account_id hint
+              && String.equal card.mapping.account_type "CREDITCRD"
+              && Iso4217.equal card.currency movement.account.currency
+              && Option.for_all card.settlement_account ~f:(fun linked ->
+                String.equal linked.institution parent.institution
+                && String.equal
+                     (Bank_account_config.source_account linked)
+                     (Bank_account_config.source_account parent)))
           in
-          match banks with
-          | [ bank ] when not (String.equal bank.iban_source "not_applicable") ->
-            let parent = account_reference bank.mapping in
-            let cards =
-              List.filter accounts ~f:(fun card ->
-                String.equal card.Transfers.mapping.institution row.institution
-                && String.equal card.mapping.bank_id movement.account.bank_id
-                && String.equal card.mapping.account_id hint
-                && String.equal card.mapping.account_type "CREDITCRD"
-                && Iso4217.equal card.currency movement.account.currency
-                && Option.for_all card.settlement_account ~f:(fun linked ->
-                  String.equal linked.institution parent.institution
-                  && String.equal
-                       (Bank_account_config.source_account linked)
-                       (Bank_account_config.source_account parent)))
-            in
-            (match cards with
-             | [ card ] ->
-               let card_has_payment =
-                 List.exists rows ~f:(fun other ->
-                   let tx = other.Review.transaction in
-                   String.equal other.institution card.mapping.institution
-                   && String.equal tx.account.bank_id card.mapping.bank_id
-                   && String.equal tx.account.account_id card.mapping.account_id
-                   && String.equal tx.account.account_type card.mapping.account_type
-                   && Iso4217.equal tx.account.currency movement.account.currency
-                   && Quantity.equal tx.amount (Quantity.neg movement.amount)
-                   && Int.abs (Date.diff tx.booked_on movement.booked_on) <= 7)
-               in
-               Option.some_if (not card_has_payment) { transaction = row; card; bank }
-             | _ -> None)
-          | _ -> None)))
+          (match cards with
+           | [ card ] -> Some { transaction = row; card; bank }
+           | _ -> None)
+        | _ -> None))
   in
   Ok suggestions
 ;;
