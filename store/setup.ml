@@ -368,9 +368,9 @@ let initialize db =
     | _ ->
       Or_error.errorf
         "unsupported database schema; this experimental build accepts only schema %d. \
-         Run fin backup first (it works on any schema); to export account settings, use \
-         the previous fin version. Then run fin delete and fin init, import your \
-         statement folders again and import the account snapshot"
+         With the previous fin version, run fin backup (it keeps a copy) and fin \
+         decisions export FILE. Then, with this one, run fin delete and fin init, import \
+         your statement folders again and run fin decisions restore FILE"
         Db_schema.version)
 ;;
 

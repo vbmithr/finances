@@ -8,6 +8,10 @@ short line of their own.
 
 ## Unreleased
 
+- **Action required: rebuild.** Schema 35 adds the indexes whose absence made reads scan whole tables:
+  movements by operation, movements by currency and day, and companion matches by event. Before
+  installing, with your current fin, run `fin backup DIR` and `fin decisions export FILE`; then run
+  `fin delete`, `fin init`, import your statements again and `fin decisions restore FILE`.
 - `fin settlement review --all` checks everything once and records the batch in one transaction, all or
   nothing: 54 settlements take about 0.3 s instead of 5.5 s, which grew with every row you had.
 - `fin transfer unmatched` lists unclassified transfers that have no candidate, with the nearest thing to

@@ -3,7 +3,7 @@ open Rel
 
 (** One current experimental baseline; older databases must be reimported. Banks
     have no tables of their own. *)
-let version = 34
+let version = 35
 
 let timestamp = `Expr "(strftime('%Y-%m-%dT%H:%M:%f','now') || '000000000Z')"
 
@@ -274,6 +274,7 @@ module Movements = struct
         [ Table.Index.make
             ~name:"movements_principal"
             [ Col.Def currency; Col.Def principal_magnitude ]
+        ; Table.Index.make ~name:"movements_day" [ Col.Def currency; Col.Def booked_on ]
         ]
       "movements"
       row
@@ -443,6 +444,10 @@ module Operation_movements = struct
                    ; Col.Def Operation_sources.event_id
                    ] ))
             ()
+        ]
+      ~indices:
+        [ (* Most reads go from an operation to its movements. *)
+          Table.Index.make ~name:"operation_movements_operation" [ Col.Def operation_id ]
         ]
       "operation_movements"
       row
@@ -1582,6 +1587,7 @@ module Companion_matches = struct
                  (Companion_rows.table, [ Col.Def Companion_rows.id ]))
             ()
         ]
+      ~indices:[ Table.Index.make ~name:"companion_matches_event" [ Col.Def event_id ] ]
       "companion_matches"
       row
   ;;
