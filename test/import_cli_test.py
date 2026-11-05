@@ -71,6 +71,22 @@ class ImportOnboarding(unittest.TestCase):
             self.assertEqual(result.returncode, 0, result.stderr)
         return result
 
+    def saved(self, section, *args):
+        """One section of what fin decisions export writes."""
+        path = self.root / 'exported-decisions.json'
+        self.run_fin('decisions', 'export', path, *args)
+        return json.loads(path.read_text())[section]
+
+    def exported(self, section, *args):
+        """A decisions file holding only this section."""
+        return self.document(**{section: self.saved(section, *args)})
+
+    def document(self, **sections):
+        return json.dumps({'format': 'fin-decisions', 'version': 1, **sections})
+
+    def problems(self, result):
+        return ' '.join(result.stderr.split())
+
     def terminal(self, args, answers):
         master, slave = pty.openpty()
         child = subprocess.Popen([FIN, *map(str, args)], env=self.env,
@@ -107,7 +123,7 @@ class ImportOnboarding(unittest.TestCase):
             os.close(master)
 
     def accounts(self):
-        return json.loads(self.run_fin('account', 'export').stdout)['accounts']
+        return self.saved('accounts')['accounts']
 
     def fullscreen(self, args, answers, size=(30, 120)):
         master, slave = pty.openpty()
@@ -258,23 +274,23 @@ class ImportOnboarding(unittest.TestCase):
         resolved = next(row for row in json.loads(self.run_fin('operation', 'list', '--institution', 'cdc', '--json').stdout) if row['operation_id'] == op)
         self.assertEqual({m['role']: m['account'] for m in resolved['movements']}, {'from': 'assets:cdc:wallet', 'to': 'assets:cdc:fiat'})
         portable = self.root / 'operation-resolutions.json'
-        portable.write_text(self.run_fin('operation', 'export').stdout)
-        saved = json.loads(portable.read_text())
+        portable.write_text(self.exported('assignments'))
+        saved = self.saved('assignments')
         self.assertEqual((saved['version'], len(saved['resolutions'])), (5, 2))
         rebuilt = self.root / 'crypto-rebuilt.sqlite3'
         self.run_fin('init', '--database', rebuilt)
         self.run_fin('import', 'cdc', path, '--database', rebuilt)
-        preview = self.terminal(['operation', 'restore', portable, '--database', rebuilt], [('Restore this snapshot?', 'n')])
-        self.assertIn('Movement resolutions to restore: 2', preview)
-        self.run_fin('operation', 'restore', portable, '--database', rebuilt, '--yes')
+        preview = self.terminal(['decisions', 'restore', portable, '--database', rebuilt], [('Restore these decisions?', 'n')])
+        self.assertIn('resolutions=2', preview)
+        self.run_fin('decisions', 'restore', portable, '--database', rebuilt, '--yes')
         rebuilt_rows = json.loads(self.run_fin('operation', 'list', '--database', rebuilt, '--institution', 'cdc', '--json').stdout)
         exchange2 = next(row for row in rebuilt_rows if row['description'] == 'Exchange')
         self.assertEqual({m['role']: m['account'] for m in exchange2['movements']}, {'from': 'assets:cdc:wallet', 'to': 'assets:cdc:fiat'})
         saved['resolutions'][0]['source_quantity'] = '999'
-        portable.write_text(json.dumps(saved))
-        blocked = self.run_fin('operation', 'restore', portable, '--database', rebuilt, '--yes', check=False)
+        portable.write_text(self.document(assignments=saved))
+        blocked = self.run_fin('decisions', 'restore', portable, '--database', rebuilt, '--yes', check=False)
         self.assertNotEqual(blocked.returncode, 0)
-        self.assertIn('movement interpretation differs', blocked.stdout)
+        self.assertIn('movement interpretation differs', self.problems(blocked))
         self.assertIn('unchanged=1', self.run_fin('import', 'cdc', path).stdout)
         self.assertEqual(self.run_fin('journal', 'export').stdout, journal)
         self.assertIn('exchange_changes=1', self.run_fin('operation', 'exchange', 'confirm', op, '--yes').stdout)
@@ -283,15 +299,15 @@ class ImportOnboarding(unittest.TestCase):
         self.assertIn('CRO', after)
         self.assertIn('operation:exchange', after)
         exchanges = self.root / 'exchanges.json'
-        exchanges.write_text(self.run_fin('operation', 'exchange', 'export').stdout)
-        self.assertIn('Exchanges to restore: 1', self.terminal(['operation', 'exchange', 'restore', exchanges, '--database', rebuilt], [('Restore these exchanges?', 'n')]))
-        self.assertIn('exchange_changes=1', self.run_fin('operation', 'exchange', 'restore', exchanges, '--database', rebuilt, '--yes').stdout)
+        exchanges.write_text(self.exported('exchanges'))
+        self.assertIn('exchanges=1', self.terminal(['decisions', 'restore', exchanges, '--database', rebuilt], [('Restore these decisions?', 'n')]))
+        self.assertIn('exchanges=1', self.run_fin('decisions', 'restore', exchanges, '--database', rebuilt, '--yes').stdout)
         self.assertEqual(self.run_fin('journal', 'export', '--database', rebuilt).stdout, after)
-        self.assertIn('already matching: 1', self.run_fin('operation', 'exchange', 'restore', exchanges, '--database', rebuilt).stdout)
+        self.assertIn('exchanges=0', self.run_fin('decisions', 'restore', exchanges, '--database', rebuilt).stdout)
         tampered = json.loads(exchanges.read_text())
-        tampered['exchanges'][0]['projection_sha256'] = 'changed'
+        tampered['exchanges']['exchanges'][0]['projection_sha256'] = 'changed'
         exchanges.write_text(json.dumps(tampered))
-        self.assertNotEqual(self.run_fin('operation', 'exchange', 'restore', exchanges, '--database', rebuilt, '--yes', check=False).returncode, 0)
+        self.assertNotEqual(self.run_fin('decisions', 'restore', exchanges, '--database', rebuilt, '--yes', check=False).returncode, 0)
         self.assertNotEqual(self.run_fin('operation', 'resolve', op, 'to', 'assets:other', fiat, check=False).returncode, 0)
         self.assertIn('exchange_changes=1', self.run_fin('operation', 'exchange', 'undo', op, '--yes').stdout)
         self.assertEqual(self.run_fin('journal', 'export').stdout, journal)
@@ -340,7 +356,7 @@ class ImportOnboarding(unittest.TestCase):
         fiat = json.dumps({'kind': 'fiat', 'code': 'EUR'})
         self.run_fin('operation', 'resolve', wallet_op, 'primary', 'assets:wallet:eur', fiat)
         resolutions = self.root / 'resolutions.json'
-        resolutions.write_text(self.run_fin('operation', 'export').stdout)
+        resolutions.write_text(self.exported('assignments'))
         self.assertIn('transfer_changes=1', self.run_fin('transfer', 'link', bank_op, wallet_op, '--yes').stdout)
         grouped = json.loads(self.run_fin('operation', 'list', '--json').stdout)
         self.assertEqual(len(grouped), 1)
@@ -352,15 +368,15 @@ class ImportOnboarding(unittest.TestCase):
         self.assertNotIn('equity:unclassified', journal)
         self.assertNotEqual(self.run_fin('operation', 'resolve', wallet_op, 'primary', 'assets:other', fiat, check=False).returncode, 0)
         transfers = self.root / 'general-transfers.json'
-        transfers.write_text(self.run_fin('transfer', 'export').stdout)
+        transfers.write_text(self.exported('transfers'))
         rebuilt = self.root / 'transfer-general-rebuilt.sqlite3'
         self.run_fin('init', '--database', rebuilt)
         self.run_fin('import', 'cdc', wallet, '--database', rebuilt)
         self.run_fin('import', 'revolut', bank, '--database', rebuilt)
-        self.run_fin('operation', 'restore', resolutions, '--database', rebuilt, '--yes')
-        self.assertIn('Transfers to restore: 1', self.terminal(['transfer', 'restore', transfers, '--database', rebuilt], [('Restore these transfers?', 'n')]))
-        self.assertIn('transfer_changes=1', self.run_fin('transfer', 'restore', transfers, '--database', rebuilt, '--yes').stdout)
-        self.assertIn('already matching: 1', self.run_fin('transfer', 'restore', transfers, '--database', rebuilt).stdout)
+        self.run_fin('decisions', 'restore', resolutions, '--database', rebuilt, '--yes')
+        self.assertIn('transfers=1', self.terminal(['decisions', 'restore', transfers, '--database', rebuilt], [('Restore these decisions?', 'n')]))
+        self.assertIn('transfers=1', self.run_fin('decisions', 'restore', transfers, '--database', rebuilt, '--yes').stdout)
+        self.assertIn('transfers=0', self.run_fin('decisions', 'restore', transfers, '--database', rebuilt).stdout)
         self.assertIn('assets:wallet:eur', self.run_fin('journal', 'export', '--database', rebuilt).stdout)
         self.assertIn('transfer_changes=1', self.run_fin('transfer', 'unlink', bank_op, '--yes').stdout)
         self.assertIn('equity:unclassified', self.run_fin('journal', 'export').stdout)
@@ -553,79 +569,55 @@ class ImportOnboarding(unittest.TestCase):
         snapshot = self.root / 'categories-portable.json'
         catalog = self.root / 'catalog.json'
         rules = self.root / 'rules.json'
-        catalog.write_text(self.run_fin('cat', 'export').stdout)
-        rules.write_text(self.run_fin('rule', 'export').stdout)
-        snapshot.write_text(self.run_fin('operation', 'export').stdout)
-        c, r, exported = (json.loads(p.read_text()) for p in (catalog, rules, snapshot))
-        self.assertEqual(set(c), {'version', 'categories'})
-        self.assertEqual(set(r), {'version', 'rules'})
+        catalog.write_text(self.exported('categories'))
+        rules.write_text(self.exported('rules'))
+        snapshot.write_text(self.exported('assignments'))
+        categories, stored_rules, exported = (self.saved(x) for x in ('categories', 'rules', 'assignments'))
         self.assertEqual(set(exported), {'version', 'decisions', 'resolutions'})
-        self.assertTrue(all(x['version'] == 2 for x in (c, r)))
         self.assertEqual(exported['version'], 5)
         self.assertTrue(all(d['movement_role'] == 'primary' for d in exported['decisions']))
-        self.assertIn('expenses:unused', c['categories'])
-        self.assertTrue(any(rule['name'] == 'deposit-rule' for rule in r['rules']))
+        self.assertIn('expenses:unused', categories)
+        self.assertTrue(any(rule['name'] == 'deposit-rule' for rule in stored_rules))
         self.assertEqual(len(exported['decisions']), 1)
-        older = self.root / 'category-v2.json'
-        older.write_text(json.dumps({'version': 2, 'decisions': [{k: v for k, v in d.items() if k != 'movement_role'} for d in exported['decisions']]}))
-        previous = self.root / 'transaction-v3.json'
-        previous.write_text(json.dumps({'version': 3, 'decisions': [{k: v for k, v in d.items() if k != 'movement_role'} for d in exported['decisions']]}))
-        previous_v4 = self.root / 'transaction-v4.json'
-        previous_v4.write_text(json.dumps({'version': 4, 'decisions': exported['decisions']}))
         other = self.root / 'rebuilt.sqlite3'
         self.run_fin('init', '--database', other)
         self.run_fin('import', 'boursobank', 'fixtures/bank.ofx', '--database', other)
         self.run_fin('import', 'revolut', self.csv, '--database', other)
         current = json.loads(self.run_fin('operation', 'list', '--database', other, '--search', 'Initial deposit', '--json').stdout)[0]
         self.assertNotEqual(current['event_id'], first)
-        refused = self.run_fin('operation', 'restore', snapshot, '--database', other, check=False)
+        refused = self.run_fin('decisions', 'restore', snapshot, '--database', other, check=False)
         self.assertNotEqual(refused.returncode, 0)
-        self.assertIn('Decisions to restore: 1', refused.stdout)
+        self.assertIn('assignments=1', refused.stdout)
         self.assertIn('pass --yes', refused.stderr)
-        declined = self.terminal(['operation', 'restore', snapshot, '--database', other], [('Restore this snapshot?', 'n')])
-        self.assertIn('Decisions to restore: 1', declined)
+        declined = self.terminal(['decisions', 'restore', snapshot, '--database', other], [('Restore these decisions?', 'n')])
+        self.assertIn('assignments=1', declined)
         self.assertIn('Nothing restored.', declined)
         self.assertEqual(json.loads(self.run_fin('cat', 'list', '--database', other, '--json').stdout), [])
-        self.assertIn('category_changes=1', self.terminal(['operation', 'restore', snapshot, '--database', other], [('Restore this snapshot? [Y/n]:', '')]))
+        self.assertIn('assignments=1', self.terminal(['decisions', 'restore', snapshot, '--database', other], [('Restore these decisions? [Y/n]:', '')]))
         current = json.loads(self.run_fin('operation', 'list', '--database', other, '--search', 'Initial deposit', '--json').stdout)[0]
         self.assertEqual(current['counter_account'], 'income:salary')
         self.assertIn('income:salary', json.loads(self.run_fin('cat', 'list', '--database', other, '--json').stdout))
-        self.assertIn('category_changes=0', self.run_fin('operation', 'restore', older, '--database', other, '--yes').stdout)
-        self.assertIn('category_changes=0', self.run_fin('operation', 'restore', previous, '--database', other, '--yes').stdout)
-        self.assertIn('category_changes=0', self.run_fin('operation', 'restore', previous_v4, '--database', other, '--yes').stdout)
         self.assertNotIn('expenses:unused', json.loads(self.run_fin('cat', 'list', '--database', other, '--json').stdout))
-        self.run_fin('cat', 'restore', catalog, '--database', other, '--yes')
-        self.assertIn('expenses:rule-only', self.terminal(['rule', 'restore', rules, '--database', other], [('Restore this snapshot?', 'n')]))
-        self.run_fin('rule', 'restore', rules, '--database', other, '--yes')
+        self.run_fin('decisions', 'restore', catalog, '--database', other, '--yes')
+        self.assertIn('rules=', self.terminal(['decisions', 'restore', rules, '--database', other], [('Restore these decisions?', 'n')]))
+        self.run_fin('decisions', 'restore', rules, '--database', other, '--yes')
         self.assertIn('expenses:rule-only', json.loads(self.run_fin('cat', 'list', '--database', other, '--json').stdout))
         self.assertIn('type-only-export', self.run_fin('rule', 'list', '--database', other).stdout)
         self.assertIn('evidence-export', self.run_fin('rule', 'list', '--database', other).stdout)
         self.assertIn('expenses:mixed', json.loads(self.run_fin('cat', 'list', '--database', other, '--json').stdout))
-        category_rule = next(rule for rule in r['rules'] if rule['name'] == 'rule-only')
+        category_rule = next(rule for rule in stored_rules if rule['name'] == 'rule-only')
         missing_card = dict(category_rule, name='missing-card', action='settlement', target='missing-card-id')
         new_category = dict(category_rule, name='blocked-category', target='expenses:blocked')
         broken_rules = self.root / 'broken-rules.json'
-        broken_rules.write_text(json.dumps({'version': 2, 'rules': [missing_card, new_category]}))
-        blocked = self.run_fin('rule', 'restore', broken_rules, '--database', other, '--yes', check=False)
+        broken_rules.write_text(self.document(rules=[missing_card, new_category]))
+        blocked = self.run_fin('decisions', 'restore', broken_rules, '--database', other, '--yes', check=False)
         self.assertNotEqual(blocked.returncode, 0)
-        self.assertIn('missing card', blocked.stdout)
+        self.assertIn('missing card', self.problems(blocked))
         self.assertNotIn('expenses:blocked', json.loads(self.run_fin('cat', 'list', '--database', other, '--json').stdout))
         self.assertNotIn('blocked-category', self.run_fin('rule', 'list', '--database', other).stdout)
         self.assertIn('expenses:unused', json.loads(self.run_fin('cat', 'list', '--database', other, '--json').stdout))
         self.assertIn('deposit-rule', self.run_fin('rule', 'list', '--database', other).stdout)
-        self.assertNotEqual(self.run_fin('cat', 'restore', snapshot, '--database', other, check=False).returncode, 0)
-        legacy = self.root / 'legacy.json'
-        legacy.write_text(json.dumps({'version': 1, 'categories': c['categories'], 'rules': r['rules'], 'decisions': exported['decisions']}))
-        legacy_db = self.root / 'legacy.sqlite3'
-        self.run_fin('init', '--database', legacy_db)
-        self.run_fin('import', 'revolut', self.csv, '--database', legacy_db)
-        self.run_fin('operation', 'restore', legacy, '--database', legacy_db, '--yes')
-        self.assertNotIn('expenses:unused', json.loads(self.run_fin('cat', 'list', '--database', legacy_db, '--json').stdout))
-        self.run_fin('rule', 'restore', legacy, '--database', legacy_db, '--yes')
-        self.assertIn('deposit-rule', self.run_fin('rule', 'list', '--database', legacy_db).stdout)
-        self.run_fin('cat', 'restore', legacy, '--database', legacy_db, '--yes')
-        self.assertIn('expenses:unused', json.loads(self.run_fin('cat', 'list', '--database', legacy_db, '--json').stdout))
-        self.assertIn('category_changes=0', self.run_fin('operation', 'restore', snapshot, '--database', other, '--yes').stdout)
+        self.assertIn('assignments=0', self.run_fin('decisions', 'restore', snapshot, '--database', other, '--yes').stdout)
 
     def test_portable_transaction_types_roundtrip_and_conflict(self):
         self.run_fin('import', 'revolut', self.csv)
@@ -634,32 +626,32 @@ class ImportOnboarding(unittest.TestCase):
         self.run_fin('operation', 'category', 'set', 'expenses:food', first)
         self.run_fin('operation', 'type', 'set', 'fee', first, second)
         snapshot = self.root / 'transaction-decisions.json'
-        exported = json.loads(self.run_fin('operation', 'export').stdout)
+        exported = self.saved('assignments')
         self.assertEqual(len(exported['decisions']), 2)
         self.assertEqual(sum('account' in d for d in exported['decisions']), 1)
         self.assertTrue(all(d['type_override'] == 'fee' for d in exported['decisions']))
-        snapshot.write_text(json.dumps(exported))
+        snapshot.write_text(self.document(assignments=exported))
 
         other = self.root / 'rebuilt-types.sqlite3'
         self.run_fin('init', '--database', other)
         self.run_fin('import', 'boursobank', 'fixtures/bank.ofx', '--database', other)
         self.run_fin('import', 'revolut', self.csv, '--database', other)
-        preview = self.terminal(['operation', 'restore', snapshot, '--database', other], [('Restore this snapshot?', 'n')])
-        self.assertIn('Type overrides to restore: 2', preview)
+        preview = self.terminal(['decisions', 'restore', snapshot, '--database', other], [('Restore these decisions?', 'n')])
+        self.assertIn('types=2', preview)
         current = json.loads(self.run_fin('operation', 'list', '--database', other, '--institution', 'revolut', '--json').stdout)
         target = next(r for r in current if r['description'] == rows[0]['description'])
         self.run_fin('operation', 'type', 'set', 'bonus', target['event_id'], '--database', other)
-        blocked = self.run_fin('operation', 'restore', snapshot, '--database', other, '--yes', check=False)
+        blocked = self.run_fin('decisions', 'restore', snapshot, '--database', other, '--yes', check=False)
         self.assertNotEqual(blocked.returncode, 0)
-        self.assertIn('existing type override differs', blocked.stdout)
+        self.assertIn('existing type override differs', self.problems(blocked))
         self.assertEqual(json.loads(self.run_fin('cat', 'list', '--database', other, '--json').stdout), [])
         self.run_fin('operation', 'type', 'reset', target['event_id'], '--database', other)
-        applied = self.run_fin('operation', 'restore', snapshot, '--database', other, '--yes').stdout
-        self.assertIn('category_changes=1 type_changes=2', applied)
+        applied = self.run_fin('decisions', 'restore', snapshot, '--database', other, '--yes').stdout
+        self.assertIn('assignments=1 types=2', applied)
         restored = json.loads(self.run_fin('operation', 'list', '--database', other, '--institution', 'revolut', '--json').stdout)
         self.assertEqual(sum(r['movement_type_override'] == 'fee' for r in restored), 2)
         self.assertEqual(sum(r['counter_account'] == 'expenses:food' for r in restored), 1)
-        self.assertIn('category_changes=0 type_changes=0', self.run_fin('operation', 'restore', snapshot, '--database', other, '--yes').stdout)
+        self.assertIn('assignments=0 types=0', self.run_fin('decisions', 'restore', snapshot, '--database', other, '--yes').stdout)
 
     def test_portable_restore_rejects_indistinguishable_duplicates(self):
         csv = self.csv.read_text().replace('Repeated transfer,10.00,0.00,EUR,COMPLETED,160.00', 'Repeated transfer,0.00,0.00,EUR,COMPLETED,150.00')
@@ -670,10 +662,10 @@ class ImportOnboarding(unittest.TestCase):
         self.assertEqual(len(rows), 2)
         self.run_fin('operation', 'category', 'set', 'income:other', rows[0]['event_id'])
         snapshot = self.root / 'duplicates.json'
-        snapshot.write_text(self.run_fin('operation', 'export').stdout)
-        result = self.run_fin('operation', 'restore', snapshot, '--yes', check=False)
+        snapshot.write_text(self.exported('assignments'))
+        result = self.run_fin('decisions', 'restore', snapshot, '--yes', check=False)
         self.assertNotEqual(result.returncode, 0)
-        self.assertIn('ambiguous duplicate source evidence', result.stdout)
+        self.assertIn('ambiguous duplicate source evidence', self.problems(result))
 
     def test_rule_from_category_can_be_applied_to_other_transactions(self):
         self.run_fin('import', 'revolut', self.csv)
@@ -705,40 +697,40 @@ class ImportOnboarding(unittest.TestCase):
         first = json.loads(self.run_fin('operation', 'list', '--search', 'Initial deposit', '--json').stdout)[0]['event_id']
         self.run_fin('operation', 'category', 'set', 'income:salary', first)
         snapshot = self.root / 'categories-portable.json'
-        exported = json.loads(self.run_fin('operation', 'export').stdout)
+        exported = self.saved('assignments')
         exported['decisions'][0]['account'] = 'expenses:should-not-appear'
         exported['decisions'][0]['payload_sha256'] = '0' * 64
-        snapshot.write_text(json.dumps(exported))
-        result = self.run_fin('operation', 'restore', snapshot, '--yes', check=False)
+        snapshot.write_text(self.document(assignments=exported))
+        result = self.run_fin('decisions', 'restore', snapshot, '--yes', check=False)
         self.assertNotEqual(result.returncode, 0)
-        self.assertIn('source evidence differs', result.stdout)
+        self.assertIn('source evidence differs', self.problems(result))
         self.assertNotIn('expenses:should-not-appear', self.run_fin('cat', 'list').stdout)
-        exported['decisions'][0]['payload_sha256'] = json.loads(self.run_fin('operation', 'export').stdout)['decisions'][0]['payload_sha256']
+        exported['decisions'][0]['payload_sha256'] = self.saved('assignments')['decisions'][0]['payload_sha256']
         exported['decisions'].append(dict(exported['decisions'][0]))
-        snapshot.write_text(json.dumps(exported))
-        result = self.run_fin('operation', 'restore', snapshot, '--yes', check=False)
+        snapshot.write_text(self.document(assignments=exported))
+        result = self.run_fin('decisions', 'restore', snapshot, '--yes', check=False)
         self.assertNotEqual(result.returncode, 0)
-        self.assertIn('duplicate transaction identities', result.stdout)
+        self.assertIn('duplicate transaction identities', self.problems(result))
         self.assertNotIn('expenses:should-not-appear', self.run_fin('cat', 'list').stdout)
         exported['decisions'] = [exported['decisions'][0]]
         exported['decisions'][0]['movement_role'] = 'to'
-        snapshot.write_text(json.dumps(exported))
-        result = self.run_fin('operation', 'restore', snapshot, '--yes', check=False)
+        snapshot.write_text(self.document(assignments=exported))
+        result = self.run_fin('decisions', 'restore', snapshot, '--yes', check=False)
         self.assertNotEqual(result.returncode, 0)
-        self.assertIn('unsupported movement role', result.stdout)
+        self.assertIn('unsupported movement role', self.problems(result))
         self.assertNotIn('expenses:should-not-appear', self.run_fin('cat', 'list').stdout)
         del exported['decisions'][0]['movement_role']
-        snapshot.write_text(json.dumps(exported))
-        self.assertNotEqual(self.run_fin('operation', 'restore', snapshot, check=False).returncode, 0)
+        snapshot.write_text(self.document(assignments=exported))
+        self.assertNotEqual(self.run_fin('decisions', 'restore', snapshot, check=False).returncode, 0)
         exported['decisions'][0]['movement_role'] = 'primary'
-        snapshot.write_text(json.dumps(exported))
+        snapshot.write_text(self.document(assignments=exported))
         with sqlite3.connect(self.root / 'data/fin/fin.sqlite3') as db:
             db.execute('DELETE FROM operation_movement_sources WHERE movement_id IN '
                        '(SELECT id FROM operation_movements WHERE anchor_event_id=?)', (first,))
-        result = self.run_fin('operation', 'restore', snapshot, '--yes', check=False)
+        result = self.run_fin('decisions', 'restore', snapshot, '--yes', check=False)
         self.assertNotEqual(result.returncode, 0)
-        self.assertIn('primary movement or its source link is missing', result.stdout)
-        self.assertNotEqual(self.run_fin('operation', 'export', check=False).returncode, 0)
+        self.assertIn('primary movement or its source link is missing', self.problems(result))
+        self.assertNotEqual(self.run_fin('decisions', 'export', snapshot, check=False).returncode, 0)
 
     def test_ledger_wrapper_streams_journal_and_forwards_arguments(self):
         self.run_fin('import', 'revolut', self.csv)
@@ -1246,36 +1238,6 @@ class ImportOnboarding(unittest.TestCase):
         self.assertIn('category_changes=1', piped.stdout)
         self.assertNotEqual(self.run_fin('operation', 'type', 'show', row['event_id'], check=False).returncode, 0)
 
-    def test_restore_decisions_for_one_institution(self):
-        self.run_fin('import', 'revolut', self.csv)
-        row = json.loads(self.run_fin('operation', 'list', '--json').stdout)[0]
-        self.run_fin('operation', 'category', 'set', 'expenses:food', row['event_id'])
-        snapshot = json.loads(self.run_fin('operation', 'export').stdout)
-        missing = dict(snapshot['decisions'][0], institution='wise', source_id='missing')
-        snapshot['decisions'].append(missing)
-        path = self.root / 'mixed-decisions.json'
-        path.write_text(json.dumps(snapshot))
-        rebuilt = self.root / 'filtered.sqlite3'
-        self.run_fin('init', '--database', rebuilt)
-        self.run_fin('import', 'revolut', self.csv, '--database', rebuilt)
-        blocked = self.run_fin('operation', 'restore', path, '--database', rebuilt, '--yes', check=False)
-        self.assertNotEqual(blocked.returncode, 0)
-        self.assertIn('transaction not found', blocked.stdout)
-        preview = self.terminal(['operation', 'restore', path, '--database', rebuilt, '--institution', 'revolut'], [('Restore this snapshot?', 'n')])
-        self.assertIn('decisions skipped: 1', preview)
-        self.assertIn('Decisions to restore: 1', preview)
-        self.assertNotIn('Problems', preview)
-        applied = self.run_fin('operation', 'restore', path, '--database', rebuilt, '--institution', 'revolut', '--yes').stdout
-        self.assertIn('category_changes=1', applied)
-        replay = self.run_fin('operation', 'restore', path, '--database', rebuilt, '--institution', 'revolut').stdout
-        self.assertIn('already matching: 1', replay)
-        self.assertNotEqual(self.run_fin('operation', 'restore', path, '--database', rebuilt, '--institution', 'typo', check=False).returncode, 0)
-        snapshot['decisions'][0]['payload_sha256'] = 'bad'
-        path.write_text(json.dumps(snapshot))
-        conflict = self.run_fin('operation', 'restore', path, '--database', rebuilt, '--institution', 'revolut', '--yes', check=False)
-        self.assertNotEqual(conflict.returncode, 0)
-        self.assertIn('source evidence differs', conflict.stdout)
-
     def test_manual_movement_types_and_history(self):
         self.run_fin('import', 'boursobank', 'fixtures/bank.ofx')
         rows = json.loads(self.run_fin('operation', 'list', '--json').stdout)
@@ -1400,7 +1362,7 @@ class ImportOnboarding(unittest.TestCase):
         rows = json.loads(self.run_fin('operation', 'list', '--json').stdout)
         self.assertTrue(rows)
         self.assertTrue(all(row['institution'] == 'provider' for row in rows))
-        self.assertTrue(json.loads(self.run_fin('account', 'export').stdout)['accounts'])
+        self.assertTrue(self.accounts())
         self.run_fin('status')
         self.assertIn('unchanged=1', self.run_fin('import', 'provider', 'fixtures/bank.ofx').stdout)
         directory = self.root / 'generic-ofx'
@@ -1627,30 +1589,30 @@ class ImportOnboarding(unittest.TestCase):
         self.assertIn('transfer_changes=1', self.terminal(['transfer', 'review'], answers))
         self.assertEqual(len(json.loads(self.run_fin('transfer', 'history').stdout)), 1)
         portable = self.root / 'transfers-portable.json'
-        portable.write_text(self.run_fin('transfer', 'export').stdout)
-        saved = json.loads(portable.read_text())
+        portable.write_text(self.exported('transfers'))
+        saved = self.saved('transfers')
         self.assertEqual((saved['version'], len(saved['links'])), (2, 1))
         rebuilt = self.root / 'transfer-rebuilt.sqlite3'
         self.run_fin('init', '--database', rebuilt)
         self.import_revolut_account(other, 'other', '--database', rebuilt)
         self.run_fin('import', 'revolut', self.csv, '--database', rebuilt)
         journal_before = self.run_fin('journal', 'export', '--database', rebuilt).stdout
-        preview = self.terminal(['transfer', 'restore', portable, '--database', rebuilt], [('Restore these transfers?', 'n')])
-        self.assertIn('Transfers to restore: 1', preview)
-        self.assertIn('transfer_changes=1', self.run_fin('transfer', 'restore', portable, '--database', rebuilt, '--yes').stdout)
-        self.assertIn('already matching: 1', self.run_fin('transfer', 'restore', portable, '--database', rebuilt).stdout)
+        preview = self.terminal(['decisions', 'restore', portable, '--database', rebuilt], [('Restore these decisions?', 'n')])
+        self.assertIn('transfers=1', preview)
+        self.assertIn('transfers=1', self.run_fin('decisions', 'restore', portable, '--database', rebuilt, '--yes').stdout)
+        self.assertIn('transfers=0', self.run_fin('decisions', 'restore', portable, '--database', rebuilt).stdout)
         restored = json.loads(self.run_fin('operation', 'list', '--database', rebuilt, '--json').stdout)
         self.assertTrue(any(len(r['movements']) == 2 for r in restored))
         journal_after = self.run_fin('journal', 'export', '--database', rebuilt).stdout
         self.assertEqual(journal_before.count('equity:unclassified') - journal_after.count('equity:unclassified'), 2)
         duplicate = dict(saved, links=saved['links'] * 2)
-        portable.write_text(json.dumps(duplicate))
-        self.assertNotEqual(self.run_fin('transfer', 'restore', portable, '--database', rebuilt, '--yes', check=False).returncode, 0)
+        portable.write_text(self.document(transfers=duplicate))
+        self.assertNotEqual(self.run_fin('decisions', 'restore', portable, '--database', rebuilt, '--yes', check=False).returncode, 0)
         saved['links'][0]['first']['payload_sha256'] = 'changed'
-        portable.write_text(json.dumps(saved))
-        blocked = self.run_fin('transfer', 'restore', portable, '--database', rebuilt, '--yes', check=False)
+        portable.write_text(self.document(transfers=saved))
+        blocked = self.run_fin('decisions', 'restore', portable, '--database', rebuilt, '--yes', check=False)
         self.assertNotEqual(blocked.returncode, 0)
-        self.assertIn('source evidence differs', blocked.stdout)
+        self.assertIn('source evidence differs', self.problems(blocked))
         tx_status = json.loads(self.run_fin('operation', 'status', '--json').stdout)
         self.assertEqual((tx_status['transfers'], tx_status['classified'], tx_status['categorized']), (2, 2, 0))
         operation = json.loads(self.run_fin('db', 'event', 'operations', first, '--json').stdout)
@@ -1664,9 +1626,9 @@ class ImportOnboarding(unittest.TestCase):
         self.assertNotEqual(self.run_fin('operation', 'type', 'set', 'fee', operation[0]['id'], '--source-event', '999999', check=False).returncode, 0)
         self.run_fin('operation', 'type', 'set', 'fee', operation[0]['id'], '--source-event', first)
         snapshot = self.root / 'transfer-type.json'
-        snapshot.write_text(self.run_fin('operation', 'export').stdout)
+        snapshot.write_text(self.exported('assignments'))
         self.run_fin('operation', 'type', 'reset', operation[0]['id'], '--source-event', first)
-        self.assertIn('type_changes=1', self.run_fin('operation', 'restore', snapshot, '--yes').stdout)
+        self.assertIn('types=1', self.run_fin('decisions', 'restore', snapshot, '--yes').stdout)
         transfer = next(r for r in json.loads(self.run_fin('operation', 'list', '--json').stdout) if r['event_id'] == first)
         self.assertEqual((transfer['decision'], transfer['movement_type_override']), ('transfer', 'fee'))
         transfer_page = json.loads(self.run_fin('operation', 'list', '--json', '--decision', 'transfer', '--limit', '1').stdout)
@@ -1859,6 +1821,31 @@ class ImportOnboarding(unittest.TestCase):
         self.assertEqual(next(r for r in json.loads(self.run_fin('operation', 'list', '--json').stdout) if r['event_id'] == found['event_id'])['source_card_reference'], 'masked123')
         self.run_fin('operation', 'refresh-evidence', '--institution', 'provider', '--yes')
         self.assertIsNone(next(r for r in json.loads(self.run_fin('operation', 'list', '--json').stdout) if r['event_id'] == found['event_id'])['source_card_reference'])
+
+    def test_decisions_carry_reversals_through_a_rebuild(self):
+        ofx = self.root / 'reversal-rebuild.ofx'
+        data = Path('fixtures/bank.ofx').read_text().replace('Synthetic debit', 'RETRAIT DAB example')
+        data = data.replace('</BANKTRANLIST></STMTRS>\n</STMTTRNRS>',
+            '<STMTTRN><DTPOSTED>20260105</DTPOSTED><TRNTYPE>CREDIT</TRNTYPE>'
+            '<TRNAMT>42.95</TRNAMT><FITID>atm-reversal</FITID>'
+            '<NAME>ANNUL RETRAIT DAB example</NAME></STMTTRN>'
+            '</BANKTRANLIST></STMTRS>\n</STMTTRNRS>')
+        ofx.write_text(data)
+        self.run_fin('import', 'boursobank', ofx)
+        rows = json.loads(self.run_fin('operation', 'list', '--json').stdout)
+        original = next(r for r in rows if r['movement_type'] == 'withdrawal' and float(r['amount']) < 0)
+        reversal = next(r for r in rows if r['description'] == 'ANNUL RETRAIT DAB example')
+        self.run_fin('reversal', 'review', original['event_id'], reversal['event_id'], '--yes')
+        journal = self.run_fin('journal', 'export').stdout
+        saved = self.root / 'reversal-decisions.json'
+        self.run_fin('decisions', 'export', saved)
+        self.assertEqual(len(json.loads(saved.read_text())['reversals']), 1)
+        rebuilt = self.root / 'reversal-rebuilt.sqlite3'
+        self.run_fin('init', '--database', rebuilt)
+        self.run_fin('import', 'boursobank', ofx, '--database', rebuilt)
+        self.assertIn('reversals=1', self.run_fin('decisions', 'restore', saved, '--database', rebuilt, '--yes').stdout)
+        self.assertEqual(self.run_fin('journal', 'export', '--database', rebuilt).stdout, journal)
+        self.assertIn('reversals=0', self.run_fin('decisions', 'restore', saved, '--database', rebuilt).stdout)
 
     def test_withdrawal_reversal_review_and_undo(self):
         ofx = self.root / 'reversal.ofx'
@@ -2241,6 +2228,44 @@ class ImportOnboarding(unittest.TestCase):
         self.assertEqual(card['settlement_account']['account_id'], 'CHECKING')
         self.assertIn('No unambiguous card settlements found.', self.run_fin('settlement', 'candidates').stdout)
 
+    def test_decisions_carry_settlements_through_a_rebuild(self):
+        ofx = self.root / 'rebuild.ofx'
+        entry = ('<STMTTRN><DTPOSTED>20260102</DTPOSTED><TRNTYPE>OTHER</TRNTYPE>'
+                 '<TRNAMT>-2.00</TRNAMT><FITID>settle-2</FITID>'
+                 '<NAME>Relevé différé Carte SAVINGS</NAME></STMTTRN>')
+        ofx.write_text(Path('fixtures/bank.ofx').read_text().replace(
+            '<ACCTTYPE>SAVINGS</ACCTTYPE>', '<ACCTTYPE>CREDITCRD</ACCTTYPE>').replace(
+            '</BANKTRANLIST>', entry + '</BANKTRANLIST>', 1))
+        self.run_fin('import', 'boursobank', ofx)
+        self.terminal(['settlement', 'review', '--all'], [('card settlements?', 'y')])
+        saved = self.root / 'all-decisions.json'
+        self.assertIn('keep it private', self.run_fin('decisions', 'export', saved).stdout)
+        self.assertEqual(saved.stat().st_mode & 0o777, 0o600)
+        document = json.loads(saved.read_text())
+        self.assertEqual((document['format'], len(document['settlements'])), ('fin-decisions', 1))
+        rebuilt = self.root / 'all-rebuilt.sqlite3'
+        self.run_fin('init', '--database', rebuilt)
+        self.run_fin('import', 'boursobank', ofx, '--database', rebuilt)
+        journal = self.run_fin('journal', 'export').stdout
+
+        # A problem late in the file undoes the steps before it.
+        broken = dict(document, settlements=[dict(document['settlements'][0], card_source_account='no-card')])
+        bad = self.root / 'bad-decisions.json'
+        bad.write_text(json.dumps(broken))
+        untouched = self.run_fin('journal', 'export', '--database', rebuilt).stdout
+        result = self.run_fin('decisions', 'restore', bad, '--database', rebuilt, '--yes', check=False)
+        self.assertIn('no such card', self.problems(result))
+        self.assertEqual(self.run_fin('journal', 'export', '--database', rebuilt).stdout, untouched)
+
+        self.assertIn('Nothing restored.', self.terminal(
+            ['decisions', 'restore', saved, '--database', rebuilt], [('Restore these decisions?', 'n')]))
+        self.assertEqual(self.run_fin('journal', 'export', '--database', rebuilt).stdout, untouched)
+        self.assertIn('settlements=1', self.run_fin('decisions', 'restore', saved, '--database', rebuilt, '--yes').stdout)
+        self.assertEqual(self.run_fin('journal', 'export', '--database', rebuilt).stdout, journal)
+        self.assertIn('settlements=0', self.run_fin('decisions', 'restore', saved, '--database', rebuilt).stdout)
+        self.assertEqual(self.saved('settlements', '--database', rebuilt), document['settlements'])
+        self.assertEqual(self.run_fin('decisions', 'restore', self.root / 'missing', check=False).returncode != 0, True)
+
     def test_settle_all_at_one_confirmation(self):
         ofx = self.root / 'settle-all.ofx'
         entry = ('<STMTTRN><DTPOSTED>2026010{day}</DTPOSTED><TRNTYPE>OTHER</TRNTYPE>'
@@ -2278,7 +2303,7 @@ class ImportOnboarding(unittest.TestCase):
         self.run_fin('import', 'boursobank', ofx)
         rows = json.loads(self.run_fin('operation', 'list', '--json').stdout)
         event = next(r['event_id'] for r in rows if r['description'] == 'Relevé différé Carte SAVINGS')
-        before = (self.run_fin('account', 'export').stdout,
+        before = (self.exported('accounts'),
                   self.run_fin('operation', 'review', '--all', '--json').stdout,
                   self.run_fin('journal', 'export').stdout,
                   self.run_fin('account', 'history').stdout,
@@ -2302,7 +2327,7 @@ class ImportOnboarding(unittest.TestCase):
                 child.kill()
                 child.wait()
             os.close(master)
-        after = (self.run_fin('account', 'export').stdout,
+        after = (self.exported('accounts'),
                  self.run_fin('operation', 'review', '--all', '--json').stdout,
                  self.run_fin('journal', 'export').stdout,
                  self.run_fin('account', 'history').stdout,
@@ -2630,21 +2655,21 @@ class ImportOnboarding(unittest.TestCase):
             '<ACCTTYPE>SAVINGS</ACCTTYPE>', '<ACCTTYPE>CREDITCRD</ACCTTYPE>').replace(
             'CAFÉ &amp; CO', 'Relevé différé Carte SAVINGS'))
         self.run_fin('import', 'boursobank', ofx)
-        before = self.run_fin('account', 'export').stdout
+        before = self.exported('accounts')
         output = self.fullscreen(['settlement', 'review', '--tui'],
                                  [('Card settlement review', '\x03')])
         self.assertIn('Nothing changed.', output)
-        self.assertEqual(self.run_fin('account', 'export').stdout, before)
+        self.assertEqual(self.exported('accounts'), before)
         self.assertEqual(json.loads(self.run_fin('settlement', 'history').stdout), [])
         output = self.fullscreen(['settlement', 'review', '--tui'],
                                  [('Terminal too small', '\ryq')], size=(8, 40))
         self.assertIn('Nothing changed.', output)
-        self.assertEqual(self.run_fin('account', 'export').stdout, before)
+        self.assertEqual(self.exported('accounts'), before)
         output = self.fullscreen(['settlement', 'review', '--tui'],
                                  [('Card settlement review', '\r'),
                                   ('Confirm this one settlement?', 'q')])
         self.assertIn('Nothing changed.', output)
-        self.assertEqual(self.run_fin('account', 'export').stdout, before)
+        self.assertEqual(self.exported('accounts'), before)
         output = self.fullscreen(['settlement', 'review', '--tui'],
                                  [('Card settlement review', '\r'),
                                   ('Confirm this one settlement?', 'y')])
@@ -2686,14 +2711,14 @@ class ImportOnboarding(unittest.TestCase):
         ofx.write_text(Path('fixtures/bank.ofx').read_text().replace(
             '<ACCTTYPE>SAVINGS</ACCTTYPE>', '<ACCTTYPE>CREDITCRD</ACCTTYPE>'))
         self.run_fin('import', 'boursobank', ofx)
-        snapshot = json.loads(self.run_fin('account', 'export').stdout)
+        snapshot = self.saved('accounts')
         cash = next(a for a in snapshot['accounts'] if a['account_type'] == 'CHECKING')
         card = next(a for a in snapshot['accounts'] if a['account_type'] == 'CREDITCRD')
         card['ledger_account'] = 'liabilities:cards:example'
         card['settlement_account'] = {key: cash[key] for key in ('institution', 'bank_id', 'account_id', 'account_type')}
         config = self.root / 'settlement-settings.json'
-        config.write_text(json.dumps(snapshot))
-        self.run_fin('account', 'import', config)
+        config.write_text(self.document(accounts=snapshot))
+        self.run_fin('decisions', 'restore', config, '--yes')
         rows = json.loads(self.run_fin('operation', 'list', '--json').stdout)
         event = next(r['event_id'] for r in rows if r['source_account'] == 'CHECKING' and r['amount'] == '-0.1')
         output = self.terminal(['settlement', 'review', str(event)], [('Record this card settlement? [Y/n]:', 'no')])
@@ -3104,15 +3129,12 @@ class ImportOnboarding(unittest.TestCase):
         self.terminal(['import', 'revolut', self.csv],
                       [('IBAN (Enter to skip):', '')])
         snapshot = self.root / 'saved-accounts.json'
-        self.run_fin('account', 'export', '-o', snapshot)
-        rows = json.loads(snapshot.read_text())
+        rows = self.saved('accounts')
         rows['accounts'][0]['iban'] = IBAN
-        snapshot.write_text(json.dumps(rows))
-        self.run_fin('account', 'import', snapshot, '--dry-run')
+        snapshot.write_text(self.document(accounts=rows))
         self.assertIsNone(self.accounts()[0]['iban'])
-        self.run_fin('account', 'import', snapshot)
+        self.run_fin('decisions', 'restore', snapshot, '--yes')
         self.assertEqual(self.accounts()[0]['iban'], IBAN)
-        self.assertNotEqual(self.run_fin('account', 'import', check=False).returncode, 0)
         before = snapshot.read_bytes()
         self.terminal(['import', 'revolut', self.usd],
                       [('IBAN (Enter to skip):', IBAN)])
@@ -3128,7 +3150,7 @@ class ImportOnboarding(unittest.TestCase):
                                          'account': 'expenses:food', 'reason': 'Reviewed'}]))
         self.run_fin('operation', 'category', 'apply', decisions)
         expected = {name: self.run_fin(*args).stdout for name, args in {
-            'accounts': ['account', 'export'],
+            'accounts': ['account', 'list'],
             'events': ['db', 'events'],
             'review': ['operation', 'review', '--all', '--json'],
             'history': ['operation', 'category', 'history'],
@@ -3141,7 +3163,7 @@ class ImportOnboarding(unittest.TestCase):
         self.run_fin('delete', '--yes')
         self.run_fin('restore', backup)
         for name, args in {
-            'accounts': ['account', 'export'], 'events': ['db', 'events'],
+            'accounts': ['account', 'list'], 'events': ['db', 'events'],
             'review': ['operation', 'review', '--all', '--json'],
             'history': ['operation', 'category', 'history'], 'journal': ['journal', 'export'],
         }.items():
@@ -3151,7 +3173,7 @@ class ImportOnboarding(unittest.TestCase):
         self.run_fin('restore', source, '--database', target)
         self.assertEqual(target.stat().st_mode & 0o777, 0o600)
         self.assertEqual(target.parent.stat().st_mode & 0o777, 0o700)
-        self.assertEqual(self.run_fin('account', 'export', '--database', target).stdout,
+        self.assertEqual(self.run_fin('account', 'list', '--database', target).stdout,
                          expected['accounts'])
 
     def test_restore_requires_confirmation_and_clears_stale_outputs(self):
@@ -3162,8 +3184,8 @@ class ImportOnboarding(unittest.TestCase):
         changed = self.accounts()
         changed[0]['ledger_account'] = 'assets:bank:renamed'
         snapshot = self.root / 'settings.json'
-        snapshot.write_text(json.dumps({'version': 1, 'accounts': changed}))
-        self.run_fin('account', 'import', snapshot)
+        snapshot.write_text(self.document(accounts={'version': 1, 'accounts': changed}))
+        self.run_fin('decisions', 'restore', snapshot, '--yes')
         self.env['VISUAL'] = 'false'
         self.run_fin('account', 'edit', check=False)
         draft = self.root / 'data/fin/fin.sqlite3.edit'
@@ -3244,16 +3266,16 @@ class ImportOnboarding(unittest.TestCase):
         self.terminal(['import', 'revolut', self.csv],
                       [('IBAN (Enter to skip):', IBAN)])
         snapshot = self.root / 'data/fin/accounts.json'
-        self.run_fin('account', 'export', '-o', snapshot)
+        snapshot.write_text(self.exported('accounts'))
         original = snapshot.read_bytes()
         directory = self.root / 'new/nested/backups'
         self.run_fin('backup', directory)
         backup = next(directory.glob('fin-backup-*'))
         self.assertEqual(directory.stat().st_mode & 0o777, 0o700)
         self.assertEqual(backup.stat().st_mode & 0o777, 0o700)
-        self.assertEqual([p.name for p in backup.iterdir()], ['fin.sqlite3'])
-        restored = json.loads(self.run_fin('account', 'export', '--database',
-                                         backup / 'fin.sqlite3').stdout)
+        self.assertEqual(sorted(p.name for p in backup.iterdir()), ['decisions.json', 'fin.sqlite3'])
+        self.assertEqual((backup / 'decisions.json').stat().st_mode & 0o777, 0o600)
+        restored = self.saved('accounts', '--database', backup / 'fin.sqlite3')
         self.assertEqual(restored['accounts'][0]['iban'], IBAN)
         # Only a pending draft is disposable app state; a user-exported snapshot
         # beside the database remains the user's file.

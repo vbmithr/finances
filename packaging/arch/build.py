@@ -14,7 +14,7 @@ import tarfile
 import tempfile
 
 
-MANPAGE_COMMANDS = (None, 'init', 'status', 'backup', 'restore', 'delete',
+MANPAGE_COMMANDS = (None, 'init', 'status', 'backup', 'restore', 'delete', 'decisions',
                     'import', 'convert', 'account', 'category', 'institution', 'records', 'statement', 'transfer', 'operation', 'settlement', 'reversal', 'rule', 'journal', 'ledger', 'db', 'paths')
 
 

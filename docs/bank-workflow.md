@@ -105,15 +105,15 @@ Discover bank accounts from imported evidence and expose their complete source
 identity and current ledger name:
 
 ```sh
-fin account export -o ~/fin-accounts.json
+fin account list
+fin account edit
 ```
 
 Each mapping contains `institution`, `bank_id`, `account_id`, `account_type`, and
 `ledger_account`. Users can replace the generated ledger name with a readable
-`assets:bank:...` name, then import the file explicitly:
+`assets:bank:...` name, and later imports use it:
 
 ```sh
-fin account import ~/fin-accounts.json
 fin import boursobank personal/boursobank/inbox \
   --journal personal/bank.journal
 ```

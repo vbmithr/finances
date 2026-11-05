@@ -107,8 +107,11 @@ SQLite holds everything fin knows: the original statement contents, movements,
 accounting entries, account names, registered IBANs, card settlement links and
 review history. `fin account edit` and the import command's IBAN prompts update
 that database.
-JSON account snapshots are optional exports to a filename you choose; they are
-read only when you explicitly run `fin account import FILE`.
+
+`fin backup DIR` saves two files in a new dated folder: `fin.sqlite3`, a copy of the
+database, and `decisions.json`, everything you decided. `fin restore FOLDER` puts the copy
+back; it only works for the same schema version. `decisions.json` is for rebuilding, and is
+what survives a schema change.
 
 `bank.journal`, beside the database, is not state: every `fin import` rewrites
 it from the database for hledger. Statement folders can live anywhere you
@@ -167,46 +170,18 @@ skips the question; without a terminal and without `--yes` it refuses.
 
 ### Rebuilding after a schema change
 
-This experimental release accepts schema version 33; it does not migrate older
-databases and refuses them without changing the file. If upgrading from schema 21
-with customized institution typing profiles, use the old executable to save each
-profile with `fin institution typing show INSTITUTION > profile.json` before
-rebuilding. Recreate those customizations as rules after reimport. Before upgrading to a new
-schema, use the **old fin executable** to export account settings and save a
-full backup. Save the transaction list and review histories as reference when
-you have decisions to recreate:
+fin does not migrate older databases: it refuses them without changing the file. To rebuild,
+save your decisions with the **old fin executable**, then start again from your statements
+with the new one.
 
 ```sh
-fin account export -o ~/fin-accounts.json
-fin cat export > ~/fin-categories-portable.json
-fin operation export > ~/fin-transaction-decisions.json
-fin operation exchange export > ~/fin-exchanges-portable.json
-fin rule export > ~/fin-rules-portable.json
-fin transfer export > ~/fin-transfers-portable.json
-fin backup ~/fin-backups
-fin operation list --json > ~/fin-transactions-before-rebuild.json
-fin operation category history > ~/fin-categories-before-rebuild.json
-fin transfer history > ~/fin-transfers-before-rebuild.json
+fin decisions export ~/fin-decisions.json   # old executable; fin backup also writes this
+fin backup ~/fin-backups                    # keep a copy to go back to
+fin delete
 ```
 
-Use an executable that supports these export commands. Older executables may
-use `fin operation category export` for category decisions; `fin operation restore` accepts those
-files, but they do not contain type overrides. If the old executable only supports
-the combined `fin cat export`, save that file and pass it to each restore command
-below. Those older files do not contain non-category rules; save
-`fin rule list --json` as a reference for recreating those rules. Assignment
-exports contain personal source identifiers; keep all backups private.
-
-Also save `fin settlement history`, `fin rule list --json`,
-`fin operation type history --json` and `fin reversal history` when those commands are
-available in the old executable.
-
-Then run `fin delete` with the old executable.
-
-Keep the old executable if you may need to inspect or restore the old backup;
-the new executable cannot open or restore a database from a different schema.
-After installing the new version, create a database and import your original
-statements. Replace these example paths and account labels with your own:
+Keep the old executable if you may need to go back; the new one cannot open a database of
+another schema. After installing the new version:
 
 ```sh
 fin init
@@ -214,85 +189,40 @@ fin import boursobank ~/Statements/boursobank
 fin import wise ~/Statements/wise
 fin import bunq ~/Statements/bunq
 fin import revolut ~/Statements/revolut
+fin decisions restore ~/fin-decisions.json
 ```
 
-After importing all banks, restore account settings with
-`fin account import ~/fin-accounts.json`. The snapshot refers to already
-discovered source accounts; it cannot create them. A full SQLite backup is for
-restoring a database of the same schema version; an account snapshot is for
-restoring settings into a rebuilt database.
-Generic CSV institutions must be added again and files reimported with their
-original institution and account labels; configure their CSV profiles again.
-Account snapshots do not include rules or review decisions. After reimporting,
-preview and restore the three independent snapshots:
+Replace these paths with your own. Institutions you added with a generic CSV must be added
+and imported again, with their original institution and account labels.
 
-```sh
-fin cat restore ~/fin-categories-portable.json
-fin operation restore ~/fin-transaction-decisions.json
-fin operation exchange restore ~/fin-exchanges-portable.json
-fin transfer restore ~/fin-transfers-portable.json
-fin rule restore ~/fin-rules-portable.json
-```
+### What a decisions file holds
 
-`fin operation export` and `fin operation restore` handle decisions only: they never
-import or create operations, which come from `fin import`, and a decision that
-matches no imported operation is a problem that blocks the restore.
+`fin decisions export FILE` saves everything you decided, as one private JSON file:
 
-Each command shows what it would change and then asks `[Y/n]`; answering `n` leaves
-everything as it was, which makes it a preview. `--yes` skips the question for
-scripts; without a terminal the command prints the changes and fails unless you
-pass `--yes`. The catalog export contains category names only. The
-transaction export contains current category decisions, including explicit
-resets, current manual type overrides and resolved movement accounts and commodities.
-Restore it before the exchange export. The rule export contains all stored rules, including institution-installed rules
-and category, type, settlement and evidence actions. Restoring rules retypes
-existing movements where applicable; category rules do not retroactively classify
-transactions. Settlement rules require their target card to exist. Automatic rules
-may affect subsequent imports. The transaction export does not contain transfer,
-settlement, reversal decisions or audit history. Type resets are not exported: they leave no
-manual override. Restore writes new type-history entries for restored overrides.
-Schema 33 recreates one preliminary operation for each imported bank event. The
-portable transaction snapshot does not yet include independently created
-operations or their source links; retain a full database backup for those.
-New transaction exports identify bank decisions with the `primary` movement
-role. Version 1–4 category and transaction exports remain readable; versions 1–3
-imply `primary`. Resolved movement decisions carry explicit roles, original
-quantities and commodity identities, and verified source evidence.
-Older executables cannot read version 5 transaction exports; keep an older-format
-snapshot if you may return to an older Fin executable.
+- account settings: ledger names, IBANs and card settlement links
+- the category catalog and your rules
+- category assignments, including explicit resets, manual type overrides, and the accounts
+  and commodities you resolved for movements
+- card settlements, reversals, exchanges and transfers
 
-Transaction and rule restore previews list missing target categories, which are
-created atomically with the restored data. Different existing decisions or rules,
-missing or ambiguous identities, changed source evidence and missing settlement
-cards block that restore. A different manual type override also blocks the entire
-transaction restore; an already matching override is left unchanged. Category and
-type decisions are restored atomically. Transaction restore identifies movements by institution,
-source account, kind and source ID, then verifies occurrence and SHA-256 hashes of
-the original payload and source fields. It does not reuse database event IDs or
-guess a match. Duplicate indistinguishable source rows are reported as ambiguous.
-If identities or encoding changed, keep the original export, remove affected
-decisions from a copy, preview it again, and recreate those decisions manually.
+Statements are not in it: they come back from `fin import`. Neither are rejected transfer
+candidates, audit history or independently created operations; `fin backup` keeps those.
 
-When statements are imported one institution at a time, select the institution
-to restore only its decisions:
+`fin decisions restore FILE` applies all of this in the right order, as one transaction. It
+shows what would change and asks `[Y/n]`, and answering `n` leaves everything as it was, which
+makes it a preview. `--yes` skips the question for scripts; without a terminal the command fails
+unless you pass it. Restoring twice changes nothing.
 
-```sh
-fin operation restore ~/fin-transaction-decisions.json --institution boursobank
-```
+Each decision finds its movement by institution, source account, kind and source ID, then
+checks the occurrence and hashes of the original source. Database IDs are not reused and no
+match is guessed. A decision that matches nothing, an ambiguous or changed source, a conflict
+with something you already decided, or a missing settlement card is a problem: the restore
+stops, lists it, and changes nothing. If that happens, remove the affected decisions from a
+copy of the file and recreate them by hand.
 
-The preview reports how many decisions for other institutions were skipped.
-Use the exact institution name in the snapshot; an unknown name is an error.
-All selected decisions must still pass the normal matching and conflict checks,
-and their restore is atomic. The snapshot is unchanged, so repeat with another
-institution after importing its statements.
-
-Version 1 combined exports remain usable: pass the same file to each restore
-command to restore its respective section. Each is a separate, previewed operation. New exports are version 2 and
-must be restored with the matching command. These snapshots do not replace a full
-database backup. After restoring decisions, project and export the journal again.
-
-Other review histories must still be recreated using saved reference exports. Their
-event IDs are database-specific; do not blindly reuse old IDs.
+Each section of the file is optional, so a copy with only `"accounts"` or `"transfers"` restores
+only that. The file contains personal source identifiers: keep it private. After restoring,
+export the journal again.
 
 ## Importing statements
 
@@ -370,9 +300,7 @@ The exchange workflow currently requires one source record, exactly two
 opposite-sign movements in distinct commodities, and both movements explicitly
 resolved. It does not infer fees, opening balances, cost basis or capital gains.
 Unknown records with no proposed movements and bank-side forex still require
-further review tooling. Save `fin operation export` for movement resolutions
-and `fin operation exchange export` for confirmations; restore those in that
-order after importing the original sources.
+further review tooling. `fin decisions export` saves movement resolutions and confirmations.
 
 Use `fin import INSTITUTION PATH...` to read exports. This replaces the former
 `fin bank sync` command; update existing scripts to use `fin import`.
@@ -814,30 +742,12 @@ length and structure and the check digits, and refuses invalid ones. Keep the
 account identity fields unchanged so settings refer to the correct imported
 account.
 
-To save or restore account settings separately from a full database backup:
-
-```sh
-fin account export -o ~/fin-accounts.json
-fin account import ~/fin-accounts.json --dry-run
-fin account import ~/fin-accounts.json
-fin account history
-```
-
-Export writes a version 1 JSON snapshot to the chosen file, or standard output
-when `-o` is omitted. Import requires an explicit filename and applies the settings
-atomically with an audit trail; `--dry-run` previews without saving changes.
-Editing or importing a snapshot never makes it an active configuration file.
-Later bank imports use only the settings saved in SQLite.
-
-Omitted accounts and settings are kept; explicit `null` clears supported optional
-settings. IBANs inferred from primary records cannot be overridden or cleared.
-See the [account settings reference](../README.md#manage-bank-accounts) for the
-JSON field definitions.
-
-Existing version 1 account JSON files still import with `fin account import FILE`.
-The old `accounts apply` command, optional `accounts edit CONFIG` argument and
-`bank sync --accounts` option have been removed. Old files are left untouched;
-there is no default account JSON path.
+`fin decisions export` saves account settings with your other decisions, and
+`fin account history` lists what changed. Settings live in SQLite; a file is never an active
+configuration, and later imports use only what is saved in the database. In the file, omitted
+accounts and settings are kept and an explicit `null` clears an optional setting. IBANs inferred
+from primary records cannot be overridden or cleared. See the
+[account settings reference](../README.md#manage-bank-accounts) for the fields.
 
 ## Reviewing transactions and transfers
 
@@ -1089,23 +999,9 @@ commodity, different accounts, and one source each. A bank movement must be
 unclassified and have no fee. Bank-to-bank pairs use `fin transfer review` and
 `fin transfer undo`. `--yes` skips the confirmation prompt.
 
-Save confirmed transfers separately before rebuilding:
-
-```sh
-fin transfer export > transfers.json
-fin transfer restore transfers.json
-```
-
-Restore after importing the sources and restoring account mappings and movement
-resolutions. It matches
-each primary movement by source identity and checks occurrence, raw payload and
-fields, refusing missing, ambiguous or changed evidence. A conflict blocks the
-whole batch, and the final application rechecks the preview and existing bank
-transfer rules atomically. `--yes` skips confirmation. Matching confirmed links
-are left unchanged. The snapshot does not include rejected candidates or audit
-history; use a full database backup to retain those records. Exchange
-confirmations have a separate `fin operation exchange export` snapshot.
-Version 1 bank transfer snapshots remain readable.
+`fin decisions export` saves confirmed transfers. Restoring matches each primary movement by
+source identity and refuses missing, ambiguous or changed evidence. Rejected candidates and audit
+history are not saved; `fin backup` keeps those.
 
 `fin transfer candidates` shows possible pairs of unclassified movements, their
 evidence and ranking. Categorized movements are excluded until returned to
@@ -1591,7 +1487,7 @@ scope. The draft displays matches without changing anything; fin then asks befor
 saving a review-mode rule, and `--yes` skips that confirmation. Saving a rule does
 not classify transactions or enable automatic application. Use `fin rule mode`
 to opt into automatic behavior, noting import-time rules see the primary source
-description. Export stored rules with `fin rule export`.
+description. `fin decisions export` saves stored rules.
 
 For Wise balance cashback, propose a type and an income account together:
 

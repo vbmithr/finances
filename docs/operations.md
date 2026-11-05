@@ -45,7 +45,7 @@ event's operation ID. This grouping uses a persisted movement-level link,
 so undo restores the two original operation IDs without rewriting either source
 or movement. It is not yet a general-purpose persisted operation merge.
 The operation layer persists each confirmed bank pair as a link between two
-movements. Both operation reads and `fin transfer export` consume the link.
+movements. Both operation reads and `fin decisions export` consume the link.
 The export saves stable references with occurrence and evidence hashes; restore
 checks them before invoking the bank confirmation path. Bank confirmation and
 undo update both representations atomically. Linking crypto accounts remains

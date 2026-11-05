@@ -30,14 +30,8 @@ type t =
   ; resolutions : resolution list
   }
 
-val decision : legacy:bool -> decision Jsont.t
-
-(** Version 1 combined backup, retained for restoring existing exports. *)
-val codec : t Jsont.t
-
+val decision : decision Jsont.t
+val rule : Classification_rule.t Jsont.t
 val categories_codec : t Jsont.t
 val rules_codec : t Jsont.t
 val decisions_codec : t Jsont.t
-val version4_decisions_codec : t Jsont.t
-val legacy_decisions_codec : t Jsont.t
-val previous_decisions_codec : t Jsont.t

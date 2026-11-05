@@ -400,6 +400,7 @@ let with_open ~registry path f =
   with_connection ~mode:Read_write_create path (fun conn ->
     let db =
       { conn
+      ; in_transaction = false
       ; registry
       ; source_typing_cache = Hashtbl.create (module String)
       ; source_evidence_cache = Hashtbl.create (module String)

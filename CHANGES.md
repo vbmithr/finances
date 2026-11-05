@@ -8,6 +8,15 @@ short line of their own.
 
 ## Unreleased
 
+- **Action required:** saving your work is now one file. `fin decisions export FILE` saves account
+  settings, the category catalog, rules, assignments, card settlements, reversals, exchanges and
+  transfers; `fin decisions restore FILE` re-applies them in the right order, all or nothing.
+  Settlements and reversals now survive a rebuild. `fin backup` writes this file beside its database
+  copy. Removed: `fin cat export/restore`, `fin operation export/restore`, `fin operation exchange
+  export/restore`, `fin rule export/restore`, `fin transfer export/restore` and `fin account
+  export/import`, with `--institution` on restore and `--dry-run` on account import: answer `n` to
+  preview. Files from those commands are no longer read, so run `fin decisions export` on your
+  current database. No rebuild is needed.
 - The full-screen category queue and settlement review start at the top left instead of centering
   each line, so that shortcuts and categories line up.
 - `fin operation category queue --institution NAME` reviews one provider's movements.

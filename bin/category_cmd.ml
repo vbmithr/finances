@@ -162,11 +162,5 @@ let cmd =
   group
     "category"
     "Manage the personal income and expense category catalog."
-    [ category_list_cmd
-    ; category_add_cmd
-    ; category_delete_cmd
-    ; category_init_cmd
-    ; Portable_cmd.category_export_cmd
-    ; Portable_cmd.category_restore_cmd
-    ]
+    [ category_list_cmd; category_add_cmd; category_delete_cmd; category_init_cmd ]
 ;;

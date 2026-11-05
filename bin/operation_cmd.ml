@@ -333,64 +333,6 @@ let operation_exchange_cmd ~undo =
           value & flag & info [ "yes" ] ~doc:"Apply without prompting after the preview."))
 ;;
 
-let operation_exchange_export database =
-  with_database database (fun db ->
-    let%map snapshot = Operations.exchange_snapshot db in
-    Report_json.print Exchange_portable.codec snapshot)
-;;
-
-let operation_exchange_export_cmd =
-  command
-    "export"
-    "Export confirmed exchange decisions as portable JSON."
-    Term.(const operation_exchange_export $ database)
-;;
-
-let operation_exchange_restore database path yes =
-  let%bind contents = read_file path in
-  let%bind snapshot = Json.decode Exchange_portable.codec contents in
-  with_database database (fun db ->
-    let%bind preview = Operations.preview_exchange_restore db snapshot in
-    printf
-      "Exchanges to restore: %d; already matching: %d\n"
-      (List.length preview.exchange_decisions)
-      preview.exchange_unchanged;
-    if not (List.is_empty preview.exchange_problems)
-    then (
-      print_endline "Problems (restore is blocked):";
-      List.iter preview.exchange_problems ~f:(fun p -> printf "  %s\n" (Terminal.text p)));
-    if not (List.is_empty preview.exchange_problems)
-    then Or_error.error_string "resolve exchange restore problems before applying"
-    else if List.is_empty preview.exchange_decisions
-    then (
-      print_endline "exchange_changes=0";
-      Ok ())
-    else (
-      let%bind confirmed = confirm ~yes ~destructive:false "Restore these exchanges?" in
-      if not confirmed
-      then (
-        print_endline "Nothing restored.";
-        Ok ())
-      else (
-        let%map changed = Operations.restore_exchanges db ~expected:preview snapshot in
-        printf "exchange_changes=%d\n" changed)))
-;;
-
-let operation_exchange_restore_cmd =
-  command
-    "restore"
-    "Restore confirmed exchanges after restoring movement resolutions; shows the changes \
-     and asks first."
-    Term.(
-      const operation_exchange_restore
-      $ database
-      $ Arg.(
-          required
-          & pos 0 (some string) None
-          & info [] ~docv:"FILE" ~doc:"Portable exchange snapshot.")
-      $ Arg.(value & flag & info [ "yes" ] ~doc:"Restore without asking, for scripts."))
-;;
-
 let transaction_status database json_output =
   with_database database (fun db ->
     let%bind report = Review.transaction_status db in
@@ -470,13 +412,7 @@ let cmd =
     ; group
         "exchange"
         "Review commodity exchanges."
-        [ operation_exchange_cmd ~undo:false
-        ; operation_exchange_cmd ~undo:true
-        ; operation_exchange_export_cmd
-        ; operation_exchange_restore_cmd
-        ]
-    ; Portable_cmd.category_decisions_export_cmd
-    ; Portable_cmd.category_decisions_restore_cmd
+        [ operation_exchange_cmd ~undo:false; operation_exchange_cmd ~undo:true ]
     ; refresh_transaction_evidence_cmd
     ; group
         "type"

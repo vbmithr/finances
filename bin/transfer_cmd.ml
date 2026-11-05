@@ -252,12 +252,6 @@ let review_transfers_cmd =
               ~doc:"Optional JSON transfer review decisions; omit for interactive review."))
 ;;
 
-let transfer_export database =
-  with_database database (fun db ->
-    let%map snapshot = Operations.transfer_snapshot db in
-    Report_json.print Transfer_portable.codec snapshot)
-;;
-
 let transfer_link database first_operation second_operation first_role second_role yes =
   with_database database (fun db ->
     let%bind preview =
@@ -354,66 +348,6 @@ let transfer_unlink_cmd =
           value & flag & info [ "yes" ] ~doc:"Undo without prompting after the preview."))
 ;;
 
-let transfer_export_cmd =
-  command
-    "export"
-    "Export confirmed transfer links with source evidence."
-    Term.(const transfer_export $ database)
-;;
-
-let transfer_restore database path yes =
-  let%bind contents = read_file path in
-  let%bind snapshot =
-    match Json.decode Transfer_portable.codec contents with
-    | Ok snapshot -> Ok snapshot
-    | Error error ->
-      (match Json.decode Transfer_portable.legacy_codec contents with
-       | Ok snapshot -> Ok snapshot
-       | Error _ -> Error error)
-  in
-  with_database database (fun db ->
-    let%bind preview = Operations.preview_transfer_restore db snapshot in
-    printf
-      "Transfers to restore: %d; already matching: %d\n"
-      (List.length preview.decisions + List.length preview.general_decisions)
-      preview.unchanged;
-    List.iter preview.decisions ~f:(fun d ->
-      printf "  #%Ld <-> #%Ld\n" d.Bank_transfer.first_event_id d.second_event_id);
-    if not (List.is_empty preview.problems)
-    then (
-      print_endline "Problems (restore is blocked):";
-      List.iter preview.problems ~f:(fun p -> printf "  %s\n" (Terminal.text p)));
-    if not (List.is_empty preview.problems)
-    then Or_error.error_string "resolve transfer restore problems before applying"
-    else if List.is_empty preview.decisions && List.is_empty preview.general_decisions
-    then (
-      print_endline "transfer_changes=0";
-      Ok ())
-    else (
-      let%bind confirmed = confirm ~yes ~destructive:false "Restore these transfers?" in
-      if not confirmed
-      then (
-        print_endline "Nothing restored.";
-        Ok ())
-      else (
-        let%map changed = Operations.restore_transfers db ~expected:preview snapshot in
-        printf "transfer_changes=%d\n" changed)))
-;;
-
-let transfer_restore_cmd =
-  command
-    "restore"
-    "Restore confirmed transfer links; shows the changes and asks first."
-    Term.(
-      const transfer_restore
-      $ database
-      $ Arg.(
-          required
-          & pos 0 (some string) None
-          & info [] ~docv:"FILE" ~doc:"Portable transfer snapshot.")
-      $ Arg.(value & flag & info [ "yes" ] ~doc:"Restore without asking, for scripts."))
-;;
-
 let transfer_undo database first second yes =
   with_database database (fun db ->
     let%bind decisions = Restore.bank_transfer_decisions db in
@@ -496,8 +430,6 @@ let cmd =
     ; review_transfers_cmd
     ; transfer_link_cmd
     ; transfer_unlink_cmd
-    ; transfer_export_cmd
-    ; transfer_restore_cmd
     ; transfer_undo_cmd
     ; transfer_history_cmd
     ]

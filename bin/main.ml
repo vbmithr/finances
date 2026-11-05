@@ -82,6 +82,7 @@ let () =
           ; Setup_cmd.backup_cmd
           ; Setup_cmd.restore_cmd
           ; Setup_cmd.delete_cmd
+          ; Decisions_cmd.decisions_cmd
           ; Account_cmd.cmd
           ; Import_cmd.cmd
           ; Records_cmd.convert_cmd

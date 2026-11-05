@@ -357,8 +357,6 @@ let cmd =
     "rule"
     "Manage automatic and reviewed transaction rules."
     [ rule_list_cmd
-    ; Portable_cmd.rules_export_cmd
-    ; Portable_cmd.rules_restore_cmd
     ; rule_from_category_cmd
     ; rule_mode_cmd
     ; Rule_add_cmd.rule_add_cmd ~settlement:false

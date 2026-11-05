@@ -104,9 +104,6 @@ atomically with mode 0600 to a path you choose.
 ```sh
 fin account list
 fin account edit
-fin account export -o ~/fin-accounts.json
-fin account import ~/fin-accounts.json --dry-run
-fin account import ~/fin-accounts.json
 ```
 
 `--database` (or `-d`) is an option on commands that access SQLite. Input files and
@@ -486,10 +483,6 @@ relationships. Configure accounts already discovered from imported statements:
 ```sh
 fin account list
 fin account edit
-# Optional settings snapshot for restoration or batch edits:
-fin account export -o ~/fin-accounts.json
-fin account import ~/fin-accounts.json --dry-run
-fin account import ~/fin-accounts.json
 fin account history
 ```
 
@@ -559,7 +552,6 @@ state requires confirmation or `--yes`. Restoration validates the source and
 discards stale generated journal and edit-draft files after success. Exported
 settings snapshots are user files and are kept by both restore and delete.
 Import every referenced source account before restoring a multi-bank snapshot.
-Existing version 1 JSON exports remain accepted by `fin account import FILE`.
 
 
 ## List imported operations
@@ -613,26 +605,18 @@ Use `fin cat init` to choose suggested starter categories, `fin cat add
 expenses:food` to add your own, and `fin cat list` (or `--json`) to see your
 personal catalog, including unused categories.
 
-Save separate portable snapshots before rebuilding:
+Save everything you decided before rebuilding:
 
 ```sh
-fin cat export > categories-portable.json
-fin operation export > transaction-decisions.json
-fin rule export > rules-portable.json
-fin transfer export > transfers-portable.json
-fin cat restore categories-portable.json                # shows changes, asks [Y/n]
-fin operation restore transaction-decisions.json
-fin rule restore rules-portable.json
-fin transfer restore transfers-portable.json
+fin backup ~/fin-backups                  # a database copy and a decisions file
+fin decisions export ~/fin-decisions.json # or only the decisions file
+fin decisions restore ~/fin-decisions.json # after importing again; shows changes, asks [Y/n]
 ```
 
-The transaction file contains current category decisions and manual type overrides,
-as well as personal source identities; store backups privately.
-It does not yet contain independently created operations or their source links.
-Restoring assignments or rules creates missing target categories. Assignment
-restore requires matching source identity and evidence and refuses conflicts or
-ambiguity. See the [manual](docs/manual.md#rebuilding-after-a-schema-change) for
-the full restore workflow and limitations. Keep a full database backup as well.
+The file holds account settings, categories, rules, assignments, settlements, reversals, exchanges
+and transfers, with personal source identities, so store it privately. Restoring applies it all or
+nothing, and requires matching source evidence. See the
+[manual](docs/manual.md#what-a-decisions-file-holds) for what it holds.
 Use `fin rule from-category OPERATION-ID NAME --contains TEXT` to preview a reusable
 review-mode rule from a categorized example; fin asks before saving it.
 

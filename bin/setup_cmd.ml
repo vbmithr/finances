@@ -34,8 +34,14 @@ let backup database directory =
   in
   let copy = Stdlib.Filename.concat target in
   let%bind () = Setup.backup database (copy "fin.sqlite3") in
-  let%map () = Or_error.try_with (fun () -> Unix.chmod (copy "fin.sqlite3") 0o600) in
+  let%bind () = Or_error.try_with (fun () -> Unix.chmod (copy "fin.sqlite3") 0o600) in
+  let%map () =
+    with_database database (fun db ->
+      let%bind contents = Decisions_cmd.decisions_json db in
+      write_file (copy "decisions.json") contents)
+  in
   printf "Backed up to %s:\n  fin.sqlite3    from %s\n" target database;
+  printf "  decisions.json for rebuilding: fin decisions restore\n";
   printf
     "To restore: fin restore %s%s\n"
     (Stdlib.Filename.quote target)
@@ -47,7 +53,7 @@ let backup database directory =
 let backup_cmd =
   command
     "backup"
-    "Save a consistent SQLite database snapshot in a new dated folder."
+    "Save a consistent database snapshot and a decisions file in a new dated folder."
     Term.(
       const backup
       $ database
@@ -207,7 +213,8 @@ let welcome () =
      \032 fin db --help           Inspect source evidence commands\n\
      \032 fin convert wise PATH…  Print statements as records\n\
      \032 fin records check FILE  Validate a statement converter's output\n\
-     \032 fin backup              Save a SQLite database snapshot\n\
+     \032 fin backup              Save a database copy and your decisions\n\
+     \032 fin decisions --help    Save and re-apply everything you decided\n\
      \032 fin restore BACKUP      Restore a SQLite database snapshot\n\
      \032 fin delete              Delete all fin data, after confirmation\n\
      \032 fin --help              Explore all commands"

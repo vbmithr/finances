@@ -6,6 +6,7 @@ module Db = Rel_sqlite3
     any other existing schema version. Original records can be reimported. *)
 type t =
   { conn : Db.t
+  ; mutable in_transaction : bool
   ; registry : Registry.t
   ; source_typing_cache : (string, Source_typing.t) Hashtbl.t
   ; source_evidence_cache : (string, Source_evidence.rule list) Hashtbl.t

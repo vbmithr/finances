@@ -19,41 +19,6 @@ let list_bank_accounts database json_output =
     Ok ())
 ;;
 
-let accounts_export database output =
-  with_database database (fun db ->
-    let%bind () =
-      match output with
-      | None -> Ok ()
-      | Some output ->
-        let same =
-          Or_error.try_with (fun () ->
-            let a = Unix.LargeFile.stat database
-            and b = Unix.LargeFile.stat output in
-            a.st_dev = b.st_dev && a.st_ino = b.st_ino)
-        in
-        if Result.ok same |> Option.value ~default:false
-        then
-          Or_error.error_string "account snapshot output must not overwrite the database"
-        else Ok ()
-    in
-    let%bind config = Accounts.export_bank_accounts db in
-    let contents = Bank_account_config.to_json config ^ "\n" in
-    match output with
-    | None ->
-      print_string contents;
-      Ok ()
-    | Some path -> write_file path contents)
-;;
-
-let accounts_import database path dry_run =
-  let%bind contents = read_file path in
-  let%bind config = Bank_account_config.of_json contents in
-  with_database database (fun db ->
-    let%bind result = Accounts.apply_bank_accounts ~dry_run db config in
-    Report_json.print Report_json.account_config (dry_run, result);
-    Ok ())
-;;
-
 let editor () =
   List.find_map [ "VISUAL"; "EDITOR" ] ~f:(fun name ->
     Option.filter (Sys.getenv name) ~f:(Fn.non String.is_empty))
@@ -254,48 +219,10 @@ let cmd =
               & flag
               & info [ "yes" ] ~doc:"Apply the proposed setup without prompting."))
     ; command
-        "export"
-        "Export an account settings snapshot as version 1 JSON."
-        Term.(
-          const accounts_export
-          $ database
-          $ Arg.(
-              value
-              & opt (some string) None
-              & info
-                  [ "o"; "output" ]
-                  ~docv:"FILE"
-                  ~doc:
-                    "Write a private snapshot atomically to FILE instead of standard \
-                     output."))
-    ; command
         "edit"
         "Edit account names, IBANs and card settlement links in your editor, and apply \
          them on save."
         Term.(const accounts_edit $ database)
-    ; command
-        "import"
-        "Restore an explicit account settings snapshot atomically, or preview with \
-         --dry-run."
-        Term.(
-          const accounts_import
-          $ database
-          $ Arg.(
-              required
-              & pos 0 (some string) None
-              & info
-                  []
-                  ~docv:"FILE"
-                  ~doc:
-                    "Account settings JSON snapshot to import; there is no default file.")
-          $ Arg.(
-              value
-              & flag
-              & info
-                  [ "dry-run" ]
-                  ~doc:
-                    "Validate and report changes without committing updates or audit \
-                     rows."))
     ; command
         "delete"
         "Delete one account and its transactions after showing what will be removed."
