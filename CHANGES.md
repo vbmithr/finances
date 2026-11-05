@@ -8,6 +8,9 @@ short line of their own.
 
 ## Unreleased
 
+- `fin operation list` and `fin status` no longer slow down with the square of your data. On about 6,700
+  rows with 183 confirmed transfers, the list takes 0.18 s instead of 0.48 s, and a 20-row page 0.06 s
+  instead of 0.33 s. Output is unchanged.
 - `fin import kraken` reads spot ledger exports, old and new. A trade's rows read as one operation, and
   listed currencies are real currencies that can pair with your banks. Trade exports are not read yet.
 - CSV layouts gain `headers`, listing each header a source has used; `values`, translating a column's

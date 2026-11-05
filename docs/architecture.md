@@ -479,8 +479,9 @@ Shared audited match persistence saves transitions without rewriting evidence.
 ## Reading reviews
 
 `Review.reviews_sql` is the one definition of a movement's decision, counter-account and effective
-description. A query takes one JSON parameter for what only OCaml can state, such as ledger names of
-transfer destinations and each companion's display field, and reads it with `json_each`. Stored records
+description. A query takes one JSON parameter for what only OCaml can state, such as each companion's display
+field, and reads it with `json_each`. A list a query joins on, such as transfer destinations or groups,
+goes in a keyed temporary table instead, as SQLite will not index what it reads from JSON. Stored records
 are read with SQLite's JSON functions rather than decoded, and grouped passes replace correlated lookups,
 as most foreign keys here have no index behind them. `Review.operations` filters, sorts and limits in
 SQL, then builds only the rows it returns. Operation groups are read from the `fin-records-row` format,

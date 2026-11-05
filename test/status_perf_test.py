@@ -99,3 +99,60 @@ def main():
 
 if __name__ == '__main__':
     main()
+
+
+def scaling_database(root, size):
+    """A database of this many bank rows, each a confirmed transfer, and as many trades."""
+    env = dict(os.environ, HOME=str(root), XDG_DATA_HOME=str(root / 'd'), XDG_CONFIG_HOME=str(root / 'c'),
+               XDG_STATE_HOME=str(root / 's'), XDG_CACHE_HOME=str(root / 'k'))
+    fin = lambda *args: subprocess.run([FIN, *map(str, args)], env=env, stdin=subprocess.DEVNULL,
+                                       capture_output=True, text=True, check=True)
+    fin('init')
+    bank = [['Type', 'Product', 'Started Date', 'Completed Date', 'Description', 'Amount', 'Fee', 'Currency', 'State', 'Balance']]
+    ledger = [['txid', 'refid', 'time', 'type', 'subtype', 'aclass', 'asset', 'amount', 'fee', 'balance']]
+    balance, received = 10 ** 7, 0
+    for i in range(size):
+        clock = (datetime.datetime(2015, 1, 1) + datetime.timedelta(hours=2 * i)).strftime('%Y-%m-%d %H:%M:%S')
+        amount = 1000 + i
+        balance -= amount
+        received += amount
+        bank.append(['Transfer', 'Current', clock, clock, f'Row {i}', f'-{amount}.00', '0.00', 'EUR', 'COMPLETED', f'{balance}.00'])
+        ledger.append([f'L{i}', f'R{i}', clock, 'deposit', '', 'currency', 'ZEUR', f'{amount}.00', '0.00', f'{received}.00'])
+        ledger.append([f'B{i}', f'T{i}', clock, 'trade', '', 'currency', 'XXBT', '1', '0', str(i + 1)])
+        ledger.append([f'C{i}', f'T{i}', clock, 'trade', '', 'currency', 'XETH', '1', '0', str(i + 1)])
+    for name, rows in (('bank.csv', bank), ('ledger.csv', ledger)):
+        with open(root / name, 'w', newline='') as out:
+            csv.writer(out).writerows(rows)
+    fin('import', 'revolut', root / 'bank.csv')
+    fin('import', 'kraken', root / 'ledger.csv')
+    pairs = json.loads(fin('transfer', 'candidates', '--json').stdout)['proposed_pairs']
+    assert len(pairs) == size, len(pairs)
+    decisions = root / 'decisions.json'
+    decisions.write_text(json.dumps([
+        {'first_event_id': p['first_event_id'], 'second_event_id': p['second_event_id'],
+         'decision': 'confirm', 'reason': 'Scaling'} for p in pairs]))
+    fin('transfer', 'review', decisions)
+    return env
+
+
+def cpu(env, *args):
+    samples = []
+    for _ in range(3):
+        before = resource.getrusage(resource.RUSAGE_CHILDREN)
+        subprocess.run([FIN, *args], env=env, stdin=subprocess.DEVNULL, capture_output=True, check=True)
+        after = resource.getrusage(resource.RUSAGE_CHILDREN)
+        samples.append((after.ru_utime + after.ru_stime) - (before.ru_utime + before.ru_stime))
+    return statistics.median(samples)
+
+
+# A cost that grows with the square of the data passes any fixed budget until it does not. Four
+# times the data should cost about four times as much; a square would cost sixteen.
+with tempfile.TemporaryDirectory(prefix='fin-scaling-') as directory:
+    small = scaling_database(Path(directory) / 'small', 750) if (Path(directory) / 'small').mkdir() is None else None
+    large = scaling_database(Path(directory) / 'large', 3000) if (Path(directory) / 'large').mkdir() is None else None
+    for args in (['status'], ['operation', 'list', '--limit', '20'], ['operation', 'list', '--json'],
+                 ['operation', 'review', '--all', '--json'], ['journal', 'export']):
+        at_small, at_large = cpu(small, *args), cpu(large, *args)
+        print(f"{' '.join(args)}: {at_small * 1000:.0f} ms, then {at_large * 1000:.0f} ms at 4x", flush=True)
+        if at_large > max(8 * at_small, 0.25):
+            raise SystemExit(f"{' '.join(args)} grows faster than the data")

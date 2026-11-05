@@ -702,8 +702,44 @@ let computed_display_names db =
   Ok (List.concat lists)
 ;;
 
+(* A list a query joins on, as a table with a key: SQLite will not index a list it reads from
+   JSON, and a join on one costs its length for every row. Lives as long as the connection. *)
+let load_lookup db ~table ~columns ~primary_key ~reads rows =
+  let* () =
+    db_result
+      (Db.exec_sql
+         db.conn
+         (Printf.sprintf
+            "DROP TABLE IF EXISTS temp.%s; CREATE TEMP TABLE %s(%s, PRIMARY KEY (%s)) \
+             WITHOUT ROWID"
+            table
+            table
+            columns
+            primary_key))
+  in
+  let insert =
+    Rel_sql.Stmt.(
+      func
+        (Printf.sprintf
+           "INSERT OR REPLACE INTO temp.%s SELECT %s FROM json_each(?)"
+           table
+           reads)
+        (text @-> unit))
+  in
+  db_result (Db.exec db.conn (insert (json_array rows)))
+;;
+
 let review_context db =
   let* destinations = transfer_destinations db in
+  let* () =
+    load_lookup
+      db
+      ~table:"fin_destinations"
+      ~columns:"event_id INTEGER, account TEXT"
+      ~primary_key:"event_id"
+      ~reads:"value->>0,value->>1"
+      destinations
+  in
   let* computed = computed_display_names db in
   let display =
     List.filter_map (registered_companions db) ~f:(fun (owner, (c : Companion.t)) ->
@@ -712,11 +748,7 @@ let review_context db =
         Some (json_array [ json_text owner; json_text c.format; json_text field ])
       | No_display_name | From_annotation -> None)
   in
-  Ok
-    [ "destinations", json_array destinations
-    ; "computed", json_array computed
-    ; "display", json_array display
-    ]
+  Ok [ "computed", json_array computed; "display", json_array display ]
 ;;
 
 (* One row per bank movement: its decision, counter-account and effective description.
@@ -729,16 +761,14 @@ let reviews_sql ?event_ids () =
       ^ String.concat ~sep:"," (List.map ids ~f:Int64.to_string)
       ^ ")")
   in
-  "destinations(event_id,account) AS (SELECT value->>0,value->>1 FROM \
-   json_each(?1,'$.destinations')), named(event_id,name) AS (SELECT \
-   m.event_id,trim(f.value->>1,' '||char(9,10,11,12,13)) FROM json_each(?1,'$.display') \
-   d JOIN companion_rows c ON c.institution=d.value->>0 AND c.format=d.value->>1 JOIN \
-   companion_matches m ON m.row_id=c.id AND m.state='matched' AND m.event_id IS NOT NULL \
-   JOIN json_each(c.fields_json->>0,'$.record.details.fields') f ON \
-   f.value->>0=d.value->>2 UNION ALL SELECT value->>0,value->>1 FROM \
-   json_each(?1,'$.computed')), display(event_id,name) AS MATERIALIZED (SELECT \
-   event_id,CASE WHEN count(DISTINCT name)=1 THEN min(name) END FROM (SELECT \
-   event_id,name FROM named WHERE name<>''"
+  "named(event_id,name) AS (SELECT m.event_id,trim(f.value->>1,' '||char(9,10,11,12,13)) \
+   FROM json_each(?1,'$.display') d JOIN companion_rows c ON c.institution=d.value->>0 \
+   AND c.format=d.value->>1 JOIN companion_matches m ON m.row_id=c.id AND \
+   m.state='matched' AND m.event_id IS NOT NULL JOIN \
+   json_each(c.fields_json->>0,'$.record.details.fields') f ON f.value->>0=d.value->>2 \
+   UNION ALL SELECT value->>0,value->>1 FROM json_each(?1,'$.computed')), \
+   display(event_id,name) AS MATERIALIZED (SELECT event_id,CASE WHEN count(DISTINCT \
+   name)=1 THEN min(name) END FROM (SELECT event_id,name FROM named WHERE name<>''"
   ^ scope
   ^ " UNION ALL SELECT event_id,NULL FROM movements WHERE 1"
   ^ scope
@@ -747,7 +777,8 @@ let reviews_sql ?event_ids () =
      m.event_id,m.first_event_id,m.second_event_id,d.reason,g.account FROM \
      bank_transfer_memberships m JOIN bank_transfer_decisions d ON \
      d.first_event_id=m.first_event_id AND d.second_event_id=m.second_event_id LEFT JOIN \
-     destinations g ON g.event_id=m.event_id WHERE d.state='confirmed' UNION ALL SELECT \
+     temp.fin_destinations g ON g.event_id=m.event_id WHERE d.state='confirmed' UNION \
+     ALL SELECT \
      own.anchor_event_id,a.anchor_event_id,b.anchor_event_id,l.reason,r.account FROM \
      operation_transfer_links l JOIN operation_movements a ON a.id=l.first_movement_id \
      JOIN operation_movements b ON b.id=l.second_movement_id JOIN operation_movements \
@@ -1154,18 +1185,15 @@ let classification_name = function
    canonical ID and its primary movement's review, or the provider's own columns when
    there is none. *)
 let operations_sql =
-  ", grouped(member,canonical) AS MATERIALIZED (SELECT value->>0,value->>1 FROM \
-   json_each(?1,'$.groups')), accounts(institution,source,id) AS MATERIALIZED (SELECT \
-   value->>0,value->>1,value->>2 FROM json_each(?1,'$.accounts')), anchors AS \
-   MATERIALIZED (SELECT operation_id,anchor_event_id FROM (SELECT \
+  ", anchors AS MATERIALIZED (SELECT operation_id,anchor_event_id FROM (SELECT \
    operation_id,anchor_event_id,row_number() OVER (PARTITION BY operation_id ORDER BY \
    role<>'primary',id) AS rank FROM operation_movements) WHERE rank=1), ops AS \
    MATERIALIZED (SELECT o.id,o.occurred,coalesce(g.canonical,o.id) AS canonical, \
-   a.anchor_event_id AS anchor FROM operations o LEFT JOIN grouped g ON g.member=o.id \
-   LEFT JOIN anchors a ON a.operation_id=o.id), venues(operation_id,venue) AS \
-   MATERIALIZED (SELECT operation_id,CASE WHEN count(DISTINCT venue)=1 THEN min(venue) \
-   ELSE '' END FROM (SELECT s.operation_id,e.venue FROM operation_sources s JOIN \
-   source_events e ON e.id=s.event_id UNION ALL SELECT m.operation_id,e.venue FROM \
+   a.anchor_event_id AS anchor FROM operations o LEFT JOIN temp.fin_grouped g ON \
+   g.member=o.id LEFT JOIN anchors a ON a.operation_id=o.id), venues(operation_id,venue) \
+   AS MATERIALIZED (SELECT operation_id,CASE WHEN count(DISTINCT venue)=1 THEN \
+   min(venue) ELSE '' END FROM (SELECT s.operation_id,e.venue FROM operation_sources s \
+   JOIN source_events e ON e.id=s.event_id UNION ALL SELECT m.operation_id,e.venue FROM \
    operation_movements m JOIN source_events e ON e.id=m.anchor_event_id) GROUP BY \
    operation_id), fields(operation_id,event_id,ordinal,name,value) AS (SELECT \
    s.operation_id,f.event_id,f.ordinal,f.name,f.value FROM operation_sources s JOIN \
@@ -1179,9 +1207,9 @@ let operations_sql =
    f.value FROM fields f WHERE f.operation_id=p.id AND f.name='Description' ORDER BY \
    f.event_id,f.ordinal LIMIT 1),(SELECT f.value FROM fields f WHERE f.operation_id=p.id \
    AND f.name='description' ORDER BY f.event_id,f.ordinal LIMIT 1),'') END AS \
-   description FROM ops p LEFT JOIN reviews r ON r.event_id=p.anchor LEFT JOIN accounts \
-   a ON a.institution=r.institution AND a.source=r.source LEFT JOIN venues n ON \
-   n.operation_id=p.id)"
+   description FROM ops p LEFT JOIN reviews r ON r.event_id=p.anchor LEFT JOIN \
+   temp.fin_accounts a ON a.institution=r.institution AND a.source=r.source LEFT JOIN \
+   venues n ON n.operation_id=p.id)"
 ;;
 
 (* A condition on any movement of the operation's group, on its review [x]. *)
@@ -1274,14 +1302,27 @@ let operations
       json_array [ Int64.to_string id; Int64.to_string canonical ])
   in
   let* context = review_context db in
+  let* () =
+    load_lookup
+      db
+      ~table:"fin_grouped"
+      ~columns:"member INTEGER, canonical INTEGER"
+      ~primary_key:"member"
+      ~reads:"value->>0,value->>1"
+      group_rows
+  in
+  let* () =
+    load_lookup
+      db
+      ~table:"fin_accounts"
+      ~columns:"institution TEXT, source TEXT, id TEXT"
+      ~primary_key:"institution,source"
+      ~reads:"value->>0,value->>1,value->>2"
+      (List.map accounts ~f:(fun (institution, source, id) ->
+         json_array [ json_text institution; json_text source; json_text id ]))
+  in
   let parameter =
     context
-    @ [ "groups", json_array group_rows
-      ; ( "accounts"
-        , json_array
-            (List.map accounts ~f:(fun (institution, source, id) ->
-               json_array [ json_text institution; json_text source; json_text id ])) )
-      ]
     @ operation_filter_values filter
     @ Option.value_map limit ~default:[] ~f:(fun n -> [ "limit", Int.to_string n ])
   in

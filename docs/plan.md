@@ -499,6 +499,11 @@ position observations, derive positions from fills, or calculate funding.
   `fin db sources` instead of a separate `fin crypto` group.
 - [x] Describe CDC as data (`cdc.json`) interpreted by the generic
   `Movement_csv`, with no institution-specific OCaml.
+- [x] Costs that grew with the square of the data, found by comparing two sizes, which a test now
+  does: lists read from JSON were joined without an index, and `operation_movements` has no index on
+  `operation_id`, so a query driven from operations scans it per operation. The list and status are
+  fixed without a schema change. Next schema change: add that index; confirming transfers still grows
+  faster than the data through it.
 - [x] Kraken spot ledgers, as a definition with no code. Real files of two eras convert with every
   balance adding up. Layouts gained `headers`, `values`, `fiat_codes` and `group`. Not done: reading
   trade exports as observations, posting a grouped trade as an exchange, and margin or derivatives.

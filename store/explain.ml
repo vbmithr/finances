@@ -311,9 +311,9 @@ let operation_summary db institution =
       db
       (Rel_sql.Stmt.(
          func
-           "SELECT COUNT(DISTINCT o.id) FROM operations o JOIN source_events e ON \
-            e.id=o.source_event_id JOIN operation_movements m ON m.operation_id=o.id \
-            LEFT JOIN operation_movement_resolutions r ON r.movement_id=m.id WHERE \
+           "SELECT COUNT(DISTINCT o.id) FROM operation_movements m CROSS JOIN operations \
+            o ON o.id=m.operation_id JOIN source_events e ON e.id=o.source_event_id LEFT \
+            JOIN operation_movement_resolutions r ON r.movement_id=m.id WHERE \
             o.bank_event_id IS NULL AND e.venue=? AND COALESCE(r.account,m.account) IS \
             NULL"
            (text @-> ret integer))
