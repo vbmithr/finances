@@ -8,6 +8,8 @@ short line of their own.
 
 ## Unreleased
 
+- `fin settlement review --all` records every settlement `fin settlement candidates` lists at one
+  confirmation, setting up each card once.
 - Speed up limited `fin operation list` pages by reviewing only selected
   movements and avoiding an unnecessary scan of operation IDs. Filters,
   ordering and grouping remain unchanged.

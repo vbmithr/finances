@@ -846,7 +846,11 @@ For a credit card paid from a checking account, start with:
 ```sh
 fin settlement candidates
 fin settlement review
+fin settlement review --all
 ```
+
+`--all` records every listed settlement at one confirmation, setting up each card once. Add
+`--card ID` to take one card. `--yes` works once a card is set up, as setting one up needs a terminal.
 
 For the experimental full-screen review, run `fin settlement review --tui`.
 Use the up and down arrows (or `j` and `k`) to choose a suggestion, Enter to

@@ -2241,6 +2241,35 @@ class ImportOnboarding(unittest.TestCase):
         self.assertEqual(card['settlement_account']['account_id'], 'CHECKING')
         self.assertIn('No unambiguous card settlements found.', self.run_fin('settlement', 'candidates').stdout)
 
+    def test_settle_all_at_one_confirmation(self):
+        ofx = self.root / 'settle-all.ofx'
+        entry = ('<STMTTRN><DTPOSTED>2026010{day}</DTPOSTED><TRNTYPE>OTHER</TRNTYPE>'
+                 '<TRNAMT>-{day}.00</TRNAMT><FITID>settle-{day}</FITID>'
+                 '<NAME>Relevé différé Carte SAVINGS</NAME></STMTTRN>')
+        ofx.write_text(Path('fixtures/bank.ofx').read_text().replace(
+            '<ACCTTYPE>SAVINGS</ACCTTYPE>', '<ACCTTYPE>CREDITCRD</ACCTTYPE>').replace(
+            '</BANKTRANLIST>', entry.format(day=2) + entry.format(day=3) + '</BANKTRANLIST>', 1))
+        self.run_fin('import', 'boursobank', ofx)
+        count = self.run_fin('settlement', 'candidates').stdout.count('#')
+        self.assertEqual(count, 2)
+        decisions = lambda: json.loads(self.run_fin('settlement', 'history').stdout)
+        refused = self.run_fin('settlement', 'review', '--all', '--yes', check=False)
+        self.assertIn('card setup requires interactive confirmation', refused.stderr)
+        self.assertNotEqual(self.run_fin('settlement', 'review', '--all', '1', check=False).returncode, 0)
+        output = self.terminal(['settlement', 'review', '--all'],
+                               [('Apply this setup and record 2 card settlements?', 'n')])
+        self.assertIn('2 settlements, 5 EUR', output)
+        self.assertIn('Nothing changed.', output)
+        self.assertEqual(decisions(), [])
+        output = self.terminal(['settlement', 'review', '--all'],
+                               [('Apply this setup and record 2 card settlements?', 'y')])
+        self.assertIn('2 card settlements recorded.', output)
+        self.assertEqual(len(decisions()), 2)
+        card = next(a for a in self.accounts() if a['account_type'] == 'CREDITCRD')
+        self.assertTrue(card['ledger_account'].startswith('liabilities:cards:'))
+        self.assertIn('No unambiguous card settlements found.',
+                      self.run_fin('settlement', 'review', '--all', '--yes').stdout)
+
     def test_interrupt_settlement_before_confirmation_changes_nothing(self):
         ofx = self.root / 'interrupt-settlement.ofx'
         ofx.write_text(Path('fixtures/bank.ofx').read_text().replace(

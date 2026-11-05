@@ -534,8 +534,10 @@ position observations, derive positions from fills, or calculate funding.
   Every bundled institution has moved; all files of all institutions import together into one
   database, and all 10 statements with balances reconcile.
   The user's database has migrated (2026-11-04): all 1851 decisions came across.
-  Next: decide what becomes of user-installed definitions, which are all that still reach the
-  other old adapters, then match transfers across institutions.
+  Next: match transfers across institutions. Measured on real statements (2026-11-05): a card
+  settlement pays a sum, not one row, and `fin settlement review --all` records them; the card's
+  liability then balances within 12 EUR over five years. Keep the seven-day window: exact amounts 8-30
+  days apart are spread evenly and look coincidental. Cash withdrawals have no second leg.
 - [ ] Group movements into operations by evidence strength, covering transfers,
   CDC exchanges and Wise conversions: design proposed 2026-11-03 in
   [operation-transactions.md](operation-transactions.md#grouping-movements-into-operations-proposal),

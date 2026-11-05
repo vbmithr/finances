@@ -253,7 +253,112 @@ let settlement_tui db suggestions =
       Ok ())
 ;;
 
-let settlement_review database requested_event card_id yes tui =
+(* Every suggestion at one confirmation, card by card. Setting up a card happens with its
+   first settlement, and stays if a later one fails: rerunning settles what is left. *)
+let settle_all db suggestions ~yes =
+  let cards =
+    List.sort_and_group suggestions ~compare:(fun a b ->
+      String.compare
+        (Bank_account_mapping.id a.card.mapping)
+        (Bank_account_mapping.id b.card.mapping))
+  in
+  if List.is_empty cards
+  then (
+    print_endline "No unambiguous card settlements found.";
+    Ok ())
+  else (
+    let plans =
+      List.map cards ~f:(fun group ->
+        let first = List.hd_exn group in
+        group, first, card_setup_plan ~card:first.card ~bank:first.bank)
+    in
+    let needs_setup =
+      List.exists plans ~f:(fun (_, _, (_, needs_link, needs_mapping, _)) ->
+        needs_link || needs_mapping)
+    in
+    if yes && needs_setup
+    then Or_error.error_string "card setup requires interactive confirmation"
+    else (
+      List.iter plans ~f:(fun (group, first, (proposed, needs_link, needs_mapping, _)) ->
+        let total =
+          List.fold group ~init:Quantity.zero ~f:(fun sum s ->
+            Quantity.(sum - s.transaction.transaction.amount))
+        in
+        printf
+          "%s / %s: %d settlements, %s %s\n"
+          (Terminal.text first.card.mapping.institution)
+          (Terminal.text first.card.mapping.account_id)
+          (List.length group)
+          (Quantity.to_string total)
+          (Iso4217.to_alpha_code first.transaction.transaction.account.currency);
+        if needs_mapping
+        then
+          printf
+            "  Card account: %s -> %s\n"
+            (Terminal.text first.card.mapping.ledger_account)
+            (Terminal.text proposed);
+        if needs_link
+        then
+          printf
+            "  Pay from: %s / %s\n"
+            (Terminal.text first.bank.mapping.institution)
+            (Terminal.text first.bank.mapping.account_id));
+      print_endline
+        "If a card statement already includes a payment, review it as a transfer instead.";
+      let count = List.length suggestions in
+      let%bind confirmed =
+        confirm
+          ~yes
+          ~destructive:false
+          (Printf.sprintf
+             "%s %d card settlements?"
+             (if needs_setup then "Apply this setup and record" else "Record")
+             count)
+      in
+      if not confirmed
+      then (
+        print_endline "Nothing changed.";
+        Ok ())
+      else (
+        let%bind () =
+          List.map
+            plans
+            ~f:(fun (group, first, (proposed, needs_link, needs_mapping, setup)) ->
+              let card_id = Bank_account_mapping.id first.card.mapping in
+              let settle (s : settlement_suggestion) ~expected_ledger =
+                Transfers.confirm_card_settlement
+                  ~card_id
+                  ~expected_ledger
+                  db
+                  s.transaction.event_id
+              in
+              if needs_link || needs_mapping
+              then (
+                let%bind () =
+                  Accounts.confirm_card_settlement_with_setup
+                    db
+                    ~event_id:first.transaction.event_id
+                    ~card_id
+                    ~expected_ledger:first.card.mapping.ledger_account
+                    ~expected_link:first.card.settlement_account
+                    ~setup
+                in
+                List.map (List.tl_exn group) ~f:(settle ~expected_ledger:proposed)
+                |> Or_error.all_unit)
+              else
+                List.map
+                  group
+                  ~f:(settle ~expected_ledger:first.card.mapping.ledger_account)
+                |> Or_error.all_unit)
+          |> Or_error.all_unit
+        in
+        printf
+          "%d card settlements recorded. Use fin journal export for an updated journal.\n"
+          count;
+        Ok ())))
+;;
+
+let settlement_review database requested_event card_id all yes tui =
   with_database database (fun db ->
     let%bind suggestions = settlement_suggestions db in
     let suggestions =
@@ -263,7 +368,12 @@ let settlement_review database requested_event card_id yes tui =
           ~default:true
           ~f:(String.equal (Bank_account_mapping.id s.card.mapping)))
     in
-    if tui
+    if all
+    then
+      if Option.is_some requested_event || tui
+      then Or_error.error_string "--all cannot be combined with EVENT-ID or --tui"
+      else settle_all db suggestions ~yes
+    else if tui
     then
       if yes
       then Or_error.error_string "--tui cannot be combined with --yes"
@@ -434,6 +544,14 @@ let settlement_review_cmd =
               [ "card" ]
               ~docv:"ID"
               ~doc:"Card account ID, needed if several cards are linked.")
+      $ Arg.(
+          value
+          & flag
+          & info
+              [ "all" ]
+              ~doc:
+                "Record every settlement fin settlement candidates lists, or those of \
+                 --card, at one confirmation.")
       $ Arg.(value & flag & info [ "yes" ] ~doc:"Confirm without prompting.")
       $ Arg.(
           value & flag & info [ "tui" ] ~doc:"Use the experimental full-screen review."))
