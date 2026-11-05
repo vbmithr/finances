@@ -253,8 +253,8 @@ let settlement_tui db suggestions =
       Ok ())
 ;;
 
-(* Every suggestion at one confirmation, card by card. Setting up a card happens with its
-   first settlement, and stays if a later one fails: rerunning settles what is left. *)
+(* Every suggestion at one confirmation, card by card, all or nothing. Setting up a card
+   happens with its first settlement. *)
 let settle_all db suggestions ~yes =
   let cards =
     List.sort_and_group suggestions ~compare:(fun a b ->
@@ -320,37 +320,52 @@ let settle_all db suggestions ~yes =
         print_endline "Nothing changed.";
         Ok ())
       else (
+        (* Everything the checks need is read once, and the batch is one transaction:
+           checking each settlement on its own read all reviews and accounts each time. *)
         let%bind () =
-          List.map
-            plans
-            ~f:(fun (group, first, (proposed, needs_link, needs_mapping, setup)) ->
-              let card_id = Bank_account_mapping.id first.card.mapping in
-              let settle (s : settlement_suggestion) ~expected_ledger =
-                Transfers.confirm_card_settlement
-                  ~card_id
-                  ~expected_ledger
-                  db
-                  s.transaction.event_id
-              in
-              if needs_link || needs_mapping
-              then (
-                let%bind () =
-                  Accounts.confirm_card_settlement_with_setup
-                    db
-                    ~event_id:first.transaction.event_id
-                    ~card_id
-                    ~expected_ledger:first.card.mapping.ledger_account
-                    ~expected_link:first.card.settlement_account
-                    ~setup
+          Handle.transaction db (fun db ->
+            let%bind events = Ledger.events db in
+            let events = Hashtbl.of_alist_exn (module Int64) events in
+            List.map
+              plans
+              ~f:(fun (group, first, (proposed, needs_link, needs_mapping, setup)) ->
+                let card_id = Bank_account_mapping.id first.card.mapping in
+                let%bind rest, expected_ledger =
+                  if needs_link || needs_mapping
+                  then (
+                    let%map () =
+                      Accounts.confirm_card_settlement_with_setup
+                        db
+                        ~event_id:first.transaction.event_id
+                        ~card_id
+                        ~expected_ledger:first.card.mapping.ledger_account
+                        ~expected_link:first.card.settlement_account
+                        ~setup
+                    in
+                    List.tl_exn group, proposed)
+                  else Ok (group, first.card.mapping.ledger_account)
                 in
-                List.map (List.tl_exn group) ~f:(settle ~expected_ledger:proposed)
+                let%bind accounts = Transfers.bank_account_info db in
+                let%bind card =
+                  List.find accounts ~f:(fun (a : Transfers.bank_account_info) ->
+                    String.equal (Bank_account_mapping.id a.mapping) card_id)
+                  |> Or_error.of_option ~error:(Error.of_string "card no longer exists")
+                in
+                List.map rest ~f:(fun (s : settlement_suggestion) ->
+                  let%bind source_event =
+                    Hashtbl.find events s.transaction.event_id
+                    |> Or_error.of_option
+                         ~error:(Error.of_string "unknown transaction event ID")
+                  in
+                  Transfers.confirm_card_settlement_in_transaction
+                    ~card_id
+                    ~expected_ledger
+                    ~validated_card:card
+                    ~source_event
+                    db
+                    s.transaction.event_id)
                 |> Or_error.all_unit)
-              else
-                List.map
-                  group
-                  ~f:(settle ~expected_ledger:first.card.mapping.ledger_account)
-                |> Or_error.all_unit)
-          |> Or_error.all_unit
+            |> Or_error.all_unit)
         in
         printf
           "%d card settlements recorded. Use fin journal export for an updated journal.\n"
