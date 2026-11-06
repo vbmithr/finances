@@ -8,6 +8,7 @@ short line of their own.
 
 ## Unreleased
 
+- Docs: `docs/cards.md` designs `fin card`, telling fin which card numbers belong to which card account.
 - `fin backup` copies a database of any schema, as the rebuild steps promise. On a schema this fin
   cannot read, it used to copy the file and then fail as if nothing had been saved; it now keeps the
   copy and says to export decisions, and restore, with the version that wrote it.
