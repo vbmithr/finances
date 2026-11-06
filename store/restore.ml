@@ -18,31 +18,21 @@ type category_restore_preview =
   ; problems : string list
   }
 
-let raw_fields_hash (e : Source_event.t) =
-  List.map e.fields ~f:(fun (name, value) ->
-    Printf.sprintf "%d:%s%d:%s" (String.length name) name (String.length value) value)
-  |> String.concat
-  |> Digestif.SHA256.digest_string
-  |> Digestif.SHA256.to_hex
+let digest digests id =
+  match Hashtbl.find digests id with
+  | Some (d : Event_digests.t) -> d
+  | None -> failwith (Printf.sprintf "source event %Ld has no stored digests" id)
 ;;
 
-let sha256 text = Digestif.SHA256.(to_hex (digest_string text))
-
-let payload_hash (e : Source_event.t) =
-  sha256 (Option.value (Records.row_identity e.payload) ~default:e.payload)
-;;
+let payload_hash digests id = (digest digests id).payload
 
 (* A records row's fields can grow with its converter, and its identity says what it is. *)
-let category_fields_hash (e : Source_event.t) =
-  match Records.row_identity e.payload with
-  | Some identity -> sha256 identity
-  | None -> raw_fields_hash e
-;;
+let category_fields_hash digests id = (digest digests id).fields
 
 (* What tells this row from others of its day. An institution with row IDs says so itself. Without
    them, rows with identical fields cannot be told apart between exports, so a decision on one could
    land on the other. *)
-let evidence_key db (e : Source_event.t) =
+let evidence_key db digests id (e : Source_event.t) =
   let identified =
     match Registry.find db.registry e.venue with
     | Some (module A : Adapter.S) ->
@@ -51,11 +41,7 @@ let evidence_key db (e : Source_event.t) =
        | Day_inventory -> false)
     | None -> false
   in
-  if identified
-  then "id:" ^ e.source_id
-  else if List.is_empty e.fields
-  then "payload:" ^ sha256 e.payload
-  else "fields:" ^ raw_fields_hash e
+  if identified then "id:" ^ e.source_id else (digest digests id).evidence
 ;;
 
 let bank_operation_anchors db =
@@ -112,23 +98,27 @@ let category_snapshot db =
         | Category _ | Type_and_category _ -> true
         | _ -> false)
     in
-    let* events = events db in
-    let events_by_id = Hashtbl.of_alist_exn (module Int64) events in
-    let* review = bank_review db in
+    let event_of id ~missing =
+      let* event = find_event db id in
+      Or_error.of_option event ~error:(Error.of_string missing)
+    in
+    let* digests = Event_digests.load db in
+    (* Only movements a person decided something about: a type, or a category or reason. *)
+    let* decided =
+      collect
+        db
+        (statement
+           "SELECT event_id FROM reviews WHERE override IS NOT NULL OR (decision IN \
+            ('unclassified','category') AND reason IS NOT NULL)"
+           Row.(t1 (int64 "event_id")))
+    in
+    let* review = reviews_of_events db decided in
     let* anchors = bank_operation_anchors db in
     let* decisions =
-      List.filter review ~f:(fun r ->
-        Option.is_some r.movement_type_override
-        || ((Poly.equal r.classification Unclassified
-             || Poly.equal r.classification Category)
-            && Option.is_some r.reason))
+      review
       |> traverse (fun r ->
         let* () = verify_bank_operation_anchor anchors r in
-        let* event =
-          Hashtbl.find events_by_id r.event_id
-          |> Or_error.of_option
-               ~error:(Error.of_string "category references missing event")
-        in
+        let* event = event_of r.event_id ~missing:"category references missing event" in
         Ok
           Category_portable.
             { institution = event.venue
@@ -136,8 +126,8 @@ let category_snapshot db =
             ; kind = event.kind
             ; source_id = event.source_id
             ; occurred = Temporal.to_string event.occurred
-            ; payload_sha256 = payload_hash event
-            ; fields_sha256 = category_fields_hash event
+            ; payload_sha256 = payload_hash digests r.event_id
+            ; fields_sha256 = category_fields_hash digests r.event_id
             ; movement_role = "primary"
             ; account =
                 Option.some_if
@@ -174,11 +164,7 @@ let category_snapshot db =
     let* resolutions =
       traverse
         (fun (id, role, account, commodity, quantity, source_commodity) ->
-           let* event =
-             Hashtbl.find events_by_id id
-             |> Or_error.of_option
-                  ~error:(Error.of_string "resolved movement source missing")
-           in
+           let* event = event_of id ~missing:"resolved movement source missing" in
            let* commodity = Json.decode Commodity.codec commodity in
            let symbol_query =
              Rel_sql.Stmt.(
@@ -206,8 +192,8 @@ let category_snapshot db =
                ; kind = event.kind
                ; source_id = event.source_id
                ; occurred = Temporal.to_string event.occurred
-               ; payload_sha256 = payload_hash event
-               ; fields_sha256 = category_fields_hash event
+               ; payload_sha256 = payload_hash digests id
+               ; fields_sha256 = category_fields_hash digests id
                ; movement_role = role
                ; account = None
                ; reason = None
@@ -225,24 +211,63 @@ let category_snapshot db =
 let preview_category_restore db (snapshot : Category_portable.t) =
   let* existing_categories = categories db in
   let* existing_rules = classification_rules db in
-  let* source = events db in
-  let* review = bank_review db in
   let* anchors = bank_operation_anchors db in
-  let by_identity = Hashtbl.Poly.create () in
-  let by_evidence = Hashtbl.Poly.create () in
-  let review_by_id = Hashtbl.create (module Int64) in
-  List.iter review ~f:(fun (r : bank_review) ->
-    Hashtbl.set review_by_id ~key:r.event_id ~data:r);
-  List.iter source ~f:(fun (id, (e : Source_event.t)) ->
-    let digest = payload_hash e in
-    Hashtbl.add_multi
-      by_identity
-      ~key:(e.venue, e.account, e.kind, e.source_id)
-      ~data:(id, e, digest);
-    Hashtbl.add_multi
-      by_evidence
-      ~key:(e.venue, e.account, e.kind, Temporal.to_string e.occurred, evidence_key db e)
-      ~data:id);
+  let* digests = Event_digests.load db in
+  (* Only the rows the snapshot names are read: each by its identity, with how many rows of
+     its place and time share its evidence. *)
+  let named =
+    List.map snapshot.decisions ~f:(fun (d : Category_portable.decision) ->
+      d.institution, d.source_account, d.kind, d.source_id)
+    @ List.map snapshot.resolutions ~f:(fun (r : Category_portable.resolution) ->
+      r.source.institution, r.source.source_account, r.source.kind, r.source.source_id)
+    |> List.dedup_and_sort ~compare:[%compare: string * string * string * string]
+  in
+  let* found =
+    traverse
+      (fun ((venue, account, kind, source_id) as key) ->
+         let* matches = find_by_identity db ~venue ~account ~kind ~source_id in
+         let* evidence =
+           traverse
+             (fun (id, (e : Source_event.t)) ->
+                let* same =
+                  same_occurrence
+                    db
+                    ~venue
+                    ~account
+                    ~kind
+                    ~occurred:(Temporal.to_string e.occurred)
+                in
+                let mine = evidence_key db digests id e in
+                Ok
+                  ( id
+                  , List.count same ~f:(fun (other, o) ->
+                      String.equal (evidence_key db digests other o) mine) ))
+             matches
+         in
+         Ok
+           ( key
+           , ( List.map matches ~f:(fun (id, e) -> id, e, payload_hash digests id)
+             , evidence ) ))
+      named
+  in
+  let found = Hashtbl.Poly.of_alist_exn found in
+  let matches_of key = Option.value_map (Hashtbl.find found key) ~default:[] ~f:fst in
+  let sharing key id =
+    Option.value_map (Hashtbl.find found key) ~default:0 ~f:(fun (_, evidence) ->
+      Option.value (List.Assoc.find evidence id ~equal:Int64.equal) ~default:0)
+  in
+  let* review =
+    reviews_of_events
+      db
+      (Hashtbl.data found
+       |> List.concat_map ~f:(fun (matches, _) ->
+         List.map matches ~f:(fun (id, _, _) -> id)))
+  in
+  let review_by_id =
+    Hashtbl.of_alist_exn
+      (module Int64)
+      (List.map review ~f:(fun (r : bank_review) -> r.event_id, r))
+  in
   let problems = ref [] in
   let problem s = problems := s :: !problems in
   if List.contains_dup snapshot.categories ~compare:String.compare
@@ -331,24 +356,25 @@ let preview_category_restore db (snapshot : Category_portable.t) =
   then problem "duplicate transaction identities";
   let unchanged = ref 0 in
   let types_to_apply = ref [] in
+  let* imported =
+    collect
+      db
+      (statement
+         "SELECT DISTINCT movement_type FROM movements WHERE movement_type IS NOT NULL"
+         Row.(t1 (text "movement_type")))
+  in
   let imported_types =
     Hash_set.of_list
       (module String)
-      (List.filter_map review ~f:(fun r ->
-         match r.imported_movement_type with
-         | Some (Movement_type.Other value) -> Some value
+      (List.filter_map imported ~f:(fun name ->
+         match Movement_type.of_string name with
+         | Movement_type.Other value -> Some value
          | _ -> None))
   in
   let decisions_to_apply =
     List.filter_map snapshot.decisions ~f:(fun d ->
       let label = d.institution ^ "/" ^ d.source_id in
-      let matches =
-        Option.value
-          (Hashtbl.find
-             by_identity
-             (d.institution, d.source_account, d.kind, d.source_id))
-          ~default:[]
-      in
+      let matches = matches_of (d.institution, d.source_account, d.kind, d.source_id) in
       if not (String.equal d.movement_role "primary")
       then (
         problem ("unsupported movement role: " ^ label);
@@ -360,22 +386,11 @@ let preview_category_restore db (snapshot : Category_portable.t) =
             not
               (String.equal (Temporal.to_string e.occurred) d.occurred
                && String.equal digest d.payload_sha256
-               && String.equal (category_fields_hash e) d.fields_sha256)
+               && String.equal (category_fields_hash digests id) d.fields_sha256)
           then (
             problem ("source evidence differs: " ^ label);
             None)
-          else if
-            List.length
-              (Option.value
-                 (Hashtbl.find
-                    by_evidence
-                    ( d.institution
-                    , d.source_account
-                    , d.kind
-                    , d.occurred
-                    , evidence_key db e ))
-                 ~default:[])
-            > 1
+          else if sharing (d.institution, d.source_account, d.kind, d.source_id) id > 1
           then (
             problem ("ambiguous duplicate source evidence: " ^ label);
             None)
@@ -505,24 +520,15 @@ let preview_category_restore db (snapshot : Category_portable.t) =
          let d = r.source in
          let label = d.institution ^ "/" ^ d.source_id ^ "/" ^ d.movement_role in
          let matches =
-           Option.value
-             (Hashtbl.find
-                by_identity
-                (d.institution, d.source_account, d.kind, d.source_id))
-             ~default:[]
+           matches_of (d.institution, d.source_account, d.kind, d.source_id)
          in
          match matches with
          | [ (id, e, digest) ]
            when String.equal (Temporal.to_string e.occurred) d.occurred
                 && String.equal digest d.payload_sha256
-                && String.equal (category_fields_hash e) d.fields_sha256 ->
+                && String.equal (category_fields_hash digests id) d.fields_sha256 ->
            let duplicate_count =
-             Option.value
-               (Hashtbl.find
-                  by_evidence
-                  (d.institution, d.source_account, d.kind, d.occurred, evidence_key db e))
-               ~default:[]
-             |> List.length
+             sharing (d.institution, d.source_account, d.kind, d.source_id) id
            in
            if duplicate_count > 1
            then (
@@ -653,12 +659,10 @@ let write_movement_type_override db ~event_id ~previous ~movement_type ~reason =
     Ok true
 ;;
 
-let restore_categories db ~expected snapshot =
+(* Applies a preview made in the same transaction; it is not checked again. *)
+let restore_categories db (current : category_restore_preview) =
   transaction db (fun db ->
-    let* current = preview_category_restore db snapshot in
-    if not (Poly.equal current expected)
-    then Or_error.error_string "restore preview changed; review it again"
-    else if not (List.is_empty current.problems)
+    if not (List.is_empty current.problems)
     then Or_error.error_string "resolve restore problems before applying"
     else (
       let insert =
@@ -893,8 +897,24 @@ let transfer_iban_evidence_with known ~a_iban ~b_iban a ta b tb =
 
 (* Every account's IBAN as evidence for pairings. Read once per batch: it visits every
    movement. *)
+(* One movement stands for each account: its movements all report the same IBAN status. *)
 let known_ibans db =
-  let* source = events db in
+  let* ids =
+    collect
+      db
+      (statement
+         "SELECT max(event_id) FROM movements GROUP BY venue,account"
+         Row.(t1 (int64 "event_id")))
+  in
+  let* source =
+    traverse
+      (fun id ->
+         let* event = find_event db id in
+         Or_error.of_option
+           (Option.map event ~f:(fun e -> id, e))
+           ~error:(Error.createf "movement %Ld has no source event" id))
+      ids
+  in
   let source = List.filter source ~f:(fun (_, e) -> Registry.is_movement db.registry e) in
   known_account_ibans db source ~movement:(movement db)
 ;;

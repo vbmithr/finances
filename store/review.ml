@@ -678,28 +678,38 @@ type operation_transfer_link =
 (* Persisted links use local movement IDs; their public identities are derived
    from the immutable anchor sources. *)
 let operation_transfer_links db =
-  let* events = events db in
-  let by_id = Hashtbl.of_alist_exn (module Int64) events in
   let* rows =
     collect
       db
       (statement
          "SELECT \
-          first_event_id,second_event_id,first_operation_id,second_operation_id,reason, \
-          first_role,second_role FROM operation_links l WHERE (SELECT count(*) FROM \
+          l.first_event_id,l.second_event_id,l.first_operation_id,l.second_operation_id, \
+          l.reason,l.first_role,l.second_role,a.venue,a.account,a.kind,a.source_id, \
+          b.venue,b.account,b.kind,b.source_id FROM operation_links l LEFT JOIN \
+          source_events a ON a.id=l.first_event_id LEFT JOIN source_events b ON \
+          b.id=l.second_event_id WHERE (SELECT count(*) FROM \
           operation_transfer_memberships m WHERE m.first_movement_id=l.first_movement_id \
           AND m.second_movement_id=l.second_movement_id AND m.movement_id IN \
           (l.first_movement_id,l.second_movement_id))=2 ORDER BY \
-          first_movement_id,second_movement_id"
+          l.first_movement_id,l.second_movement_id"
          Row.(
-           unit (fun a b c d e f g -> a, b, c, d, e, f, g)
+           unit (fun a b c d e f g h i j k l m n o ->
+             (a, b, c, d, e, f, g), (h, i, j, k), (l, m, n, o))
            * int64 "first_event_id"
            * int64 "second_event_id"
            * int64 "first_operation_id"
            * int64 "second_operation_id"
            * text "reason"
            * text "first_role"
-           * text "second_role"))
+           * text "second_role"
+           * option Rel.Type.text "first_venue"
+           * option Rel.Type.text "first_account"
+           * option Rel.Type.text "first_kind"
+           * option Rel.Type.text "first_source_id"
+           * option Rel.Type.text "second_venue"
+           * option Rel.Type.text "second_account"
+           * option Rel.Type.text "second_kind"
+           * option Rel.Type.text "second_source_id"))
   in
   let* stored_count =
     db_result
@@ -712,26 +722,23 @@ let operation_transfer_links db =
     then Ok ()
     else Or_error.error_string "operation transfer link has missing movement membership"
   in
+  let identity which ~role = function
+    | Some venue, Some source_account, Some source_kind, Some source_id ->
+      Movement_identity.create ~venue ~source_account ~source_kind ~source_id ~role
+    | _ -> Or_error.errorf "confirmed transfer has no %s source" which
+  in
   traverse
-    (fun ( first_event
-         , second_event
-         , first_operation_id
-         , second_operation_id
-         , reason
-         , first_role
-         , second_role ) ->
-       let* first =
-         Hashtbl.find by_id first_event
-         |> Or_error.of_option
-              ~error:(Error.of_string "confirmed transfer has no first source")
-       in
-       let* second =
-         Hashtbl.find by_id second_event
-         |> Or_error.of_option
-              ~error:(Error.of_string "confirmed transfer has no second source")
-       in
-       let* first_movement = Movement_identity.of_event first ~role:first_role in
-       let* second_movement = Movement_identity.of_event second ~role:second_role in
+    (fun ( ( first_event
+           , second_event
+           , first_operation_id
+           , second_operation_id
+           , reason
+           , first_role
+           , second_role )
+         , first
+         , second ) ->
+       let* first_movement = identity "first" ~role:first_role first in
+       let* second_movement = identity "second" ~role:second_role second in
        if Int64.equal first_operation_id second_operation_id
        then
          Or_error.error_string

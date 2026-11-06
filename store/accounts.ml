@@ -312,7 +312,7 @@ let bank_overview db =
     Hash_set.add needed a;
     Hash_set.add needed b);
   let* table = selected_movements db needed in
-  let* summaries, movements, unclassified = status_summaries db source in
+  let* summaries, movements, unclassified = status_summaries db in
   let* accounts = bank_account_info_from ~summaries db source table in
   let* candidates = transfer_candidates_from db source table pairs in
   Ok (accounts, movements, unclassified, List.length candidates)
@@ -338,7 +338,8 @@ let set_bank_account_identities_in_transaction db identities =
   then Or_error.error_string "duplicate account identity"
   else
     let* accounts = bank_accounts db in
-    let* source = events db in
+    (* [own_iban] reads each account's first movement, which is all this holds. *)
+    let* source = account_events db in
     let upsert =
       Rel_sql.Stmt.(
         func

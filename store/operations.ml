@@ -538,13 +538,6 @@ type portable_transfer_preview =
   ; problems : string list
   }
 
-(* Source events by the identity a portable decision names them with. *)
-let events_by_identity events =
-  Hashtbl.Poly.of_alist_multi
-    (List.map events ~f:(fun ((_, (e : Source_event.t)) as entry) ->
-       (e.venue, e.account, e.kind, e.source_id), entry))
-;;
-
 let reviews_by_id reviews =
   Hashtbl.of_alist_exn
     (module Int64)
@@ -553,29 +546,33 @@ let reviews_by_id reviews =
 
 let transfer_snapshot db =
   transaction db (fun db ->
-    let* events = events db in
-    let* reviews = bank_review db in
     let* anchors = bank_operation_anchors db in
     let* operation_links = operation_transfer_links db in
     let* general = general_transfer_entries db in
-    let by_identity = events_by_identity events in
+    let* digests = Event_digests.load db in
+    let* reviews =
+      reviews_of_events
+        db
+        (List.concat_map operation_links ~f:(fun (l : operation_transfer_link) ->
+           [ l.first_event_id; l.second_event_id ]))
+    in
     let review_by_id = reviews_by_id reviews in
     let general_by_operations =
       Hashtbl.Poly.of_alist_multi
         (List.map general ~f:(fun p -> (p.first.operation_id, p.second.operation_id), p))
     in
     let reference (identity : Movement_identity.t) =
-      let matches =
-        Hashtbl.find
-          by_identity
-          ( identity.venue
-          , identity.source_account
-          , identity.source_kind
-          , identity.source_id )
+      let* matches =
+        find_by_identity
+          db
+          ~venue:identity.venue
+          ~account:identity.source_account
+          ~kind:identity.source_kind
+          ~source_id:identity.source_id
       in
       let* id, event =
         match matches with
-        | Some [ entry ] -> Ok entry
+        | [ entry ] -> Ok entry
         | _ -> Or_error.error_string "transfer movement source is missing or ambiguous"
       in
       let* () =
@@ -590,8 +587,8 @@ let transfer_snapshot db =
           ; kind = event.kind
           ; source_id = event.source_id
           ; occurred = Temporal.to_string event.occurred
-          ; payload_sha256 = payload_hash event
-          ; fields_sha256 = category_fields_hash event
+          ; payload_sha256 = payload_hash digests id
+          ; fields_sha256 = category_fields_hash digests id
           ; movement_role = identity.role
           ; account = None
           ; reason = None
@@ -617,8 +614,6 @@ let transfer_snapshot db =
 ;;
 
 let preview_transfer_restore db (snapshot : Transfer_portable.t) =
-  let* events = events db in
-  let* reviews = bank_review db in
   let* anchors = bank_operation_anchors db in
   let* existing = bank_transfer_decisions db in
   let* existing_links = operation_transfer_links db in
@@ -638,12 +633,50 @@ let preview_transfer_restore db (snapshot : Transfer_portable.t) =
              (int64 "operation_id")
              (option Rel.Type.int64 "bank_event_id")))
   in
-  let by_identity = events_by_identity events in
-  (* Events another could be mistaken for: same place and time. *)
-  let by_occurrence =
-    Hashtbl.Poly.of_alist_multi
-      (List.map events ~f:(fun (_, (e : Source_event.t)) ->
-         (e.venue, e.account, e.kind, Temporal.to_string e.occurred), e))
+  let* digests = Event_digests.load db in
+  (* Only the rows the links name are read: each by its identity, with how many rows of its
+     place and time carry the same evidence. *)
+  let named =
+    List.concat_map snapshot.links ~f:(fun link -> [ link.first; link.second ])
+    |> List.map ~f:(fun (r : Category_portable.decision) ->
+      r.institution, r.source_account, r.kind, r.source_id)
+    |> List.dedup_and_sort ~compare:[%compare: string * string * string * string]
+  in
+  let* found =
+    traverse
+      (fun ((venue, account, kind, source_id) as key) ->
+         let* matches = find_by_identity db ~venue ~account ~kind ~source_id in
+         let* counts =
+           traverse
+             (fun (id, (e : Source_event.t)) ->
+                let* same =
+                  same_occurrence
+                    db
+                    ~venue
+                    ~account
+                    ~kind
+                    ~occurred:(Temporal.to_string e.occurred)
+                in
+                Ok
+                  ( id
+                  , List.count same ~f:(fun (other_id, (other : Source_event.t)) ->
+                      if List.is_empty e.fields
+                      then String.equal other.payload e.payload
+                      else
+                        String.equal
+                          (category_fields_hash digests other_id)
+                          (category_fields_hash digests id)) ))
+             matches
+         in
+         Ok (key, (matches, counts)))
+      named
+  in
+  let found = Hashtbl.Poly.of_alist_exn found in
+  let* reviews =
+    reviews_of_events
+      db
+      (Hashtbl.data found
+       |> List.concat_map ~f:(fun (matches, _) -> List.map matches ~f:fst))
   in
   let review_by_id = reviews_by_id reviews in
   let movement_by_role =
@@ -684,11 +717,8 @@ let preview_transfer_restore db (snapshot : Transfer_portable.t) =
   then problem "a movement occurs in more than one transfer link";
   let resolve (r : Category_portable.decision) =
     let label = r.institution ^ "/" ^ r.source_id in
-    let matches =
-      Option.value
-        (Hashtbl.find by_identity (r.institution, r.source_account, r.kind, r.source_id))
-        ~default:[]
-    in
+    let key = r.institution, r.source_account, r.kind, r.source_id in
+    let matches = Option.value_map (Hashtbl.find found key) ~default:[] ~f:fst in
     if
       Option.is_some r.account
       || Option.is_some r.reason
@@ -700,21 +730,14 @@ let preview_transfer_restore db (snapshot : Transfer_portable.t) =
       match matches with
       | [ (id, e) ] ->
         let evidence_count =
-          Option.value
-            (Hashtbl.find
-               by_occurrence
-               (e.venue, e.account, e.kind, Temporal.to_string e.occurred))
-            ~default:[]
-          |> List.count ~f:(fun (other : Source_event.t) ->
-            if List.is_empty e.fields
-            then String.equal other.payload e.payload
-            else String.equal (category_fields_hash other) (category_fields_hash e))
+          Option.value_map (Hashtbl.find found key) ~default:0 ~f:(fun (_, counts) ->
+            Option.value (List.Assoc.find counts id ~equal:Int64.equal) ~default:0)
         in
         if
           not
             (String.equal (Temporal.to_string e.occurred) r.occurred
-             && String.equal (payload_hash e) r.payload_sha256
-             && String.equal (category_fields_hash e) r.fields_sha256)
+             && String.equal (payload_hash digests id) r.payload_sha256
+             && String.equal (category_fields_hash digests id) r.fields_sha256)
         then (
           problem ("source evidence differs: " ^ label);
           None)
@@ -836,12 +859,10 @@ let preview_transfer_restore db (snapshot : Transfer_portable.t) =
     }
 ;;
 
-let restore_transfers db ~expected snapshot =
+(* Applies a preview made in the same transaction; it is not checked again. *)
+let restore_transfers db (current : portable_transfer_preview) =
   transaction db (fun db ->
-    let* current = preview_transfer_restore db snapshot in
-    if not (Poly.equal current expected)
-    then Or_error.error_string "restore preview changed; review it again"
-    else if not (List.is_empty current.problems)
+    if not (List.is_empty current.problems)
     then Or_error.error_string "resolve transfer restore problems before applying"
     else
       let* bank_changes =
@@ -1023,6 +1044,7 @@ let operation_exchange_entries db =
 
 let exchange_snapshot db =
   transaction db (fun db ->
+    let* digests = Event_digests.load db in
     let query =
       statement
         "SELECT o.id,o.source_event_id,m.role FROM operation_exchange_decisions d JOIN \
@@ -1048,7 +1070,8 @@ let exchange_snapshot db =
              then Ok ()
              else Or_error.error_string "exchange source changed"
            in
-           let* event = find_event db source in
+           let event_id = source in
+           let* event = find_event db event_id in
            let* event =
              Or_error.of_option event ~error:(Error.of_string "exchange source missing")
            in
@@ -1059,8 +1082,8 @@ let exchange_snapshot db =
                ; kind = event.kind
                ; source_id = event.source_id
                ; occurred = Temporal.to_string event.occurred
-               ; payload_sha256 = payload_hash event
-               ; fields_sha256 = category_fields_hash event
+               ; payload_sha256 = payload_hash digests event_id
+               ; fields_sha256 = category_fields_hash digests event_id
                ; movement_role = role
                ; account = None
                ; reason = None
@@ -1082,13 +1105,7 @@ type exchange_restore_preview =
   }
 
 let preview_exchange_restore db (snapshot : Exchange_portable.t) =
-  let* source_events = events db in
-  let by_identity = events_by_identity source_events in
-  let by_occurrence =
-    Hashtbl.Poly.of_alist_multi
-      (List.map source_events ~f:(fun (_, (e : Source_event.t)) ->
-         (e.venue, e.account, e.kind, Temporal.to_string e.occurred), e))
-  in
+  let* digests = Event_digests.load db in
   let problems = ref []
   and unchanged = ref 0 in
   let problem s = problems := s :: !problems in
@@ -1113,26 +1130,32 @@ let preview_exchange_restore db (snapshot : Exchange_portable.t) =
       (fun (x : Exchange_portable.exchange) ->
          let d = x.source in
          let label = d.institution ^ "/" ^ d.source_id in
-         let matches =
-           Option.value
-             (Hashtbl.find
-                by_identity
-                (d.institution, d.source_account, d.kind, d.source_id))
-             ~default:[]
+         let* matches =
+           find_by_identity
+             db
+             ~venue:d.institution
+             ~account:d.source_account
+             ~kind:d.kind
+             ~source_id:d.source_id
          in
          match matches with
          | [ (id, event) ]
            when String.equal (Temporal.to_string event.occurred) d.occurred
-                && String.equal (payload_hash event) d.payload_sha256
-                && String.equal (category_fields_hash event) d.fields_sha256 ->
+                && String.equal (payload_hash digests id) d.payload_sha256
+                && String.equal (category_fields_hash digests id) d.fields_sha256 ->
+           let* same =
+             same_occurrence
+               db
+               ~venue:event.venue
+               ~account:event.account
+               ~kind:event.kind
+               ~occurred:d.occurred
+           in
            let duplicate =
-             Option.value
-               (Hashtbl.find
-                  by_occurrence
-                  (event.venue, event.account, event.kind, d.occurred))
-               ~default:[]
-             |> List.count ~f:(fun e ->
-               String.equal (evidence_key db e) (evidence_key db event))
+             List.count same ~f:(fun (other_id, e) ->
+               String.equal
+                 (evidence_key db digests other_id e)
+                 (evidence_key db digests id event))
              > 1
            in
            if
@@ -1185,12 +1208,10 @@ let preview_exchange_restore db (snapshot : Exchange_portable.t) =
     }
 ;;
 
-let restore_exchanges db ~expected snapshot =
+(* Applies a preview made in the same transaction; it is not checked again. *)
+let restore_exchanges db (current : exchange_restore_preview) =
   transaction db (fun db ->
-    let* current = preview_exchange_restore db snapshot in
-    if not (Poly.equal current expected)
-    then Or_error.error_string "exchange restore preview changed; review it again"
-    else if not (List.is_empty current.exchange_problems)
+    if not (List.is_empty current.exchange_problems)
     then Or_error.error_string "resolve exchange restore problems before applying"
     else
       let* changes =

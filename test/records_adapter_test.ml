@@ -262,17 +262,19 @@ let surviving_a_converter_change () =
   and after = event {|{"descriptions":["Text","More"],"fields":[["New","Column"]]}|} in
   Alcotest.(check string)
     "payload"
-    (Restore.payload_hash before)
-    (Restore.payload_hash after);
+    (Event_digests.compute before).payload
+    (Event_digests.compute after).payload;
   Alcotest.(check string)
     "fields"
-    (Restore.category_fields_hash before)
-    (Restore.category_fields_hash after);
+    (Event_digests.compute before).fields
+    (Event_digests.compute after).fields;
   let moved = event ~quantity:"-2" {|{"descriptions":["Text"]}|} in
   Alcotest.(check bool)
     "a different amount is a different row"
     false
-    (String.equal (Restore.payload_hash before) (Restore.payload_hash moved))
+    (String.equal
+       (Event_digests.compute before).payload
+       (Event_digests.compute moved).payload)
 ;;
 
 let balances () =

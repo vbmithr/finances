@@ -698,18 +698,16 @@ let bank_account_info_from ~summaries db source table =
 
 (* Aggregate separately by event kind so an unregistered adapter's rows do not
    enter status counts. The registry check below uses a representative event. *)
-let status_summaries db source =
-  let recognized = Hash_set.create (module Int64) in
-  List.iter source ~f:(fun (id, _) -> Hash_set.add recognized id);
+let status_summaries db =
   let* rows =
     collect
       db
       (statement
          Sql.account_summaries
          Row.(
-           unit (fun id venue account count first last unclassified ->
-             id, venue, account, count, first, last, unclassified)
-           * int64 "event_id"
+           unit (fun kind venue account count first last unclassified ->
+             kind, venue, account, count, first, last, unclassified)
+           * text "kind"
            * text "institution"
            * text "source"
            * int "count"
@@ -720,8 +718,8 @@ let status_summaries db source =
   let summaries = Hashtbl.Poly.create () in
   let* counts =
     traverse
-      (fun (id, venue, account, count, first, last, unclassified) ->
-         if not (Hash_set.mem recognized id)
+      (fun (kind, venue, account, count, first, last, unclassified) ->
+         if not (Registry.is_movement_kind db.registry kind)
          then Ok (0, 0)
          else
            let* first = Or_error.try_with (fun () -> Date.of_string first) in
@@ -800,8 +798,8 @@ let bank_account_ids db =
 ;;
 
 let bank_account_info db =
-  let* source = movement_source db in
-  let* summaries, _, _ = status_summaries db source in
+  let* source = account_events db in
+  let* summaries, _, _ = status_summaries db in
   let* table = selected_movements db (account_representatives source) in
   bank_account_info_from ~summaries db source table
 ;;

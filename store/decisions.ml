@@ -5,14 +5,14 @@ open Ledger
 open Review
 open Restore
 
-let movement_reference (e : Source_event.t) : Category_portable.decision =
+let movement_reference digests id (e : Source_event.t) : Category_portable.decision =
   { institution = e.venue
   ; source_account = e.account
   ; kind = e.kind
   ; source_id = e.source_id
   ; occurred = Temporal.to_string e.occurred
-  ; payload_sha256 = payload_hash e
-  ; fields_sha256 = category_fields_hash e
+  ; payload_sha256 = payload_hash digests id
+  ; fields_sha256 = category_fields_hash digests id
   ; movement_role = "primary"
   ; account = None
   ; reason = None
@@ -28,12 +28,11 @@ let export db =
     let* assignments = category_snapshot db in
     let* exchanges = Operations.exchange_snapshot db in
     let* transfers = Operations.transfer_snapshot db in
-    let* source = events db in
-    let by_id = Hashtbl.of_alist_exn (module Int64) source in
+    let* digests = Event_digests.load db in
     let reference id =
-      Hashtbl.find by_id id
-      |> Or_error.of_option ~error:(Error.createf "decision on unknown event %Ld" id)
-      |> Or_error.map ~f:movement_reference
+      let* event = find_event db id in
+      Or_error.of_option event ~error:(Error.createf "decision on unknown event %Ld" id)
+      |> Or_error.map ~f:(movement_reference digests id)
     in
     let* settled =
       collect
@@ -132,25 +131,25 @@ let blocked problems =
 
 (* Finds the rows saved decisions name, by source identity. *)
 let locate db =
-  let* source = events db in
-  let by_identity = Hashtbl.Poly.create () in
-  List.iter source ~f:(fun (id, (e : Source_event.t)) ->
-    Hashtbl.add_multi
-      by_identity
-      ~key:(e.venue, e.account, e.kind, e.source_id)
-      ~data:(id, e));
+  let* digests = Event_digests.load db in
   Ok
     (fun (r : Category_portable.decision) ->
       let label = r.institution ^ "/" ^ r.source_id in
       match
-        Hashtbl.find by_identity (r.institution, r.source_account, r.kind, r.source_id)
+        find_by_identity
+          db
+          ~venue:r.institution
+          ~account:r.source_account
+          ~kind:r.kind
+          ~source_id:r.source_id
       with
-      | None | Some [] -> Error ("no imported movement for " ^ label)
-      | Some [ (id, e) ] ->
-        if String.equal (payload_hash e) r.payload_sha256
+      | Error e -> Error (Error.to_string_hum e)
+      | Ok [] -> Error ("no imported movement for " ^ label)
+      | Ok [ (id, e) ] ->
+        if String.equal (payload_hash digests id) r.payload_sha256
         then Ok (id, e)
         else Error ("source evidence changed for " ^ label)
-      | Some _ -> Error ("several imported movements for " ^ label))
+      | Ok _ -> Error ("several imported movements for " ^ label))
 ;;
 
 let restore_settlements db settlements =
@@ -158,7 +157,14 @@ let restore_settlements db settlements =
   then Ok 0
   else
     let* find = locate db in
-    let* reviews = bank_review db in
+    let located =
+      List.map settlements ~f:(fun (s : Decisions_portable.settlement) -> find s.source)
+    in
+    let* reviews =
+      reviews_of_events
+        db
+        (List.filter_map located ~f:(fun found -> Option.map (Result.ok found) ~f:fst))
+    in
     let* cards = Transfers.bank_account_info db in
     let* existing =
       collect
@@ -172,8 +178,8 @@ let restore_settlements db settlements =
       Hashtbl.of_alist_exn (module Int64) (List.map reviews ~f:(fun r -> r.event_id, r))
     in
     let planned =
-      List.filter_map settlements ~f:(fun (s : Decisions_portable.settlement) ->
-        match find s.source with
+      List.filter_map (List.zip_exn settlements located) ~f:(fun (s, found) ->
+        match found with
         | Error problem -> Some (Error problem)
         | Ok (id, _) when Set.mem existing id -> None
         | Ok (id, event) ->
@@ -301,7 +307,7 @@ let restore db (snapshot : Decisions_portable.t) ~confirm =
           && List.is_empty preview.types_to_apply
           && List.is_empty preview.resolutions_to_apply
         then Ok 0
-        else restore_categories db ~expected:preview portable
+        else restore_categories db preview
       in
       let* settlements =
         restore_settlements db (Option.value snapshot.settlements ~default:[])
@@ -312,17 +318,19 @@ let restore db (snapshot : Decisions_portable.t) ~confirm =
       let* exchanges =
         match snapshot.exchanges with
         | None -> Ok 0
+        | Some exchanges when List.is_empty exchanges.exchanges -> Ok 0
         | Some exchanges ->
           let* preview = Operations.preview_exchange_restore db exchanges in
           if not (List.is_empty preview.exchange_problems)
           then blocked preview.exchange_problems
           else if List.is_empty preview.exchange_decisions
           then Ok 0
-          else Operations.restore_exchanges db ~expected:preview exchanges
+          else Operations.restore_exchanges db preview
       in
       let* transfers =
         match snapshot.transfers with
         | None -> Ok 0
+        | Some transfers when List.is_empty transfers.links -> Ok 0
         | Some transfers ->
           let* preview = Operations.preview_transfer_restore db transfers in
           if not (List.is_empty preview.problems)
@@ -330,7 +338,7 @@ let restore db (snapshot : Decisions_portable.t) ~confirm =
           else if
             List.is_empty preview.decisions && List.is_empty preview.general_decisions
           then Ok 0
-          else Operations.restore_transfers db ~expected:preview transfers
+          else Operations.restore_transfers db preview
       in
       let changes =
         { accounts

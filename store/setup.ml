@@ -378,7 +378,7 @@ let initialize db =
 external decimal_extension : unit -> Db.Extension.t = "fin_sqlite_decimal_extension"
 
 let with_connection ~mode path f =
-  let* conn = db_result (Db.open' ~foreign_keys:true ~mode path) in
+  let* conn = db_result (Db.open' ~foreign_keys:true ~stmt_cache_size:1000 ~mode path) in
   let result =
     try
       let* () = db_result (Db.Extension.apply conn (decimal_extension ())) in

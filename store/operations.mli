@@ -75,11 +75,8 @@ val preview_exchange_restore
   -> Exchange_portable.t
   -> exchange_restore_preview Or_error.t
 
-val restore_exchanges
-  :  t
-  -> expected:exchange_restore_preview
-  -> Exchange_portable.t
-  -> int Or_error.t
+(** Applies a preview made in the same transaction, without making it again. *)
+val restore_exchanges : t -> exchange_restore_preview -> int Or_error.t
 
 type portable_transfer_preview =
   { decisions : Bank_transfer.decision list
@@ -95,8 +92,5 @@ val preview_transfer_restore
   -> Transfer_portable.t
   -> portable_transfer_preview Or_error.t
 
-val restore_transfers
-  :  t
-  -> expected:portable_transfer_preview
-  -> Transfer_portable.t
-  -> int Or_error.t
+(** Applies a preview made in the same transaction, without making it again. *)
+val restore_transfers : t -> portable_transfer_preview -> int Or_error.t

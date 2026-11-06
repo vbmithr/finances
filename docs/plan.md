@@ -523,6 +523,15 @@ position observations, derive positions from fills, or calculate funding.
   restore preview and restore gave identical results and restored databases.
 - [x] Operation transfer links are read from one view, `operation_links`, which `linked_operations`
   also builds on.
+- [x] `fin decisions restore` and `export` read only what decisions name (schema 38). Event
+  digests are stored at import (`source_event_digests`); decisions find their rows by the identity
+  index and their look-alikes by a new place-and-time index; reviews, accounts and IBANs come from
+  queries over the named rows or one movement per account; a restore applies its own preview instead
+  of making it again, and skips empty sections. On real data, restore takes 0.21 s instead of 1.55 s
+  and export 91 ms instead of 266 ms, with identical results; the scaling guard now covers both.
+  A posting lookup that stayed slow inside the restore was an upstream SQLite issue, fixed by a
+  patched package. Three other indexes were missing: operation sources and document events by
+  event, companion rows by layout.
 - [x] Cards ([cards.md](cards.md)): a card number belongs to a card account, stated by the account's
   own number or assigned by a person; `fin card list`, `assign` and `unassign`, settlement matching
   through the `card_accounts` view, an optional `cards` section in `fin decisions`, schema 37. On a

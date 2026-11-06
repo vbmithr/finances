@@ -214,6 +214,28 @@ val bank_accounts_from
 val stored_event_row : Handle.t -> int64 -> Db_schema.Source_events.t option Or_error.t
 val stored_event_fields : Handle.t -> int64 -> (string * string) list Or_error.t
 val find_event : Handle.t -> int64 -> Source_event.t option Or_error.t
+
+(** The events of one place and time; [occurred] as [Temporal.to_string] writes it. *)
+val same_occurrence
+  :  Handle.t
+  -> venue:string
+  -> account:string
+  -> kind:string
+  -> occurred:string
+  -> (int64 * Source_event.t) list Or_error.t
+
+(** The event with this identity, through the unique index: at most one. *)
+val find_by_identity
+  :  Handle.t
+  -> venue:string
+  -> account:string
+  -> kind:string
+  -> source_id:string
+  -> (int64 * Source_event.t) list Or_error.t
+
+(** Each account's first movement, as its event, in account order. *)
+val account_events : Handle.t -> (int64 * Source_event.t) list Or_error.t
+
 val event_by_id : Handle.t -> int64 -> (Source_event.t, Error.t) Result.t
 
 val movement_rows

@@ -684,6 +684,7 @@ let ingest_in_transaction db (e : Source_event.t) =
     in
     let id = Db.last_insert_rowid db.conn in
     let* () = store_event_fields db id e.fields in
+    let* () = Event_digests.store db id e in
     (* Movements are decoded once, here, and stored for queries. *)
     let* () =
       if Registry.is_movement db.registry e

@@ -145,6 +145,45 @@ def cpu(env, *args):
     return statistics.median(samples)
 
 
+def export_cpu(env):
+    """CPU time of fin decisions export to a new file, median of three."""
+    root = Path(env['HOME'])
+    samples = []
+    for i in range(3):
+        before = resource.getrusage(resource.RUSAGE_CHILDREN)
+        subprocess.run([FIN, 'decisions', 'export', root / f'export{i}.json'], env=env,
+                       stdin=subprocess.DEVNULL, capture_output=True, check=True)
+        after = resource.getrusage(resource.RUSAGE_CHILDREN)
+        samples.append((after.ru_utime + after.ru_stime) - (before.ru_utime + before.ru_stime))
+    return statistics.median(samples)
+
+
+def restore_cpu(env):
+    """CPU time of fin decisions restore into a fresh import of the same files, median of three."""
+    root = Path(env['HOME'])
+    saved = root / 'decisions.json'
+    subprocess.run([FIN, 'decisions', 'export', saved], env=env, stdin=subprocess.DEVNULL,
+                   capture_output=True, check=True)
+    fresh = dict(env, XDG_DATA_HOME=str(root / 'fresh'))
+    fin = lambda *args: subprocess.run([FIN, *map(str, args)], env=fresh, stdin=subprocess.DEVNULL,
+                                       capture_output=True, check=True)
+    fin('init')
+    fin('import', 'revolut', root / 'bank.csv')
+    fin('import', 'kraken', root / 'ledger.csv')
+    imported = (root / 'fresh' / 'fin' / 'fin.sqlite3').read_bytes()
+    samples = []
+    for i in range(3):
+        copy = root / f'copy{i}'
+        (copy / 'fin').mkdir(parents=True)
+        (copy / 'fin' / 'fin.sqlite3').write_bytes(imported)
+        before = resource.getrusage(resource.RUSAGE_CHILDREN)
+        subprocess.run([FIN, 'decisions', 'restore', '--yes', saved], env=dict(fresh, XDG_DATA_HOME=str(copy)),
+                       stdin=subprocess.DEVNULL, capture_output=True, check=True)
+        after = resource.getrusage(resource.RUSAGE_CHILDREN)
+        samples.append((after.ru_utime + after.ru_stime) - (before.ru_utime + before.ru_stime))
+    return statistics.median(samples)
+
+
 # A cost that grows with the square of the data passes any fixed budget until it does not. Four
 # times the data should cost about four times as much; a square would cost sixteen.
 with tempfile.TemporaryDirectory(prefix='fin-scaling-') as directory:
@@ -157,3 +196,8 @@ with tempfile.TemporaryDirectory(prefix='fin-scaling-') as directory:
         print(f"{' '.join(args)}: {at_small * 1000:.0f} ms, then {at_large * 1000:.0f} ms at 4x", flush=True)
         if at_large > max(8 * at_small, 0.25):
             raise SystemExit(f"{' '.join(args)} grows faster than the data")
+    for name, cost in (('decisions export', export_cpu), ('decisions restore', restore_cpu)):
+        at_small, at_large = cost(small), cost(large)
+        print(f"{name}: {at_small * 1000:.0f} ms, then {at_large * 1000:.0f} ms at 4x", flush=True)
+        if at_large > max(8 * at_small, 0.25):
+            raise SystemExit(f"{name} grows faster than the data")

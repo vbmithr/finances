@@ -39,6 +39,7 @@ DELETE FROM import_documents WHERE id IN (SELECT id FROM deleted_documents);
 DELETE FROM movement_evidence WHERE event_id IN (SELECT id FROM deleted_events);
 DELETE FROM movements WHERE event_id IN (SELECT id FROM deleted_events);
 DELETE FROM source_event_fields WHERE event_id IN (SELECT id FROM deleted_events);
+DELETE FROM source_event_digests WHERE event_id IN (SELECT id FROM deleted_events);
 DELETE FROM source_events WHERE id IN (SELECT id FROM deleted_events);
 DELETE FROM bank_account_mappings WHERE (institution, source_account) IN
   (SELECT institution, source_account FROM deleted_account);

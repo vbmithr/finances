@@ -89,42 +89,6 @@ let staged_catalog_rollback () =
       (List.mem (ok (Setup.categories db)) "expenses:staged" ~equal:String.equal))
 ;;
 
-let portable_restore_stale_preview () =
-  memory (fun db ->
-    let event_id = id db in
-    ignore (classify db [ decision event_id "expenses:food" ]);
-    let snapshot = ok (Restore.category_snapshot db) in
-    let snapshot =
-      { snapshot with
-        Category_portable.categories = "expenses:new" :: snapshot.categories
-      }
-    in
-    let preview = ok (Restore.preview_category_restore db snapshot) in
-    ignore (classify db [ decision ~reason:"changed" event_id "expenses:other" ]);
-    error (Restore.restore_categories db ~expected:preview snapshot);
-    Alcotest.(check bool)
-      "no catalog change on stale preview"
-      false
-      (List.mem (ok (Setup.categories db)) "expenses:new" ~equal:String.equal);
-    ignore
-      (ok (Restore.set_movement_type_override db ~event_id ~movement_type:(Some Fee)));
-    let snapshot = ok (Restore.category_snapshot db) in
-    ignore (ok (Restore.set_movement_type_override db ~event_id ~movement_type:None));
-    let preview = ok (Restore.preview_category_restore db snapshot) in
-    ignore
-      (ok (Restore.set_movement_type_override db ~event_id ~movement_type:(Some Bonus)));
-    error (Restore.restore_categories db ~expected:preview snapshot);
-    let row =
-      List.find_exn
-        (ok (Review.bank_review db))
-        ~f:(fun r -> Int64.equal r.event_id event_id)
-    in
-    Alcotest.(check bool)
-      "new type preserved after stale preview"
-      true
-      (Poly.equal row.movement_type_override (Some Bonus)))
-;;
-
 let replay () =
   memory (fun db ->
     let event_id = id db in
@@ -516,9 +480,7 @@ let () =
     "Bank categories"
     [ ( "review"
       , List.map
-          [ ( "portable restore rejects stale previews atomically"
-            , portable_restore_stale_preview )
-          ; "staged category and decisions roll back together", staged_catalog_rollback
+          [ "staged category and decisions roll back together", staged_catalog_rollback
           ; "rereview checks all previous decisions atomically", rereview_atomic
           ; "unclassified batch is atomic", unclassified_batch_is_atomic
           ; "rule batches reject stale previews atomically", rule_batch_is_atomic

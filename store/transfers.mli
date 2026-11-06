@@ -143,9 +143,10 @@ val selected_movements
   -> Int64.t Hash_set.t
   -> ((Int64.t, Movement.t) Hashtbl.t, Error.t) Result.t
 
+(** Each account's movement count and first and last booking dates, then the number of
+    movements and of undecided ones, over the kinds the registry reads as movements. *)
 val status_summaries
   :  Handle.t
-  -> (Int64.t * 'a) List.t
   -> ( (string * string, Base__Int.t * Date.t * Date.t) Hashtbl.Poly.t * Int.t * Int.t
        , Error.t )
        Result.t

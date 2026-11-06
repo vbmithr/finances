@@ -8,6 +8,13 @@ short line of their own.
 
 ## Unreleased
 
+- **Action required: rebuild.** Schema 38 stores, at import, the digests `fin decisions` compares saved
+  decisions by, and adds the indexes four lookups were missing. Run `fin backup DIR`, then with your
+  current fin `fin decisions export FILE`; then `fin delete`, `fin init`, `fin import --all DIR` and
+  `fin decisions restore FILE`.
+- `fin decisions restore` and `export` read only the rows your decisions name, where every section
+  re-read every statement row, review and account: restoring real decisions takes 0.21 s instead of
+  1.55 s, and exporting them 91 ms instead of 266 ms. `fin backup` exports too.
 - `fin import --all DIRECTORY` imports every folder of a directory named after an institution or an
   alias, as one `fin import NAME FOLDER` each. An unrecognized folder, or a file directly in the
   directory, stops it before anything is imported.

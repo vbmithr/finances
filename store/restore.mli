@@ -19,11 +19,8 @@ val preview_category_restore
   -> Category_portable.t
   -> category_restore_preview Or_error.t
 
-val restore_categories
-  :  t
-  -> expected:category_restore_preview
-  -> Category_portable.t
-  -> int Or_error.t
+(** Applies a preview made in the same transaction, without making it again. *)
+val restore_categories : t -> category_restore_preview -> int Or_error.t
 
 val observed_provider_movement_types : t -> string list Or_error.t
 
@@ -126,11 +123,17 @@ val verify_bank_operation_anchor
   -> Review.bank_review
   -> unit Or_error.t
 
-val category_fields_hash : Source_event.t -> string
+(** A source event's stored digests ([Event_digests.load]), by event ID. *)
+val category_fields_hash : (int64, Event_digests.t) Hashtbl.t -> int64 -> string
 
 (** A digest that says a saved decision still names this row. For a records row it covers only what
     identifies the row, so that it survives a converter keeping more detail. *)
-val payload_hash : Source_event.t -> string
+val payload_hash : (int64, Event_digests.t) Hashtbl.t -> int64 -> string
 
 (** What tells this row from others of its day, for matching saved decisions. *)
-val evidence_key : Handle.t -> Source_event.t -> string
+val evidence_key
+  :  Handle.t
+  -> (int64, Event_digests.t) Hashtbl.t
+  -> int64
+  -> Source_event.t
+  -> string

@@ -167,6 +167,55 @@ let find_event db event_id =
     Ok (Some (Source_event.with_fields event fields))
 ;;
 
+(* The event a saved decision names, by its identity: unique, so at most one. *)
+let find_by_identity db ~venue ~account ~kind ~source_id =
+  let* ids =
+    collect
+      db
+      (Rel_sql.Stmt.(
+         func
+           "SELECT id FROM source_events WHERE venue=? AND account=? AND kind=? AND \
+            source_id=?"
+           (text @-> text @-> text @-> text @-> ret Row.(t1 (int64 "id"))))
+         venue
+         account
+         kind
+         source_id)
+  in
+  let* events = traverse (fun id -> find_event db id) ids in
+  Ok
+    (List.filter_map (List.zip_exn ids events) ~f:(fun (id, e) ->
+       Option.map e ~f:(fun e -> id, e)))
+;;
+
+(* The events of one place and time, as [Temporal.to_string] writes it: a date or an
+   instant, never both. *)
+let same_occurrence db ~venue ~account ~kind ~occurred =
+  let date = String.length occurred = 10 in
+  let* ids =
+    collect
+      db
+      (Rel_sql.Stmt.(
+         func
+           (if date
+            then
+              "SELECT id FROM source_events WHERE venue=? AND account=? AND kind=? AND \
+               occurred_on=?"
+            else
+              "SELECT id FROM source_events WHERE venue=? AND account=? AND kind=? AND \
+               occurred_on IS NULL AND occurred_at=?")
+           (text @-> text @-> text @-> text @-> ret Row.(t1 (int64 "id"))))
+         venue
+         account
+         kind
+         occurred)
+  in
+  let* events = traverse (fun id -> find_event db id) ids in
+  Ok
+    (List.filter_map (List.zip_exn ids events) ~f:(fun (id, e) ->
+       Option.map e ~f:(fun e -> id, e)))
+;;
+
 let event_by_id db event_id =
   let* event = find_event db event_id in
   Or_error.of_option event ~error:(Error.of_string "unknown transaction event ID")
@@ -587,8 +636,55 @@ let bank_accounts_from db source_events ~movement =
     bank_events
 ;;
 
+(* Each account's first movement in listing order, among the kinds the registry reads as
+   movements: the one that stands for the account, without reading every event. SQLite
+   takes a row's other columns from the row its [min] picked. *)
+let account_events db =
+  let* rows =
+    collect
+      db
+      (statement
+         "SELECT e.id,e.venue,e.account,e.kind, \
+          coalesce(e.occurred_on,substr(e.occurred_at,1,10)),e.occurred_at, \
+          min(coalesce(e.occurred_on,substr(e.occurred_at,1,10))||char(31)|| \
+          coalesce(e.occurred_at,'')||char(31)||printf('%019d',e.id)) FROM source_events \
+          e JOIN movements m ON m.event_id=e.id GROUP BY e.venue,e.account,e.kind"
+         Row.(
+           unit (fun id venue account kind day at _ -> id, venue, account, kind, day, at)
+           * int64 "id"
+           * text "venue"
+           * text "account"
+           * text "kind"
+           * text "day"
+           * option Rel.Type.text "occurred_at"
+           * text "first"))
+  in
+  let firsts =
+    List.filter rows ~f:(fun (_, _, _, kind, _, _) ->
+      Registry.is_movement_kind db.registry kind)
+    |> List.sort
+         ~compare:
+           (fun
+             (id, venue, account, _, day, at) (id', venue', account', _, day', at') ->
+           [%compare: string * string * string * string option * int64]
+             (venue, account, day, at, id)
+             (venue', account', day', at', id'))
+    |> List.remove_consecutive_duplicates
+         ~which_to_keep:`First
+         ~equal:(fun (_, venue, account, _, _, _) (_, venue', account', _, _, _) ->
+           String.equal venue venue' && String.equal account account')
+  in
+  traverse
+    (fun (id, _, _, _, _, _) ->
+       let* event = find_event db id in
+       Or_error.of_option
+         (Option.map event ~f:(fun e -> id, e))
+         ~error:(Error.createf "movement %Ld has no source event" id))
+    firsts
+;;
+
 let bank_accounts db =
-  let* source = events db in
+  let* source = account_events db in
   bank_accounts_from db source ~movement:(movement db)
 ;;
 
@@ -628,16 +724,26 @@ let rename_posting account entry_id = update_posting account entry_id 0
 
 let set_bank_account_mappings_in_transaction db mappings =
   let* mappings = Bank_account_mapping.of_json (Bank_account_mapping.to_json mappings) in
-  let* source_events = events db in
+  let account_movements =
+    Rel_sql.Stmt.(
+      func
+        "SELECT e.id,e.kind FROM source_events e JOIN movements m ON m.event_id=e.id \
+         WHERE e.venue=? AND e.account=? ORDER BY \
+         coalesce(e.occurred_on,substr(e.occurred_at,1,10)),e.occurred_at,e.id"
+        (text @-> text @-> ret Row.(t2 (int64 "id") (text "kind"))))
+  in
   let rec apply changed = function
     | [] -> Ok changed
     | (mapping : Bank_account_mapping.t) :: rest ->
       let source_account = Bank_account_mapping.source_account mapping in
-      let matching =
-        List.filter source_events ~f:(fun (_, event) ->
-          Registry.is_movement db.registry event
-          && String.equal event.venue mapping.institution
-          && String.equal event.account source_account)
+      let* rows = collect db (account_movements mapping.institution source_account) in
+      let* matching =
+        List.filter rows ~f:(fun (_, kind) -> Registry.is_movement_kind db.registry kind)
+        |> traverse (fun (id, _) ->
+          let* event = find_event db id in
+          Or_error.of_option
+            (Option.map event ~f:(fun e -> id, e))
+            ~error:(Error.createf "movement %Ld has no source event" id))
       in
       if List.is_empty matching
       then

@@ -3,7 +3,7 @@ open Rel
 
 (** One current experimental baseline; older databases must be reimported. Banks
     have no tables of their own. *)
-let version = 37
+let version = 38
 
 let timestamp = `Expr "(strftime('%Y-%m-%dT%H:%M:%f','now') || '000000000Z')"
 
@@ -109,6 +109,15 @@ module Source_events = struct
         ]
       ~indices:
         [ Table.Index.make ~name:"source_events_time" [ Col.Def occurred_at; Col.Def id ]
+        ; (* The rows of one place and time, which a saved decision must not confuse. *)
+          Table.Index.make
+            ~name:"source_events_occurrence"
+            [ Col.Def venue
+            ; Col.Def account
+            ; Col.Def kind
+            ; Col.Def occurred_on
+            ; Col.Def occurred_at
+            ]
         ]
       "source_events"
       row
@@ -382,6 +391,10 @@ module Operation_sources = struct
             ~parent:
               (Table.Foreign_key.Table (Source_events.table, [ Col.Def Source_events.id ]))
             ()
+        ]
+      ~indices:
+        [ (* Which operations an event is a source of. *)
+          Table.Index.make ~name:"operation_sources_event" [ Col.Def event_id ]
         ]
       "operation_sources"
       row
@@ -923,6 +936,53 @@ module Source_event_fields = struct
   ;;
 end
 
+(* What restore and export compare an event by, computed once at import: its payload's
+   digest (a records row's identity, else the payload), its fields' digest, and the evidence
+   that tells it from others of its day. See Event_digests. *)
+module Source_event_digests = struct
+  type t =
+    { event_id : int64
+    ; payload_sha256 : string
+    ; fields_sha256 : string
+    ; evidence : string
+    }
+
+  let event_id = Col.make "event_id" Type.int64 (fun (r : t) -> r.event_id)
+
+  let payload_sha256 =
+    Col.make "payload_sha256" Type.text (fun (r : t) -> r.payload_sha256)
+  ;;
+
+  let fields_sha256 = Col.make "fields_sha256" Type.text (fun (r : t) -> r.fields_sha256)
+  let evidence = Col.make "evidence" Type.text (fun (r : t) -> r.evidence)
+
+  let row =
+    Row.(
+      unit (fun event_id payload_sha256 fields_sha256 evidence ->
+        { event_id; payload_sha256; fields_sha256; evidence })
+      * event_id
+      * payload_sha256
+      * fields_sha256
+      * evidence)
+  ;;
+
+  let table =
+    Table.make
+      ~primary_key:(Table.Primary_key.make [ Col.Def event_id ])
+      ~foreign_keys:
+        [ Table.Foreign_key.make
+            ~cols:[ Col.Def event_id ]
+            ~parent:
+              (Table.Foreign_key.Table (Source_events.table, [ Col.Def Source_events.id ]))
+            ()
+        ]
+      "source_event_digests"
+      row
+  ;;
+
+  let definition = Sqlite_schema.table table
+end
+
 module Journal_entries = struct
   type t =
     { id : int64
@@ -1140,6 +1200,10 @@ module Import_document_events = struct
               (Table.Foreign_key.Table
                  (Import_documents.table, [ Col.Def Import_documents.id ]))
             ()
+        ]
+      ~indices:
+        [ (* Which documents carried an event. *)
+          Table.Index.make ~name:"import_document_events_event" [ Col.Def event_id ]
         ]
       "import_document_events"
       row
@@ -1533,6 +1597,12 @@ module Companion_rows = struct
               (Table.Foreign_key.Table
                  (Import_documents.table, [ Col.Def Import_documents.id ]))
             ()
+        ]
+      ~indices:
+        [ (* A companion layout's rows. *)
+          Table.Index.make
+            ~name:"companion_rows_format"
+            [ Col.Def institution; Col.Def format ]
         ]
       "companion_rows"
       row
@@ -3050,6 +3120,7 @@ let definitions =
   ; Operation_exchange_changes.definition
   ; Operation_transfer_changes.definition
   ; Source_event_fields.definition
+  ; Source_event_digests.definition
   ; Movement_evidence.definition
   ; Journal_entries.definition
   ; Postings.definition

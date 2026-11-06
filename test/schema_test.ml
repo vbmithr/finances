@@ -45,10 +45,10 @@ let initialize () =
          check "fresh database empty" 0 (List.length (ok (Ledger.events db)));
          Ok ()));
     raw path (fun db ->
-      check "latest baseline" 37 (scalar db "PRAGMA user_version");
+      check "latest baseline" 38 (scalar db "PRAGMA user_version");
       check
         "all tables are strict"
-        52
+        53
         (scalar
            db
            "SELECT count(*) FROM pragma_table_list WHERE schema='main' AND name NOT LIKE \
