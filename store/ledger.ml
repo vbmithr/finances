@@ -6,13 +6,20 @@ open Setup
 open Sources
 open Import
 
-let movement_rows db where =
+(* Stored movements, all of them or those of [event_ids]. *)
+let movement_rows ?event_ids db =
+  let select = "SELECT " ^ movement_columns ^ " FROM movements" in
   let* rows =
     collect
       db
-      (statement
-         ("SELECT " ^ movement_columns ^ " FROM movements" ^ where)
-         Db_schema.Movements.row)
+      (match event_ids with
+       | None -> statement select Db_schema.Movements.row
+       | Some ids ->
+         Rel_sql.Stmt.(
+           func
+             (select ^ " WHERE event_id IN (SELECT value FROM json_each(?))")
+             (text @-> ret Db_schema.Movements.row))
+           ("[" ^ String.concat ~sep:"," (List.map ids ~f:Int64.to_string) ^ "]"))
   in
   traverse
     (fun (r : Db_schema.Movements.t) ->
@@ -23,12 +30,12 @@ let movement_rows db where =
 
 (* Every stored movement by event ID, read in one query. *)
 let movement_table db =
-  let* rows = movement_rows db "" in
+  let* rows = movement_rows db in
   Ok (Hashtbl.of_alist_exn (module Int64) rows)
 ;;
 
 let movement db event_id =
-  let* rows = movement_rows db (Printf.sprintf " WHERE event_id = %Ld" event_id) in
+  let* rows = movement_rows ~event_ids:[ event_id ] db in
   match rows with
   | [ (_, m) ] -> Ok m
   | _ -> Or_error.errorf "no stored movement for event %Ld" event_id
@@ -120,39 +127,44 @@ let events_with_order ?order db =
 
 let events db = events_with_order db
 
-(* One source event, if stored, without decoding the others. *)
-let find_event db event_id =
+(* One stored source event row, as stored. *)
+let stored_event_row db event_id =
+  db_result
+    (Db.first
+       db.conn
+       (Rel_sql.Stmt.(
+          func
+            "SELECT \
+             id,venue,account,kind,source_id,occurred_at,occurred_on,retrieved_at,payload \
+             FROM source_events WHERE id=?"
+            (int64 @-> ret source_row))
+          event_id))
+;;
+
+(* A source event's stored fields, by name, in source order. *)
+let stored_event_fields db event_id =
   let* rows =
     collect
       db
-      (statement
-         (Printf.sprintf
-            "SELECT \
-             id,venue,account,kind,source_id,occurred_at,occurred_on,retrieved_at,payload \
-             FROM source_events WHERE id = %Ld"
-            event_id)
-         source_row)
+      (Rel_sql.Stmt.(
+         func
+           "SELECT event_id,ordinal,name,value FROM source_event_fields WHERE event_id=? \
+            ORDER BY ordinal"
+           (int64 @-> ret Db_schema.Source_event_fields.row))
+         event_id)
   in
-  match rows with
-  | [ row ] ->
+  Ok (List.map rows ~f:(fun (f : Db_schema.Source_event_fields.t) -> f.name, f.value))
+;;
+
+(* One source event, if stored, without decoding the others. *)
+let find_event db event_id =
+  let* row = stored_event_row db event_id in
+  match row with
+  | None -> Ok None
+  | Some row ->
     let* _, event = event_of_row row in
-    let* stored =
-      collect
-        db
-        (statement
-           (Printf.sprintf
-              "SELECT event_id,ordinal,name,value FROM source_event_fields WHERE \
-               event_id = %Ld ORDER BY ordinal"
-              event_id)
-           Db_schema.Source_event_fields.row)
-    in
-    Ok
-      (Some
-         (Source_event.with_fields
-            event
-            (List.map stored ~f:(fun (f : Db_schema.Source_event_fields.t) ->
-               f.name, f.value))))
-  | _ -> Ok None
+    let* fields = stored_event_fields db event_id in
+    Ok (Some (Source_event.with_fields event fields))
 ;;
 
 let event_by_id db event_id =

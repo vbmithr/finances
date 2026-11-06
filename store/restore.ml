@@ -480,13 +480,12 @@ let preview_category_restore db (snapshot : Category_portable.t) =
     Rel_sql.Stmt.(
       func
         "SELECT \
-         m.operation_id,m.quantity,m.commodity,r.account,r.commodity,o.bank_event_id, \
-         EXISTS(SELECT 1 FROM operation_transfer_memberships t WHERE t.movement_id=m.id) \
-         FROM operation_movements m JOIN operations o ON o.id=m.operation_id LEFT JOIN \
-         operation_movement_resolutions r ON r.movement_id=m.id WHERE \
-         m.anchor_event_id=? AND m.role=? AND EXISTS (SELECT 1 FROM \
-         operation_movement_sources s WHERE s.movement_id=m.id AND \
-         s.event_id=m.anchor_event_id AND s.operation_id=m.operation_id)"
+         c.operation_id,m.quantity,m.commodity,r.account,r.commodity,c.bank_event_id, \
+         c.linked FROM movement_claims c JOIN operation_movements m ON m.id=c.id LEFT \
+         JOIN operation_movement_resolutions r ON r.movement_id=c.id WHERE \
+         c.anchor_event_id=? AND c.role=? AND EXISTS (SELECT 1 FROM \
+         operation_movement_sources s WHERE s.movement_id=c.id AND \
+         s.event_id=c.anchor_event_id AND s.operation_id=c.operation_id)"
         (int64
          @-> text
          @-> ret

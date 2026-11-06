@@ -412,9 +412,19 @@ let with_open ~registry path f =
 ;;
 
 let check_queries db =
-  List.fold_result Sql.queries ~init:() ~f:(fun () (name, query) ->
-    db_result (Db.exec_sql db.conn ("EXPLAIN " ^ query))
-    |> Or_error.tag ~tag:(name ^ ".sql"))
+  let* () =
+    List.fold_result Sql.queries ~init:() ~f:(fun () (name, query) ->
+      db_result (Db.exec_sql db.conn ("EXPLAIN " ^ query))
+      |> Or_error.tag ~tag:(name ^ ".sql"))
+  in
+  (* EXPLAIN covers only a script's first statement, so a script runs, then is undone. *)
+  List.fold_result Sql.scripts ~init:() ~f:(fun () (name, script) ->
+    let* () = db_result (Db.exec_sql db.conn "SAVEPOINT check_script") in
+    let ran = db_result (Db.exec_sql db.conn script) in
+    let* () =
+      db_result (Db.exec_sql db.conn "ROLLBACK TO check_script; RELEASE check_script")
+    in
+    Or_error.tag ran ~tag:(name ^ ".sql"))
 ;;
 
 let backup source path =

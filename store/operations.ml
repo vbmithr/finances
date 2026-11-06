@@ -193,11 +193,8 @@ let general_transfer_leg ?(allow_linked = false) db ~operation_id ~role =
   let query =
     Rel_sql.Stmt.(
       func
-        "SELECT m.id,m.anchor_event_id,o.bank_event_id, EXISTS(SELECT 1 FROM \
-         operation_transfer_memberships t WHERE t.movement_id=m.id), EXISTS(SELECT 1 \
-         FROM operation_exchange_decisions x WHERE x.operation_id=o.id) FROM \
-         operation_movements m JOIN operations o ON o.id=m.operation_id WHERE o.id=? AND \
-         m.role=?"
+        "SELECT id,anchor_event_id,bank_event_id,linked,exchanged FROM movement_claims \
+         WHERE operation_id=? AND role=?"
         (int64
          @-> text
          @-> ret
@@ -870,8 +867,8 @@ let exchange_projection db operation_id =
         "SELECT o.bank_event_id,o.source_event_id, (SELECT count(*) FROM \
          operation_movements m JOIN operation_movement_resolutions r ON \
          r.movement_id=m.id WHERE m.operation_id=o.id), EXISTS(SELECT 1 FROM \
-         operation_movements m JOIN operation_transfer_memberships t ON \
-         t.movement_id=m.id WHERE m.operation_id=o.id) FROM operations o WHERE o.id=?"
+         movement_claims c WHERE c.operation_id=o.id AND c.linked) FROM operations o \
+         WHERE o.id=?"
         (int64
          @-> ret
                Row.(

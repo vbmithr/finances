@@ -28,6 +28,10 @@ short line of their own.
   `fin operation show` and linking read it there; the OCaml `Operation_groups` module is gone.
 - Internal: the journal takes each movement's description from the `reviews` view, so it can no longer
   describe a movement differently from the listings.
+- Internal: operation transfer links are read from one view, `operation_links`.
+- Internal: account deletion is SQL files with bound parameters instead of SQL concatenated with
+  hand-quoted values. Whether a movement is already claimed by a link or an exchange is one view,
+  `movement_claims`, instead of five copies.
 - Batches no longer slow down with the square of their size: confirming transfers, applying categories,
   previewing a settlement rule, and `fin decisions export` and `restore`, which searched every
   imported row once per decision. Restoring real decisions takes 1.0 s instead of 1.4 s.

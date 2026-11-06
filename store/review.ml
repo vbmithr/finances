@@ -149,9 +149,8 @@ let set_bank_categories_in_transaction ?(only_unclassified = false) db decisions
           let linked_query =
             Rel_sql.Stmt.(
               func
-                "SELECT EXISTS(SELECT 1 FROM operation_movements m JOIN \
-                 operation_transfer_memberships t ON t.movement_id=m.id WHERE \
-                 m.anchor_event_id=?)"
+                "SELECT EXISTS(SELECT 1 FROM movement_claims WHERE anchor_event_id=? AND \
+                 linked)"
                 (int64 @-> ret Row.(t1 (bool "linked"))))
           in
           let* operation_linked =
@@ -614,8 +613,7 @@ let movement_source db =
 let bank_review_with_order ?order db =
   let order =
     match order with
-    | None ->
-      "coalesce(r.occurred_on,substr(r.occurred_at,1,10)),r.occurred_at,r.event_id"
+    | None -> "r.listed_on,r.occurred_at,r.event_id"
     | Some (columns, ascending) ->
       let direction = if ascending then " ASC" else " DESC" in
       let column = function
@@ -635,13 +633,7 @@ let bank_review_with_order ?order db =
 let bank_review db = bank_review_with_order db
 
 let reviews_of_events db event_ids =
-  let* stored =
-    Ledger.movement_rows
-      db
-      (" WHERE event_id IN ("
-       ^ String.concat ~sep:"," (List.map event_ids ~f:Int64.to_string)
-       ^ ")")
-  in
+  let* stored = Ledger.movement_rows ~event_ids db in
   select_reviews
     db
     (Rel_sql.Stmt.(func Sql.event_reviews (text @-> ret review_row)) (json_ids event_ids))
@@ -693,15 +685,12 @@ let operation_transfer_links db =
       db
       (statement
          "SELECT \
-          a.anchor_event_id,b.anchor_event_id,a.operation_id,b.operation_id,l.reason, \
-          a.role,b.role FROM operation_transfer_links l JOIN operation_movements a ON \
-          a.id=l.first_movement_id JOIN operation_movements b ON \
-          b.id=l.second_movement_id JOIN operation_transfer_memberships x ON \
-          x.movement_id=a.id AND x.first_movement_id=l.first_movement_id AND \
-          x.second_movement_id=l.second_movement_id JOIN operation_transfer_memberships \
-          y ON y.movement_id=b.id AND y.first_movement_id=l.first_movement_id AND \
-          y.second_movement_id=l.second_movement_id ORDER BY \
-          l.first_movement_id,l.second_movement_id"
+          first_event_id,second_event_id,first_operation_id,second_operation_id,reason, \
+          first_role,second_role FROM operation_links l WHERE (SELECT count(*) FROM \
+          operation_transfer_memberships m WHERE m.first_movement_id=l.first_movement_id \
+          AND m.second_movement_id=l.second_movement_id AND m.movement_id IN \
+          (l.first_movement_id,l.second_movement_id))=2 ORDER BY \
+          first_movement_id,second_movement_id"
          Row.(
            unit (fun a b c d e f g -> a, b, c, d, e, f, g)
            * int64 "first_event_id"
@@ -1146,11 +1135,8 @@ let resolve_operation_movement_internal
     let query =
       Rel_sql.Stmt.(
         func
-          "SELECT m.id,o.bank_event_id,(EXISTS(SELECT 1 FROM \
-           operation_transfer_memberships t WHERE t.movement_id=m.id) OR EXISTS (SELECT \
-           1 FROM operation_exchange_decisions x WHERE x.operation_id=o.id)) FROM \
-           operation_movements m JOIN operations o ON o.id=m.operation_id WHERE o.id=? \
-           AND m.role=?"
+          "SELECT id,bank_event_id,linked OR exchanged FROM movement_claims WHERE \
+           operation_id=? AND role=?"
           (int64
            @-> text
            @-> ret

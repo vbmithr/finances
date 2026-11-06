@@ -1,12 +1,19 @@
 -- Views every connection's queries share. They are temporary because they hold no data:
 -- changing one needs neither a schema version nor a rebuild.
 
--- Operations a confirmed transfer link joins, as (canonical, member).
-CREATE TEMP VIEW linked_operations(first, second) AS
-SELECT a.operation_id, b.operation_id
+-- Each confirmed transfer link between operations, with both movements.
+CREATE TEMP VIEW operation_links AS
+SELECT l.first_movement_id, l.second_movement_id, l.reason,
+  a.anchor_event_id AS first_event_id, b.anchor_event_id AS second_event_id,
+  a.operation_id AS first_operation_id, b.operation_id AS second_operation_id,
+  a.role AS first_role, b.role AS second_role
 FROM operation_transfer_links l
 JOIN operation_movements a ON a.id = l.first_movement_id
 JOIN operation_movements b ON b.id = l.second_movement_id;
+
+-- Operations a confirmed transfer link joins, as (canonical, member).
+CREATE TEMP VIEW linked_operations(first, second) AS
+SELECT first_operation_id, second_operation_id FROM operation_links;
 
 -- Operations whose records state a group, outside any link: a decision outranks the source.
 CREATE TEMP VIEW stated_operations(venue, group_key, operation_id, supporting) AS
@@ -58,6 +65,8 @@ JOIN operation_movement_resolutions r ON r.movement_id = other.id;
 CREATE TEMP VIEW reviews AS
 SELECT m.event_id, e.kind, m.venue AS institution, m.account AS source, m.booked_on,
   m.amount, m.currency, e.occurred_at, e.occurred_on,
+  -- Listings order by this day, then the instant, then the event ID.
+  coalesce(e.occurred_on, substr(e.occurred_at, 1, 10)) AS listed_on,
   coalesce(
     (SELECT CASE WHEN count(DISTINCT c.display_name) = 1 THEN min(c.display_name) END
      FROM companion_matches cm JOIN companion_rows c ON c.id = cm.row_id
@@ -181,3 +190,21 @@ JOIN movements p
   ON p.currency = m.currency
   AND p.booked_on BETWEEN date(m.booked_on, '-7 days') AND date(m.booked_on, '+7 days')
   AND decimal_cmp(p.amount, decimal_sub('0', m.amount)) = 0;
+
+-- Each operation movement with what already claims it: a confirmed transfer link, or an
+-- exchange decision on its operation. A claimed movement is not offered again.
+CREATE TEMP VIEW movement_claims AS
+SELECT m.id, m.operation_id, m.anchor_event_id, m.role, o.bank_event_id,
+  EXISTS (SELECT 1 FROM operation_transfer_memberships t WHERE t.movement_id = m.id)
+    AS linked,
+  EXISTS (SELECT 1 FROM operation_exchange_decisions x WHERE x.operation_id = o.id)
+    AS exchanged
+FROM operation_movements m
+JOIN operations o ON o.id = m.operation_id;
+
+-- Scratch tables account deletion fills and reads; see account_deletion_scope.sql.
+CREATE TEMP TABLE deleted_account(
+  institution TEXT NOT NULL, source_account TEXT NOT NULL, settlement_target TEXT NOT NULL);
+CREATE TEMP TABLE deleted_events(id INTEGER PRIMARY KEY);
+CREATE TEMP TABLE deleted_documents(id INTEGER PRIMARY KEY);
+CREATE TEMP TABLE deleted_operations(id INTEGER PRIMARY KEY);

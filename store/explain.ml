@@ -3,7 +3,6 @@ open Rel
 module Db = Rel_sqlite3
 open Handle
 open Setup
-open Sources
 open Import
 open Ledger
 open Review
@@ -584,21 +583,9 @@ let document_detail db document_id =
 
 let show_movement db event_id =
   let* explanation = explain_movement db event_id in
-  let* source =
-    collect
-      db
-      (statement
-         (Printf.sprintf
-            "SELECT \
-             id,venue,account,kind,source_id,occurred_at,occurred_on,retrieved_at,payload \
-             FROM source_events WHERE id = %Ld"
-            event_id)
-         source_row)
-  in
+  let* source = stored_event_row db event_id in
   let* (event : Db_schema.Source_events.t) =
-    match source with
-    | [ event ] -> Ok event
-    | _ -> Or_error.error_string "unknown transaction event ID"
+    Or_error.of_option source ~error:(Error.of_string "unknown transaction event ID")
   in
   let* document_ids =
     collect
@@ -726,19 +713,7 @@ let show_movement db event_id =
       companion_rows
   in
   let* transfer = linked_transfer db event_id in
-  let* stored_fields =
-    let* rows =
-      collect
-        db
-        (statement
-           (Printf.sprintf
-              "SELECT event_id,ordinal,name,value FROM source_event_fields WHERE \
-               event_id = %Ld ORDER BY ordinal"
-              event_id)
-           Db_schema.Source_event_fields.row)
-    in
-    Ok (List.map rows ~f:(fun (f : Db_schema.Source_event_fields.t) -> f.name, f.value))
-  in
+  let* stored_fields = stored_event_fields db event_id in
   let payload =
     match Json.decode Jsont.json event.payload with
     | Ok value -> Json.encode ~format:Jsont.Indent Jsont.json value

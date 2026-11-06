@@ -46,6 +46,14 @@ Some logic lives in OCaml because the database does not hold what a query needs:
 
 The read queries now take no parameters from OCaml beyond filters, as one JSON object.
 
+## Statements are bindings
+
+A SQL statement is treated like a foreign-function binding: defined once, kept apart from the code
+that calls it, and called like a function. The same `SELECT`, join or `EXISTS` check written at two
+call sites is a binding declared twice. What gets extracted is anything long, complex, or restating a
+query or rule that already exists; a short statement used in one place may stay a string next to its
+row type.
+
 ## Queries in SQL files
 
 Every query goes in its own file under `store/sql/`, such as `store/sql/unmatched_transfers.sql`.
@@ -54,10 +62,15 @@ string per file, with no new dependency. A file holds plain SQL with `?1` parame
 to it declares the row type and nothing else. Where a user picks the sort, the caller appends an
 `ORDER BY` of view columns.
 
+A file of several statements, each ending with a semicolon, is a script, run with no parameters;
+`account_deletion*.sql` gathers what an account owns into temporary tables, counts what it shares,
+then deletes.
+
 Two checks keep files honest:
 
-- a test compiles every file against a fresh database (`Setup.check_queries`), so a typo or a renamed
-  column fails the test suite, not a user's command;
+- a test compiles every query against a fresh database, and runs every script in a savepoint it then
+  undoes (`Setup.check_queries`), so a typo or a renamed column fails the test suite, not a user's
+  command;
 - `test/status_perf_test.py` already compares two sizes and fails a command whose cost grows
   faster than the data.
 
@@ -71,10 +84,14 @@ The shared reads are views, in `store/sql/views.sql`:
   description. It is the only statement of the decision rule; counts and the journal read it;
 - `operation_transfer_sides`: a bank movement's link to an operation without one, with the account
   resolved on that side;
+- `operation_links`: each confirmed link between operations with both movements, which transfer
+  history, the journal and decisions export read;
 - `linked_operations`, `stated_operations` and `grouped_operations`: which operations read as one;
 - `operation_anchors` and `operation_rows`: each operation's group, primary movement and display
   fields;
 - `group_reviews`: the review of every movement in a group, for filters that hold when any one does.
+- `movement_claims`: each operation movement with whether a transfer link or an exchange decision
+  already claims it, read by linking, resolving, category batches and restore checks;
 - `opposite_payments`: each movement with the accounts showing the opposite amount within seven
   days, which tells card spending already paid by the card from a settlement, for both settlement
   suggestions and settlement rules.

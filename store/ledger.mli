@@ -211,9 +211,15 @@ val bank_accounts_from
   -> movement:('a -> (Movement.t, Error.t) Result.t)
   -> Bank_account_mapping.t list Or_error.t
 
+val stored_event_row : Handle.t -> int64 -> Db_schema.Source_events.t option Or_error.t
+val stored_event_fields : Handle.t -> int64 -> (string * string) list Or_error.t
 val find_event : Handle.t -> int64 -> Source_event.t option Or_error.t
 val event_by_id : Handle.t -> int64 -> (Source_event.t, Error.t) Result.t
-val movement_rows : Handle.t -> String.t -> ((int64 * Movement.t) list, Error.t) Result.t
+
+val movement_rows
+  :  ?event_ids:int64 list
+  -> Handle.t
+  -> ((int64 * Movement.t) list, Error.t) Result.t
 
 val set_bank_account_mappings_in_transaction
   :  Handle.t

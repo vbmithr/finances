@@ -745,11 +745,7 @@ let account_representatives source =
 ;;
 
 let selected_movements db needed =
-  (* Only database-generated int64 IDs are rendered here, never input text. *)
-  let ids =
-    Hash_set.to_list needed |> List.map ~f:Int64.to_string |> String.concat ~sep:","
-  in
-  let* rows = movement_rows db (" WHERE event_id IN (" ^ ids ^ ")") in
+  let* rows = movement_rows ~event_ids:(Hash_set.to_list needed) db in
   Ok (Hashtbl.of_alist_exn (module Int64) rows)
 ;;
 

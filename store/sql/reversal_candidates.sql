@@ -15,5 +15,4 @@ WHERE r.decision = 'unclassified' AND r.reason IS NULL
   AND decimal_cmp(rm.amount, '0') > 0 AND decimal_cmp(om.amount, '0') < 0
   AND decimal_cmp(decimal_sub('0', om.amount), rm.amount) = 0
   AND decimal_cmp(rm.fee, '0') = 0 AND decimal_cmp(om.fee, '0') = 0
-ORDER BY coalesce(r.occurred_on, substr(r.occurred_at, 1, 10)), r.occurred_at, r.event_id,
-  coalesce(o.occurred_on, substr(o.occurred_at, 1, 10)), o.occurred_at, o.event_id
+ORDER BY r.listed_on, r.occurred_at, r.event_id, o.listed_on, o.occurred_at, o.event_id

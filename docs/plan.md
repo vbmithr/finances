@@ -520,8 +520,15 @@ position observations, derive positions from fills, or calculate funding.
 - [x] Quadratic code fixed on sight, not measured first: per-decision searches over every event,
   review or rule in transfer and category batches, the settlement rule preview, and decisions export
   and restore now use lookups built once, or one query (card-side payments). Real decisions export,
-  restore preview and restore gave identical results and restored databases. Next: the large single
-  queries (transfer linking, operation summary).
+  restore preview and restore gave identical results and restored databases.
+- [x] Operation transfer links are read from one view, `operation_links`, which `linked_operations`
+  also builds on.
+- [x] SQL statements are bindings: defined once, isolated, never restated. Account deletion, about
+  150 lines of SQL concatenated with hand-quoted values, is three files; "already claimed by a link or
+  exchange", written five times, is the `movement_claims` view; `explain.ml` reuses the event
+  lookups instead of copying them; `movement_rows` takes event IDs instead of SQL text; the listing
+  order is `reviews.listed_on`. On real data, dry runs on 14 accounts and a real deletion matched the
+  previous build row for row.
   Short inline statements stay where they are.
 - [x] Costs that grew with the square of the data, found by comparing two sizes, which a test now
   does: lists read from JSON were joined without an index, and `operation_movements` has no index on

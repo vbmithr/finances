@@ -11,4 +11,4 @@ WHERE r.card_reference IS NOT NULL
     SELECT 1 FROM opposite_payments p
     WHERE p.event_id = m.event_id AND p.venue = m.venue AND p.bank_id = m.bank_id
       AND p.account_id = r.card_reference AND p.account_type = 'CREDITCRD')
-ORDER BY coalesce(r.occurred_on, substr(r.occurred_at, 1, 10)), r.occurred_at, r.event_id
+ORDER BY r.listed_on, r.occurred_at, r.event_id
