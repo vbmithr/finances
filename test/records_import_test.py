@@ -41,7 +41,7 @@ Total,,,,,,20.90
     database, journal = imported("csv", statement)
     text = journal.read_text()
     postings = [line for line in text.splitlines()
-                if line.startswith(" ") and "liabilities:cards:fdm:card" in line]
+                if line.startswith(" ") and "assets:cards:fdm:card" in line]
     assert len(postings) == 3, text
     assert "USD" in text, text
     listed = run("operation", "list", "--institution", "fdm", "-d", database).stdout

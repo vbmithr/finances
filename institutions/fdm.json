@@ -37,7 +37,7 @@
       "account": {
         "id": "card",
         "bank": "fdm",
-        "type": "credit-card",
+        "type": "prepaid-card",
         "currency": {
           "code": "USD"
         }

@@ -8,6 +8,11 @@ short line of their own.
 
 ## Unreleased
 
+- **Action required: rebuild.** fdm is a top-up card, now typed `prepaid-card`: its balance is an asset,
+  `assets:cards:fdm:card`, where it was `liabilities:cards:fdm:card`, and it no longer shows in
+  `fin card list`, which lists cards a bank account settles. The type is part of the account's identity,
+  so rebuild; a saved fdm account setting of type `credit-card` no longer matches and must be removed from
+  the decisions file before `fin decisions restore`.
 - **Action required: rebuild.** Schema 38 stores, at import, the digests `fin decisions` compares saved
   decisions by, and adds the indexes four lookups were missing. Run `fin backup DIR`, then with your
   current fin `fin decisions export FILE`; then `fin delete`, `fin init`, `fin import --all DIR` and
