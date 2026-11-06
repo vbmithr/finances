@@ -3032,6 +3032,19 @@ class ImportOnboarding(unittest.TestCase):
         refused = self.run_fin('card', 'unassign', 'OLD-CARD', '--yes', check=False)
         self.assertIn('settlements were recorded through OLD-CARD', refused.stderr)
 
+        # One account at a time: its cards, the card accounts it pays, how it is decided.
+        shown = json.loads(self.run_fin('account', 'show', card['id'], '--json').stdout)
+        self.assertEqual(sorted(c['card'] for c in shown['cards']), ['OLD-CARD', 'SAVINGS'])
+        self.assertEqual(shown['account']['id'], card['id'])
+        paying = json.loads(self.run_fin('account', 'show', checking['id'], '--json').stdout)
+        self.assertEqual(paying['pays'], [card['id']])
+        self.assertIn({'decision': 'settlement', 'count': 1}, paying['decisions'])
+        text = self.run_fin('account', 'show', checking['id']).stdout
+        self.assertIn('Pays:', text)
+        self.assertIn('settlement    1', text)
+        self.assertIn('no matching account ID',
+                      self.run_fin('account', 'show', 'nope', check=False).stderr)
+
         # The assignment is a decision: a rebuild restores it before the settlement it carries.
         saved = self.root / 'card-decisions.json'
         self.run_fin('decisions', 'export', saved)

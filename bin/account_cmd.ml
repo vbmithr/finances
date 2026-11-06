@@ -19,6 +19,98 @@ let list_bank_accounts database json_output =
     Ok ())
 ;;
 
+let decision_counts db (account : Transfers.bank_account_info) =
+  Handle.collect
+    db
+    (Rel_sql.Stmt.(
+       func
+         "SELECT decision,count(*) FROM reviews WHERE institution=? AND source=? GROUP \
+          BY decision ORDER BY decision"
+         (text @-> text @-> ret Rel.Row.(t2 (text "decision") (int "count"))))
+       account.mapping.institution
+       (Bank_account_mapping.source_account account.mapping))
+;;
+
+let decision_json =
+  Jsont.Object.enc_only ()
+  |> Jsont.Object.mem "decision" Jsont.string ~enc:fst
+  |> Jsont.Object.mem "count" Jsont.int ~enc:snd
+  |> Jsont.Object.finish
+;;
+
+let show_account database account_id json_output =
+  with_database database (fun db ->
+    let%bind accounts = Transfers.bank_account_info db in
+    let%bind account =
+      match
+        List.filter accounts ~f:(fun (a : Transfers.bank_account_info) ->
+          String.equal (Bank_account_mapping.id a.mapping) account_id)
+      with
+      | [ account ] -> Ok account
+      | [] -> Or_error.error_string "no matching account ID; see fin account list"
+      | _ -> Or_error.error_string "account ID collision; use fin account list"
+    in
+    let source = Bank_account_mapping.source_account account.mapping in
+    let%bind cards = Cards.list db in
+    let cards =
+      List.filter cards ~f:(fun (c : Cards.t) ->
+        String.equal c.institution account.mapping.institution
+        && Option.equal String.equal c.card_source_account (Some source))
+    in
+    (* Card accounts this one pays. *)
+    let paid =
+      List.filter accounts ~f:(fun (a : Transfers.bank_account_info) ->
+        Option.exists a.settlement_account ~f:(fun parent ->
+          String.equal parent.institution account.mapping.institution
+          && String.equal (Bank_account_config.source_account parent) source))
+    in
+    let%map decisions = decision_counts db account in
+    if json_output
+    then
+      Report_json.print
+        (Jsont.Object.enc_only ()
+         |> Jsont.Object.mem "account" Report_json.account ~enc:(fun () -> account)
+         |> Jsont.Object.mem "cards" (Jsont.list Card_cmd.card_json) ~enc:(fun () ->
+           cards)
+         |> Jsont.Object.mem "pays" (Jsont.list Jsont.string) ~enc:(fun () ->
+           List.map paid ~f:(fun a -> Bank_account_mapping.id a.mapping))
+         |> Jsont.Object.mem "decisions" (Jsont.list decision_json) ~enc:(fun () ->
+           decisions)
+         |> Jsont.Object.finish)
+        ()
+    else (
+      Terminal.account ~separate:false account;
+      if not (List.is_empty cards)
+      then (
+        print_endline "  Cards:";
+        List.iter cards ~f:(fun (c : Cards.t) ->
+          let period =
+            match c.first_seen, c.last_seen with
+            | Some first, Some last ->
+              Printf.sprintf " from %s to %s" (Date.to_string first) (Date.to_string last)
+            | _ -> ""
+          in
+          printf
+            "    %s  %s; %d bank rows%s, %d settled, %d undecided\n"
+            (Terminal.text c.card_reference)
+            (Option.value c.known_by ~default:"-")
+            c.bank_rows
+            period
+            c.settled
+            c.undecided));
+      if not (List.is_empty paid)
+      then (
+        print_endline "  Pays:";
+        List.iter paid ~f:(fun (a : Transfers.bank_account_info) ->
+          printf
+            "    %s  %s\n"
+            (Bank_account_mapping.id a.mapping)
+            (Terminal.text a.mapping.ledger_account)));
+      print_endline "  Decisions:";
+      List.iter decisions ~f:(fun (decision, count) ->
+        printf "    %-13s %d\n" decision count)))
+;;
+
 let editor () =
   List.find_map [ "VISUAL"; "EDITOR" ] ~f:(fun name ->
     Option.filter (Sys.getenv name) ~f:(Fn.non String.is_empty))
@@ -197,6 +289,18 @@ let cmd =
         "list"
         "List account details, IBAN provenance, coverage and card settlement links."
         Term.(const list_bank_accounts $ database $ json_output)
+    ; command
+        "show"
+        "Show one account: its details, cards, the card accounts it pays and how its \
+         movements are decided."
+        Term.(
+          const show_account
+          $ database
+          $ Arg.(
+              required
+              & pos 0 (some string) None
+              & info [] ~docv:"ID" ~doc:"Account ID shown by fin account list.")
+          $ json_output)
     ; command
         "link-card"
         "Link a credit card to the account that pays it."

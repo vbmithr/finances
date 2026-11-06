@@ -8,6 +8,8 @@ short line of their own.
 
 ## Unreleased
 
+- `fin account show ID` shows one account: its details, its cards, the card accounts it pays and how
+  its movements are decided. `--json` prints it as one object.
 - **Action required: rebuild.** fdm is a top-up card, now typed `prepaid-card`: its balance is an asset,
   `assets:cards:fdm:card`, where it was `liabilities:cards:fdm:card`, and it no longer shows in
   `fin card list`, which lists cards a bank account settles. The type is part of the account's identity,

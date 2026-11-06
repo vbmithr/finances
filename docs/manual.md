@@ -750,6 +750,11 @@ custom journal separately. Make a backup first if the removed records may be nee
 
 ## Account settings and snapshots
 
+`fin account list` lists your accounts with their IDs. `fin account show ID` shows one:
+its details, the cards that belong to it (see [Cards](#cards)), the card accounts it pays,
+and how many of its movements are unclassified, categorized, transfers, settlements or
+reversals. Add `--json` for the same as one object.
+
 ```sh
 fin account list
 fin account edit

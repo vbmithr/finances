@@ -43,7 +43,7 @@ let table ?(out = stdout) headers rows =
     Out_channel.output_char out '\n')
 ;;
 
-let account (a : Transfers.bank_account_info) =
+let account ?(separate = true) (a : Transfers.bank_account_info) =
   Stdio.printf "%s  %s\n" (text a.mapping.institution) (text a.mapping.ledger_account);
   Stdio.printf "  ID: %s\n" (Bank_account_mapping.id a.mapping);
   Stdio.printf
@@ -67,7 +67,7 @@ let account (a : Transfers.bank_account_info) =
       (text parent.institution)
       (text parent.account_id)
       (text parent.account_type));
-  print_endline ""
+  if separate then print_endline ""
 ;;
 
 let import_history attempts =
