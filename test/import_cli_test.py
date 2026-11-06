@@ -3569,6 +3569,24 @@ class ImportOnboarding(unittest.TestCase):
         self.assertFalse((self.root / 'data/fin/fin.sqlite3.edit').exists())
         self.assertFalse(self.config.exists())
 
+    def test_backup_copies_a_database_of_an_older_schema(self):
+        self.terminal(['import', 'revolut', self.csv],
+                      [('IBAN (Enter to skip):', IBAN)])
+        database = self.root / 'data/fin/fin.sqlite3'
+        with sqlite3.connect(database) as connection:
+            connection.execute('PRAGMA user_version = 1')
+        refused = self.run_fin('status', check=False)
+        self.assertNotEqual(refused.returncode, 0)
+        self.assertIn('fin backup DIR, which copies a database of any schema', refused.stderr)
+        directory = self.root / 'backups'
+        result = self.run_fin('backup', directory)
+        backup = next(directory.glob('fin-backup-*'))
+        self.assertEqual([p.name for p in backup.iterdir()], ['fin.sqlite3'])
+        self.assertIn('run: fin decisions export FILE', result.stdout)
+        self.assertIn('To restore, with that version: fin restore', result.stdout)
+        with sqlite3.connect(backup / 'fin.sqlite3') as copy:
+            self.assertEqual(copy.execute('PRAGMA user_version').fetchone(), (1,))
+
     def test_checking_prompts_but_associated_card_does_not(self):
         ofx = self.root / 'checking-and-card.ofx'
         ofx.write_text(Path('fixtures/bank.ofx').read_text()

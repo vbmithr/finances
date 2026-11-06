@@ -35,15 +35,27 @@ let backup database directory =
   let copy = Stdlib.Filename.concat target in
   let%bind () = Setup.backup database (copy "fin.sqlite3") in
   let%bind () = Or_error.try_with (fun () -> Unix.chmod (copy "fin.sqlite3") 0o600) in
+  (* The copy does not depend on the schema; the decisions do, so an older database gets
+     the copy alone and the way to its decisions. *)
+  let%bind supported = Setup.schema_supported database in
   let%map () =
-    with_database database (fun db ->
-      let%bind contents = Decisions_cmd.decisions_json db in
-      write_file (copy "decisions.json") contents)
+    if supported
+    then
+      with_database database (fun db ->
+        let%bind contents = Decisions_cmd.decisions_json db in
+        write_file (copy "decisions.json") contents)
+    else Ok ()
   in
   printf "Backed up to %s:\n  fin.sqlite3    from %s\n" target database;
-  printf "  decisions.json for rebuilding: fin decisions restore\n";
+  if supported
+  then printf "  decisions.json for rebuilding: fin decisions restore\n"
+  else
+    printf
+      "This database has a schema this fin cannot read, so its decisions were not saved.\n\
+       With the fin version that wrote it, run: fin decisions export FILE\n";
   printf
-    "To restore: fin restore %s%s\n"
+    "To restore%s: fin restore %s%s\n"
+    (if supported then "" else ", with that version")
     (Stdlib.Filename.quote target)
     (if String.equal database paths.database
      then ""

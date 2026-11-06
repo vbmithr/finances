@@ -11,6 +11,10 @@ val with_open : registry:Registry.t -> string -> (t -> 'a Or_error.t) -> 'a Or_e
     command. *)
 val check_queries : t -> unit Or_error.t
 
+(** Whether this build can open the database at [path]: it reads the schema version and
+    nothing else, so it works on any database. *)
+val schema_supported : string -> bool Or_error.t
+
 (** [backup source path] writes a consistent copy of the database file [source] to
     [path], a new file, with SQLite's [VACUUM INTO]; other connections may be using
     the database meanwhile. It does not check the schema version, so it works on

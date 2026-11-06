@@ -8,6 +8,9 @@ short line of their own.
 
 ## Unreleased
 
+- `fin backup` copies a database of any schema, as the rebuild steps promise. On a schema this fin
+  cannot read, it used to copy the file and then fail as if nothing had been saved; it now keeps the
+  copy and says to export decisions, and restore, with the version that wrote it.
 - **Action required: rebuild.** Schema 36 adds the indexes whose absence made reads scan whole tables
   (movements by operation, movements by currency and day, companion matches by event), and stores what
   queries used to ask OCaml for: each account's ledger name and short ID, and each companion row's

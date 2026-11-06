@@ -368,9 +368,10 @@ let initialize db =
     | _ ->
       Or_error.errorf
         "unsupported database schema; this experimental build accepts only schema %d. \
-         With the previous fin version, run fin backup (it keeps a copy) and fin \
-         decisions export FILE. Then, with this one, run fin delete and fin init, import \
-         your statement folders again and run fin decisions restore FILE"
+         Run fin backup DIR, which copies a database of any schema, and with the \
+         previous fin version run fin decisions export FILE. Then, with this one, run \
+         fin delete and fin init, import your statement folders again and run fin \
+         decisions restore FILE"
         Db_schema.version)
 ;;
 
@@ -425,6 +426,12 @@ let check_queries db =
       db_result (Db.exec_sql db.conn "ROLLBACK TO check_script; RELEASE check_script")
     in
     Or_error.tag ran ~tag:(name ^ ".sql"))
+;;
+
+let schema_supported path =
+  with_connection ~mode:Read path (fun conn ->
+    let* version = db_result (Db.first conn (statement "PRAGMA user_version" integer)) in
+    Ok (Option.equal Int.equal version (Some Db_schema.version)))
 ;;
 
 let backup source path =
