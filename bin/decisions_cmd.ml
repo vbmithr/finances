@@ -25,10 +25,10 @@ let export_cmd =
     ~man:
       [ `S Manpage.s_description
       ; `P
-          "Saves account settings, the category catalog, rules, category assignments, \
-           manual types, resolved movements, card settlements, reversals, exchanges and \
-           transfers. Statements are not in the file: they come back from $(b,fin \
-           import). $(b,fin backup) also writes this file."
+          "Saves account settings, card assignments, the category catalog, rules, \
+           category assignments, manual types, resolved movements, card settlements, \
+           reversals, exchanges and transfers. Statements are not in the file: they come \
+           back from $(b,fin import). $(b,fin backup) also writes this file."
       ]
     Term.(
       const export
@@ -39,9 +39,10 @@ let export_cmd =
 
 let print_changes (c : Decisions.changes) =
   printf
-    "accounts=%d categories=%d rules=%d assignments=%d types=%d resolutions=%d \
+    "accounts=%d cards=%d categories=%d rules=%d assignments=%d types=%d resolutions=%d \
      settlements=%d reversals=%d exchanges=%d transfers=%d\n"
     c.accounts
+    c.cards
     c.categories
     c.rules
     c.assignments

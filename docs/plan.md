@@ -523,9 +523,11 @@ position observations, derive positions from fills, or calculate funding.
   restore preview and restore gave identical results and restored databases.
 - [x] Operation transfer links are read from one view, `operation_links`, which `linked_operations`
   also builds on.
-- [ ] Cards ([cards.md](cards.md)): a card number belongs to a card account, stated by the account's
-  own number or assigned by a person, so that a replaced card's settlements match; `fin card list`
-  and `fin card assign` first, settlement matching through a `card_accounts` view, schema 37.
+- [x] Cards ([cards.md](cards.md)): a card number belongs to a card account, stated by the account's
+  own number or assigned by a person; `fin card list`, `assign` and `unassign`, settlement matching
+  through the `card_accounts` view, an optional `cards` section in `fin decisions`, schema 37. On a
+  real rebuild, 44 outputs matched the previous build before any assignment; assigning two replaced
+  cards made 58 of their 59 rows settlement candidates, the 59th being a refund. Next: `fin card show`.
 - [x] SQL statements are bindings: defined once, isolated, never restated. Account deletion, about
   150 lines of SQL concatenated with hand-quoted values, is three files; "already claimed by a link or
   exchange", written five times, is the `movement_claims` view; `explain.ml` reuses the event

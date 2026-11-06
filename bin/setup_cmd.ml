@@ -215,6 +215,7 @@ let welcome () =
      \032 fin operation review  Review unclassified movements\n\
      \032 fin statement list       Inspect statement reconciliation\n\
      \032 fin settlement review    Review card settlements\n\
+     \032 fin card list            See your cards and their accounts\n\
      \032 fin reversal candidates  Find possible reversals\n\
      \032 fin rule --help          Manage classification rules\n\
      \032 fin transfer candidates  Find possible transfers\n\

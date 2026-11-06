@@ -73,8 +73,14 @@ let export db =
            Ok ({ original; reversal } : Decisions_portable.reversal))
         pairs
     in
+    let* cards = Cards.assignments db in
     Ok
       ({ accounts = Some accounts
+       ; cards =
+           Some
+             (List.map cards ~f:(fun (institution, card_reference, card_source_account) ->
+                ({ institution; card_reference; card_source_account }
+                 : Decisions_portable.card)))
        ; categories = Some categories
        ; rules = Some rules
        ; assignments = Some { assignments with categories = []; rules = [] }
@@ -88,6 +94,7 @@ let export db =
 
 type changes =
   { accounts : int
+  ; cards : int
   ; categories : int
   ; rules : int
   ; assignments : int
@@ -105,6 +112,7 @@ type outcome =
 
 let nothing_changed =
   { accounts = 0
+  ; cards = 0
   ; categories = 0
   ; rules = 0
   ; assignments = 0
@@ -256,6 +264,20 @@ let restore db (snapshot : Decisions_portable.t) ~confirm =
           let* report = Accounts.apply_bank_accounts db config in
           Ok (report.mapping_changes + report.identity_changes + report.settlement_changes)
       in
+      (* Before settlements: a settlement of a replaced card matches through its card. *)
+      let* cards =
+        let* restored =
+          traverse
+            (fun (c : Decisions_portable.card) ->
+               Cards.restore_assignment
+                 db
+                 ~institution:c.institution
+                 ~card_reference:c.card_reference
+                 ~card_source_account:c.card_source_account)
+            (Option.value snapshot.cards ~default:[])
+        in
+        Ok (List.count restored ~f:Fn.id)
+      in
       let assignments =
         Option.value
           snapshot.assignments
@@ -312,6 +334,7 @@ let restore db (snapshot : Decisions_portable.t) ~confirm =
       in
       let changes =
         { accounts
+        ; cards
         ; categories = List.length preview.categories_to_add
         ; rules = List.length preview.rules_to_add
         ; assignments = assigned

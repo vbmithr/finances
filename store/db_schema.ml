@@ -3,7 +3,7 @@ open Rel
 
 (** One current experimental baseline; older databases must be reimported. Banks
     have no tables of their own. *)
-let version = 36
+let version = 37
 
 let timestamp = `Expr "(strftime('%Y-%m-%dT%H:%M:%f','now') || '000000000Z')"
 
@@ -2433,6 +2433,118 @@ module Bank_account_settlement_changes = struct
   ;;
 end
 
+(* A card number, as the institution prints it, that a person says belongs to a card
+   account. An account's own number needs no row: see the card_accounts view. *)
+module Card_assignments = struct
+  type t =
+    { institution : string
+    ; card_reference : string
+    ; card_source_account : string
+    }
+
+  let institution = Col.make "institution" Type.text (fun (r : t) -> r.institution)
+
+  let card_reference =
+    Col.make "card_reference" Type.text (fun (r : t) -> r.card_reference)
+  ;;
+
+  let card_source_account =
+    Col.make "card_source_account" Type.text (fun (r : t) -> r.card_source_account)
+  ;;
+
+  let row =
+    Row.(
+      unit (fun institution card_reference card_source_account ->
+        { institution; card_reference; card_source_account })
+      * institution
+      * card_reference
+      * card_source_account)
+  ;;
+
+  let table =
+    Table.make
+      ~primary_key:
+        (Table.Primary_key.make [ Col.Def institution; Col.Def card_reference ])
+      "card_assignments"
+      row
+  ;;
+
+  let definition = Sqlite_schema.table table
+end
+
+module Card_assignment_changes = struct
+  type t =
+    { id : int64
+    ; institution : string
+    ; card_reference : string
+    ; previous_card_source_account : string option
+    ; card_source_account : string option
+    ; changed_at : Ptime.t
+    }
+
+  let id = Col.make "id" Type.int64 (fun (r : t) -> r.id)
+  let institution = Col.make "institution" Type.text (fun (r : t) -> r.institution)
+
+  let card_reference =
+    Col.make "card_reference" Type.text (fun (r : t) -> r.card_reference)
+  ;;
+
+  let previous_card_source_account =
+    Col.make
+      "previous_card_source_account"
+      Type.(option text)
+      (fun (r : t) -> r.previous_card_source_account)
+  ;;
+
+  let card_source_account =
+    Col.make
+      "card_source_account"
+      Type.(option text)
+      (fun (r : t) -> r.card_source_account)
+  ;;
+
+  let changed_at =
+    Col.make ~default:timestamp "changed_at" instant (fun (r : t) -> r.changed_at)
+  ;;
+
+  let row =
+    Row.(
+      unit
+        (fun
+            id
+             institution
+             card_reference
+             previous_card_source_account
+             card_source_account
+             changed_at
+           ->
+           { id
+           ; institution
+           ; card_reference
+           ; previous_card_source_account
+           ; card_source_account
+           ; changed_at
+           })
+      * id
+      * institution
+      * card_reference
+      * previous_card_source_account
+      * card_source_account
+      * changed_at)
+  ;;
+
+  let table =
+    Table.make
+      ~primary_key:(Table.Primary_key.make [ Col.Def id ])
+      "card_assignment_changes"
+      row
+  ;;
+
+  let definition =
+    Sqlite_schema.table ~immutable:"Card assignment history is append-only" table
+  ;;
+end
+
 module Card_settlement_decisions = struct
   type t =
     { event_id : int64
@@ -2968,6 +3080,8 @@ let definitions =
   ; Institution_definitions.definition
   ; Card_settlement_decisions.definition
   ; Card_settlement_changes.definition
+  ; Card_assignments.definition
+  ; Card_assignment_changes.definition
   ; Classification_rules.definition
   ; Reversal_pairs.definition
   ; Reversal_changes.definition

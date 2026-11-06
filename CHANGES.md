@@ -8,6 +8,13 @@ short line of their own.
 
 ## Unreleased
 
+- **Action required: rebuild.** Schema 37 adds card assignments. Before installing, run `fin backup DIR`
+  (it copies any schema) and, with your current fin, `fin decisions export FILE`; then run `fin delete`,
+  `fin init`, import your statements again and `fin decisions restore FILE`.
+- `fin card list` shows every card your statements name and the card account it belongs to, or that it
+  belongs to none; `fin card assign CARD ACCOUNT-ID` records that a replaced card belonged to a card
+  account, so that its settlement debits match, and `fin card unassign` removes it. Assignments travel in
+  `fin decisions`. `fin settlement candidates` now offers a card's debits through these assignments.
 - Docs: `docs/cards.md` designs `fin card`, telling fin which card numbers belong to which card account.
 - `fin backup` copies a database of any schema, as the rebuild steps promise. On a schema this fin
   cannot read, it used to copy the file and then fail as if nothing had been saved; it now keeps the

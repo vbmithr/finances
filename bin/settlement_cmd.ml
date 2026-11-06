@@ -24,36 +24,41 @@ let settlement_suggestions db =
   let%bind rows = Transfers.settlement_candidates db in
   let%bind accounts = Transfers.bank_account_info db in
   let suggestions =
-    List.filter_map rows ~f:(fun (row : Review.bank_review) ->
+    List.filter_map rows ~f:(fun ((row : Review.bank_review), card_accounts) ->
       let movement = row.transaction in
-      Option.bind row.source_evidence.card_reference ~f:(fun hint ->
-        let banks =
-          List.filter accounts ~f:(fun a ->
-            String.equal a.Transfers.mapping.institution row.institution
-            && String.equal a.mapping.bank_id movement.account.bank_id
-            && String.equal a.mapping.account_id movement.account.account_id
-            && String.equal a.mapping.account_type movement.account.account_type)
+      let banks =
+        List.filter accounts ~f:(fun a ->
+          String.equal a.Transfers.mapping.institution row.institution
+          && String.equal a.mapping.bank_id movement.account.bank_id
+          && String.equal a.mapping.account_id movement.account.account_id
+          && String.equal a.mapping.account_type movement.account.account_type)
+      in
+      match banks with
+      | [ bank ] when not (String.equal bank.iban_source "not_applicable") ->
+        let parent = account_reference bank.mapping in
+        let cards =
+          List.filter accounts ~f:(fun card ->
+            String.equal card.Transfers.mapping.institution row.institution
+            && List.mem
+                 card_accounts
+                 (Bank_account_mapping.source_account card.mapping)
+                 ~equal:String.equal
+            && String.equal card.mapping.bank_id movement.account.bank_id
+            && List.mem
+                 [ "CREDITCRD"; "credit-card" ]
+                 card.mapping.account_type
+                 ~equal:String.equal
+            && Iso4217.equal card.currency movement.account.currency
+            && Option.for_all card.settlement_account ~f:(fun linked ->
+              String.equal linked.institution parent.institution
+              && String.equal
+                   (Bank_account_config.source_account linked)
+                   (Bank_account_config.source_account parent)))
         in
-        match banks with
-        | [ bank ] when not (String.equal bank.iban_source "not_applicable") ->
-          let parent = account_reference bank.mapping in
-          let cards =
-            List.filter accounts ~f:(fun card ->
-              String.equal card.Transfers.mapping.institution row.institution
-              && String.equal card.mapping.bank_id movement.account.bank_id
-              && String.equal card.mapping.account_id hint
-              && String.equal card.mapping.account_type "CREDITCRD"
-              && Iso4217.equal card.currency movement.account.currency
-              && Option.for_all card.settlement_account ~f:(fun linked ->
-                String.equal linked.institution parent.institution
-                && String.equal
-                     (Bank_account_config.source_account linked)
-                     (Bank_account_config.source_account parent)))
-          in
-          (match cards with
-           | [ card ] -> Some { transaction = row; card; bank }
-           | _ -> None)
-        | _ -> None))
+        (match cards with
+         | [ card ] -> Some { transaction = row; card; bank }
+         | _ -> None)
+      | _ -> None)
   in
   Ok suggestions
 ;;

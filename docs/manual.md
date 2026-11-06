@@ -785,8 +785,9 @@ too small to show all proposed changes. The full-screen mode requires a terminal
 and cannot be combined with `--yes`.
 
 For BoursoBank, fin recognizes its deferred-card debit description and proposes
-a match only when the complete masked card identifier uniquely matches a card
-at the same institution and bank, in the same currency. It excludes suggestions
+a match only when the complete masked card number belongs to exactly one card
+account at the same institution and bank, in the same currency. A card account's
+own number is one of its cards; see [Cards](#cards) for a replaced card's. It excludes suggestions
 when an opposite payment on that card is already present within seven days, or
 the card is already linked to a different checking account. These are suggestions,
 not automatic accounting decisions. Select a transaction by its event ID. If
@@ -795,6 +796,42 @@ the checking account alongside the settlement. One final confirmation applies
 the entire proposal atomically; declining or interrupting before confirmation
 leaves both the setup and settlement unchanged. Only the selected settlement is
 recorded; similar suggestions remain for review.
+
+### Cards
+
+A bank can replace a card, when it expires or is lost, or add one, without changing
+the card account behind it. The new card has a new number, so the settlement debits
+of the old one name a number that is not the account's: fin cannot match them, and
+they stay out of `fin settlement candidates`.
+
+```sh
+fin card list
+```
+
+lists every card your statements name: the card account it belongs to, or
+`unassigned`; how fin knows (`statement` for an account's own number, `assigned` for
+one you recorded); the bank rows naming it and their dates; how many are settled or
+undecided; and from when the account has purchases of its own. Purchases name the
+card account, not the card, so fin cannot tell which of two cards on one account
+bought what.
+
+If you know an unassigned card belonged to a card account, record it:
+
+```sh
+fin card assign CARD ACCOUNT-ID
+```
+
+`CARD` is the number as `fin card list` prints it, or a unique ending such as its
+last digits; `ACCOUNT-ID` is the card account's ID from `fin account list`. fin shows
+the card, the account and the rows naming the card, asks before recording, then says
+how many of its debits `fin settlement candidates` now offers. `fin card unassign
+CARD` removes an assignment that no recorded settlement uses. Assignments are in
+`fin decisions export` and come back with `fin decisions restore`.
+
+Settling a card paid before its account's statements begin leaves the account with
+payments and no purchases behind them; `fin card list` warns about it. Export the
+account's older statements from the bank if you can; otherwise categorize those
+payments as spending instead of settling them.
 
 For other institutions, or where no suggestion is available, use
 `fin account list` to find the IDs and link the accounts explicitly:

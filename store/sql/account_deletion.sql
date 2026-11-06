@@ -52,3 +52,9 @@ DELETE FROM bank_account_settlements WHERE (institution, source_account) IN
   (SELECT institution, source_account FROM deleted_account);
 DELETE FROM bank_account_settlement_changes WHERE (institution, source_account) IN
   (SELECT institution, source_account FROM deleted_account);
+DELETE FROM card_assignments WHERE (institution, card_source_account) IN
+  (SELECT institution, source_account FROM deleted_account);
+DELETE FROM card_assignment_changes WHERE (institution, card_source_account) IN
+  (SELECT institution, source_account FROM deleted_account)
+  OR (institution, previous_card_source_account) IN
+  (SELECT institution, source_account FROM deleted_account);

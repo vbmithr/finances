@@ -9,6 +9,7 @@ import re
 import select
 import signal
 import shlex
+import shutil
 import sqlite3
 import subprocess
 import struct
@@ -2988,6 +2989,63 @@ class ImportOnboarding(unittest.TestCase):
             'CAFÉ &amp; CO', 'Relevé différé Carte OTHER-CARD'))
         self.run_fin('import', 'boursobank', ofx)
         self.assertIn('No unambiguous card settlements found.', self.run_fin('settlement', 'candidates').stdout)
+
+    def test_card_assignment_settles_a_replaced_cards_debits(self):
+        ofx = self.root / 'replaced-card.ofx'
+        ofx.write_text(Path('fixtures/bank.ofx').read_text().replace(
+            '<ACCTTYPE>SAVINGS</ACCTTYPE>', '<ACCTTYPE>CREDITCRD</ACCTTYPE>').replace(
+            'CAFÉ &amp; CO', 'Relevé différé Carte OLD-CARD'))
+        self.run_fin('import', 'boursobank', ofx)
+        cards = lambda *args: {c['card']: c for c in json.loads(self.run_fin('card', 'list', '--json', *args).stdout)}
+        accounts = json.loads(self.run_fin('account', 'list', '--json').stdout)
+        card = next(a for a in accounts if a['account_type'] == 'CREDITCRD')
+        checking = next(a for a in accounts if a['account_type'] == 'CHECKING')
+        listed = cards()
+        # The card account's own number is a card; the old number is seen but belongs nowhere.
+        self.assertEqual((listed['SAVINGS']['known_by'], listed['SAVINGS']['account_id']), ('statement', card['id']))
+        self.assertEqual((listed['OLD-CARD']['known_by'], listed['OLD-CARD']['account_id']), (None, None))
+        self.assertEqual((listed['OLD-CARD']['bank_rows'], listed['OLD-CARD']['undecided']), (1, 1))
+        self.assertIn('fin card assign CARD ACCOUNT-ID', self.run_fin('card', 'list').stdout)
+        self.assertIn('No unambiguous card settlements found.', self.run_fin('settlement', 'candidates').stdout)
+
+        refused = self.run_fin('card', 'assign', 'OLD-CARD', checking['id'], '--yes', check=False)
+        self.assertIn('is not a card account', refused.stderr)
+        refused = self.run_fin('card', 'assign', 'SAVINGS', card['id'], '--yes')
+        self.assertIn('already belongs', refused.stdout)
+        self.assertIn('not assigned', self.run_fin('card', 'unassign', 'OLD-CARD', '--yes', check=False).stderr)
+        self.assertIn('Nothing changed.', self.terminal(['card', 'assign', 'OLD-CARD', card['id']],
+                                                        [('Record this card?', 'n')]))
+        self.assertIsNone(cards()['OLD-CARD']['known_by'])
+
+        # A unique ending names the card.
+        output = self.run_fin('card', 'assign', 'LD-CARD', card['id'], '--yes').stdout
+        self.assertIn('now offers 1 of its debits', output)
+        self.assertEqual((cards()['OLD-CARD']['known_by'], cards()['OLD-CARD']['account_id']), ('assigned', card['id']))
+        self.assertIn('OLD-CARD', self.run_fin('settlement', 'candidates').stdout)
+        self.assertIn('own number', self.run_fin('card', 'unassign', 'SAVINGS', '--yes', check=False).stderr)
+        self.run_fin('card', 'unassign', 'OLD-CARD', '--yes')
+        self.assertIn('No unambiguous card settlements found.', self.run_fin('settlement', 'candidates').stdout)
+        self.run_fin('card', 'assign', 'OLD-CARD', card['id'], '--yes')
+        self.assertIn('1 card settlements recorded', self.terminal(['settlement', 'review', '--all'],
+                                                                  [('card settlements?', 'y')]))
+        self.assertEqual(cards()['OLD-CARD']['settled'], 1)
+        refused = self.run_fin('card', 'unassign', 'OLD-CARD', '--yes', check=False)
+        self.assertIn('settlements were recorded through OLD-CARD', refused.stderr)
+
+        # The assignment is a decision: a rebuild restores it before the settlement it carries.
+        saved = self.root / 'card-decisions.json'
+        self.run_fin('decisions', 'export', saved)
+        document = json.loads(saved.read_text())
+        self.assertEqual([c['card_reference'] for c in document['cards']], ['OLD-CARD'])
+        rebuilt = self.root / 'card-rebuilt.sqlite3'
+        self.run_fin('init', '--database', rebuilt)
+        self.run_fin('import', 'boursobank', ofx, '--database', rebuilt)
+        output = self.run_fin('decisions', 'restore', saved, '--database', rebuilt, '--yes').stdout
+        self.assertIn('cards=1', output)
+        self.assertIn('settlements=1', output)
+        rebuilt_cards = cards('--database', rebuilt)
+        self.assertEqual((rebuilt_cards['OLD-CARD']['known_by'], rebuilt_cards['OLD-CARD']['settled']), ('assigned', 1))
+        self.assertIn('cards=0', self.run_fin('decisions', 'restore', saved, '--database', rebuilt).stdout)
 
     def test_interactive_card_settlement(self):
         ofx = self.root / 'settlement.ofx'

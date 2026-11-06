@@ -1,6 +1,6 @@
 # Cards
 
-Status: proposal, 2026-11-06.
+Status: implemented 2026-11-06, except `fin card show`.
 
 ## The problem
 
@@ -63,12 +63,13 @@ When a card was used is derived from the debits that name it, never stored.
 
 ## Commands
 
-`fin card list [--json]` lists every card number fin has seen, on a bank debit or as a card account:
+`fin card list [--json]` lists every card number fin has seen, on a bank row or as a card account:
 the number as printed, its account (ID and ledger name) or `unassigned`, how it is known, the first
-and last debit naming it, and its settlements (recorded and open). It also shows from when the
+and last bank row naming it (its payments, and any refund), and how many are settled or undecided. It also shows from when the
 account has purchases, so that a card used before its account's statements begin stands out.
 
-`fin card assign CARD ACCOUNT-ID` assigns a card number to a card account, after a preview listing
+`fin card assign CARD ACCOUNT-ID` assigns a card number, given as printed or by a unique ending
+such as its last digits, to a card account, after a preview listing
 the settlement debits that would become candidates; it asks before writing. It refuses an account
 that is not a card account, an account at another institution, and a number that is already another
 account's own number or assigned elsewhere.

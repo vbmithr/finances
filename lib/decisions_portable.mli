@@ -17,8 +17,16 @@ type reversal =
   ; reversal : Category_portable.decision
   }
 
+(** A card number assigned to a card account; see docs/cards.md. *)
+type card =
+  { institution : string
+  ; card_reference : string
+  ; card_source_account : string
+  }
+
 type t =
   { accounts : Bank_account_config.t list option
+  ; cards : card list option
   ; categories : string list option
   ; rules : Classification_rule.t list option
   ; assignments : Category_portable.t option

@@ -90,6 +90,7 @@ let () =
           ; Institution_cmd.cmd
           ; Records_cmd.cmd
           ; Settlement_cmd.cmd
+          ; Card_cmd.cmd
           ; Reversal_cmd.cmd
           ; Rule_cmd.cmd
           ; Db_cmd.cmd

@@ -35,14 +35,24 @@ let reversal_candidates db =
 (* Card spending that may be a settlement, in listing order; see
    [Sql.settlement_candidates]. *)
 let settlement_candidates db =
-  let* ids =
-    collect db (statement Sql.settlement_candidates Row.(t1 (int64 "event_id")))
+  let* rows =
+    collect
+      db
+      (statement
+         Sql.settlement_candidates
+         Row.(t2 (int64 "event_id") (text "card_source_account")))
+  in
+  let ids =
+    List.map rows ~f:fst |> List.remove_consecutive_duplicates ~equal:Int64.equal
   in
   let* reviews = reviews_of_events db ids in
   let by_id =
     Hashtbl.of_alist_exn (module Int64) (List.map reviews ~f:(fun r -> r.event_id, r))
   in
-  Ok (List.map ids ~f:(Hashtbl.find_exn by_id))
+  let cards = Hashtbl.of_alist_multi (module Int64) rows in
+  Ok
+    (List.map ids ~f:(fun id ->
+       Hashtbl.find_exn by_id id, Option.value (Hashtbl.find cards id) ~default:[]))
 ;;
 
 let reversal_change db ~original ~reversal ~undo =

@@ -10,9 +10,10 @@ type reversal_candidate =
 
 val reversal_candidates : t -> reversal_candidate list Or_error.t
 
-(** Card spending on a bank account that may be a card's settlement: undecided, naming a card
-    whose own account shows no payment of it. Matching the accounts is the caller's. *)
-val settlement_candidates : t -> bank_review list Or_error.t
+(** Card spending on a bank account that may be a card's settlement: undecided, naming a
+    card, with the source accounts of the card accounts that card belongs to and that show
+    no payment of it. Checking the accounts is the caller's. *)
+val settlement_candidates : t -> (bank_review * string list) list Or_error.t
 
 val reversal_change
   :  t

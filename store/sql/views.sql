@@ -183,8 +183,9 @@ LEFT JOIN grouped_operations g ON g.member = m.operation_id;
 -- Each movement with every account showing the opposite amount in the same currency within
 -- seven days. For card spending on a bank account, a row on the card's own account is the
 -- card being paid: a transfer, not a settlement.
-CREATE TEMP VIEW opposite_payments(event_id, venue, bank_id, account_id, account_type) AS
-SELECT m.event_id, p.venue, p.bank_id, p.account_id, p.account_type
+CREATE TEMP VIEW opposite_payments(event_id, venue, account, bank_id, account_id,
+                                    account_type) AS
+SELECT m.event_id, p.venue, p.account, p.bank_id, p.account_id, p.account_type
 FROM movements m
 JOIN movements p
   ON p.currency = m.currency
@@ -208,3 +209,14 @@ CREATE TEMP TABLE deleted_account(
 CREATE TEMP TABLE deleted_events(id INTEGER PRIMARY KEY);
 CREATE TEMP TABLE deleted_documents(id INTEGER PRIMARY KEY);
 CREATE TEMP TABLE deleted_operations(id INTEGER PRIMARY KEY);
+
+-- Each card number with the card account it belongs to, and how fin knows: a card account's
+-- own number is one of its cards ('statement'), and a person can assign others, such as a
+-- replaced card's ('assigned'). Card numbers are as the institution prints them.
+CREATE TEMP VIEW card_accounts(institution, card_reference, card_source_account, known_by) AS
+SELECT DISTINCT venue, account_id, account, 'statement'
+FROM movements
+WHERE account_type IN ('CREDITCRD', 'credit-card')
+UNION ALL
+SELECT institution, card_reference, card_source_account, 'assigned'
+FROM card_assignments;

@@ -891,6 +891,7 @@ let delete_account ?(dry_run = false) db (mapping : Bank_account_mapping.t) =
         ; "movement_type_changes"
         ; "operation_resolution_changes"
         ; "operation_exchange_changes"
+        ; "card_assignment_changes"
         ]
       in
       let trigger_sql =
