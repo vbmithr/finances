@@ -532,6 +532,11 @@ position observations, derive positions from fills, or calculate funding.
   A posting lookup that stayed slow inside the restore was an upstream SQLite issue, fixed by a
   patched package. Three other indexes were missing: operation sources and document events by
   event, companion rows by layout.
+- [x] A category batch is one read (`category_batch.sql`), the old checks in order on that data,
+  journal entries built in bulk, and one write per table, where each decision took about fifteen
+  statements and fetched its event several times; look-alike rows are counted in SQL instead of
+  fetched. Real restore: 0.20 s. What remains is parsing the decisions file, SQLite's writes and
+  commit, and decoding each restored movement twice (review and journal entry).
 - [x] Cards ([cards.md](cards.md)): a card number belongs to a card account, stated by the account's
   own number or assigned by a person; `fin card list`, `assign` and `unassign`, settlement matching
   through the `card_accounts` view, an optional `cards` section in `fin decisions`, schema 37. On a

@@ -3,7 +3,6 @@ open Rel
 module Db = Rel_sqlite3
 open Handle
 open Setup
-open Sources
 open Ledger
 
 type statement_reconciliation =
@@ -137,41 +136,106 @@ let set_bank_categories_in_transaction ?(only_unclassified = false) db decisions
       ~compare:Int64.compare
   then Or_error.error_string "duplicate event_id in category batch"
   else (
+    (* One read for every decision, the checks in decision order with the old messages, then
+       one write per table: the batch is all or nothing, and its first error is the first
+       decision's in order. *)
     let apply_batch db =
-      let rec apply changed = function
-        | [] -> Ok changed
-        | (d : Bank_category.t) :: rest ->
-          let* event = find_event db d.event_id in
-          let* event =
-            Or_error.of_option event ~error:(Error.of_string "unknown category event_id")
-          in
-          let* transfer = linked_transfer db d.event_id in
-          let linked_query =
-            Rel_sql.Stmt.(
-              func
-                "SELECT EXISTS(SELECT 1 FROM movement_claims WHERE anchor_event_id=? AND \
-                 linked)"
-                (int64 @-> ret Row.(t1 (bool "linked"))))
-          in
-          let* operation_linked =
-            db_result (Db.first db.conn (linked_query d.event_id))
-          in
-          let* settlement = card_settlement db d.event_id in
-          let* reversal = linked_reversal db d.event_id in
-          if Option.is_some reversal
+      let ids = List.map decisions ~f:(fun d -> d.Bank_category.event_id) in
+      let* rows =
+        collect
+          db
+          (Rel_sql.Stmt.(
+             func
+               Sql.category_batch
+               (text
+                @-> text
+                @-> ret
+                      Row.(
+                        unit
+                          (fun
+                              id
+                               venue
+                               account
+                               kind
+                               transfer
+                               linked
+                               settlement
+                               reversal
+                               previous_account
+                               previous_reason
+                               movement_id
+                               entry
+                               date
+                               description
+                             ->
+                             ( id
+                             , (venue, account, kind)
+                             , (transfer, linked, settlement, reversal)
+                             , (previous_account, previous_reason)
+                             , movement_id
+                             , (entry, date, description) ))
+                        * int64 "event_id"
+                        * option Rel.Type.text "venue"
+                        * option Rel.Type.text "account"
+                        * option Rel.Type.text "kind"
+                        * bool "transfer"
+                        * bool "operation_linked"
+                        * bool "settlement"
+                        * bool "reversal"
+                        * option Rel.Type.text "previous_account"
+                        * option Rel.Type.text "previous_reason"
+                        * option Rel.Type.int64 "movement_id"
+                        * option Rel.Type.int64 "entry_id"
+                        * option Rel.Type.text "date"
+                        * option Rel.Type.text "description")))
+             ("[" ^ String.concat ~sep:"," (List.map ids ~f:Int64.to_string) ^ "]")
+             Bank_projection.key)
+      in
+      let projected =
+        List.filter_map rows ~f:(fun (id, (venue, account, _), _, _, _, (entry, _, _)) ->
+          match venue, account, entry with
+          | Some venue, Some account, Some _ -> Some (id, venue, account)
+          | _ -> None)
+      in
+      let* expected = mapped_bank_entries db projected in
+      let* stored =
+        read_entries
+          db
+          (List.filter_map rows ~f:(fun (_, _, _, _, _, entry) ->
+             match entry with
+             | Some entry, Some date, Some description -> Some (entry, date, description)
+             | _ -> None))
+      in
+      let check
+            (d : Bank_category.t)
+            ( _
+            , (venue, _, kind)
+            , (transfer, linked, settlement, reversal)
+            , previous
+            , movement_id
+            , (entry, _, _) )
+        =
+        match venue, kind with
+        | None, _ | _, None -> Or_error.error_string "unknown category event_id"
+        | Some _, Some kind ->
+          if reversal
           then
             Or_error.error_string
               "undo the confirmed reversal before changing its category"
-          else if Option.is_some settlement
+          else if settlement
           then Or_error.error_string "transaction is a confirmed card settlement"
-          else if Option.is_some transfer || Option.value operation_linked ~default:false
+          else if transfer || linked
           then
             Or_error.error_string
               "reject the confirmed transfer before changing its category"
-          else if not (Registry.is_movement db.registry event)
+          else if not (Registry.is_movement_kind db.registry kind)
           then Or_error.error_string "category decision requires a bank event"
-          else
-            let* previous = db_result (Db.first db.conn (find_category d.event_id)) in
+          else (
+            let previous =
+              match previous with
+              | Some account, Some reason -> Some (account, reason)
+              | _ -> None
+            in
             if
               only_unclassified
               && Option.exists previous ~f:(fun (account, _) ->
@@ -181,78 +245,98 @@ let set_bank_categories_in_transaction ?(only_unclassified = false) db decisions
                 "a selected transaction is no longer unclassified; review it again"
             else if
               Option.equal [%equal: string * string] previous (Some (d.account, d.reason))
-            then apply changed rest
+            then Ok None
             else
-              let* movement_id = bank_primary_movement_id db d.event_id in
-              let* existing =
-                db_result (Db.first db.conn (find_entry d.event_id Bank_projection.key))
+              let* movement_id =
+                Or_error.of_option
+                  movement_id
+                  ~error:(Error.of_string "bank primary movement is missing")
               in
               let* () =
-                match existing with
+                match entry with
                 | None -> Ok ()
-                | Some (id, date, description) ->
-                  let* stored = read_entry db id date description in
-                  let* expected = mapped_bank_entry db d.event_id event in
-                  if not (same_entry stored expected)
-                  then
+                | Some entry ->
+                  let* stored =
+                    Option.value
+                      (Hashtbl.find stored entry)
+                      ~default:(Or_error.error_string "bank journal entry is missing")
+                  in
+                  let* expected =
+                    Option.value
+                      (Hashtbl.find expected d.event_id)
+                      ~default:(Or_error.error_string "bank movement is missing")
+                  in
+                  if same_entry stored expected
+                  then Ok ()
+                  else
                     Or_error.error_string
                       "category change conflicts with existing bank projection"
-                  else (
-                    let update =
-                      fun account entry_id -> update_posting account entry_id 1
-                    in
-                    db_result (Db.exec db.conn (update d.account id)))
               in
-              let upsert =
-                Rel_sql.Stmt.(
-                  func
-                    "INSERT INTO bank_categories(movement_id,event_id,account,reason) \
-                     VALUES (?,?,?,?) ON CONFLICT(event_id) DO UPDATE SET \
-                     account=excluded.account,reason=excluded.reason"
-                    (int64 @-> int64 @-> text @-> text @-> unit))
-              in
-              let audit =
-                let open Db_schema.Bank_category_changes in
-                let insert = Rel_sql.insert_into_cols Db.dialect table in
-                fun v_movement_id v_event_id v_previous_account v_account v_reason ->
-                  insert
-                    Col.
-                      [ Value (movement_id, v_movement_id)
-                      ; Value (event_id, v_event_id)
-                      ; Value (previous_account, v_previous_account)
-                      ; Value (account, v_account)
-                      ; Value (reason, v_reason)
-                      ]
-              in
-              let catalog =
-                Rel_sql.Stmt.(
-                  func
-                    "INSERT OR IGNORE INTO category_catalog(account) VALUES (?)"
-                    (text @-> unit))
-              in
-              let* () =
-                if String.equal d.account "equity:unclassified"
-                then Ok ()
-                else db_result (Db.exec db.conn (catalog d.account))
-              in
-              let* () =
-                db_result
-                  (Db.exec db.conn (upsert movement_id d.event_id d.account d.reason))
-              in
-              let* () =
-                db_result
-                  (Db.exec
-                     db.conn
-                     (audit
-                        movement_id
-                        d.event_id
-                        (Option.map previous ~f:fst)
-                        d.account
-                        d.reason))
-              in
-              apply (changed + 1) rest
+              Ok (Some (movement_id, d, Option.map previous ~f:fst, entry)))
       in
-      apply 0 decisions
+      let* changes =
+        List.fold2_exn decisions rows ~init:(Ok []) ~f:(fun acc d row ->
+          let* acc = acc in
+          let* change = check d row in
+          Ok (Option.to_list change @ acc))
+      in
+      let changes = List.rev changes in
+      let text = Json.encode Jsont.string in
+      let batch rows = "[" ^ String.concat ~sep:"," rows ^ "]" in
+      let exec statement values =
+        db_result
+          (Db.exec db.conn (Rel_sql.Stmt.(func statement (text @-> unit)) (batch values)))
+      in
+      let* () =
+        if List.is_empty changes
+        then Ok ()
+        else
+          let* () =
+            exec
+              "INSERT OR IGNORE INTO category_catalog(account) SELECT value FROM \
+               json_each(?) ORDER BY key"
+              (List.filter_map changes ~f:(fun (_, d, _, _) ->
+                 Option.some_if
+                   (not (String.equal d.account "equity:unclassified"))
+                   (text d.account)))
+          in
+          let* () =
+            exec
+              "UPDATE postings SET account=j.value->>1 FROM json_each(?) j WHERE \
+               postings.entry_id=j.value->>0 AND postings.ordinal=1"
+              (List.filter_map changes ~f:(fun (_, d, _, entry) ->
+                 Option.map entry ~f:(fun entry ->
+                   Printf.sprintf "[%Ld,%s]" entry (text d.account))))
+          in
+          let* () =
+            exec
+              "INSERT INTO bank_categories(movement_id,event_id,account,reason) SELECT \
+               value->>0,value->>1,value->>2,value->>3 FROM json_each(?) WHERE true \
+               ORDER BY key ON CONFLICT(event_id) DO UPDATE SET \
+               account=excluded.account,reason=excluded.reason"
+              (List.map changes ~f:(fun (movement_id, d, _, _) ->
+                 Printf.sprintf
+                   "[%Ld,%Ld,%s,%s]"
+                   movement_id
+                   d.event_id
+                   (text d.account)
+                   (text d.reason)))
+          in
+          exec
+            "INSERT INTO \
+             bank_category_changes(movement_id,event_id,previous_account,account,reason) \
+             SELECT value->>0,value->>1,value->>2,value->>3,value->>4 FROM json_each(?) \
+             ORDER BY key"
+            (List.map changes ~f:(fun (movement_id, d, previous, _) ->
+               Printf.sprintf
+                 "[%Ld,%Ld,%s,%s,%s]"
+                 movement_id
+                 d.event_id
+                 (Option.value_map previous ~default:"null" ~f:text)
+                 (text d.account)
+                 (text d.reason)))
+      in
+      Ok (List.length changes)
     in
     apply_batch db)
 ;;

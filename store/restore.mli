@@ -130,6 +130,14 @@ val category_fields_hash : (int64, Event_digests.t) Hashtbl.t -> int64 -> string
     identifies the row, so that it survives a converter keeping more detail. *)
 val payload_hash : (int64, Event_digests.t) Hashtbl.t -> int64 -> string
 
+(** How many rows of this event's place and time share its [evidence_key], counted in SQL. *)
+val evidence_count
+  :  Handle.t
+  -> (int64, Event_digests.t) Hashtbl.t
+  -> int64
+  -> Source_event.t
+  -> int Or_error.t
+
 (** What tells this row from others of its day, for matching saved decisions. *)
 val evidence_key
   :  Handle.t

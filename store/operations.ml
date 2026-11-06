@@ -649,23 +649,18 @@ let preview_transfer_restore db (snapshot : Transfer_portable.t) =
          let* counts =
            traverse
              (fun (id, (e : Source_event.t)) ->
-                let* same =
-                  same_occurrence
+                let* count =
+                  count_look_alikes
                     db
                     ~venue
                     ~account
                     ~kind
                     ~occurred:(Temporal.to_string e.occurred)
+                    (if List.is_empty e.fields
+                     then Same_payload e.payload
+                     else Same_fields (category_fields_hash digests id))
                 in
-                Ok
-                  ( id
-                  , List.count same ~f:(fun (other_id, (other : Source_event.t)) ->
-                      if List.is_empty e.fields
-                      then String.equal other.payload e.payload
-                      else
-                        String.equal
-                          (category_fields_hash digests other_id)
-                          (category_fields_hash digests id)) ))
+                Ok (id, count))
              matches
          in
          Ok (key, (matches, counts)))
@@ -1143,21 +1138,8 @@ let preview_exchange_restore db (snapshot : Exchange_portable.t) =
            when String.equal (Temporal.to_string event.occurred) d.occurred
                 && String.equal (payload_hash digests id) d.payload_sha256
                 && String.equal (category_fields_hash digests id) d.fields_sha256 ->
-           let* same =
-             same_occurrence
-               db
-               ~venue:event.venue
-               ~account:event.account
-               ~kind:event.kind
-               ~occurred:d.occurred
-           in
-           let duplicate =
-             List.count same ~f:(fun (other_id, e) ->
-               String.equal
-                 (evidence_key db digests other_id e)
-                 (evidence_key db digests id event))
-             > 1
-           in
+           let* count = evidence_count db digests id event in
+           let duplicate = count > 1 in
            if
              duplicate
              || Option.is_some d.account

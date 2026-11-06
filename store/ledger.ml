@@ -188,32 +188,45 @@ let find_by_identity db ~venue ~account ~kind ~source_id =
        Option.map e ~f:(fun e -> id, e)))
 ;;
 
-(* The events of one place and time, as [Temporal.to_string] writes it: a date or an
-   instant, never both. *)
-let same_occurrence db ~venue ~account ~kind ~occurred =
-  let date = String.length occurred = 10 in
-  let* ids =
-    collect
-      db
-      (Rel_sql.Stmt.(
-         func
-           (if date
-            then
-              "SELECT id FROM source_events WHERE venue=? AND account=? AND kind=? AND \
-               occurred_on=?"
-            else
-              "SELECT id FROM source_events WHERE venue=? AND account=? AND kind=? AND \
-               occurred_on IS NULL AND occurred_at=?")
-           (text @-> text @-> text @-> text @-> ret Row.(t1 (int64 "id"))))
-         venue
-         account
-         kind
-         occurred)
+type look_alike =
+  | Same_source_id of string
+  | Same_evidence of string
+  | Same_payload of string
+  | Same_fields of string
+
+(* How many events of one place and time ([occurred] as [Temporal.to_string] writes it)
+   look alike by one stored value; nothing is fetched. *)
+let count_look_alikes db ~venue ~account ~kind ~occurred look_alike =
+  let mode, value =
+    match look_alike with
+    | Same_source_id v -> "source_id", v
+    | Same_evidence v -> "evidence", v
+    | Same_payload v -> "payload", v
+    | Same_fields v -> "fields", v
   in
-  let* events = traverse (fun id -> find_event db id) ids in
-  Ok
-    (List.filter_map (List.zip_exn ids events) ~f:(fun (id, e) ->
-       Option.map e ~f:(fun e -> id, e)))
+  let* count =
+    db_result
+      (Db.first
+         db.conn
+         (Rel_sql.Stmt.(
+            func
+              ("SELECT count(*) FROM source_events e JOIN source_event_digests d ON \
+                d.event_id=e.id WHERE e.venue=?1 AND e.account=?2 AND e.kind=?3 AND "
+               ^ (if String.length occurred = 10
+                  then "e.occurred_on=?4"
+                  else "e.occurred_on IS NULL AND e.occurred_at=?4")
+               ^ " AND CASE ?5 WHEN 'source_id' THEN e.source_id=?6 WHEN 'evidence' THEN \
+                  d.evidence=?6 WHEN 'payload' THEN e.payload=CAST(?6 AS BLOB) ELSE \
+                  d.fields_sha256=?6 END")
+              (text @-> text @-> text @-> text @-> text @-> text @-> ret integer))
+            venue
+            account
+            kind
+            occurred
+            mode
+            value))
+  in
+  Ok (Option.value count ~default:0)
 ;;
 
 let event_by_id db event_id =
@@ -504,6 +517,83 @@ let mapped_bank_entry db event_id (event : Source_event.t) =
   let* counter_account = counter_account db event_id in
   let* movement = movement db event_id in
   Bank_projection.entry ?bank_account ?counter_account ~institution:event.venue movement
+;;
+
+let json_ids ids = "[" ^ String.concat ~sep:"," (List.map ids ~f:Int64.to_string) ^ "]"
+
+(* [mapped_bank_entry] for many movements, given as (event ID, institution, source
+   account), from three reads instead of three per movement. Each entry is its own result. *)
+let mapped_bank_entries db movements =
+  let ids = List.map movements ~f:(fun (id, _, _) -> id) in
+  let* names =
+    collect
+      db
+      (statement
+         "SELECT institution,source_account,ledger_account FROM bank_account_mappings"
+         Row.(t3 (text "institution") (text "source_account") (text "ledger_account")))
+  in
+  let names =
+    Hashtbl.Poly.of_alist_exn
+      (List.map names ~f:(fun (institution, source, name) -> (institution, source), name))
+  in
+  let* posting =
+    collect
+      db
+      (Rel_sql.Stmt.(
+         func
+           "SELECT event_id,posting_account FROM reviews WHERE event_id IN (SELECT value \
+            FROM json_each(?))"
+           (text
+            @-> ret Row.(t2 (int64 "event_id") (option Rel.Type.text "posting_account"))))
+         (json_ids ids))
+  in
+  let posting = Hashtbl.of_alist_exn (module Int64) posting in
+  let* stored = movement_rows ~event_ids:ids db in
+  let stored = Hashtbl.of_alist_exn (module Int64) stored in
+  Ok
+    (List.map movements ~f:(fun (id, venue, account) ->
+       ( id
+       , match Hashtbl.find stored id with
+         | None -> Or_error.errorf "no stored movement for event %Ld" id
+         | Some movement ->
+           Bank_projection.entry
+             ?bank_account:(Hashtbl.find names (venue, account))
+             ?counter_account:(Option.join (Hashtbl.find posting id))
+             ~institution:venue
+             movement ))
+     |> Hashtbl.of_alist_exn (module Int64))
+;;
+
+(* [read_entry] for many entries, given as (entry ID, date, description), in one read. *)
+let read_entries db entries =
+  let* rows =
+    collect
+      db
+      (Rel_sql.Stmt.(
+         func
+           "SELECT entry_id,account,commodity,quantity FROM postings WHERE entry_id IN \
+            (SELECT value FROM json_each(?)) ORDER BY entry_id,ordinal"
+           (text
+            @-> ret
+                  Row.(
+                    t4
+                      (int64 "entry_id")
+                      (text "account")
+                      (text "commodity")
+                      (text "quantity"))))
+         (json_ids (List.map entries ~f:(fun (id, _, _) -> id))))
+  in
+  let postings = Hashtbl.create (module Int64) in
+  List.iter (List.rev rows) ~f:(fun (entry, account, commodity, quantity) ->
+    Hashtbl.add_multi postings ~key:entry ~data:(account, commodity, quantity));
+  Ok
+    (List.map entries ~f:(fun (id, date, description) ->
+       ( id
+       , decode_entry
+           date
+           description
+           (Option.value (Hashtbl.find postings id) ~default:[]) ))
+     |> Hashtbl.of_alist_exn (module Int64))
 ;;
 
 let record_entry db ~event_id ~key entry =

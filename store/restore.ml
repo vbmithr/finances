@@ -44,6 +44,20 @@ let evidence_key db digests id (e : Source_event.t) =
   if identified then "id:" ^ e.source_id else (digest digests id).evidence
 ;;
 
+(* How many rows of this event's place and time share its [evidence_key]. *)
+let evidence_count db digests id (e : Source_event.t) =
+  let key = evidence_key db digests id e in
+  count_look_alikes
+    db
+    ~venue:e.venue
+    ~account:e.account
+    ~kind:e.kind
+    ~occurred:(Temporal.to_string e.occurred)
+    (if String.is_prefix key ~prefix:"id:"
+     then Same_source_id e.source_id
+     else Same_evidence (digest digests id).evidence)
+;;
+
 let bank_operation_anchors db =
   let* sources =
     collect
@@ -228,20 +242,9 @@ let preview_category_restore db (snapshot : Category_portable.t) =
          let* matches = find_by_identity db ~venue ~account ~kind ~source_id in
          let* evidence =
            traverse
-             (fun (id, (e : Source_event.t)) ->
-                let* same =
-                  same_occurrence
-                    db
-                    ~venue
-                    ~account
-                    ~kind
-                    ~occurred:(Temporal.to_string e.occurred)
-                in
-                let mine = evidence_key db digests id e in
-                Ok
-                  ( id
-                  , List.count same ~f:(fun (other, o) ->
-                      String.equal (evidence_key db digests other o) mine) ))
+             (fun (id, e) ->
+                let* count = evidence_count db digests id e in
+                Ok (id, count))
              matches
          in
          Ok

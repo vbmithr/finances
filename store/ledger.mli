@@ -181,6 +181,19 @@ val mapped_bank_entry
   -> Source_event.t
   -> (Accounting.entry, Error.t) Result.t
 
+(** [mapped_bank_entry] for many movements, as (event ID, institution, source account), from
+    three reads; each entry is its own result. *)
+val mapped_bank_entries
+  :  Handle.t
+  -> (int64 * string * string) list
+  -> (int64, Accounting.entry Or_error.t) Hashtbl.t Or_error.t
+
+(** [read_entry] for many entries, as (entry ID, date, description), in one read. *)
+val read_entries
+  :  Handle.t
+  -> (int64 * string * string) list
+  -> (int64, Accounting.entry Or_error.t) Hashtbl.t Or_error.t
+
 val update_posting : string -> int64 -> int -> unit Rel_sql.Stmt.t
 val same_entry : Accounting.entry -> Accounting.entry -> bool
 val stored : (int64, 'a) Hashtbl.t -> int64 Hashtbl.key -> 'a Or_error.t
@@ -215,14 +228,21 @@ val stored_event_row : Handle.t -> int64 -> Db_schema.Source_events.t option Or_
 val stored_event_fields : Handle.t -> int64 -> (string * string) list Or_error.t
 val find_event : Handle.t -> int64 -> Source_event.t option Or_error.t
 
-(** The events of one place and time; [occurred] as [Temporal.to_string] writes it. *)
-val same_occurrence
+type look_alike =
+  | Same_source_id of string
+  | Same_evidence of string
+  | Same_payload of string
+  | Same_fields of string
+
+(** How many events of one place and time look alike by one stored value, counted in SQL. *)
+val count_look_alikes
   :  Handle.t
   -> venue:string
   -> account:string
   -> kind:string
   -> occurred:string
-  -> (int64 * Source_event.t) list Or_error.t
+  -> look_alike
+  -> int Or_error.t
 
 (** The event with this identity, through the unique index: at most one. *)
 val find_by_identity
