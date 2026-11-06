@@ -3047,6 +3047,40 @@ class ImportOnboarding(unittest.TestCase):
         self.assertEqual((rebuilt_cards['OLD-CARD']['known_by'], rebuilt_cards['OLD-CARD']['settled']), ('assigned', 1))
         self.assertIn('cards=0', self.run_fin('decisions', 'restore', saved, '--database', rebuilt).stdout)
 
+    def test_import_all_reads_one_folder_per_institution(self):
+        directory = self.root / 'statements'
+        (directory / 'bourso').mkdir(parents=True)
+        (directory / 'wise').mkdir()
+        (directory / '.git').mkdir()
+        shutil.copy('fixtures/bank.ofx', directory / 'bourso')
+        shutil.copy('fixtures/wise.xml', directory / 'wise')
+        operations = lambda *args: json.loads(self.run_fin('operation', 'list', '--json', *args).stdout)
+
+        # Every name is checked before anything is imported.
+        (directory / 'misc').mkdir()
+        refused = self.run_fin('import', '--all', directory, check=False)
+        self.assertIn('not institutions or aliases', refused.stderr)
+        self.assertIn('misc', refused.stderr)
+        self.assertEqual(operations(), [])
+        (directory / 'misc').rmdir()
+        (directory / 'notes.txt').write_text('loose')
+        refused = self.run_fin('import', '--all', directory, check=False)
+        self.assertIn('belong to no institution: notes.txt', refused.stderr)
+        self.assertEqual(operations(), [])
+        (directory / 'notes.txt').unlink()
+        self.assertIn('takes one directory', self.run_fin('import', '--all', directory, directory, check=False).stderr)
+        self.assertIn('not --all', self.run_fin('import', '--all', directory, '--account-id', 'x', check=False).stderr)
+
+        output = self.run_fin('import', '--all', directory).stdout
+        self.assertLess(output.index('== bourso'), output.index('== wise'))
+        separate = self.root / 'separate.sqlite3'
+        self.run_fin('init', '--database', separate)
+        self.run_fin('import', 'bourso', directory / 'bourso', '--database', separate)
+        self.run_fin('import', 'wise', directory / 'wise', '--database', separate)
+        shape = lambda rows: sorted((r['occurred'], r['description'], r['amount']) for r in rows)
+        self.assertEqual(shape(operations()), shape(operations('--database', separate)))
+        self.assertIn('unchanged=', self.run_fin('import', '--all', directory).stdout)
+
     def test_interactive_card_settlement(self):
         ofx = self.root / 'settlement.ofx'
         ofx.write_text(Path('fixtures/bank.ofx').read_text().replace(

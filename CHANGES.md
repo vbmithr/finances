@@ -8,6 +8,9 @@ short line of their own.
 
 ## Unreleased
 
+- `fin import --all DIRECTORY` imports every folder of a directory named after an institution or an
+  alias, as one `fin import NAME FOLDER` each. An unrecognized folder, or a file directly in the
+  directory, stops it before anything is imported.
 - **Action required: rebuild.** Schema 37 adds card assignments. Before installing, run `fin backup DIR`
   (it copies any schema) and, with your current fin, `fin decisions export FILE`; then run `fin delete`,
   `fin init`, import your statements again and `fin decisions restore FILE`.

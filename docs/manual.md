@@ -185,14 +185,13 @@ another schema. After installing the new version:
 
 ```sh
 fin init
-fin import boursobank ~/Statements/boursobank
-fin import wise ~/Statements/wise
-fin import bunq ~/Statements/bunq
-fin import revolut ~/Statements/revolut
+fin import --all ~/Statements
 fin decisions restore ~/fin-decisions.json
 ```
 
-Replace these paths with your own. Institutions you added with a generic CSV must be added
+`--all` imports each folder of `~/Statements` named after an institution or an alias (see
+[Importing statements](#importing-statements)); `fin import NAME FOLDER` imports one. Replace
+these paths with your own. Institutions you added with a generic CSV must be added
 and imported again, with their original institution and account labels.
 
 ### What a decisions file holds
@@ -225,6 +224,21 @@ only that. The file contains personal source identifiers: keep it private. After
 export the journal again.
 
 ## Importing statements
+
+Import an institution's statements by naming it: `fin import wise ~/Statements/wise`. If you
+keep one folder per institution, each named after the institution or an alias
+(`fin institution list` shows both, for example `bourso` for BoursoBank), import them all at
+once:
+
+```sh
+fin import --all ~/Statements
+```
+
+Each folder is imported as `fin import NAME FOLDER` would, in name order, with a summary per
+institution. Every name is checked first: a folder that is not an institution or alias, or a
+file directly in `~/Statements`, stops the import before anything is read, so nothing is
+skipped silently. Hidden folders are ignored. Folders must be real directories, not
+symbolic links, as for any import.
 
 ### Inspect CDC CSV exports
 
