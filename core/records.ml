@@ -114,6 +114,7 @@ type details =
   ; reported : reported option
   ; balance_after : Quantity.t option
   ; valuations : amount list
+  ; names : (string * string) list
   ; fields : (string * string) list
   }
 
@@ -401,6 +402,7 @@ let details_codec =
          reported
          balance_after
          valuations
+         names
          fields
        ->
        { descriptions
@@ -411,6 +413,7 @@ let details_codec =
        ; reported
        ; balance_after
        ; valuations
+       ; names
        ; fields
        })
   |> optional_list "descriptions" Jsont.string ~enc:(fun d -> d.descriptions)
@@ -421,6 +424,12 @@ let details_codec =
   |> Jsont.Object.opt_mem "reported" reported_codec ~enc:(fun d -> d.reported)
   |> Jsont.Object.opt_mem "balance_after" quantity ~enc:(fun d -> d.balance_after)
   |> optional_list "valuations" amount_codec ~enc:(fun d -> d.valuations)
+  |> Jsont.Object.mem
+       "names"
+       Json.string_map
+       ~dec_absent:[]
+       ~enc_omit:List.is_empty
+       ~enc:(fun d -> d.names)
   |> optional_list "fields" field ~enc:(fun d -> d.fields)
   |> Jsont.Object.error_unknown
   |> Jsont.Object.finish
@@ -435,6 +444,7 @@ let no_details =
   ; reported = None
   ; balance_after = None
   ; valuations = []
+  ; names = []
   ; fields = []
   }
 ;;
@@ -695,7 +705,15 @@ let check t =
     if Option.is_some r.details.balance_after && not one_movement
     then problem "a balance after the row needs exactly one movement";
     if r.observation && not one_movement
-    then problem "an observation needs exactly one movement");
+    then problem "an observation needs exactly one movement";
+    List.iter r.details.names ~f:(fun (symbol, _) ->
+      if
+        not
+          (List.exists r.movements ~f:(fun (m : movement) ->
+             match m.commodity with
+             | Reported { symbol = reported; _ } -> String.equal reported symbol
+             | Fiat _ | Asset _ -> false))
+      then problem "names %S, which no movement reports" symbol));
   if List.length t.sources = 1
   then List.iter (check_balances t) ~f:(Queue.enqueue problems);
   if Queue.is_empty problems

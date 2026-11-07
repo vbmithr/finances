@@ -90,6 +90,7 @@ let record (statement : Ofx_source.statement) (tx : Ofx_source.transaction)
       ; reported = None
       ; balance_after = None
       ; valuations = []
+      ; names = []
       ; fields =
           List.filter_opt
             [ Option.map tx.name ~f:(fun value -> "name", value)

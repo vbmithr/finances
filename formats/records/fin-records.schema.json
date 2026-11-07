@@ -399,6 +399,12 @@
             "$ref": "#/$defs/amount"
           }
         },
+        "names": {
+          "type": "object",
+          "additionalProperties": {
+            "$ref": "#/$defs/line"
+          }
+        },
         "fields": {
           "description": "Raw source values in source order, as name and value. A name may repeat.",
           "type": "array",

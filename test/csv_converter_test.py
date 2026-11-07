@@ -233,6 +233,9 @@ records = kind(lines, "record")
 assert [r["movements"][0]["quantity"] for r in records] == ["1000.5", "-250", "99", "7"], records
 assert [r["movements"][0]["commodity"] for r in records] == [
     {"kind": "reported", "code": c, "provider": "polygon"} for c in (usdc, usdc, spam, fake)], records
+# The name a token gives itself is stated, for reading, never trusted as its identity.
+assert [r["details"]["names"] for r in records] == [
+    {usdc: "USD Coin"}, {usdc: "USD Coin"}, {spam: "ERC-20 TOKEN*"}, {fake: "USD Coin"}], records
 account = kind(lines, "account")[0]
 assert (account["id"], account.get("type")) == (me, "wallet"), account
 strangers = write("export-strangers.csv", header

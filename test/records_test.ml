@@ -44,6 +44,7 @@ let reasons () =
     ; "impossible-date", "occurred"
     ; "invalid-currency-code", "ISO 4217"
     ; "no-header", "line 1: expected a header"
+    ; "names-unreported-symbol", "names \"0xOTHER\", which no movement reports"
     ; "no-source", "names no source"
     ; "observation-without-movement", "an observation needs exactly one movement"
     ; "repeated-role", "repeated role"
@@ -60,7 +61,7 @@ let reasons () =
         if not (String.is_substring message ~substring:reason)
         then Alcotest.failf "%s: expected %S in %s" name reason message);
   let names = examples "semantic" |> List.length in
-  Alcotest.(check int) "every semantic example has a reason" 16 names
+  Alcotest.(check int) "every semantic example has a reason" 17 names
 ;;
 
 let balance_after () =

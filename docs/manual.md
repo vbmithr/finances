@@ -294,7 +294,7 @@ ticker scoped to the exchange, or a token's contract scoped to its network. Say 
 what each one is; it applies to every movement reporting it:
 
 ```sh
-fin asset list                        # every reported symbol, with the name its rows give it
+fin asset list                        # every reported symbol, with the name its source states
 fin asset map cdc BTC BTC             # an exchange's ticker
 fin asset map polygon 0x3c49 USDC     # a token contract, by its first characters
 fin asset ignore polygon 0x5273       # spam: kept as evidence, never counted

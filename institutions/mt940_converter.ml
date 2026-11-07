@@ -60,6 +60,7 @@ let convert (profile : Mt940_profile.t) ~name contents =
         ; reported = None
         ; balance_after = None
         ; valuations = []
+        ; names = []
         ; fields =
             List.filter
               [ "name", tx.name; "counterparty", tx.counterparty ]

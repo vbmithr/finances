@@ -1,11 +1,11 @@
 -- Every symbol a provider reported on a movement, such as a token contract on a network or
--- an exchange's ticker: how many movements and when, the name its rows most often give it,
+-- an exchange's ticker: how many movements and when, the name its rows most often state for it,
 -- and what it is mapped to, or whether, unmapped, it is an ISO 4217 code that counts as
 -- that currency. A mapping with no movements yet, as a restore can make, is listed too.
 WITH reported AS (
   SELECT m.commodity ->> 'provider' AS provider, m.commodity ->> 'code' AS symbol,
     coalesce(substr(e.occurred_at, 1, 10), e.occurred_on) AS day,
-    CAST(e.payload AS TEXT) ->> '$.record.details.descriptions[0]' AS name
+    CAST(e.payload AS TEXT) -> '$.record.details.names' ->> (m.commodity ->> 'code') AS name
   FROM operation_movements m
   JOIN source_events e ON e.id = m.anchor_event_id
   WHERE m.commodity ->> 'kind' = 'reported'),

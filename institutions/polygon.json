@@ -228,7 +228,8 @@
                 },
                 "commodity": {
                   "reported": "ContractAddress",
-                  "provider": "polygon"
+                  "provider": "polygon",
+                  "name": "TokenName"
                 }
               }
             ]
@@ -248,7 +249,8 @@
                 },
                 "commodity": {
                   "reported": "ContractAddress",
-                  "provider": "polygon"
+                  "provider": "polygon",
+                  "name": "TokenName"
                 }
               }
             ]

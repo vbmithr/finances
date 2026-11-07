@@ -8,6 +8,10 @@ short line of their own.
 
 ## Unreleased
 
+- `fin asset list` showed a symbol's most common row description as its name, such as Kraken's
+  `trade` for BTC. It now shows only a name the source states: a token's name, which explorer
+  exports give for a contract. Records gain `details.names`, and a CSV definition's reported
+  commodity may name its `name` column.
 - A reported symbol that is an ISO 4217 currency code, such as cdc's `EUR`, counts as that currency
   until you map or ignore it: `fin asset list` shows it as `EUR (fiat, assumed)`, and nothing is saved.
   The codes come from the iso4217 library, which gains `Iso4217.all` (pinned at 3025949).
@@ -20,7 +24,7 @@ short line of their own.
   network holds it; the network stays in the source fields. What a source reports, a token's contract on
   its network or an exchange's ticker, is mapped once with `fin asset map PROVIDER SYMBOL CODE`, for
   every movement reporting it, or ignored as spam with `fin asset ignore`; `fin asset list` shows them
-  all with the name their rows give them. Mappings are saved and restored with your decisions.
+  all, with the name a source states for an opaque symbol such as a token contract. Mappings are saved and restored with your decisions.
   `fin operation resolve` now assigns only an account. Schema 40 adds the mappings and drops the table of
   journal symbols, since an asset's symbol is its journal name. Saved decisions restore as before; a
   saved resolution with a commodity, from an earlier build, is refused. Run `fin backup DIR` and

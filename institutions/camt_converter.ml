@@ -16,6 +16,7 @@ let no_details : Records.details =
   ; reported = None
   ; balance_after = None
   ; valuations = []
+  ; names = []
   ; fields = []
   }
 ;;

@@ -123,6 +123,7 @@ not change it, so a record gains data without changing identity.
 | `reported` | An amount stated but not interpreted, with its symbol |
 | `balance_after` | The account's balance after this row, if the source displays one |
 | `valuations` | What the source says this row is worth, as `quantity` and `commodity`, as stated |
+| `names` | What the source calls a symbol a movement reports, by symbol, such as a token's name for its contract. Read for display; never part of the commodity, since anyone can name a token USD Coin |
 | `fields` | Raw values as `[name, value]`, in source order; rules match these |
 
 A displayed running balance is evidence, so it is kept as stated, never computed. It is in
@@ -295,7 +296,9 @@ to each other is left to a definition, because those columns are not in the reco
   asset, so `{"code": "ETH"}` for a network's own coin), or `{"reported": column, "provider": name}`,
   which may add `"fiat_codes": ["EUR"]`: those values are currencies, so a row in one of them is a
   bank movement in that account's currency. They are listed because a crypto ticker can also be an
-  ISO code. A reported symbol that is an ISO code but not listed is still counted as that currency
+  ISO code. `"name": column` says which column names the reported symbol, stated in `details.names`:
+  a token contract is opaque, while a ticker is its own name. A reported symbol that is an ISO code
+  but not listed is still counted as that currency
   until `fin asset map` says otherwise; it stays an operation. A definition never says which symbol is which asset: a token is
   reported by its contract, scoped to its network, and `fin asset map` says what it is.
 - A condition is `column` with `in`, `sign` (`positive`, `negative`), `filled`, or `address`.

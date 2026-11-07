@@ -30,6 +30,7 @@ type commodity_spec =
       { column : string
       ; provider : string
       ; fiat_codes : string list
+      ; name : string option (* The column naming it, such as a token's name. *)
       }
 
 type sign =
@@ -310,12 +311,12 @@ let quantity_codec =
 ;;
 
 let commodity_codec =
-  Jsont.Object.map (fun fiat code reported provider fiat_codes ->
-    match fiat, code, reported, provider with
-    | Some column, None, None, None -> Fiat_column column
-    | None, Some code, None, None -> Code code
-    | None, None, Some column, Some provider ->
-      Reported_column { column; provider; fiat_codes }
+  Jsont.Object.map (fun fiat code reported provider fiat_codes name ->
+    match fiat, code, reported, provider, name with
+    | Some column, None, None, None, None -> Fiat_column column
+    | None, Some code, None, None, None -> Code code
+    | None, None, Some column, Some provider, name ->
+      Reported_column { column; provider; fiat_codes; name }
     | _ ->
       Jsont.Error.msgf
         Jsont.Meta.none
@@ -325,6 +326,7 @@ let commodity_codec =
   |> opt "reported" Jsont.string
   |> opt "provider" Jsont.string
   |> list_or_empty "fiat_codes" Jsont.string
+  |> opt "name" Jsont.string
   |> finish
 ;;
 
@@ -685,7 +687,8 @@ let named_columns t =
     (q.column :: Option.to_list q.minus) @ Option.to_list q.plus
   in
   let commodity = function
-    | Fiat_column column | Reported_column { column; _ } -> [ column ]
+    | Fiat_column column -> [ column ]
+    | Reported_column { column; name; _ } -> column :: Option.to_list name
     | Code _ -> []
   in
   let conditions =
@@ -864,7 +867,7 @@ let commodity_of t row = function
   | Fiat_column column ->
     Validation.currency column (cell t row column) |> Or_error.ok_exn |> Commodity.fiat
   | Code code -> Commodity.of_code code |> Or_error.ok_exn
-  | Reported_column { column; provider; fiat_codes } ->
+  | Reported_column { column; provider; fiat_codes; name = _ } ->
     let symbol = cell t row column in
     if List.mem fiat_codes symbol ~equal:String.equal
     then Validation.currency column symbol |> Or_error.ok_exn |> Commodity.fiat
@@ -1009,6 +1012,7 @@ let details t row : Records.details =
           (optional_quantity t row v.quantity)
           ~f:(fun quantity : Records.amount ->
             { quantity; commodity = commodity_of t row v.commodity }))
+  ; names = []
   ; fields =
       List.filter_map (List.zip_exn row.header row.cells) ~f:(fun (name, value) ->
         Option.some_if (not (String.is_empty (String.strip value))) (name, value))
@@ -1053,7 +1057,20 @@ let record t ~positions ~statements row : Records.record =
         ; commodity = commodity_of t row m.commodity
         }))
   in
-  let details = details t row in
+  (* What the row calls each symbol it reports, where the definition says which column. *)
+  let names =
+    Option.value_map case ~default:[] ~f:(fun case ->
+      List.filter_map case.movements ~f:(fun m ->
+        match m.commodity with
+        | Reported_column { name = Some column; _ } ->
+          (match commodity_of t row m.commodity with
+           | Reported { symbol; _ } ->
+             Option.map (filled (cell t row column)) ~f:(fun name -> symbol, name)
+           | Fiat _ | Asset _ -> None)
+        | Reported_column { name = None; _ } | Fiat_column _ | Code _ -> None))
+    |> List.dedup_and_sort ~compare:[%compare: string * string]
+  in
+  let details = { (details t row) with names } in
   let details =
     if not (List.is_empty movements)
     then details

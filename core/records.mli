@@ -128,6 +128,9 @@ type details =
   ; balance_after : Quantity.t option
     (** The account's balance after this row, as the source displays it. *)
   ; valuations : amount list (** What the source says this row is worth, as stated. *)
+  ; names : (string * string) list
+    (** What the source calls each symbol a movement reports, such as a token's name for
+        its contract: enrichment, never identity. *)
   ; fields : (string * string) list
   }
 

@@ -3,4 +3,5 @@
 {"kind":"account","id":"wallet-1","no_iban":true}
 {"kind":"record","id":"tx-1/0","account":"wallet-1","occurred":"2025-01-02T10:00:00Z","movements":[{"role":"from","quantity":"-1.5","commodity":{"kind":"asset","code":"ETH"}},{"role":"to","quantity":"3000","commodity":{"kind":"asset","code":"USDC"}}],"details":{"references":{"hash":"0xSYNTHETICHASH"}}}
 {"kind":"record","id":"tx-2/0","account":"wallet-1","occurred":"2025-01-03T10:00:00Z","movements":[{"role":"primary","quantity":"1","commodity":{"kind":"asset","code":"LINK"}}]}
-{"kind":"end","records":2}
+{"kind":"record","id":"tx-3/0","account":"wallet-1","occurred":"2025-01-04T10:00:00Z","movements":[{"role":"primary","quantity":"5","commodity":{"kind":"reported","code":"0xSYNTHETIC","provider":"ethereum"}}],"details":{"names":{"0xSYNTHETIC":"Synthetic Token"}}}
+{"kind":"end","records":3}
