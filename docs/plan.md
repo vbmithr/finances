@@ -500,14 +500,14 @@ position observations, derive positions from fills, or calculate funding.
 - [x] Describe CDC as data (`cdc.json`) interpreted by the generic
   `Movement_csv`, with no institution-specific OCaml.
 - [ ] Database work in SQL ([sql-first.md](sql-first.md)). Done: schema 36 stores ledger names,
-  short account IDs and companion display names; `store/sql/views.sql` defines the shared reads
+  short account IDs and companion display names; `store/sql/views/` defines the shared reads
   (reviews, operation groups, operation rows) as views each connection creates; reviews, `fin operation
   list` and `fin transfer unmatched` read from `store/sql/` files, which a test compiles. On a rebuild
   of real statements with 54 settlements and confirmed transfers, 44 command outputs matched the
   previous build, apart from the order of an operation's movements in JSON. The decision rule is
   stated once, in `reviews`: both status commands count from it and the journal reads its posting
   account there, byte-identical on a fresh real rebuild. Transfer candidates are one query over
-  `reviews` (`store/sql/transfer_candidates.sql`); only the IBAN check stays in OCaml, and
+  `reviews` (`store/sql/transfers/transfer_candidates.sql`); only the IBAN check stays in OCaml, and
   `review_metadata` is gone. Identical output on real data untouched, after 40 transfer decisions
   and after categorizing six candidate sides. Settlement and reversal suggestions are queries too;
   both compared every movement against every other in OCaml. Seven commands that act on one or two

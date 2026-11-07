@@ -56,20 +56,23 @@ row type.
 
 ## Queries in SQL files
 
-Every query goes in its own file under `store/sql/`, such as `store/sql/unmatched_transfers.sql`.
-A dune rule runs `store/gen/embed_sql.exe` over the directory and generates the `Sql` module, one
-string per file, with no new dependency. A file holds plain SQL with `?1` parameters; the OCaml next
+Every query goes in its own file under `store/sql/`, in a folder by subject: `reviews/`,
+`operations/`, `transfers/`, `settlements/`, `reversals/`, `categories/`, `accounts/`, `cards/`, such
+as `store/sql/transfers/unmatched_transfers.sql`. A dune rule runs `store/gen/embed_sql.exe` over the
+tree and generates the `Sql` module, one string per file named after its basename (two files of one
+name fail the build), with no new dependency. A file holds plain SQL with `?1` parameters; the OCaml next
 to it declares the row type and nothing else. Where a user picks the sort, the caller appends an
 `ORDER BY` of view columns.
 
 A file of several statements, each ending with a semicolon, is a script, run with no parameters;
-`account_deletion*.sql` gathers what an account owns into temporary tables, counts what it shares,
-then deletes.
+`accounts/account_deletion_tables.sql` creates and empties the temporary tables,
+`account_deletion_scope.sql` gathers what an account owns into them, `account_deletion_counts.sql`
+counts what it shares, then `account_deletion.sql` deletes.
 
 Two checks keep files honest:
 
 - a test compiles every query against a fresh database, and runs every script in a savepoint it then
-  undoes (`Setup.check_queries`), so a typo or a renamed column fails the test suite, not a user's
+  undoes (`Setup.check_queries`, itself inside a savepoint once the deletion tables exist), so a typo or a renamed column fails the test suite, not a user's
   command;
 - `test/status_perf_test.py` already compares two sizes and fails a command whose cost grows
   faster than the data.
@@ -78,7 +81,9 @@ What files cannot do is share a fragment: SQLite has no include. That is what vi
 
 ## Views
 
-The shared reads are views, in `store/sql/views.sql`:
+The shared reads are views, in `store/sql/views/`, one file per subject: `1_operation_groups.sql`,
+`2_reviews.sql`, `3_operations.sql`, `4_matching.sql` and `5_cards.sql`. The generator joins them in
+name order into one `Sql.views`, so a view comes after the views it reads:
 
 - `reviews`: each movement with its decision, counter-account, posting account and effective
   description. It is the only statement of the decision rule; counts and the journal read it;
@@ -94,7 +99,8 @@ The shared reads are views, in `store/sql/views.sql`:
   already claims it, read by linking, resolving, category batches and restore checks;
 - `opposite_payments`: each movement with the accounts showing the opposite amount within seven
   days, which tells card spending already paid by the card from a settlement, for both settlement
-  suggestions and settlement rules.
+  suggestions and settlement rules;
+- `card_accounts`: each card number with the card account it belongs to, stated or assigned.
 
 They are temporary views that each connection creates when it opens. A view holds no data, so a
 change to one needs neither a schema version nor a rebuild, which a view in the schema would.
@@ -149,3 +155,11 @@ statements: one with only imports, one with transfers confirmed and settlements 
 
 - Whether transfer candidates' IBAN evidence can be stated in SQL. For now it stays a check in
   OCaml on the pairs `transfer_candidates.sql` returns.
+
+## Tables
+
+Tables stay defined in OCaml, in `store/db_schema.ml`: Rel writes each `CREATE TABLE` and its
+indexes, and `Sqlite_schema` adds what Rel does not model, the checks, `STRICT` and the triggers that
+keep evidence immutable and histories append-only. `store/sql/schema.sql` is a copy of that SQL,
+checked in for reading and never edited: `dune test` fails when it is out of date, and `dune promote`
+refreshes it. It is the exact text `fin init` runs, not a reconstruction from a database.

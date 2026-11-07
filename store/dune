@@ -31,12 +31,13 @@
  (preprocess
   (pps ppx_sexp_conv ppx_compare ppx_let)))
 
-; Queries and views live in sql/, one per file, read by the generated Sql module.
+; Queries and views live in sql/, by subject, one per file, read by the generated Sql
+; module; sql/views/ holds the views every connection creates.
 
 (rule
  (target sql.ml)
  (deps
-  (glob_files sql/*.sql))
+  (glob_files_rec sql/*.sql))
  (action
   (with-stdout-to
    %{target}

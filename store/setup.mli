@@ -11,6 +11,10 @@ val with_open : registry:Registry.t -> string -> (t -> 'a Or_error.t) -> 'a Or_e
     command. *)
 val check_queries : t -> unit Or_error.t
 
+(** The SQL that creates an empty database: its tables, indexes and triggers, and its
+    schema version. [store/sql/schema.sql] is a copy, checked in for reading. *)
+val schema_sql : string
+
 (** Whether this build can open the database at [path]: it reads the schema version and
     nothing else, so it works on any database. *)
 val schema_supported : string -> bool Or_error.t

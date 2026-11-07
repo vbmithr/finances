@@ -823,7 +823,7 @@ let delete_account ?(dry_run = false) db (mapping : Bank_account_mapping.t) =
         ~account_id:mapping.account_id
         ~account_type:mapping.account_type
     in
-    let* () = exec "DELETE FROM deleted_account" in
+    let* () = exec Sql.account_deletion_tables in
     let* () =
       db_result
         (Db.exec

@@ -8,6 +8,9 @@ short line of their own.
 
 ## Unreleased
 
+- Internal: the store's SQL files are in folders by subject, the views split by subject under
+  `store/sql/views/`, and `store/sql/schema.sql` is the generated table SQL, checked in for reading
+  and kept current by a test.
 - `fin account show ID` shows one account: its details, its cards, the card accounts it pays and how
   its movements are decided. `--json` prints it as one object.
 - **Action required: rebuild.** fdm is a top-up card, now typed `prepaid-card`: its balance is an asset,

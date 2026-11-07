@@ -1,0 +1,17 @@
+; sql/schema.sql is the SQL that creates the tables, generated from Db_schema and checked
+; in for reading: the tables are defined in OCaml. A test fails when it is out of date;
+; dune promote refreshes it.
+
+(executable
+ (name print_schema)
+ (libraries finances.store stdio))
+
+(rule
+ (with-stdout-to
+  schema.sql.gen
+  (run ./print_schema.exe)))
+
+(rule
+ (alias runtest)
+ (action
+  (diff ../sql/schema.sql schema.sql.gen)))

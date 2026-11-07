@@ -413,20 +413,34 @@ let with_open ~registry path f =
 ;;
 
 let check_queries db =
-  let* () =
-    List.fold_result Sql.queries ~init:() ~f:(fun () (name, query) ->
-      db_result (Db.exec_sql db.conn ("EXPLAIN " ^ query))
-      |> Or_error.tag ~tag:(name ^ ".sql"))
+  (* The account deletion queries read temp tables that a script creates; the whole check
+     runs in a savepoint it then undoes, so it leaves no tables behind. *)
+  let undo () =
+    db_result (Db.exec_sql db.conn "ROLLBACK TO check_sql; RELEASE check_sql")
   in
-  (* EXPLAIN covers only a script's first statement, so a script runs, then is undone. *)
-  List.fold_result Sql.scripts ~init:() ~f:(fun () (name, script) ->
-    let* () = db_result (Db.exec_sql db.conn "SAVEPOINT check_script") in
-    let ran = db_result (Db.exec_sql db.conn script) in
+  let check () =
+    let* () = db_result (Db.exec_sql db.conn Sql.account_deletion_tables) in
     let* () =
-      db_result (Db.exec_sql db.conn "ROLLBACK TO check_script; RELEASE check_script")
+      List.fold_result Sql.queries ~init:() ~f:(fun () (name, query) ->
+        db_result (Db.exec_sql db.conn ("EXPLAIN " ^ query))
+        |> Or_error.tag ~tag:(name ^ ".sql"))
     in
-    Or_error.tag ran ~tag:(name ^ ".sql"))
+    (* EXPLAIN covers only a script's first statement, so a script runs, then is undone. *)
+    List.fold_result Sql.scripts ~init:() ~f:(fun () (name, script) ->
+      let* () = db_result (Db.exec_sql db.conn "SAVEPOINT check_script") in
+      let ran = db_result (Db.exec_sql db.conn script) in
+      let* () =
+        db_result (Db.exec_sql db.conn "ROLLBACK TO check_script; RELEASE check_script")
+      in
+      Or_error.tag ran ~tag:(name ^ ".sql"))
+  in
+  let* () = db_result (Db.exec_sql db.conn "SAVEPOINT check_sql") in
+  let checked = check () in
+  let* () = undo () in
+  checked
 ;;
+
+let schema_sql = Db_schema.create
 
 let schema_supported path =
   with_connection ~mode:Read path (fun conn ->
