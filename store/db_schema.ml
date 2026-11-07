@@ -102,6 +102,11 @@ module Source_events = struct
 
   let table =
     Table.make
+      ~checks:
+        Sqlite_schema.Check.
+          [ canonical_instant occurred_at
+          ; different (present occurred_at) (present occurred_on)
+          ]
       ~primary_key:(Table.Primary_key.make [ Col.Def id ])
       ~unique_keys:
         [ Table.Unique_key.make
@@ -123,16 +128,7 @@ module Source_events = struct
       row
   ;;
 
-  let definition =
-    Sqlite_schema.table
-      ~checks:
-        Sqlite_schema.Check.
-          [ canonical_instant occurred_at
-          ; different (present occurred_at) (present occurred_on)
-          ]
-      ~immutable:"source events are immutable"
-      table
-  ;;
+  let definition = Sqlite_schema.table ~immutable:"source events are immutable" table
 end
 
 (* A bank movement as its adapter decoded it from the source event, stored once at
@@ -271,6 +267,13 @@ module Movements = struct
 
   let table =
     Table.make
+      ~checks:
+        Sqlite_schema.Check.
+          [ one_of principal_sign [ "+"; "-" ]
+          ; one_of own_iban_status [ "known"; "unknown"; "not_applicable" ]
+          ; equivalent (text_equal own_iban_status "known") (present own_iban)
+          ; nonnegative main_description
+          ]
       ~primary_key:(Table.Primary_key.make [ Col.Def event_id ])
       ~foreign_keys:
         [ Table.Foreign_key.make
@@ -291,13 +294,6 @@ module Movements = struct
 
   let definition =
     Sqlite_schema.table
-      ~checks:
-        Sqlite_schema.Check.
-          [ one_of principal_sign [ "+"; "-" ]
-          ; one_of own_iban_status [ "known"; "unknown"; "not_applicable" ]
-          ; equivalent (text_equal own_iban_status "known") (present own_iban)
-          ; nonnegative main_description
-          ]
       ~immutable:"movements are derived from immutable source events"
       ~mutable_columns:[ "movement_type" ]
       table
@@ -547,6 +543,12 @@ module Operation_transfer_links = struct
 
   let table =
     Table.make
+      ~checks:
+        Sqlite_schema.Check.
+          [ different
+              (same first_movement_id second_movement_id)
+              (same first_movement_id first_movement_id)
+          ]
       ~primary_key:
         (Table.Primary_key.make [ Col.Def first_movement_id; Col.Def second_movement_id ])
       ~foreign_keys:
@@ -567,16 +569,7 @@ module Operation_transfer_links = struct
       row
   ;;
 
-  let definition =
-    Sqlite_schema.table
-      ~checks:
-        Sqlite_schema.Check.
-          [ different
-              (same first_movement_id second_movement_id)
-              (same first_movement_id first_movement_id)
-          ]
-      table
-  ;;
+  let definition = Sqlite_schema.table table
 end
 
 module Operation_movement_resolutions = struct
@@ -717,6 +710,12 @@ module Operation_transfer_memberships = struct
 
   let table =
     Table.make
+      ~checks:
+        Sqlite_schema.Check.
+          [ either
+              (same movement_id first_movement_id)
+              (same movement_id second_movement_id)
+          ]
       ~primary_key:(Table.Primary_key.make [ Col.Def movement_id ])
       ~foreign_keys:
         [ Table.Foreign_key.make
@@ -739,16 +738,7 @@ module Operation_transfer_memberships = struct
       row
   ;;
 
-  let definition =
-    Sqlite_schema.table
-      ~checks:
-        Sqlite_schema.Check.
-          [ either
-              (same movement_id first_movement_id)
-              (same movement_id second_movement_id)
-          ]
-      table
-  ;;
+  let definition = Sqlite_schema.table table
 end
 
 module Operation_transfer_changes = struct
@@ -789,6 +779,7 @@ module Operation_transfer_changes = struct
 
   let table =
     Table.make
+      ~checks:Sqlite_schema.Check.[ one_of action [ "confirmed"; "undone" ] ]
       ~primary_key:(Table.Primary_key.make [ Col.Def id ])
       ~foreign_keys:
         [ Table.Foreign_key.make
@@ -809,10 +800,7 @@ module Operation_transfer_changes = struct
   ;;
 
   let definition =
-    Sqlite_schema.table
-      ~checks:Sqlite_schema.Check.[ one_of action [ "confirmed"; "undone" ] ]
-      ~immutable:"operation transfer history is append-only"
-      table
+    Sqlite_schema.table ~immutable:"operation transfer history is append-only" table
   ;;
 end
 
@@ -875,6 +863,7 @@ module Operation_exchange_changes = struct
 
   let table =
     Table.make
+      ~checks:Sqlite_schema.Check.[ one_of action [ "confirmed"; "undone" ] ]
       ~primary_key:(Table.Primary_key.make [ Col.Def id ])
       ~foreign_keys:
         [ Table.Foreign_key.make
@@ -888,10 +877,7 @@ module Operation_exchange_changes = struct
   ;;
 
   let definition =
-    Sqlite_schema.table
-      ~checks:Sqlite_schema.Check.[ one_of action [ "confirmed"; "undone" ] ]
-      ~immutable:"operation exchange history is append-only"
-      table
+    Sqlite_schema.table ~immutable:"operation exchange history is append-only" table
   ;;
 end
 
@@ -919,6 +905,7 @@ module Source_event_fields = struct
 
   let table =
     Table.make
+      ~checks:Sqlite_schema.Check.[ nonnegative ordinal ]
       ~primary_key:(Table.Primary_key.make [ Col.Def event_id; Col.Def ordinal ])
       ~foreign_keys:
         [ Table.Foreign_key.make
@@ -931,9 +918,7 @@ module Source_event_fields = struct
       row
   ;;
 
-  let definition =
-    Sqlite_schema.table ~checks:Sqlite_schema.Check.[ nonnegative ordinal ] table
-  ;;
+  let definition = Sqlite_schema.table table
 end
 
 (* What restore and export compare an event by, computed once at import: its payload's
@@ -1064,6 +1049,7 @@ module Postings = struct
 
   let table =
     Table.make
+      ~checks:Sqlite_schema.Check.[ nonnegative ordinal ]
       ~primary_key:(Table.Primary_key.make [ Col.Def entry_id; Col.Def ordinal ])
       ~foreign_keys:
         [ Table.Foreign_key.make
@@ -1077,9 +1063,7 @@ module Postings = struct
       row
   ;;
 
-  let definition =
-    Sqlite_schema.table ~checks:Sqlite_schema.Check.[ nonnegative ordinal ] table
-  ;;
+  let definition = Sqlite_schema.table table
 end
 
 module Movement_evidence = struct
@@ -1110,6 +1094,7 @@ module Movement_evidence = struct
 
   let table =
     Table.make
+      ~checks:Sqlite_schema.Check.[ one_of withdrawal_reversal [ "yes"; "no" ] ]
       ~primary_key:(Table.Primary_key.make [ Col.Def event_id ])
       ~foreign_keys:
         [ Table.Foreign_key.make
@@ -1122,11 +1107,7 @@ module Movement_evidence = struct
       row
   ;;
 
-  let definition =
-    Sqlite_schema.table
-      ~checks:Sqlite_schema.Check.[ one_of withdrawal_reversal [ "yes"; "no" ] ]
-      table
-  ;;
+  let definition = Sqlite_schema.table table
 end
 
 module Import_documents = struct
@@ -1481,6 +1462,9 @@ module Stated_balances = struct
 
   let table =
     Table.make
+      ~checks:
+        Sqlite_schema.Check.
+          [ one_of balance_type [ "opening"; "closing"; "available"; "day_end" ] ]
       ~primary_key:
         (Table.Primary_key.make
            [ Col.Def document_id
@@ -1501,14 +1485,7 @@ module Stated_balances = struct
       row
   ;;
 
-  let definition =
-    Sqlite_schema.table
-      ~checks:
-        Sqlite_schema.Check.
-          [ one_of balance_type [ "opening"; "closing"; "available"; "day_end" ] ]
-      ~immutable:"stated balances are immutable"
-      table
-  ;;
+  let definition = Sqlite_schema.table ~immutable:"stated balances are immutable" table
 end
 
 module Statement_events = struct
@@ -1588,6 +1565,7 @@ module Companion_rows = struct
 
   let table =
     Table.make
+      ~checks:Sqlite_schema.Check.[ positive row_number ]
       ~primary_key:(Table.Primary_key.make [ Col.Def id ])
       ~unique_keys:[ Table.Unique_key.make [ Col.Def document_id; Col.Def row_number ] ]
       ~foreign_keys:
@@ -1609,10 +1587,7 @@ module Companion_rows = struct
   ;;
 
   let definition =
-    Sqlite_schema.table
-      ~checks:Sqlite_schema.Check.[ positive row_number ]
-      ~immutable:"companion observations are immutable"
-      table
+    Sqlite_schema.table ~immutable:"companion observations are immutable" table
   ;;
 end
 
@@ -1657,6 +1632,11 @@ module Companion_matches = struct
 
   let table =
     Table.make
+      ~checks:
+        Sqlite_schema.Check.
+          [ one_of state [ "matched"; "unmatched"; "ambiguous"; "conflict" ]
+          ; equivalent (one_of state [ "matched"; "conflict" ]) (present event_id)
+          ]
       ~primary_key:(Table.Primary_key.make [ Col.Def row_id ])
       ~foreign_keys:
         [ Table.Foreign_key.make
@@ -1676,15 +1656,7 @@ module Companion_matches = struct
       row
   ;;
 
-  let definition =
-    Sqlite_schema.table
-      ~checks:
-        Sqlite_schema.Check.
-          [ one_of state [ "matched"; "unmatched"; "ambiguous"; "conflict" ]
-          ; equivalent (one_of state [ "matched"; "conflict" ]) (present event_id)
-          ]
-      table
-  ;;
+  let definition = Sqlite_schema.table table
 end
 
 module Companion_match_changes = struct
@@ -2045,6 +2017,15 @@ module Bank_import_attempts = struct
 
   let table =
     Table.make
+      ~checks:
+        Sqlite_schema.Check.
+          [ one_of
+              outcome
+              [ "imported"; "unchanged"; "rejected"; "unsupported"; "unreadable" ]
+          ; nonnegative inserted_count
+          ; nonnegative existing_count
+          ; equivalent (text_equal outcome "unreadable") (absent document_id)
+          ]
       ~primary_key:(Table.Primary_key.make [ Col.Def id ])
       ~foreign_keys:
         [ Table.Foreign_key.make
@@ -2063,20 +2044,7 @@ module Bank_import_attempts = struct
       row
   ;;
 
-  let definition =
-    Sqlite_schema.table
-      ~checks:
-        Sqlite_schema.Check.
-          [ one_of
-              outcome
-              [ "imported"; "unchanged"; "rejected"; "unsupported"; "unreadable" ]
-          ; nonnegative inserted_count
-          ; nonnegative existing_count
-          ; equivalent (text_equal outcome "unreadable") (absent document_id)
-          ]
-      ~immutable:"import history is append-only"
-      table
-  ;;
+  let definition = Sqlite_schema.table ~immutable:"import history is append-only" table
 end
 
 module Document_contexts = struct
@@ -2144,6 +2112,11 @@ module Bank_transfer_decisions = struct
 
   let table =
     Table.make
+      ~checks:
+        Sqlite_schema.Check.
+          [ one_of state [ "confirmed"; "rejected" ]
+          ; less first_event_id second_event_id
+          ]
       ~primary_key:
         (Table.Primary_key.make [ Col.Def first_event_id; Col.Def second_event_id ])
       ~foreign_keys:
@@ -2162,15 +2135,7 @@ module Bank_transfer_decisions = struct
       row
   ;;
 
-  let definition =
-    Sqlite_schema.table
-      ~checks:
-        Sqlite_schema.Check.
-          [ one_of state [ "confirmed"; "rejected" ]
-          ; less first_event_id second_event_id
-          ]
-      table
-  ;;
+  let definition = Sqlite_schema.table table
 end
 
 module Bank_transfer_memberships = struct
@@ -2201,6 +2166,9 @@ module Bank_transfer_memberships = struct
 
   let table =
     Table.make
+      ~checks:
+        Sqlite_schema.Check.
+          [ either (same event_id first_event_id) (same event_id second_event_id) ]
       ~primary_key:(Table.Primary_key.make [ Col.Def event_id ])
       ~foreign_keys:
         [ Table.Foreign_key.make
@@ -2222,13 +2190,7 @@ module Bank_transfer_memberships = struct
       row
   ;;
 
-  let definition =
-    Sqlite_schema.table
-      ~checks:
-        Sqlite_schema.Check.
-          [ either (same event_id first_event_id) (same event_id second_event_id) ]
-      table
-  ;;
+  let definition = Sqlite_schema.table table
 end
 
 module Bank_transfer_changes = struct
@@ -2286,6 +2248,7 @@ module Bank_transfer_changes = struct
 
   let table =
     Table.make
+      ~checks:Sqlite_schema.Check.[ one_of state [ "confirmed"; "rejected" ] ]
       ~primary_key:(Table.Primary_key.make [ Col.Def id ])
       ~foreign_keys:
         [ Table.Foreign_key.make
@@ -2303,12 +2266,7 @@ module Bank_transfer_changes = struct
       row
   ;;
 
-  let definition =
-    Sqlite_schema.table
-      ~checks:Sqlite_schema.Check.[ one_of state [ "confirmed"; "rejected" ] ]
-      ~immutable:"Transfer history is append-only"
-      table
-  ;;
+  let definition = Sqlite_schema.table ~immutable:"Transfer history is append-only" table
 end
 
 module Bank_account_identities = struct
@@ -2731,16 +2689,14 @@ module Card_settlement_changes = struct
 
   let table =
     Table.make
+      ~checks:Sqlite_schema.Check.[ one_of action [ "confirmed"; "undone" ] ]
       ~primary_key:(Table.Primary_key.make [ Col.Def id ])
       "card_settlement_changes"
       row
   ;;
 
   let definition =
-    Sqlite_schema.table
-      ~checks:Sqlite_schema.Check.[ one_of action [ "confirmed"; "undone" ] ]
-      ~immutable:"card settlement history is append-only"
-      table
+    Sqlite_schema.table ~immutable:"card settlement history is append-only" table
   ;;
 end
 
@@ -2832,13 +2788,6 @@ module Classification_rules = struct
 
   let table =
     Table.make
-      ~primary_key:(Table.Primary_key.make [ Col.Def name ])
-      "classification_rules"
-      row
-  ;;
-
-  let definition =
-    Sqlite_schema.table
       ~checks:
         Sqlite_schema.Check.
           [ one_of mode [ "automatic"; "review"; "disabled" ]
@@ -2853,8 +2802,12 @@ module Classification_rules = struct
               ; "withdrawal-reversal"
               ]
           ]
-      table
+      ~primary_key:(Table.Primary_key.make [ Col.Def name ])
+      "classification_rules"
+      row
   ;;
+
+  let definition = Sqlite_schema.table table
 end
 
 module Institution_definitions = struct
@@ -2986,15 +2939,14 @@ module Reversal_changes = struct
   ;;
 
   let table =
-    Table.make ~primary_key:(Table.Primary_key.make [ Col.Def id ]) "reversal_changes" row
+    Table.make
+      ~checks:Sqlite_schema.Check.[ one_of action [ "confirmed"; "undone" ] ]
+      ~primary_key:(Table.Primary_key.make [ Col.Def id ])
+      "reversal_changes"
+      row
   ;;
 
-  let definition =
-    Sqlite_schema.table
-      ~checks:Sqlite_schema.Check.[ one_of action [ "confirmed"; "undone" ] ]
-      ~immutable:"reversal history is append-only"
-      table
-  ;;
+  let definition = Sqlite_schema.table ~immutable:"reversal history is append-only" table
 end
 
 module Movement_type_overrides = struct

@@ -12,10 +12,9 @@ CREATE TABLE "source_events" (
   "retrieved_at" TEXT NOT NULL DEFAULT ((strftime('%Y-%m-%dT%H:%M:%f','now') || '000000000Z')),
   "payload" BLOB NOT NULL,
   PRIMARY KEY ("id"),
-  UNIQUE ("venue", "account", "kind", "source_id")
-,
-CHECK ("occurred_at" IS NULL OR (length("occurred_at") = 33 AND "occurred_at" GLOB '[0-9][0-9][0-9][0-9]-[0-9][0-9]-[0-9][0-9]T[0-9][0-9]:[0-9][0-9]:[0-9][0-9].[0-9][0-9][0-9][0-9][0-9][0-9][0-9][0-9][0-9][0-9][0-9][0-9]Z')),
-CHECK (("occurred_at" IS NOT NULL) != ("occurred_on" IS NOT NULL))
+  UNIQUE ("venue", "account", "kind", "source_id"),
+  CHECK ("occurred_at" IS NULL OR (length("occurred_at") = 33 AND "occurred_at" GLOB '[0-9][0-9][0-9][0-9]-[0-9][0-9]-[0-9][0-9]T[0-9][0-9]:[0-9][0-9]:[0-9][0-9].[0-9][0-9][0-9][0-9][0-9][0-9][0-9][0-9][0-9][0-9][0-9][0-9]Z')),
+  CHECK (("occurred_at" IS NOT NULL) != ("occurred_on" IS NOT NULL))
 ) STRICT;
 CREATE INDEX "source_events_time" ON "source_events" ("occurred_at", "id");
 CREATE INDEX "source_events_occurrence" ON "source_events" ("venue",
@@ -46,12 +45,11 @@ CREATE TABLE "movements" (
   "movement_type" TEXT,
   "main_description" INTEGER NOT NULL,
   PRIMARY KEY ("event_id"),
-  FOREIGN KEY ("event_id") REFERENCES "source_events" ("id")
-,
-CHECK ("principal_sign" IN ('+','-')),
-CHECK ("own_iban_status" IN ('known','unknown','not_applicable')),
-CHECK (("own_iban_status" = 'known') = ("own_iban" IS NOT NULL)),
-CHECK ("main_description" >= 0)
+  FOREIGN KEY ("event_id") REFERENCES "source_events" ("id"),
+  CHECK ("principal_sign" IN ('+','-')),
+  CHECK ("own_iban_status" IN ('known','unknown','not_applicable')),
+  CHECK (("own_iban_status" = 'known') = ("own_iban" IS NOT NULL)),
+  CHECK ("main_description" >= 0)
 ) STRICT;
 CREATE INDEX "movements_principal" ON "movements" ("currency",
                                                    "principal_magnitude");
@@ -68,7 +66,6 @@ CREATE TABLE "operations" (
   UNIQUE ("source_event_id"),
   FOREIGN KEY ("bank_event_id") REFERENCES "source_events" ("id"),
   FOREIGN KEY ("source_event_id") REFERENCES "source_events" ("id")
-
 ) STRICT;
 CREATE TABLE "operation_sources" (
   "operation_id" INTEGER NOT NULL,
@@ -76,7 +73,6 @@ CREATE TABLE "operation_sources" (
   PRIMARY KEY ("operation_id", "event_id"),
   FOREIGN KEY ("operation_id") REFERENCES "operations" ("id"),
   FOREIGN KEY ("event_id") REFERENCES "source_events" ("id")
-
 ) STRICT;
 CREATE INDEX "operation_sources_event" ON "operation_sources" ("event_id");
 CREATE TABLE "operation_movements" (
@@ -92,7 +88,6 @@ CREATE TABLE "operation_movements" (
   UNIQUE ("id", "operation_id"),
   UNIQUE ("id", "anchor_event_id"),
   FOREIGN KEY ("operation_id", "anchor_event_id") REFERENCES "operation_sources" ("operation_id", "event_id")
-
 ) STRICT;
 CREATE INDEX "operation_movements_operation" ON "operation_movements" 
   ("operation_id");
@@ -103,7 +98,6 @@ CREATE TABLE "operation_movement_sources" (
   PRIMARY KEY ("movement_id", "event_id"),
   FOREIGN KEY ("movement_id", "operation_id") REFERENCES "operation_movements" ("id", "operation_id"),
   FOREIGN KEY ("operation_id", "event_id") REFERENCES "operation_sources" ("operation_id", "event_id")
-
 ) STRICT;
 CREATE TABLE "operation_transfer_links" (
   "first_movement_id" INTEGER NOT NULL,
@@ -111,9 +105,8 @@ CREATE TABLE "operation_transfer_links" (
   "reason" TEXT NOT NULL,
   PRIMARY KEY ("first_movement_id", "second_movement_id"),
   FOREIGN KEY ("first_movement_id") REFERENCES "operation_movements" ("id"),
-  FOREIGN KEY ("second_movement_id") REFERENCES "operation_movements" ("id")
-,
-CHECK (("first_movement_id" = "second_movement_id") != ("first_movement_id" = "first_movement_id"))
+  FOREIGN KEY ("second_movement_id") REFERENCES "operation_movements" ("id"),
+  CHECK (("first_movement_id" = "second_movement_id") != ("first_movement_id" = "first_movement_id"))
 ) STRICT;
 CREATE TABLE "operation_transfer_memberships" (
   "movement_id" INTEGER NOT NULL,
@@ -121,9 +114,8 @@ CREATE TABLE "operation_transfer_memberships" (
   "second_movement_id" INTEGER NOT NULL,
   PRIMARY KEY ("movement_id"),
   FOREIGN KEY ("movement_id") REFERENCES "operation_movements" ("id"),
-  FOREIGN KEY ("first_movement_id", "second_movement_id") REFERENCES "operation_transfer_links" ("first_movement_id", "second_movement_id")
-,
-CHECK (("movement_id" = "first_movement_id") OR ("movement_id" = "second_movement_id"))
+  FOREIGN KEY ("first_movement_id", "second_movement_id") REFERENCES "operation_transfer_links" ("first_movement_id", "second_movement_id"),
+  CHECK (("movement_id" = "first_movement_id") OR ("movement_id" = "second_movement_id"))
 ) STRICT;
 CREATE TABLE "operation_movement_resolutions" (
   "movement_id" INTEGER NOT NULL,
@@ -131,7 +123,6 @@ CREATE TABLE "operation_movement_resolutions" (
   "commodity" TEXT NOT NULL,
   PRIMARY KEY ("movement_id"),
   FOREIGN KEY ("movement_id") REFERENCES "operation_movements" ("id")
-
 ) STRICT;
 CREATE TABLE "operation_resolution_changes" (
   "id" INTEGER NOT NULL,
@@ -141,7 +132,6 @@ CREATE TABLE "operation_resolution_changes" (
   "changed_at" TEXT NOT NULL DEFAULT ((strftime('%Y-%m-%dT%H:%M:%f','now') || '000000000Z')),
   PRIMARY KEY ("id"),
   FOREIGN KEY ("movement_id") REFERENCES "operation_movements" ("id")
-
 ) STRICT;
 CREATE TRIGGER "operation_resolution_changes_no_update" BEFORE UPDATE ON "operation_resolution_changes" BEGIN SELECT RAISE(ABORT, 'movement resolution history is append-only'); END;
 CREATE TRIGGER "operation_resolution_changes_no_delete" BEFORE DELETE ON "operation_resolution_changes" BEGIN SELECT RAISE(ABORT, 'movement resolution history is append-only'); END;
@@ -150,14 +140,12 @@ CREATE TABLE "commodity_symbols" (
   "symbol" TEXT NOT NULL,
   PRIMARY KEY ("commodity"),
   UNIQUE ("symbol")
-
 ) STRICT;
 CREATE TABLE "operation_exchange_decisions" (
   "operation_id" INTEGER NOT NULL,
   "reason" TEXT NOT NULL,
   PRIMARY KEY ("operation_id"),
   FOREIGN KEY ("operation_id") REFERENCES "operations" ("id")
-
 ) STRICT;
 CREATE TABLE "operation_exchange_changes" (
   "id" INTEGER NOT NULL,
@@ -165,9 +153,8 @@ CREATE TABLE "operation_exchange_changes" (
   "action" TEXT NOT NULL,
   "changed_at" TEXT NOT NULL DEFAULT ((strftime('%Y-%m-%dT%H:%M:%f','now') || '000000000Z')),
   PRIMARY KEY ("id"),
-  FOREIGN KEY ("operation_id") REFERENCES "operations" ("id")
-,
-CHECK ("action" IN ('confirmed','undone'))
+  FOREIGN KEY ("operation_id") REFERENCES "operations" ("id"),
+  CHECK ("action" IN ('confirmed','undone'))
 ) STRICT;
 CREATE TRIGGER "operation_exchange_changes_no_update" BEFORE UPDATE ON "operation_exchange_changes" BEGIN SELECT RAISE(ABORT, 'operation exchange history is append-only'); END;
 CREATE TRIGGER "operation_exchange_changes_no_delete" BEFORE DELETE ON "operation_exchange_changes" BEGIN SELECT RAISE(ABORT, 'operation exchange history is append-only'); END;
@@ -179,9 +166,8 @@ CREATE TABLE "operation_transfer_changes" (
   "changed_at" TEXT NOT NULL DEFAULT ((strftime('%Y-%m-%dT%H:%M:%f','now') || '000000000Z')),
   PRIMARY KEY ("id"),
   FOREIGN KEY ("first_movement_id") REFERENCES "operation_movements" ("id"),
-  FOREIGN KEY ("second_movement_id") REFERENCES "operation_movements" ("id")
-,
-CHECK ("action" IN ('confirmed','undone'))
+  FOREIGN KEY ("second_movement_id") REFERENCES "operation_movements" ("id"),
+  CHECK ("action" IN ('confirmed','undone'))
 ) STRICT;
 CREATE TRIGGER "operation_transfer_changes_no_update" BEFORE UPDATE ON "operation_transfer_changes" BEGIN SELECT RAISE(ABORT, 'operation transfer history is append-only'); END;
 CREATE TRIGGER "operation_transfer_changes_no_delete" BEFORE DELETE ON "operation_transfer_changes" BEGIN SELECT RAISE(ABORT, 'operation transfer history is append-only'); END;
@@ -191,9 +177,8 @@ CREATE TABLE "source_event_fields" (
   "name" TEXT NOT NULL,
   "value" TEXT NOT NULL,
   PRIMARY KEY ("event_id", "ordinal"),
-  FOREIGN KEY ("event_id") REFERENCES "source_events" ("id")
-,
-CHECK ("ordinal" >= 0)
+  FOREIGN KEY ("event_id") REFERENCES "source_events" ("id"),
+  CHECK ("ordinal" >= 0)
 ) STRICT;
 CREATE TABLE "source_event_digests" (
   "event_id" INTEGER NOT NULL,
@@ -202,16 +187,14 @@ CREATE TABLE "source_event_digests" (
   "evidence" TEXT NOT NULL,
   PRIMARY KEY ("event_id"),
   FOREIGN KEY ("event_id") REFERENCES "source_events" ("id")
-
 ) STRICT;
 CREATE TABLE "movement_evidence" (
   "event_id" INTEGER NOT NULL,
   "card_reference" TEXT,
   "withdrawal_reversal" TEXT NOT NULL,
   PRIMARY KEY ("event_id"),
-  FOREIGN KEY ("event_id") REFERENCES "source_events" ("id")
-,
-CHECK ("withdrawal_reversal" IN ('yes','no'))
+  FOREIGN KEY ("event_id") REFERENCES "source_events" ("id"),
+  CHECK ("withdrawal_reversal" IN ('yes','no'))
 ) STRICT;
 CREATE TABLE "journal_entries" (
   "id" INTEGER NOT NULL,
@@ -222,7 +205,6 @@ CREATE TABLE "journal_entries" (
   PRIMARY KEY ("id"),
   UNIQUE ("event_id", "projection_key"),
   FOREIGN KEY ("event_id") REFERENCES "source_events" ("id")
-
 ) STRICT;
 CREATE INDEX "journal_entries_date" ON "journal_entries" ("date", "event_id",
                                                           "projection_key");
@@ -233,9 +215,8 @@ CREATE TABLE "postings" (
   "commodity" TEXT NOT NULL,
   "quantity" TEXT NOT NULL,
   PRIMARY KEY ("entry_id", "ordinal"),
-  FOREIGN KEY ("entry_id") REFERENCES "journal_entries" ("id")
-,
-CHECK ("ordinal" >= 0)
+  FOREIGN KEY ("entry_id") REFERENCES "journal_entries" ("id"),
+  CHECK ("ordinal" >= 0)
 ) STRICT;
 CREATE TABLE "import_documents" (
   "id" INTEGER NOT NULL,
@@ -245,7 +226,6 @@ CREATE TABLE "import_documents" (
   "imported_at" TEXT NOT NULL DEFAULT ((strftime('%Y-%m-%dT%H:%M:%f','now') || '000000000Z')),
   PRIMARY KEY ("id"),
   UNIQUE ("institution", "sha256")
-
 ) STRICT;
 CREATE TRIGGER "import_documents_no_update" BEFORE UPDATE ON "import_documents" BEGIN SELECT RAISE(ABORT, 'import documents are immutable'); END;
 CREATE TRIGGER "import_documents_no_delete" BEFORE DELETE ON "import_documents" BEGIN SELECT RAISE(ABORT, 'import documents are immutable'); END;
@@ -255,7 +235,6 @@ CREATE TABLE "import_document_events" (
   PRIMARY KEY ("document_id", "event_id"),
   FOREIGN KEY ("event_id") REFERENCES "source_events" ("id"),
   FOREIGN KEY ("document_id") REFERENCES "import_documents" ("id")
-
 ) STRICT;
 CREATE INDEX "import_document_events_event" ON "import_document_events" 
   ("event_id");
@@ -265,7 +244,6 @@ CREATE TABLE "bank_account_mappings" (
   "ledger_account" TEXT NOT NULL,
   "public_id" TEXT NOT NULL,
   PRIMARY KEY ("institution", "source_account")
-
 ) STRICT;
 CREATE TABLE "bank_account_mapping_changes" (
   "id" INTEGER NOT NULL,
@@ -275,7 +253,6 @@ CREATE TABLE "bank_account_mapping_changes" (
   "ledger_account" TEXT NOT NULL,
   "changed_at" TEXT NOT NULL DEFAULT ((strftime('%Y-%m-%dT%H:%M:%f','now') || '000000000Z')),
   PRIMARY KEY ("id")
-
 ) STRICT;
 CREATE TRIGGER "bank_account_mapping_changes_no_update" BEFORE UPDATE ON "bank_account_mapping_changes" BEGIN SELECT RAISE(ABORT, 'mapping history is append-only'); END;
 CREATE TRIGGER "bank_account_mapping_changes_no_delete" BEFORE DELETE ON "bank_account_mapping_changes" BEGIN SELECT RAISE(ABORT, 'mapping history is append-only'); END;
@@ -296,7 +273,6 @@ CREATE TABLE "statements" (
   PRIMARY KEY ("id"),
   UNIQUE ("document_id", "ordinal"),
   FOREIGN KEY ("document_id") REFERENCES "import_documents" ("id")
-
 ) STRICT;
 CREATE TRIGGER "statements_no_update" BEFORE UPDATE ON "statements" BEGIN SELECT RAISE(ABORT, 'statements are immutable'); END;
 CREATE TRIGGER "statements_no_delete" BEFORE DELETE ON "statements" BEGIN SELECT RAISE(ABORT, 'statements are immutable'); END;
@@ -309,9 +285,8 @@ CREATE TABLE "stated_balances" (
   "quantity" TEXT NOT NULL,
   "as_of" TEXT NOT NULL,
   PRIMARY KEY ("document_id", "account", "balance_type", "commodity_json", "as_of"),
-  FOREIGN KEY ("document_id") REFERENCES "import_documents" ("id")
-,
-CHECK ("balance_type" IN ('opening','closing','available','day_end'))
+  FOREIGN KEY ("document_id") REFERENCES "import_documents" ("id"),
+  CHECK ("balance_type" IN ('opening','closing','available','day_end'))
 ) STRICT;
 CREATE TRIGGER "stated_balances_no_update" BEFORE UPDATE ON "stated_balances" BEGIN SELECT RAISE(ABORT, 'stated balances are immutable'); END;
 CREATE TRIGGER "stated_balances_no_delete" BEFORE DELETE ON "stated_balances" BEGIN SELECT RAISE(ABORT, 'stated balances are immutable'); END;
@@ -321,7 +296,6 @@ CREATE TABLE "statement_events" (
   PRIMARY KEY ("statement_id", "event_id"),
   FOREIGN KEY ("event_id") REFERENCES "source_events" ("id"),
   FOREIGN KEY ("statement_id") REFERENCES "statements" ("id")
-
 ) STRICT;
 CREATE TABLE "companion_rows" (
   "id" INTEGER NOT NULL,
@@ -333,9 +307,8 @@ CREATE TABLE "companion_rows" (
   "display_name" TEXT,
   PRIMARY KEY ("id"),
   UNIQUE ("document_id", "row_number"),
-  FOREIGN KEY ("document_id") REFERENCES "import_documents" ("id")
-,
-CHECK ("row_number" > 0)
+  FOREIGN KEY ("document_id") REFERENCES "import_documents" ("id"),
+  CHECK ("row_number" > 0)
 ) STRICT;
 CREATE INDEX "companion_rows_format" ON "companion_rows" ("institution",
                                                           "format");
@@ -351,10 +324,9 @@ CREATE TABLE "companion_matches" (
   "updated_at" TEXT NOT NULL DEFAULT ((strftime('%Y-%m-%dT%H:%M:%f','now') || '000000000Z')),
   PRIMARY KEY ("row_id"),
   FOREIGN KEY ("event_id") REFERENCES "source_events" ("id"),
-  FOREIGN KEY ("row_id") REFERENCES "companion_rows" ("id")
-,
-CHECK ("state" IN ('matched','unmatched','ambiguous','conflict')),
-CHECK (("state" IN ('matched','conflict')) = ("event_id" IS NOT NULL))
+  FOREIGN KEY ("row_id") REFERENCES "companion_rows" ("id"),
+  CHECK ("state" IN ('matched','unmatched','ambiguous','conflict')),
+  CHECK (("state" IN ('matched','conflict')) = ("event_id" IS NOT NULL))
 ) STRICT;
 CREATE INDEX "companion_matches_event" ON "companion_matches" ("event_id");
 CREATE TABLE "companion_match_changes" (
@@ -372,14 +344,12 @@ CREATE TABLE "companion_match_changes" (
   FOREIGN KEY ("event_id") REFERENCES "source_events" ("id"),
   FOREIGN KEY ("previous_event_id") REFERENCES "source_events" ("id"),
   FOREIGN KEY ("row_id") REFERENCES "companion_rows" ("id")
-
 ) STRICT;
 CREATE TRIGGER "companion_match_changes_no_update" BEFORE UPDATE ON "companion_match_changes" BEGIN SELECT RAISE(ABORT, 'companion matching history is append-only'); END;
 CREATE TRIGGER "companion_match_changes_no_delete" BEFORE DELETE ON "companion_match_changes" BEGIN SELECT RAISE(ABORT, 'companion matching history is append-only'); END;
 CREATE TABLE "category_catalog" (
   "account" TEXT NOT NULL,
   PRIMARY KEY ("account")
-
 ) STRICT;
 CREATE TABLE "bank_categories" (
   "movement_id" INTEGER NOT NULL,
@@ -389,7 +359,6 @@ CREATE TABLE "bank_categories" (
   PRIMARY KEY ("movement_id"),
   UNIQUE ("event_id"),
   FOREIGN KEY ("movement_id", "event_id") REFERENCES "operation_movements" ("id", "anchor_event_id")
-
 ) STRICT;
 CREATE TABLE "bank_category_changes" (
   "id" INTEGER NOT NULL,
@@ -401,7 +370,6 @@ CREATE TABLE "bank_category_changes" (
   "changed_at" TEXT NOT NULL DEFAULT ((strftime('%Y-%m-%dT%H:%M:%f','now') || '000000000Z')),
   PRIMARY KEY ("id"),
   FOREIGN KEY ("movement_id", "event_id") REFERENCES "operation_movements" ("id", "anchor_event_id")
-
 ) STRICT;
 CREATE TRIGGER "bank_category_changes_no_update" BEFORE UPDATE ON "bank_category_changes" BEGIN SELECT RAISE(ABORT, 'category history is append-only'); END;
 CREATE TRIGGER "bank_category_changes_no_delete" BEFORE DELETE ON "bank_category_changes" BEGIN SELECT RAISE(ABORT, 'category history is append-only'); END;
@@ -413,7 +381,6 @@ CREATE TABLE "day_inventories" (
   "document_id" INTEGER NOT NULL,
   PRIMARY KEY ("institution", "source_account", "booked_on"),
   FOREIGN KEY ("document_id") REFERENCES "import_documents" ("id")
-
 ) STRICT;
 CREATE TRIGGER "day_inventories_no_update" BEFORE UPDATE ON "day_inventories" BEGIN SELECT RAISE(ABORT, 'daily inventories are immutable'); END;
 CREATE TRIGGER "day_inventories_no_delete" BEFORE DELETE ON "day_inventories" BEGIN SELECT RAISE(ABORT, 'daily inventories are immutable'); END;
@@ -429,12 +396,11 @@ CREATE TABLE "bank_import_attempts" (
   "error" TEXT,
   "attempted_at" TEXT NOT NULL DEFAULT ((strftime('%Y-%m-%dT%H:%M:%f','now') || '000000000Z')),
   PRIMARY KEY ("id"),
-  FOREIGN KEY ("document_id") REFERENCES "import_documents" ("id")
-,
-CHECK ("outcome" IN ('imported','unchanged','rejected','unsupported','unreadable')),
-CHECK ("inserted_count" >= 0),
-CHECK ("existing_count" >= 0),
-CHECK (("outcome" = 'unreadable') = ("document_id" IS NULL))
+  FOREIGN KEY ("document_id") REFERENCES "import_documents" ("id"),
+  CHECK ("outcome" IN ('imported','unchanged','rejected','unsupported','unreadable')),
+  CHECK ("inserted_count" >= 0),
+  CHECK ("existing_count" >= 0),
+  CHECK (("outcome" = 'unreadable') = ("document_id" IS NULL))
 ) STRICT;
 CREATE INDEX "bank_import_attempts_document" ON "bank_import_attempts" 
   ("document_id", "id");
@@ -445,7 +411,6 @@ CREATE TABLE "document_contexts" (
   "context_json" TEXT NOT NULL,
   PRIMARY KEY ("document_id"),
   FOREIGN KEY ("document_id") REFERENCES "import_documents" ("id")
-
 ) STRICT;
 CREATE TRIGGER "document_contexts_no_update" BEFORE UPDATE ON "document_contexts" BEGIN SELECT RAISE(ABORT, 'document contexts are immutable'); END;
 CREATE TRIGGER "document_contexts_no_delete" BEFORE DELETE ON "document_contexts" BEGIN SELECT RAISE(ABORT, 'document contexts are immutable'); END;
@@ -456,10 +421,9 @@ CREATE TABLE "bank_transfer_decisions" (
   "reason" TEXT NOT NULL,
   PRIMARY KEY ("first_event_id", "second_event_id"),
   FOREIGN KEY ("second_event_id") REFERENCES "source_events" ("id"),
-  FOREIGN KEY ("first_event_id") REFERENCES "source_events" ("id")
-,
-CHECK ("state" IN ('confirmed','rejected')),
-CHECK ("first_event_id" < "second_event_id")
+  FOREIGN KEY ("first_event_id") REFERENCES "source_events" ("id"),
+  CHECK ("state" IN ('confirmed','rejected')),
+  CHECK ("first_event_id" < "second_event_id")
 ) STRICT;
 CREATE TABLE "bank_transfer_memberships" (
   "event_id" INTEGER NOT NULL,
@@ -467,9 +431,8 @@ CREATE TABLE "bank_transfer_memberships" (
   "second_event_id" INTEGER NOT NULL,
   PRIMARY KEY ("event_id"),
   FOREIGN KEY ("first_event_id", "second_event_id") REFERENCES "bank_transfer_decisions" ("first_event_id", "second_event_id"),
-  FOREIGN KEY ("event_id") REFERENCES "source_events" ("id")
-,
-CHECK (("event_id" = "first_event_id") OR ("event_id" = "second_event_id"))
+  FOREIGN KEY ("event_id") REFERENCES "source_events" ("id"),
+  CHECK (("event_id" = "first_event_id") OR ("event_id" = "second_event_id"))
 ) STRICT;
 CREATE TABLE "bank_transfer_changes" (
   "id" INTEGER NOT NULL,
@@ -481,9 +444,8 @@ CREATE TABLE "bank_transfer_changes" (
   "changed_at" TEXT NOT NULL DEFAULT ((strftime('%Y-%m-%dT%H:%M:%f','now') || '000000000Z')),
   PRIMARY KEY ("id"),
   FOREIGN KEY ("second_event_id") REFERENCES "source_events" ("id"),
-  FOREIGN KEY ("first_event_id") REFERENCES "source_events" ("id")
-,
-CHECK ("state" IN ('confirmed','rejected'))
+  FOREIGN KEY ("first_event_id") REFERENCES "source_events" ("id"),
+  CHECK ("state" IN ('confirmed','rejected'))
 ) STRICT;
 CREATE TRIGGER "bank_transfer_changes_no_update" BEFORE UPDATE ON "bank_transfer_changes" BEGIN SELECT RAISE(ABORT, 'Transfer history is append-only'); END;
 CREATE TRIGGER "bank_transfer_changes_no_delete" BEFORE DELETE ON "bank_transfer_changes" BEGIN SELECT RAISE(ABORT, 'Transfer history is append-only'); END;
@@ -492,7 +454,6 @@ CREATE TABLE "bank_account_identities" (
   "source_account" TEXT NOT NULL,
   "iban" TEXT NOT NULL,
   PRIMARY KEY ("institution", "source_account")
-
 ) STRICT;
 CREATE TABLE "bank_account_identity_changes" (
   "id" INTEGER NOT NULL,
@@ -502,7 +463,6 @@ CREATE TABLE "bank_account_identity_changes" (
   "iban" TEXT,
   "changed_at" TEXT NOT NULL DEFAULT ((strftime('%Y-%m-%dT%H:%M:%f','now') || '000000000Z')),
   PRIMARY KEY ("id")
-
 ) STRICT;
 CREATE TRIGGER "bank_account_identity_changes_no_update" BEFORE UPDATE ON "bank_account_identity_changes" BEGIN SELECT RAISE(ABORT, 'Account identity history is append-only'); END;
 CREATE TRIGGER "bank_account_identity_changes_no_delete" BEFORE DELETE ON "bank_account_identity_changes" BEGIN SELECT RAISE(ABORT, 'Account identity history is append-only'); END;
@@ -511,7 +471,6 @@ CREATE TABLE "bank_account_settlements" (
   "source_account" TEXT NOT NULL,
   "settlement_account" TEXT NOT NULL,
   PRIMARY KEY ("institution", "source_account")
-
 ) STRICT;
 CREATE TABLE "bank_account_settlement_changes" (
   "id" INTEGER NOT NULL,
@@ -521,7 +480,6 @@ CREATE TABLE "bank_account_settlement_changes" (
   "settlement_account" TEXT,
   "changed_at" TEXT NOT NULL DEFAULT ((strftime('%Y-%m-%dT%H:%M:%f','now') || '000000000Z')),
   PRIMARY KEY ("id")
-
 ) STRICT;
 CREATE TRIGGER "bank_account_settlement_changes_no_update" BEFORE UPDATE ON "bank_account_settlement_changes" BEGIN SELECT RAISE(ABORT, 'Account settlement history is append-only'); END;
 CREATE TRIGGER "bank_account_settlement_changes_no_delete" BEFORE DELETE ON "bank_account_settlement_changes" BEGIN SELECT RAISE(ABORT, 'Account settlement history is append-only'); END;
@@ -530,13 +488,11 @@ CREATE TABLE "institutions" (
   "profile" TEXT,
   "companion_profile" TEXT,
   PRIMARY KEY ("name")
-
 ) STRICT;
 CREATE TABLE "institution_definitions" (
   "name" TEXT NOT NULL,
   "definition_json" TEXT NOT NULL,
   PRIMARY KEY ("name")
-
 ) STRICT;
 CREATE TABLE "card_settlement_decisions" (
   "event_id" INTEGER NOT NULL,
@@ -546,7 +502,6 @@ CREATE TABLE "card_settlement_decisions" (
   "reason" TEXT NOT NULL,
   PRIMARY KEY ("event_id"),
   FOREIGN KEY ("event_id") REFERENCES "source_events" ("id")
-
 ) STRICT;
 CREATE TABLE "card_settlement_changes" (
   "id" INTEGER NOT NULL,
@@ -556,9 +511,8 @@ CREATE TABLE "card_settlement_changes" (
   "ledger_account" TEXT NOT NULL,
   "action" TEXT NOT NULL,
   "changed_at" TEXT NOT NULL DEFAULT ((strftime('%Y-%m-%dT%H:%M:%f','now') || '000000000Z')),
-  PRIMARY KEY ("id")
-,
-CHECK ("action" IN ('confirmed','undone'))
+  PRIMARY KEY ("id"),
+  CHECK ("action" IN ('confirmed','undone'))
 ) STRICT;
 CREATE TRIGGER "card_settlement_changes_no_update" BEFORE UPDATE ON "card_settlement_changes" BEGIN SELECT RAISE(ABORT, 'card settlement history is append-only'); END;
 CREATE TRIGGER "card_settlement_changes_no_delete" BEFORE DELETE ON "card_settlement_changes" BEGIN SELECT RAISE(ABORT, 'card settlement history is append-only'); END;
@@ -567,7 +521,6 @@ CREATE TABLE "card_assignments" (
   "card_reference" TEXT NOT NULL,
   "card_source_account" TEXT NOT NULL,
   PRIMARY KEY ("institution", "card_reference")
-
 ) STRICT;
 CREATE TABLE "card_assignment_changes" (
   "id" INTEGER NOT NULL,
@@ -577,7 +530,6 @@ CREATE TABLE "card_assignment_changes" (
   "card_source_account" TEXT,
   "changed_at" TEXT NOT NULL DEFAULT ((strftime('%Y-%m-%dT%H:%M:%f','now') || '000000000Z')),
   PRIMARY KEY ("id")
-
 ) STRICT;
 CREATE TRIGGER "card_assignment_changes_no_update" BEFORE UPDATE ON "card_assignment_changes" BEGIN SELECT RAISE(ABORT, 'Card assignment history is append-only'); END;
 CREATE TRIGGER "card_assignment_changes_no_delete" BEFORE DELETE ON "card_assignment_changes" BEGIN SELECT RAISE(ABORT, 'Card assignment history is append-only'); END;
@@ -594,11 +546,10 @@ CREATE TABLE "classification_rules" (
   "target" TEXT NOT NULL,
   "action_type" TEXT,
   "field" TEXT,
-  PRIMARY KEY ("name")
-,
-CHECK ("mode" IN ('automatic','review','disabled')),
-CHECK ("case_mode" IN ('sensitive','insensitive')),
-CHECK ("action_kind" IN ('category','settlement','type','type-category','card-reference','withdrawal-reversal'))
+  PRIMARY KEY ("name"),
+  CHECK ("mode" IN ('automatic','review','disabled')),
+  CHECK ("case_mode" IN ('sensitive','insensitive')),
+  CHECK ("action_kind" IN ('category','settlement','type','type-category','card-reference','withdrawal-reversal'))
 ) STRICT;
 CREATE TABLE "reversal_pairs" (
   "original" INTEGER NOT NULL,
@@ -607,7 +558,6 @@ CREATE TABLE "reversal_pairs" (
   PRIMARY KEY ("original"),
   FOREIGN KEY ("original") REFERENCES "source_events" ("id"),
   FOREIGN KEY ("reversal") REFERENCES "source_events" ("id")
-
 ) STRICT;
 CREATE UNIQUE INDEX "reversal_pairs_reversal" ON "reversal_pairs" ("reversal");
 CREATE TABLE "reversal_changes" (
@@ -616,9 +566,8 @@ CREATE TABLE "reversal_changes" (
   "reversal" INTEGER NOT NULL,
   "action" TEXT NOT NULL,
   "changed_at" TEXT NOT NULL DEFAULT ((strftime('%Y-%m-%dT%H:%M:%f','now') || '000000000Z')),
-  PRIMARY KEY ("id")
-,
-CHECK ("action" IN ('confirmed','undone'))
+  PRIMARY KEY ("id"),
+  CHECK ("action" IN ('confirmed','undone'))
 ) STRICT;
 CREATE TRIGGER "reversal_changes_no_update" BEFORE UPDATE ON "reversal_changes" BEGIN SELECT RAISE(ABORT, 'reversal history is append-only'); END;
 CREATE TRIGGER "reversal_changes_no_delete" BEFORE DELETE ON "reversal_changes" BEGIN SELECT RAISE(ABORT, 'reversal history is append-only'); END;
@@ -629,7 +578,6 @@ CREATE TABLE "movement_type_overrides" (
   PRIMARY KEY ("movement_id"),
   UNIQUE ("event_id"),
   FOREIGN KEY ("movement_id", "event_id") REFERENCES "operation_movements" ("id", "anchor_event_id")
-
 ) STRICT;
 CREATE TABLE "movement_type_changes" (
   "id" INTEGER NOT NULL,
@@ -641,7 +589,6 @@ CREATE TABLE "movement_type_changes" (
   "changed_at" TEXT NOT NULL DEFAULT ((strftime('%Y-%m-%dT%H:%M:%f','now') || '000000000Z')),
   PRIMARY KEY ("id"),
   FOREIGN KEY ("movement_id", "event_id") REFERENCES "operation_movements" ("id", "anchor_event_id")
-
 ) STRICT;
 CREATE TRIGGER "movement_type_changes_no_update" BEFORE UPDATE ON "movement_type_changes" BEGIN SELECT RAISE(ABORT, 'movement type history is append-only'); END;
 CREATE TRIGGER "movement_type_changes_no_delete" BEFORE DELETE ON "movement_type_changes" BEGIN SELECT RAISE(ABORT, 'movement type history is append-only'); END;

@@ -1,10 +1,11 @@
 open Base
 open Rel
 
-(** SQLite features missing from the pinned Rel DDL generator. Checks refer to
-    typed columns; table structure, keys, defaults and indexes remain Rel's job. *)
+(** What the pinned Rel DDL generator lacks: STRICT tables and the triggers that keep
+    evidence immutable and histories append-only. [Check] writes Rel check constraints
+    from typed columns. *)
 module Check : sig
-  type 'r t
+  type 'r t = 'r Table.Check.t
 
   val positive : ('r, int) Col.t -> 'r t
   val nonnegative : ('r, int) Col.t -> 'r t
@@ -18,14 +19,14 @@ module Check : sig
   val equivalent : 'r t -> 'r t -> 'r t
   val different : 'r t -> 'r t -> 'r t
   val either : 'r t -> 'r t -> 'r t
-  val sql : 'r t -> string
 end = struct
-  type 'r t = Check of string
+  type 'r t = 'r Table.Check.t
 
+  let check sql = Table.Check.make sql
   let column c = Rel_sql.Syntax.id (Col.name c)
   let literal = Rel_sql.Syntax.string_to_literal
-  let positive c = Check (column c ^ " > 0")
-  let nonnegative c = Check (column c ^ " >= 0")
+  let positive c = check (column c ^ " > 0")
+  let nonnegative c = check (column c ^ " >= 0")
 
   let canonical_instant c =
     let name = column c in
@@ -47,7 +48,7 @@ end = struct
       ^ digits 12
       ^ "Z"
     in
-    Check
+    check
       (name
        ^ " IS NULL OR (length("
        ^ name
@@ -59,33 +60,35 @@ end = struct
   ;;
 
   let one_of c values =
-    Check (column c ^ " IN (" ^ String.concat ~sep:"," (List.map values ~f:literal) ^ ")")
+    check (column c ^ " IN (" ^ String.concat ~sep:"," (List.map values ~f:literal) ^ ")")
   ;;
 
-  let present c = Check (column c ^ " IS NOT NULL")
-  let absent c = Check (column c ^ " IS NULL")
-  let text_equal c value = Check (column c ^ " = " ^ literal value)
-  let same a b = Check (column a ^ " = " ^ column b)
-  let less a b = Check (column a ^ " < " ^ column b)
-  let combine op (Check a) (Check b) = Check ("(" ^ a ^ ") " ^ op ^ " (" ^ b ^ ")")
+  let present c = check (column c ^ " IS NOT NULL")
+  let absent c = check (column c ^ " IS NULL")
+  let text_equal c value = check (column c ^ " = " ^ literal value)
+  let same a b = check (column a ^ " = " ^ column b)
+  let less a b = check (column a ^ " < " ^ column b)
+
+  let combine op a b =
+    check ("(" ^ Table.Check.expr a ^ ") " ^ op ^ " (" ^ Table.Check.expr b ^ ")")
+  ;;
+
   let equivalent a b = combine "=" a b
   let different a b = combine "!=" a b
   let either a b = combine "OR" a b
-  let sql (Check s) = s
 end
 
-type t = Definition : 'r Table.t * 'r Check.t list * (string * string list) option -> t
+type t = Definition : 'r Table.t * (string * string list) option -> t
 
 (* [mutable_columns] are exempt from the update trigger of an immutable table: the
    rest of each row is evidence, but derived values such as a type may be recomputed. *)
-let table ?(checks = []) ?immutable ?(mutable_columns = []) table =
-  Definition
-    (table, checks, Option.map immutable ~f:(fun message -> message, mutable_columns))
+let table ?immutable ?(mutable_columns = []) table =
+  Definition (table, Option.map immutable ~f:(fun message -> message, mutable_columns))
 ;;
 
-let rel_table (Definition (table, _, _)) = Table.Def table
+let rel_table (Definition (table, _)) = Table.Def table
 
-let statements (Definition (table, checks, immutable)) =
+let statements (Definition (table, immutable)) =
   let dialect = Rel_sqlite3.dialect in
   let sql = Rel_sql.Stmt.src (Rel_sql.create_table dialect table) |> String.strip in
   (* Rel emits BIGINT for int64. SQLite STRICT requires INTEGER, which also
@@ -111,8 +114,7 @@ let statements (Definition (table, checks, immutable)) =
     | Some body -> body
     | None -> failwith "Rel CREATE TABLE output no longer ends with );"
   in
-  let checks = List.map checks ~f:(fun c -> ",\nCHECK (" ^ Check.sql c ^ ")") in
-  let create = body ^ String.concat checks ^ "\n) STRICT;" in
+  let create = String.rstrip body ^ "\n) STRICT;" in
   let indexes =
     List.map (Table.indices table) ~f:(fun index ->
       Rel_sql.Stmt.src (Rel_sql.create_index dialect table index))

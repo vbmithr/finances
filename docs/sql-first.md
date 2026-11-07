@@ -158,8 +158,9 @@ statements: one with only imports, one with transfers confirmed and settlements 
 
 ## Tables
 
-Tables stay defined in OCaml, in `store/db_schema.ml`: Rel writes each `CREATE TABLE` and its
-indexes, and `Sqlite_schema` adds what Rel does not model, the checks, `STRICT` and the triggers that
-keep evidence immutable and histories append-only. `store/sql/schema.sql` is a copy of that SQL,
+Tables stay defined in OCaml, in `store/db_schema.ml`: Rel writes each `CREATE TABLE`, with its
+checks, and its indexes, and `Sqlite_schema` adds what Rel does not model, `STRICT` and the triggers
+that keep evidence immutable and histories append-only. Checks are written from typed columns by
+`Sqlite_schema.Check`, and given to `Table.make` with the table's keys. `store/sql/schema.sql` is a copy of that SQL,
 checked in for reading and never edited: `dune test` fails when it is out of date, and `dune promote`
 refreshes it. It is the exact text `fin init` runs, not a reconstruction from a database.

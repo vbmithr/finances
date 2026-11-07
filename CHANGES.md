@@ -8,6 +8,8 @@ short line of their own.
 
 ## Unreleased
 
+- Internal: check constraints are Rel's (`Table.make ~checks`, from a Rel branch, `feat/table-checks`)
+  instead of being spliced into Rel's `CREATE TABLE` text. The tables are unchanged, so no rebuild.
 - Internal: the store's SQL files are in folders by subject, the views split by subject under
   `store/sql/views/`, and `store/sql/schema.sql` is the generated table SQL, checked in for reading
   and kept current by a test.
