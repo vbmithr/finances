@@ -5,12 +5,13 @@
 type t =
   | Bank
   | Crypto_exchange
+  | Wallet (** An address on a network, read from a block explorer's exports. *)
 [@@deriving compare, equal]
 
-(** The token used in definitions and JSON: [bank] or [crypto-exchange]. *)
+(** The token used in definitions and JSON: [bank], [crypto-exchange] or [wallet]. *)
 val to_string : t -> string
 
-(** The words used in terminal output: [bank] or [crypto exchange]. *)
+(** The words used in terminal output: [bank], [crypto exchange] or [wallet]. *)
 val label : t -> string
 
 val jsont : t Jsont.t

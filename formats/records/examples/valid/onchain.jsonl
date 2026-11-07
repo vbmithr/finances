@@ -1,6 +1,0 @@
-{"kind":"header","format":"fin-records","version":1,"institution":"wallet","identity":"source","converter":{"name":"example-wallet","version":"1"}}
-{"kind":"source","name":"wallet.json","sha256":"0000000000000000000000000000000000000000000000000000000000000000"}
-{"kind":"account","id":"wallet-1","no_iban":true}
-{"kind":"record","id":"tx-1/0","account":"wallet-1","occurred":"2025-01-02T10:00:00Z","movements":[{"role":"from","quantity":"-1.5","commodity":{"kind":"onchain-native","network":"ethereum"}},{"role":"to","quantity":"3000","commodity":{"kind":"onchain-token","network":"ethereum","contract":"0xSYNTHETIC"}}],"details":{"references":{"hash":"0xSYNTHETICHASH"}}}
-{"kind":"record","id":"tx-2/0","account":"wallet-1","occurred":"2025-01-03T10:00:00Z","movements":[{"role":"primary","quantity":"1","commodity":{"kind":"onchain-token","network":"ethereum","contract":"0xSYNTHETIC","token_id":"7"}}]}
-{"kind":"end","records":2}

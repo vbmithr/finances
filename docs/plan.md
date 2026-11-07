@@ -629,7 +629,13 @@ position observations, derive positions from fills, or calculate funding.
   identify overlapping exports, commodity identities, wallet ownership, card
   top-ups and unrecognized transaction kinds before enabling journal projection.
 - [ ] Connect stored commodity identities to accounting and resolve
-  provider-reported symbols to verified assets.
+  provider-reported symbols to verified assets. Done 2026-11-07: a commodity is fiat, an asset
+  by symbol whichever network holds it, or a provider's unresolved symbol (schema 39); `ethereum`
+  and `polygon` read explorer exports with a list of known token contracts. Next: operation
+  movements take their account from the record's account, as bank movements do, so a wallet's
+  rows need no `fin operation resolve`; then the deBridge orders (ETH on Ethereum, USDC on Polygon)
+  as exchanges across two accounts, and the fdm top-ups once fdm exports its deposits (asked
+  upstream; until then the USDC payments stay undecided and the card's balance lacks them).
 - [ ] Connect persisted operations to general reviewed source links and portable
   non-primary movement decisions; bank reviews use the primary movement.
 - [ ] Import fills, funding and other necessary events, derive positions, and

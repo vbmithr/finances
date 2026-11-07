@@ -20,7 +20,6 @@ type resolution =
   ; source_commodity : Commodity.t
   ; account : string
   ; commodity : Commodity.t
-  ; symbol : string
   }
 
 type t =
@@ -183,16 +182,14 @@ let rules_codec =
 ;;
 
 let resolution =
-  Jsont.Object.map
-    (fun source source_quantity source_commodity account commodity symbol ->
-       { source; source_quantity; source_commodity; account; commodity; symbol })
+  Jsont.Object.map (fun source source_quantity source_commodity account commodity ->
+    { source; source_quantity; source_commodity; account; commodity })
   |> Jsont.Object.mem "source" decision ~enc:(fun r -> r.source)
   |> Jsont.Object.mem "source_quantity" Json.quantity ~enc:(fun r -> r.source_quantity)
   |> Jsont.Object.mem "source_commodity" Commodity.codec ~enc:(fun r ->
     r.source_commodity)
   |> Jsont.Object.mem "account" Jsont.string ~enc:(fun r -> r.account)
   |> Jsont.Object.mem "commodity" Commodity.codec ~enc:(fun r -> r.commodity)
-  |> Jsont.Object.mem "symbol" Jsont.string ~enc:(fun r -> r.symbol)
   |> Jsont.Object.error_unknown
   |> Jsont.Object.finish
 ;;

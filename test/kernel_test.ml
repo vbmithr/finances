@@ -334,46 +334,33 @@ let commodity_identity () =
   let fiat = Commodity.fiat usd in
   let reported = ok (Commodity.reported ~provider:"cdc" ~symbol:"USD") in
   let other = ok (Commodity.reported ~provider:"other" ~symbol:"USD") in
-  let eth = ok (Commodity.onchain_native ~network:"ethereum-mainnet") in
-  let token =
-    ok
-      (Commodity.onchain_token
-         ~network:"ethereum-mainnet"
-         ~contract:"0x123"
-         ~token_id:None)
-  in
-  let other_network =
-    ok
-      (Commodity.onchain_token
-         ~network:"polygon-mainnet"
-         ~contract:"0x123"
-         ~token_id:None)
-  in
-  let multi_token =
-    ok
-      (Commodity.onchain_token
-         ~network:"ethereum-mainnet"
-         ~contract:"0x123"
-         ~token_id:(Some "1"))
-  in
+  let usdc = ok (Commodity.asset "USDC") in
+  let cdc_usdc = ok (Commodity.reported ~provider:"cdc" ~symbol:"USDC") in
   Alcotest.(check bool)
     "fiat differs from reported symbol"
     false
     (Commodity.equal fiat reported);
   Alcotest.(check bool) "provider scopes symbol" false (Commodity.equal reported other);
   Alcotest.(check bool) "identity equals itself" true (Commodity.equal reported reported);
-  Alcotest.(check bool) "network scopes token" false (Commodity.equal token other_network);
-  Alcotest.(check bool) "token ID scopes token" false (Commodity.equal token multi_token);
-  List.iter
-    [ fiat; reported; other; eth; token; other_network; multi_token ]
-    ~f:(fun commodity ->
-      let restored =
-        Json.decode Commodity.codec (Json.encode Commodity.codec commodity) |> ok
-      in
-      Alcotest.(check bool)
-        "commodity identity survives JSON"
-        true
-        (Commodity.equal commodity restored));
+  Alcotest.(check bool) "an asset is its symbol" true (Commodity.equal usdc usdc);
+  Alcotest.(check bool)
+    "a provider's symbol is not the asset"
+    false
+    (Commodity.equal usdc cdc_usdc);
+  Alcotest.(check (option string))
+    "an unresolved symbol has no journal name"
+    None
+    (Commodity.journal_symbol cdc_usdc);
+  List.iter [ fiat; reported; other; usdc; cdc_usdc ] ~f:(fun commodity ->
+    let restored =
+      Json.decode Commodity.codec (Json.encode Commodity.codec commodity) |> ok
+    in
+    Alcotest.(check bool)
+      "commodity identity survives JSON"
+      true
+      (Commodity.equal commodity restored));
+  error (Commodity.asset "USD");
+  error (Commodity.asset "");
   error (Json.decode Commodity.codec {|{"kind":"onchain-token","network":"ethereum"}|});
   error (Commodity.reported ~provider:"cdc" ~symbol:"")
 ;;
@@ -846,7 +833,7 @@ let operation_groups () =
 let exchange_accounting () =
   let eur = Commodity.fiat (Option.value_exn (Iso4217.of_alpha_code "EUR")) in
   let usd = Commodity.fiat (Option.value_exn (Iso4217.of_alpha_code "USD")) in
-  let btc = ok (Commodity.onchain_native ~network:"bitcoin") in
+  let btc = ok (Commodity.asset "BTC") in
   let date = Date.of_string "2026-11-03" in
   let example first second second_symbol =
     ok
@@ -904,8 +891,8 @@ let exchange_accounting () =
 
 let transfer_accounting () =
   let eur = Commodity.fiat (Option.value_exn (Iso4217.of_alpha_code "EUR")) in
-  let btc = ok (Commodity.onchain_native ~network:"bitcoin") in
-  let other_btc = ok (Commodity.onchain_native ~network:"other") in
+  let btc = ok (Commodity.asset "BTC") in
+  let other_btc = ok (Commodity.reported ~provider:"cdc" ~symbol:"BTC") in
   let date = Date.of_string "2026-11-03" in
   let make commodity symbol =
     [ "assets:bank", commodity, symbol, decimal "-0.00000000000001"

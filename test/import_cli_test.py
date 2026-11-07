@@ -279,14 +279,11 @@ class ImportOnboarding(unittest.TestCase):
         self.assertTrue(any('2025-06-09T17:56:17' in str(row['occurred']) for row in listed))
         exchange_row = next(row for row in listed if row['description'] == 'Exchange')
         op = exchange_row['operation_id']
-        native = json.dumps({'kind': 'onchain-native', 'network': 'cronos'})
-        fiat = json.dumps({'kind': 'fiat', 'code': 'EUR'})
-        self.assertIn('movement_resolution_changes=1', self.run_fin('operation', 'resolve', op, 'from', 'assets:cdc:wallet', native, '--symbol', 'CRO').stdout)
+        fiat = 'EUR'
+        self.assertIn('movement_resolution_changes=1', self.run_fin('operation', 'resolve', op, 'from', 'assets:cdc:wallet', 'CRO').stdout)
         self.assertIn('movement_resolution_changes=1', self.run_fin('operation', 'resolve', op, 'to', 'assets:cdc:fiat', fiat).stdout)
-        other_native = json.dumps({'kind': 'onchain-native', 'network': 'another-network'})
-        collision = self.run_fin('operation', 'resolve', op, 'to', 'assets:cdc:fiat', other_native, '--symbol', 'CRO', check=False)
-        self.assertNotEqual(collision.returncode, 0)
-        self.assertIn('different mapping', collision.stderr)
+        invalid = self.run_fin('operation', 'resolve', op, 'to', 'assets:cdc:fiat', 'C R O', check=False)
+        self.assertNotEqual(invalid.returncode, 0)
         self.assertIn('movement_resolution_changes=0', self.run_fin('operation', 'resolve', op, 'to', 'assets:cdc:fiat', fiat).stdout)
         self.assertNotEqual(self.run_fin('operation', 'resolve', op, 'missing', 'assets:test', fiat, check=False).returncode, 0)
         resolved = next(row for row in json.loads(self.run_fin('operation', 'list', '--institution', 'cdc', '--json').stdout) if row['operation_id'] == op)
@@ -350,7 +347,7 @@ class ImportOnboarding(unittest.TestCase):
         row = json.loads(self.run_fin('operation', 'list', '--json').stdout)[0]
         op = row['operation_id']
         for role, account, currency in [('from', 'assets:forex:eur', 'EUR'), ('to', 'assets:forex:usd', 'USD')]:
-            self.run_fin('operation', 'resolve', op, role, account, json.dumps({'kind': 'fiat', 'code': currency}))
+            self.run_fin('operation', 'resolve', op, role, account, currency)
         self.run_fin('operation', 'exchange', 'confirm', op, '--yes')
         journal = self.run_fin('journal', 'export').stdout
         self.assertIn('assets:forex:eur', journal)
@@ -371,8 +368,7 @@ class ImportOnboarding(unittest.TestCase):
         rows = json.loads(self.run_fin('operation', 'list', '--json').stdout)
         bank_op = next(r['operation_id'] for r in rows if r['institution'] == 'revolut')
         wallet_op = next(r['operation_id'] for r in rows if r['institution'] == 'cdc')
-        fiat = json.dumps({'kind': 'fiat', 'code': 'EUR'})
-        self.run_fin('operation', 'resolve', wallet_op, 'primary', 'assets:wallet:eur', fiat)
+        self.run_fin('operation', 'resolve', wallet_op, 'primary', 'assets:wallet:eur', 'EUR')
         resolutions = self.root / 'resolutions.json'
         resolutions.write_text(self.exported('assignments'))
         self.assertIn('transfer_changes=1', self.run_fin('transfer', 'link', bank_op, wallet_op, '--yes').stdout)
@@ -384,7 +380,7 @@ class ImportOnboarding(unittest.TestCase):
         journal = self.run_fin('journal', 'export').stdout
         self.assertIn('assets:wallet:eur', journal)
         self.assertNotIn('equity:unclassified', journal)
-        self.assertNotEqual(self.run_fin('operation', 'resolve', wallet_op, 'primary', 'assets:other', fiat, check=False).returncode, 0)
+        self.assertNotEqual(self.run_fin('operation', 'resolve', wallet_op, 'primary', 'assets:other', 'EUR', check=False).returncode, 0)
         transfers = self.root / 'general-transfers.json'
         transfers.write_text(self.exported('transfers'))
         rebuilt = self.root / 'transfer-general-rebuilt.sqlite3'
@@ -399,7 +395,7 @@ class ImportOnboarding(unittest.TestCase):
         self.assertIn('transfer_changes=1', self.run_fin('transfer', 'unlink', bank_op, '--yes').stdout)
         self.assertIn('equity:unclassified', self.run_fin('journal', 'export').stdout)
 
-    def test_wallet_to_wallet_transfer_and_symbol_collisions(self):
+    def test_wallet_to_wallet_transfer(self):
         path = self.root / 'wallet-transfers.csv'
         path.write_text('Timestamp (UTC),Transaction Description,Currency,Amount,To Currency,To Amount,Native Currency,Native Amount,Native Amount (in USD),Transaction Kind,Transaction Hash\n'
                         '2026-01-02 10:01:00,Wallet withdrawal,BTC,-0.12345678,,,EUR,0,0,supercharger_deposit,\n'
@@ -408,9 +404,8 @@ class ImportOnboarding(unittest.TestCase):
         rows = json.loads(self.run_fin('operation', 'list', '--json').stdout)
         first = next(r['operation_id'] for r in rows if r['description'] == 'Wallet withdrawal')
         second = next(r['operation_id'] for r in rows if r['description'] == 'Wallet deposit')
-        commodity = json.dumps({'kind': 'onchain-native', 'network': 'bitcoin'})
-        self.run_fin('operation', 'resolve', first, 'primary', 'assets:wallet:one', commodity, '--symbol', 'BTC')
-        self.run_fin('operation', 'resolve', second, 'primary', 'assets:wallet:two', commodity, '--symbol', 'BTC')
+        self.run_fin('operation', 'resolve', first, 'primary', 'assets:wallet:one', 'BTC')
+        self.run_fin('operation', 'resolve', second, 'primary', 'assets:wallet:two', 'BTC')
         self.assertIn('transfer_changes=1', self.run_fin('transfer', 'link', first, second, '--yes').stdout)
         journal = self.run_fin('journal', 'export').stdout
         self.assertIn('assets:wallet:one', journal)

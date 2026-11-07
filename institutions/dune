@@ -18,11 +18,13 @@
   cdc.json
   kraken.json
   fdm.json
+  ethereum.json
+  polygon.json
   companion_example.json)
  (action
   (write-file
    %{targets}
-   "let boursobank = {fin|%{read:boursobank.json}|fin}\n\nlet wise = {fin|%{read:wise.json}|fin}\n\nlet revolut = {fin|%{read:revolut.json}|fin}\n\nlet bunq = {fin|%{read:bunq.json}|fin}\n\nlet cdc = {fin|%{read:cdc.json}|fin}\n\nlet fdm = {fin|%{read:fdm.json}|fin}\n\nlet kraken = {fin|%{read:kraken.json}|fin}\n\nlet companion_example = {fin|%{read:companion_example.json}|fin}\n")))
+   "let boursobank = {fin|%{read:boursobank.json}|fin}\n\nlet wise = {fin|%{read:wise.json}|fin}\n\nlet revolut = {fin|%{read:revolut.json}|fin}\n\nlet bunq = {fin|%{read:bunq.json}|fin}\n\nlet cdc = {fin|%{read:cdc.json}|fin}\n\nlet fdm = {fin|%{read:fdm.json}|fin}\n\nlet ethereum = {fin|%{read:ethereum.json}|fin}\n\nlet polygon = {fin|%{read:polygon.json}|fin}\n\nlet kraken = {fin|%{read:kraken.json}|fin}\n\nlet companion_example = {fin|%{read:companion_example.json}|fin}\n")))
 
 ; Adapters are pure: no Rel or SQLite dependency, enforced here.
 

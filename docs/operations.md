@@ -61,14 +61,21 @@ to be implemented.
 
 ## Commodity identity
 
-Fiat has ISO currency identity; native network assets and contract tokens use
-explicit network identity, and contract tokens may have a token ID. Network and
-contract strings are treated exactly as supplied; chain-specific validation and
-normalization are not yet implemented. A provider symbol is scoped to its provider and
-is not automatically a canonical asset or chain contract. Resolution to a
-canonical commodity needs explicit evidence and must preserve the original
-symbol. A ticker can refer to different assets or networks. Commodity identity
-and the account are independent: an account may hold multiple commodities.
+Fiat has ISO currency identity. A crypto asset is identified by its symbol, which is
+also its name in the journal, and is one asset whichever network holds it: USDC on
+Ethereum and USDC on Polygon are both `USDC`, so moving USDC between two of one's
+wallets is a transfer, not an exchange. Telling the same asset apart per network would
+add bookkeeping, a bridge becoming an exchange, for no use in personal accounting. The
+network and the token contract stay evidence: they are in the source fields of every
+movement read from a chain.
+
+A symbol is trusted as an asset only through evidence that names the asset: a
+definition's list of known token contracts, or a reviewed resolution. A provider's
+symbol stays scoped to its provider until then, because anyone can deploy a token
+called USDC; an explorer's export lists such tokens next to the real one, and the
+contract list is what leaves them out. An asset cannot take an ISO code, which names
+fiat. Commodity identity and the account are independent: an account may hold several
+commodities.
 
 ## Persistence and migration
 

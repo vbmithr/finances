@@ -1,0 +1,279 @@
+{
+  "version": 1,
+  "kind": "records",
+  "type": "wallet",
+  "records": {
+    "institution": "ethereum",
+    "aliases": [],
+    "csv": [
+      {
+        "format": "fin-csv-converter",
+        "version": 1,
+        "institution": "ethereum",
+        "institution_type": "wallet",
+        "header": [
+          "Transaction Hash",
+          "Blockno",
+          "UnixTimestamp",
+          "DateTime (UTC)",
+          "From",
+          "To",
+          "ContractAddress",
+          "Value_IN(ETH)",
+          "Value_OUT(ETH)",
+          "CurrentValue @ *",
+          "TxnFee(ETH)",
+          "TxnFee(USD)",
+          "Historical $Price/Eth",
+          "Status",
+          "ErrCode",
+          "Method"
+        ],
+        "address": [
+          "From",
+          "To"
+        ],
+        "account": {
+          "id": "{@address}",
+          "bank": "ethereum",
+          "type": "wallet"
+        },
+        "id": {
+          "columns": [
+            "Transaction Hash"
+          ]
+        },
+        "occurred": {
+          "column": "DateTime (UTC)",
+          "layout": "iso-datetime",
+          "utc": true
+        },
+        "cases": [
+          {
+            "when": [
+              {
+                "column": "From",
+                "address": true
+              },
+              {
+                "column": "ErrCode",
+                "filled": true
+              }
+            ],
+            "movements": [
+              {
+                "role": "primary",
+                "quantity": {
+                  "column": "TxnFee(ETH)",
+                  "negate": true
+                },
+                "commodity": {
+                  "code": "ETH"
+                }
+              }
+            ],
+            "fee": {
+              "column": "TxnFee(ETH)"
+            }
+          },
+          {
+            "when": [
+              {
+                "column": "From",
+                "address": true
+              },
+              {
+                "column": "Value_OUT(ETH)",
+                "sign": "positive"
+              }
+            ],
+            "movements": [
+              {
+                "role": "primary",
+                "quantity": {
+                  "column": "Value_OUT(ETH)",
+                  "plus": "TxnFee(ETH)",
+                  "negate": true
+                },
+                "commodity": {
+                  "code": "ETH"
+                }
+              }
+            ],
+            "fee": {
+              "column": "TxnFee(ETH)"
+            }
+          },
+          {
+            "when": [
+              {
+                "column": "From",
+                "address": true
+              }
+            ],
+            "movements": [
+              {
+                "role": "primary",
+                "quantity": {
+                  "column": "TxnFee(ETH)",
+                  "negate": true
+                },
+                "commodity": {
+                  "code": "ETH"
+                }
+              }
+            ],
+            "fee": {
+              "column": "TxnFee(ETH)"
+            }
+          },
+          {
+            "when": [
+              {
+                "column": "To",
+                "address": true
+              },
+              {
+                "column": "Value_IN(ETH)",
+                "sign": "positive"
+              },
+              {
+                "column": "ErrCode",
+                "filled": false
+              }
+            ],
+            "movements": [
+              {
+                "role": "primary",
+                "quantity": {
+                  "column": "Value_IN(ETH)"
+                },
+                "commodity": {
+                  "code": "ETH"
+                }
+              }
+            ]
+          }
+        ],
+        "descriptions": [
+          "Method"
+        ],
+        "type": "Method",
+        "references": {
+          "hash": "Transaction Hash"
+        }
+      },
+      {
+        "format": "fin-csv-converter",
+        "version": 1,
+        "institution": "ethereum",
+        "institution_type": "wallet",
+        "header": [
+          "Transaction Hash",
+          "Blockno",
+          "UnixTimestamp",
+          "DateTime (UTC)",
+          "From",
+          "To",
+          "TokenValue",
+          "USDValueDayOfTx",
+          "ContractAddress",
+          "TokenName",
+          "TokenSymbol"
+        ],
+        "thousands": ",",
+        "address": [
+          "From",
+          "To"
+        ],
+        "values": [
+          {
+            "column": "ContractAddress",
+            "map": {
+              "0xa0b86991c6218b36c1d19d4a2e9eb0ce3606eb48": "USDC"
+            }
+          }
+        ],
+        "only": [
+          {
+            "column": "ContractAddress",
+            "in": [
+              "USDC"
+            ]
+          },
+          {
+            "column": "TokenValue",
+            "sign": "positive"
+          }
+        ],
+        "account": {
+          "id": "{@address}",
+          "bank": "ethereum",
+          "type": "wallet"
+        },
+        "id": {
+          "columns": [
+            "Transaction Hash",
+            "From",
+            "To",
+            "ContractAddress",
+            "TokenValue"
+          ]
+        },
+        "occurred": {
+          "column": "DateTime (UTC)",
+          "layout": "iso-datetime",
+          "utc": true
+        },
+        "cases": [
+          {
+            "when": [
+              {
+                "column": "From",
+                "address": true
+              }
+            ],
+            "movements": [
+              {
+                "role": "primary",
+                "quantity": {
+                  "column": "TokenValue",
+                  "negate": true
+                },
+                "commodity": {
+                  "asset": "ContractAddress"
+                }
+              }
+            ]
+          },
+          {
+            "when": [
+              {
+                "column": "To",
+                "address": true
+              }
+            ],
+            "movements": [
+              {
+                "role": "primary",
+                "quantity": {
+                  "column": "TokenValue"
+                },
+                "commodity": {
+                  "asset": "ContractAddress"
+                }
+              }
+            ]
+          }
+        ],
+        "descriptions": [
+          "TokenName"
+        ],
+        "references": {
+          "hash": "Transaction Hash"
+        }
+      }
+    ]
+  },
+  "rules": []
+}

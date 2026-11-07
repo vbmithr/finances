@@ -12,6 +12,8 @@ let definitions : Institution_definition.t list =
     ; Bundled_definitions.cdc
     ; Bundled_definitions.kraken
     ; Bundled_definitions.fdm
+    ; Bundled_definitions.ethereum
+    ; Bundled_definitions.polygon
     ]
     ~f:(fun json -> Json.decode Institution_definition.codec json |> Or_error.ok_exn)
 ;;
@@ -48,7 +50,7 @@ let mt940_profile name =
     | _ -> None)
 ;;
 
-let csv_definition name = Option.bind (records_of name) ~f:(fun r -> r.csv)
+let csv_definition name = Option.bind (records_of name) ~f:(fun r -> List.hd r.csv)
 
 let adapters : (module Adapter.S) list =
   List.map definitions ~f:Institution_definition.adapter @ [ (module Csv_adapter) ]

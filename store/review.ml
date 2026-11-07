@@ -1196,18 +1196,11 @@ let unmatched_transfers db ~offered =
     rows
 ;;
 
-let validate_commodity_symbol commodity symbol =
-  let* symbol = Validation.token "commodity symbol" symbol in
-  match commodity with
-  | Commodity.Reported _ ->
-    Or_error.error_string "choose a canonical commodity, not a provider-reported symbol"
-  | Commodity.Fiat currency
-    when not (String.equal symbol (Iso4217.to_alpha_code currency)) ->
-    Or_error.error_string "fiat commodity symbol must equal its ISO currency code"
-  | (Commodity.Onchain_native _ | Onchain_token _)
-    when Option.is_some (Iso4217.of_alpha_code (String.uppercase symbol)) ->
-    Or_error.error_string "crypto commodity symbol conflicts with an ISO currency code"
-  | _ -> Ok symbol
+let journal_symbol commodity =
+  Or_error.of_option
+    (Commodity.journal_symbol commodity)
+    ~error:
+      (Error.of_string "choose a canonical commodity, not a provider-reported symbol")
 ;;
 
 let resolve_operation_movement_internal
@@ -1217,11 +1210,10 @@ let resolve_operation_movement_internal
       ~role
       ~account
       ~commodity
-      ~symbol
   =
   let* account = Validation.account account in
   let* _ = Validation.token "movement role" role in
-  let* symbol = validate_commodity_symbol commodity symbol in
+  let* _ = journal_symbol commodity in
   (if in_transaction then fun f -> f db else transaction db) (fun db ->
     let query =
       Rel_sql.Stmt.(
@@ -1253,31 +1245,6 @@ let resolve_operation_movement_internal
       else Ok ()
     in
     let commodity = Json.encode Commodity.codec commodity in
-    let symbol_query =
-      Rel_sql.Stmt.(
-        func
-          "SELECT commodity,symbol FROM commodity_symbols WHERE commodity=? OR symbol=?"
-          (text @-> text @-> ret Row.(t2 (text "commodity") (text "symbol"))))
-    in
-    let* mappings = collect db (symbol_query commodity symbol) in
-    let* () =
-      if
-        List.exists mappings ~f:(fun (existing_commodity, existing_symbol) ->
-          not
-            (String.equal existing_commodity commodity
-             && String.equal existing_symbol symbol))
-      then
-        Or_error.error_string
-          "commodity identity or journal symbol already has a different mapping"
-      else Ok ()
-    in
-    let insert_symbol =
-      Rel_sql.Stmt.(
-        func
-          "INSERT OR IGNORE INTO commodity_symbols(commodity,symbol) VALUES (?,?)"
-          (text @-> text @-> unit))
-    in
-    let* () = db_result (Db.exec db.conn (insert_symbol commodity symbol)) in
     let previous =
       Rel_sql.Stmt.(
         func
@@ -1311,6 +1278,6 @@ let resolve_operation_movement_internal
       Ok true))
 ;;
 
-let resolve_operation_movement db ~operation_id ~role ~account ~commodity ~symbol =
-  resolve_operation_movement_internal db ~operation_id ~role ~account ~commodity ~symbol
+let resolve_operation_movement db ~operation_id ~role ~account ~commodity =
+  resolve_operation_movement_internal db ~operation_id ~role ~account ~commodity
 ;;

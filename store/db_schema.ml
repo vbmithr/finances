@@ -3,7 +3,7 @@ open Rel
 
 (** One current experimental baseline; older databases must be reimported. Banks
     have no tables of their own. *)
-let version = 38
+let version = 39
 
 let timestamp = `Expr "(strftime('%Y-%m-%dT%H:%M:%f','now') || '000000000Z')"
 
@@ -611,31 +611,6 @@ module Operation_movement_resolutions = struct
             ()
         ]
       "operation_movement_resolutions"
-      row
-  ;;
-
-  let definition = Sqlite_schema.table table
-end
-
-module Commodity_symbols = struct
-  type t =
-    { commodity : string
-    ; symbol : string
-    }
-
-  let commodity = Col.make "commodity" Type.text (fun (r : t) -> r.commodity)
-  let symbol = Col.make "symbol" Type.text (fun (r : t) -> r.symbol)
-
-  let row =
-    Row.(unit (fun commodity symbol -> { commodity; symbol }) * commodity * symbol)
-  ;;
-
-  let table =
-    Table.make
-      ~params:[ Rel_sqlite3.Strict ]
-      ~primary_key:(Table.Primary_key.make [ Col.Def commodity ])
-      ~unique_keys:[ Table.Unique_key.make [ Col.Def symbol ] ]
-      "commodity_symbols"
       row
   ;;
 
@@ -3123,7 +3098,6 @@ let definitions =
   ; Operation_transfer_memberships.definition
   ; Operation_movement_resolutions.definition
   ; Operation_resolution_changes.definition
-  ; Commodity_symbols.definition
   ; Operation_exchange_decisions.definition
   ; Operation_exchange_changes.definition
   ; Operation_transfer_changes.definition

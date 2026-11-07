@@ -242,17 +242,15 @@ let transaction_show_cmd =
           & info [] ~docv:"OPERATION-ID" ~doc:"Operation ID from fin operation list."))
 ;;
 
-let operation_resolve database operation_id role account commodity_json symbol =
-  let%bind commodity = Json.decode Commodity.codec commodity_json in
-  let%bind symbol =
-    match symbol, commodity with
-    | Some symbol, _ -> Ok symbol
-    | None, Commodity.Fiat currency -> Ok (Iso4217.to_alpha_code currency)
-    | None, _ -> Or_error.error_string "choose a journal symbol with --symbol"
+let operation_resolve database operation_id role account code =
+  let%bind commodity =
+    match Iso4217.of_alpha_code code with
+    | Some currency -> Ok (Commodity.fiat currency)
+    | None -> Commodity.asset code
   in
   with_database database (fun db ->
     let%map changed =
-      Review.resolve_operation_movement db ~operation_id ~role ~account ~commodity ~symbol
+      Review.resolve_operation_movement db ~operation_id ~role ~account ~commodity
     in
     printf "movement_resolution_changes=%d\n" (if changed then 1 else 0))
 ;;
@@ -260,22 +258,22 @@ let operation_resolve database operation_id role account commodity_json symbol =
 let operation_resolve_cmd =
   command
     "resolve"
-    "Assign an account and canonical commodity to a proposed movement."
+    "Assign an account and a commodity, fiat or an asset, to a proposed movement."
     Term.(
       const operation_resolve
       $ database
       $ Arg.(required & pos 0 (some int64) None & info [] ~docv:"OPERATION-ID")
       $ Arg.(required & pos 1 (some string) None & info [] ~docv:"ROLE")
       $ Arg.(required & pos 2 (some string) None & info [] ~docv:"ACCOUNT")
-      $ Arg.(required & pos 3 (some string) None & info [] ~docv:"COMMODITY-JSON")
       $ Arg.(
-          value
-          & opt (some string) None
+          required
+          & pos 3 (some string) None
           & info
-              [ "symbol" ]
-              ~docv:"SYMBOL"
+              []
+              ~docv:"COMMODITY"
               ~doc:
-                "Explicit hledger symbol (required for crypto; fiat uses its ISO code)."))
+                "An ISO currency code such as EUR, or an asset such as BTC or USDC, one \
+                 asset whichever network holds it."))
 ;;
 
 let operation_exchange_review database operation_id undo yes =

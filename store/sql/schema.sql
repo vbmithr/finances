@@ -135,12 +135,6 @@ CREATE TABLE "operation_resolution_changes" (
 ) STRICT;
 CREATE TRIGGER "operation_resolution_changes_no_update" BEFORE UPDATE ON "operation_resolution_changes" BEGIN SELECT RAISE(ABORT, 'movement resolution history is append-only'); END;
 CREATE TRIGGER "operation_resolution_changes_no_delete" BEFORE DELETE ON "operation_resolution_changes" BEGIN SELECT RAISE(ABORT, 'movement resolution history is append-only'); END;
-CREATE TABLE "commodity_symbols" (
-  "commodity" TEXT NOT NULL,
-  "symbol" TEXT NOT NULL,
-  PRIMARY KEY ("commodity"),
-  UNIQUE ("symbol")
-) STRICT;
 CREATE TABLE "operation_exchange_decisions" (
   "operation_id" INTEGER NOT NULL,
   "reason" TEXT NOT NULL,
@@ -592,4 +586,4 @@ CREATE TABLE "movement_type_changes" (
 ) STRICT;
 CREATE TRIGGER "movement_type_changes_no_update" BEFORE UPDATE ON "movement_type_changes" BEGIN SELECT RAISE(ABORT, 'movement type history is append-only'); END;
 CREATE TRIGGER "movement_type_changes_no_delete" BEFORE DELETE ON "movement_type_changes" BEGIN SELECT RAISE(ABORT, 'movement type history is append-only'); END;
-PRAGMA user_version = 38;
+PRAGMA user_version = 39;

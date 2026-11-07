@@ -273,19 +273,9 @@ let general_transfer_leg ?(allow_linked = false) db ~operation_id ~role =
           proposal.account
           ~error:(Error.of_string "resolve the movement account first")
       in
-      let query =
-        Rel_sql.Stmt.(
-          func
-            "SELECT symbol FROM commodity_symbols WHERE commodity=?"
-            (text @-> ret Row.(t1 (text "symbol"))))
-      in
-      let* symbol =
-        db_result
-          (Db.first db.conn (query (Json.encode Commodity.codec proposal.commodity)))
-      in
       let* symbol =
         Or_error.of_option
-          symbol
+          (Commodity.journal_symbol proposal.commodity)
           ~error:(Error.of_string "resolve the movement commodity first")
       in
       Ok (account, symbol)
@@ -924,22 +914,7 @@ let exchange_projection db operation_id =
              m.account
              ~error:(Error.of_string "exchange movement has no account")
          in
-         let symbol_query =
-           Rel_sql.Stmt.(
-             func
-               "SELECT symbol FROM commodity_symbols WHERE commodity=?"
-               (text @-> ret Row.(t1 (text "symbol"))))
-         in
-         let* symbol =
-           db_result
-             (Db.first db.conn (symbol_query (Json.encode Commodity.codec m.commodity)))
-         in
-         let* symbol =
-           Or_error.of_option
-             symbol
-             ~error:(Error.of_string "resolved commodity has no journal symbol")
-         in
-         let* _ = validate_commodity_symbol m.commodity symbol in
+         let* symbol = journal_symbol m.commodity in
          Ok (account, m.commodity, symbol, m.quantity))
       operation.movements
   in

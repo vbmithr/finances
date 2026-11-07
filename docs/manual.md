@@ -295,17 +295,16 @@ For a recognized two-movement exchange, inspect its roles with
 movement. For example, using the roles `from` and `to`:
 
 ```sh
-fin operation resolve 123 from assets:exchange:eur '{"kind":"fiat","code":"EUR"}'
-fin operation resolve 123 to assets:exchange:btc '{"kind":"onchain-native","network":"bitcoin"}' --symbol BTC
+fin operation resolve 123 from assets:exchange:eur EUR
+fin operation resolve 123 to assets:exchange:btc BTC
 fin operation exchange confirm 123
 fin journal export > journal.hledger
 ```
 
-Fiat uses its ISO currency code. For crypto, choose a distinct hledger symbol
-with `--symbol`; the full network or token contract identity remains in Fin.
-An on-chain token uses `{"kind":"onchain-token","network":"...","contract":"..."}`
-and can optionally include `token_id`. Fin rejects reuse of a symbol for a
-different commodity. Confirm only after checking the source, both accounts and
+The commodity is an ISO currency code, which is fiat, or an asset's symbol, which is
+also its name in the journal. An asset is one asset whichever network holds it: USDC
+on Ethereum and on Polygon is `USDC`, and which network a movement was on stays in its
+source fields. An asset cannot take an ISO code. Confirm only after checking the source, both accounts and
 quantities. Confirmation previews the two movements and two `equity:trading`
 postings, then asks for approval. `--yes` skips the prompt. Use
 `fin operation exchange undo ID` before changing a confirmed resolution.

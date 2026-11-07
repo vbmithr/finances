@@ -13,7 +13,7 @@ type category_restore_preview =
   ; rules_to_add : Classification_rule.t list
   ; decisions_to_apply : Bank_category.t list
   ; types_to_apply : (int64 * Movement_type.t) list
-  ; resolutions_to_apply : (int64 * string * string * Commodity.t * string) list
+  ; resolutions_to_apply : (int64 * string * string * Commodity.t) list
   ; unchanged : int
   ; problems : string list
   }
@@ -180,21 +180,6 @@ let category_snapshot db =
         (fun (id, role, account, commodity, quantity, source_commodity) ->
            let* event = event_of id ~missing:"resolved movement source missing" in
            let* commodity = Json.decode Commodity.codec commodity in
-           let symbol_query =
-             Rel_sql.Stmt.(
-               func
-                 "SELECT symbol FROM commodity_symbols WHERE commodity=?"
-                 (text @-> ret Row.(t1 (text "symbol"))))
-           in
-           let* symbol =
-             db_result
-               (Db.first db.conn (symbol_query (Json.encode Commodity.codec commodity)))
-           in
-           let* symbol =
-             Or_error.of_option
-               symbol
-               ~error:(Error.of_string "resolved commodity has no journal symbol")
-           in
            let* source_commodity = Json.decode Commodity.codec source_commodity in
            let* source_quantity =
              Or_error.try_with (fun () -> Quantity.of_string quantity)
@@ -216,7 +201,7 @@ let category_snapshot db =
            in
            Ok
              Category_portable.
-               { source; source_quantity; source_commodity; account; commodity; symbol })
+               { source; source_quantity; source_commodity; account; commodity })
         saved
     in
     Ok Category_portable.{ categories; rules; decisions; resolutions })
@@ -473,27 +458,6 @@ let preview_category_restore db (snapshot : Category_portable.t) =
       resolution_ids
       ~compare:[%compare: string * string * string * string * string]
   then problem "duplicate movement resolutions";
-  let* existing_symbols =
-    collect
-      db
-      (statement
-         "SELECT commodity,symbol FROM commodity_symbols"
-         Row.(t2 (text "commodity") (text "symbol")))
-  in
-  let proposed_symbols =
-    List.map snapshot.resolutions ~f:(fun (r : Category_portable.resolution) ->
-      Json.encode Commodity.codec r.commodity, r.symbol)
-  in
-  List.iter proposed_symbols ~f:(fun (commodity, symbol) ->
-    if
-      List.exists
-        (existing_symbols @ proposed_symbols)
-        ~f:(fun (other_commodity, other_symbol) ->
-          (String.equal commodity other_commodity
-           && not (String.equal symbol other_symbol))
-          || (String.equal symbol other_symbol
-              && not (String.equal commodity other_commodity)))
-    then problem ("commodity symbol mapping conflicts: " ^ symbol));
   let lookup =
     Rel_sql.Stmt.(
       func
@@ -567,7 +531,7 @@ let preview_category_restore db (snapshot : Category_portable.t) =
                 else if
                   Option.is_some bank
                   || Result.is_error (Validation.account r.account)
-                  || Result.is_error (validate_commodity_symbol r.commodity r.symbol)
+                  || Result.is_error (journal_symbol r.commodity)
                 then (
                   problem ("invalid movement resolution: " ^ label);
                   Ok None)
@@ -576,19 +540,12 @@ let preview_category_restore db (snapshot : Category_portable.t) =
                   match current_account, current_commodity with
                   | Some account, Some commodity
                     when String.equal account r.account && String.equal commodity encoded
-                    ->
-                    if
-                      List.exists existing_symbols ~f:(fun (c, s) ->
-                        String.equal c encoded && String.equal s r.symbol)
-                    then Ok None
-                    else (
-                      problem ("resolved commodity symbol missing: " ^ label);
-                      Ok None)
+                    -> Ok None
                   | Some _, Some _ ->
                     problem ("existing movement resolution differs: " ^ label);
                     Ok None
                   | None, None when not linked ->
-                    Ok (Some (op, d.movement_role, r.account, r.commodity, r.symbol))
+                    Ok (Some (op, d.movement_role, r.account, r.commodity))
                   | _ ->
                     problem ("movement resolution conflicts with a transfer: " ^ label);
                     Ok None))
@@ -699,15 +656,14 @@ let restore_categories db (current : category_restore_preview) =
       in
       let* _ =
         traverse
-          (fun (operation_id, role, account, commodity, symbol) ->
+          (fun (operation_id, role, account, commodity) ->
              resolve_operation_movement_internal
                ~in_transaction:true
                db
                ~operation_id
                ~role
                ~account
-               ~commodity
-               ~symbol)
+               ~commodity)
           current.resolutions_to_apply
       in
       Ok changed))

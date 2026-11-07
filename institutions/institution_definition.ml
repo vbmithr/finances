@@ -10,7 +10,7 @@ type records =
   { institution : string
   ; aliases : string list
   ; statement : statement option
-  ; csv : Csv_converter.t option
+  ; csv : Csv_converter.t list (* Each export layout the institution has. *)
   ; stored_formats : string list
   }
 
@@ -115,6 +115,23 @@ let csv_codec =
   |> Jsont.Object.finish
 ;;
 
+(* One layout, or a list of them, such as an explorer's transactions and token transfers. *)
+let layouts_codec =
+  let ok = function
+    | Ok value -> value
+    | Error error -> raise (Jsont.Error error)
+  in
+  Jsont.map
+    Jsont.json
+    ~dec:(fun json ->
+      match json with
+      | Jsont.Array _ -> ok (Jsont.Json.decode' (Jsont.list Csv_converter.codec) json)
+      | _ -> [ ok (Jsont.Json.decode' Csv_converter.codec json) ])
+    ~enc:(function
+      | [ one ] -> ok (Jsont.Json.encode' Csv_converter.codec one)
+      | many -> ok (Jsont.Json.encode' (Jsont.list Csv_converter.codec) many))
+;;
+
 let records_codec =
   Jsont.Object.map (fun institution aliases camt mt940 ofx csv stored_formats ->
     let statement =
@@ -125,7 +142,8 @@ let records_codec =
       | None, None, (None | Some false) -> None
       | _ -> failwith "a definition has one statement format"
     in
-    if Option.is_none statement && Option.is_none csv
+    let csv = Option.value csv ~default:[] in
+    if Option.is_none statement && List.is_empty csv
     then failwith "a definition needs a statement format or a CSV layout";
     ({ institution; aliases; statement; csv; stored_formats } : records))
   |> Jsont.Object.mem "institution" Jsont.string ~enc:(fun (r : records) -> r.institution)
@@ -146,7 +164,8 @@ let records_codec =
     match r.statement with
     | Some Ofx -> Some true
     | _ -> None)
-  |> Jsont.Object.opt_mem "csv" Csv_converter.codec ~enc:(fun (r : records) -> r.csv)
+  |> Jsont.Object.opt_mem "csv" layouts_codec ~enc:(fun (r : records) ->
+    Option.some_if (not (List.is_empty r.csv)) r.csv)
   |> Jsont.Object.mem
        "stored_formats"
        (Jsont.list Jsont.string)
@@ -219,15 +238,21 @@ let sources (r : records) =
             || String.equal (Adapter_support.extension filename) ".ofx")
           ~convert:(Ofx_converter.convert ~institution:r.institution))
   in
-  List.filter_opt [ statement; Option.map r.csv ~f:(Records_adapter.of_definition "csv") ]
+  (* The first layout keeps the name [csv], which stored rows may already carry. *)
+  let layouts =
+    List.mapi r.csv ~f:(fun i definition ->
+      let format = if i = 0 then "csv" else Printf.sprintf "csv-%d" (i + 1) in
+      Records_adapter.of_definition format definition)
+  in
+  Option.to_list statement @ layouts
 ;;
 
 let overlap (r : records) : Adapter.overlap =
   match r.statement, r.csv with
   | Some (Camt _ | Ofx), _ -> Source_ids
   | Some (Mt940 _), _ -> Day_inventory
-  | None, Some csv -> Csv_converter.overlap csv
-  | None, None -> Source_ids
+  | None, csv :: _ -> Csv_converter.overlap csv
+  | None, [] -> Source_ids
 ;;
 
 let adapter t =
@@ -334,13 +359,13 @@ let describe t =
       | Some Ofx -> [ "statement", "OFX" ]
       | None -> []
     in
-    let roles = Option.value_map r.csv ~default:[] ~f:Csv_converter.roles in
+    let roles = List.concat_map r.csv ~f:Csv_converter.roles in
     base
       "Records"
       (statement
        @ List.map roles ~f:(fun (role, columns) -> role, String.concat ~sep:", " columns)
       )
-      (Option.value_map r.csv ~default:[] ~f:Csv_converter.header)
+      (List.concat_map r.csv ~f:Csv_converter.header)
       (List.concat_map roles ~f:snd)
       [ "the description (type rules)"
       ; "any field of the row, named as the source names it, with --field (type rules)"

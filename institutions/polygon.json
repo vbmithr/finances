@@ -1,0 +1,279 @@
+{
+  "version": 1,
+  "kind": "records",
+  "type": "wallet",
+  "records": {
+    "institution": "polygon",
+    "aliases": [],
+    "csv": [
+      {
+        "format": "fin-csv-converter",
+        "version": 1,
+        "institution": "polygon",
+        "institution_type": "wallet",
+        "header": [
+          "Transaction Hash",
+          "Blockno",
+          "UnixTimestamp",
+          "DateTime (UTC)",
+          "From",
+          "To",
+          "ContractAddress",
+          "Value_IN(POL)",
+          "Value_OUT(POL)",
+          "CurrentValue @ *",
+          "TxnFee(POL)",
+          "TxnFee(USD)",
+          "Historical $Price/POL",
+          "Status",
+          "ErrCode",
+          "Method"
+        ],
+        "address": [
+          "From",
+          "To"
+        ],
+        "account": {
+          "id": "{@address}",
+          "bank": "polygon",
+          "type": "wallet"
+        },
+        "id": {
+          "columns": [
+            "Transaction Hash"
+          ]
+        },
+        "occurred": {
+          "column": "DateTime (UTC)",
+          "layout": "iso-datetime",
+          "utc": true
+        },
+        "cases": [
+          {
+            "when": [
+              {
+                "column": "From",
+                "address": true
+              },
+              {
+                "column": "ErrCode",
+                "filled": true
+              }
+            ],
+            "movements": [
+              {
+                "role": "primary",
+                "quantity": {
+                  "column": "TxnFee(POL)",
+                  "negate": true
+                },
+                "commodity": {
+                  "code": "POL"
+                }
+              }
+            ],
+            "fee": {
+              "column": "TxnFee(POL)"
+            }
+          },
+          {
+            "when": [
+              {
+                "column": "From",
+                "address": true
+              },
+              {
+                "column": "Value_OUT(POL)",
+                "sign": "positive"
+              }
+            ],
+            "movements": [
+              {
+                "role": "primary",
+                "quantity": {
+                  "column": "Value_OUT(POL)",
+                  "plus": "TxnFee(POL)",
+                  "negate": true
+                },
+                "commodity": {
+                  "code": "POL"
+                }
+              }
+            ],
+            "fee": {
+              "column": "TxnFee(POL)"
+            }
+          },
+          {
+            "when": [
+              {
+                "column": "From",
+                "address": true
+              }
+            ],
+            "movements": [
+              {
+                "role": "primary",
+                "quantity": {
+                  "column": "TxnFee(POL)",
+                  "negate": true
+                },
+                "commodity": {
+                  "code": "POL"
+                }
+              }
+            ],
+            "fee": {
+              "column": "TxnFee(POL)"
+            }
+          },
+          {
+            "when": [
+              {
+                "column": "To",
+                "address": true
+              },
+              {
+                "column": "Value_IN(POL)",
+                "sign": "positive"
+              },
+              {
+                "column": "ErrCode",
+                "filled": false
+              }
+            ],
+            "movements": [
+              {
+                "role": "primary",
+                "quantity": {
+                  "column": "Value_IN(POL)"
+                },
+                "commodity": {
+                  "code": "POL"
+                }
+              }
+            ]
+          }
+        ],
+        "descriptions": [
+          "Method"
+        ],
+        "type": "Method",
+        "references": {
+          "hash": "Transaction Hash"
+        }
+      },
+      {
+        "format": "fin-csv-converter",
+        "version": 1,
+        "institution": "polygon",
+        "institution_type": "wallet",
+        "header": [
+          "Transaction Hash",
+          "Blockno",
+          "UnixTimestamp",
+          "DateTime (UTC)",
+          "From",
+          "To",
+          "TokenValue",
+          "USDValueDayOfTx",
+          "ContractAddress",
+          "TokenName",
+          "TokenSymbol"
+        ],
+        "thousands": ",",
+        "address": [
+          "From",
+          "To"
+        ],
+        "values": [
+          {
+            "column": "ContractAddress",
+            "map": {
+              "0x3c499c542cef5e3811e1192ce70d8cc03d5c3359": "USDC"
+            }
+          }
+        ],
+        "only": [
+          {
+            "column": "ContractAddress",
+            "in": [
+              "USDC"
+            ]
+          },
+          {
+            "column": "TokenValue",
+            "sign": "positive"
+          }
+        ],
+        "account": {
+          "id": "{@address}",
+          "bank": "polygon",
+          "type": "wallet"
+        },
+        "id": {
+          "columns": [
+            "Transaction Hash",
+            "From",
+            "To",
+            "ContractAddress",
+            "TokenValue"
+          ]
+        },
+        "occurred": {
+          "column": "DateTime (UTC)",
+          "layout": "iso-datetime",
+          "utc": true
+        },
+        "cases": [
+          {
+            "when": [
+              {
+                "column": "From",
+                "address": true
+              }
+            ],
+            "movements": [
+              {
+                "role": "primary",
+                "quantity": {
+                  "column": "TokenValue",
+                  "negate": true
+                },
+                "commodity": {
+                  "asset": "ContractAddress"
+                }
+              }
+            ]
+          },
+          {
+            "when": [
+              {
+                "column": "To",
+                "address": true
+              }
+            ],
+            "movements": [
+              {
+                "role": "primary",
+                "quantity": {
+                  "column": "TokenValue"
+                },
+                "commodity": {
+                  "asset": "ContractAddress"
+                }
+              }
+            ]
+          }
+        ],
+        "descriptions": [
+          "TokenName"
+        ],
+        "references": {
+          "hash": "Transaction Hash"
+        }
+      }
+    ]
+  },
+  "rules": []
+}

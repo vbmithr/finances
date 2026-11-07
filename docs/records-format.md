@@ -104,9 +104,11 @@ each export's statement differently, so one row can be listed by several.
 | `observation` | This row describes a row stated elsewhere, see below; it is never counted |
 
 A movement has a `role` unique in its record (`primary`, or `from` and `to`), a
-`quantity` and a `commodity`. Quantities are decimal strings, never numbers. A symbol
-that does not identify an asset is `reported`, scoped to its provider; only ISO 4217
-codes are `fiat`.
+`quantity` and a `commodity`. Quantities are decimal strings, never numbers. ISO 4217
+codes are `fiat`; an `asset` is a crypto asset by its symbol, one asset whichever network
+holds it, so USDC on Ethereum and on Polygon are both `{"kind": "asset", "code": "USDC"}`
+and the network stays in `fields`. A symbol whose asset is not known is `reported`, scoped
+to its provider.
 
 `details` is **enrichment**. A later import or a paired observation may add to it but may
 not change it, so a record gains data without changing identity.
@@ -286,11 +288,24 @@ What a record states is checked by the format, for every source. Only what relat
 to each other is left to a definition, because those columns are not in the record.
 
 - A column name repeated in the header is `Solde#2` for the second one.
-- A quantity is `column`, with optional `negate` and `minus` (another column).
-- A commodity is `{"fiat": column}`, `{"code": "USD"}`, or `{"reported": column, "provider": name}`,
+- A header entry ending with `*` names any column starting with the rest, for a name that
+  changes with every export, such as Etherscan's `CurrentValue @ $2243.29/Eth`.
+- A quantity is `column`, with optional `negate`, `minus` and `plus` (other columns).
+- A commodity is `{"fiat": column}`, `{"code": "USD"}` (an ISO code is fiat, anything else an
+  asset, so `{"code": "ETH"}`), `{"asset": column}`, or `{"reported": column, "provider": name}`,
   which may add `"fiat_codes": ["EUR"]`: those values are currencies. They are listed because a crypto
-  ticker can also be an ISO code.
-- A condition is `column` with `in`, `sign` (`positive`, `negative`) or `filled`.
+  ticker can also be an ISO code. An `asset` column takes its value after `values`, which is how a
+  definition lists the token contracts it knows: unknown ones stay addresses and `only` leaves them
+  out.
+- A condition is `column` with `in`, `sign` (`positive`, `negative`), `filled`, or `address`.
+- `thousands` names a character that groups digits, such as Etherscan's `1,000.5`.
+- `address` lists the columns holding a wallet's address, such as `["From", "To"]`: in an
+  explorer's export of one address it is the one value found on every row. `{@address}` in the
+  account `id` is that address, and the condition `"address": true` holds when the column is it,
+  which tells what the wallet sent from what it received. A file where no address, or more than
+  one, is on every row is refused.
+- `csv` may be a list of layouts, for an institution exporting several files, such as an explorer's
+  transactions and token transfers.
 - A clock with no stated offset gives a date, unless `utc` says the column is in UTC.
 
 Every column stays in `fields`, as stated.

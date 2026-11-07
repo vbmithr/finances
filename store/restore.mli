@@ -7,7 +7,7 @@ type category_restore_preview =
   ; rules_to_add : Classification_rule.t list
   ; decisions_to_apply : Bank_category.t list
   ; types_to_apply : (int64 * Movement_type.t) list
-  ; resolutions_to_apply : (int64 * string * string * Commodity.t * string) list
+  ; resolutions_to_apply : (int64 * string * string * Commodity.t) list
   ; unchanged : int
   ; problems : string list
   }

@@ -98,7 +98,7 @@ let statement ~institution (t : Records.t) ~events (s : Records.statement)
          ; closing = closing.quantity
          ; events
          }
-     | Onchain_native _ | Onchain_token _ | Reported _ -> None)
+     | Asset _ | Reported _ -> None)
   | _ -> None
 ;;
 

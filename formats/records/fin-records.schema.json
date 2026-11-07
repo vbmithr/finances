@@ -110,37 +110,14 @@
           "additionalProperties": false,
           "required": [
             "kind",
-            "network"
+            "code"
           ],
           "properties": {
             "kind": {
-              "const": "onchain-native"
+              "const": "asset"
             },
-            "network": {
+            "code": {
               "$ref": "#/$defs/symbol"
-            }
-          }
-        },
-        {
-          "type": "object",
-          "additionalProperties": false,
-          "required": [
-            "kind",
-            "network",
-            "contract"
-          ],
-          "properties": {
-            "kind": {
-              "const": "onchain-token"
-            },
-            "network": {
-              "$ref": "#/$defs/symbol"
-            },
-            "contract": {
-              "$ref": "#/$defs/line"
-            },
-            "token_id": {
-              "$ref": "#/$defs/line"
             }
           }
         }

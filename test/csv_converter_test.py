@@ -199,4 +199,44 @@ done = convert("--definition", definition, other, check=False)
 assert done.returncode != 0 and done.stdout == "", done.stderr
 done = convert("nowhere", other, check=False)
 assert done.returncode != 0 and "--definition" in " ".join(done.stderr.split()), done.stderr
+# A block explorer's exports of one address: the wallet is the address on every row. Fictional
+# addresses; the USDC contract is Polygon's real one, since the definition lists it.
+me, them, usdc = "0x" + "1" * 40, "0x" + "2" * 40, "0x3c499c542cef5e3811e1192ce70d8cc03d5c3359"
+spam, fake = "0x" + "9" * 40, "0x" + "8" * 40
+header = ("Transaction Hash,Blockno,UnixTimestamp,DateTime (UTC),From,To,ContractAddress,Value_IN(POL),"
+          "Value_OUT(POL),CurrentValue @ $0.1/POL,TxnFee(POL),TxnFee(USD),Historical $Price/POL,Status,ErrCode,Method\n")
+transactions = write("export-polygon.csv", header + "".join(
+    f"0x{h},1,1,2026-07-29 10:00:{i:02},{f},{t},,{vin},{vout},0,{fee},0,0.1,,{err},{method}\n"
+    for i, (h, f, t, vin, vout, fee, err, method) in enumerate([
+        ("a", me, them, "0", "2", "0.01", "", "Transfer"),     # sends 2 POL, pays the fee
+        ("b", me, usdc, "0", "0", "0.02", "", "Transfer"),     # a token transfer: only the fee
+        ("c", them, me, "5", "0", "0.03", "", "Transfer"),     # receives 5 POL, fee paid by them
+        ("d", me, them, "0", "3", "0.04", "Out of gas", "Transfer"),  # failed: only the fee
+    ])))
+records = kind(convert("polygon", transactions), "record")
+assert [r["movements"][0]["quantity"] for r in records] == ["-2.01", "-0.02", "5", "-0.04"], records
+assert [r.get("fee") for r in records] == ["0.01", "0.02", None, "0.04"], records
+assert all(r["movements"][0]["commodity"] == {"kind": "asset", "code": "POL"} for r in records)
+tokens = write("export-address-token-polygon.csv",
+    "Transaction Hash,Blockno,UnixTimestamp,DateTime (UTC),From,To,TokenValue,USDValueDayOfTx,ContractAddress,TokenName,TokenSymbol\n"
+    + "".join(f'0x{h},1,1,2026-07-29 11:00:{i:02},{f},{t},"{v}",N/A,{c},{n},{s}\n'
+              for i, (h, f, t, v, c, n, s) in enumerate([
+                  ("a", them, me, "1,000.5", usdc, "USD Coin", "USDC"),  # bridged in
+                  ("b", me, them, "250", usdc, "USD Coin", "USDC"),      # a top-up
+                  ("c", me, them, "0", usdc, "USD Coin", "USDC"),        # a poisoner's zero transfer
+                  ("d", spam, me, "99", spam, "ERC-20 TOKEN*", "ERC-20 TOKEN*"),
+                  ("e", fake, me, "7", fake, "USD Coin", "USDC"),        # not the USDC contract
+              ])))
+lines = convert("polygon", tokens)
+records = kind(lines, "record")
+assert [r["movements"][0]["quantity"] for r in records] == ["1000.5", "-250"], records
+assert all(r["movements"][0]["commodity"] == {"kind": "asset", "code": "USDC"} for r in records)
+account = kind(lines, "account")[0]
+assert (account["id"], account.get("type")) == (me, "wallet"), account
+strangers = write("export-strangers.csv", header
+    + f"0xa,1,1,2026-07-29 10:00:00,{me},{them},,0,1,0,0.01,0,0.1,,,Transfer\n"
+    + f"0xb,1,1,2026-07-29 10:00:01,{spam},{fake},,0,1,0,0.01,0,0.1,,,Transfer\n")
+done = convert("polygon", strangers, check=False)
+assert done.returncode != 0 and "no address appears on every row" in done.stderr, done.stderr
+
 print("Verified CSV converters")

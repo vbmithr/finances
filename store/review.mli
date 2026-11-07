@@ -215,10 +215,11 @@ val resolve_operation_movement
   -> role:string
   -> account:string
   -> commodity:Commodity.t
-  -> symbol:string
   -> bool Or_error.t
 
-val validate_commodity_symbol : Commodity.t -> String.t -> (String.t, Error.t) Result.t
+(** The journal's name for a resolved commodity; a provider's symbol must be resolved to
+    fiat or an asset first. *)
+val journal_symbol : Commodity.t -> string Or_error.t
 
 val set_bank_categories_in_transaction
   :  ?only_unclassified:bool
@@ -233,7 +234,6 @@ val resolve_operation_movement_internal
   -> role:String.t
   -> account:String.t
   -> commodity:Commodity.t
-  -> symbol:String.t
   -> (bool, Error.t) Result.t
 
 val movement_source : Handle.t -> ((int64 * Source_event.t) List.t, Error.t) Result.t
