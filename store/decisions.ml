@@ -73,8 +73,13 @@ let export db =
         pairs
     in
     let* cards = Cards.assignments db in
+    let* assets = Assets.mappings db in
     Ok
       ({ accounts = Some accounts
+       ; assets =
+           Some
+             (List.map assets ~f:(fun (provider, symbol, commodity) ->
+                ({ provider; symbol; commodity } : Decisions_portable.asset)))
        ; cards =
            Some
              (List.map cards ~f:(fun (institution, card_reference, card_source_account) ->
@@ -93,6 +98,7 @@ let export db =
 
 type changes =
   { accounts : int
+  ; assets : int
   ; cards : int
   ; categories : int
   ; rules : int
@@ -111,6 +117,7 @@ type outcome =
 
 let nothing_changed =
   { accounts = 0
+  ; assets = 0
   ; cards = 0
   ; categories = 0
   ; rules = 0
@@ -270,6 +277,16 @@ let restore db (snapshot : Decisions_portable.t) ~confirm =
           let* report = Accounts.apply_bank_accounts db config in
           Ok (report.mapping_changes + report.identity_changes + report.settlement_changes)
       in
+      (* Before exchanges and transfers, which need their movements' commodities. *)
+      let* assets =
+        let* restored =
+          traverse
+            (fun (a : Decisions_portable.asset) ->
+               Assets.restore db ~provider:a.provider ~symbol:a.symbol a.commodity)
+            (Option.value snapshot.assets ~default:[])
+        in
+        Ok (List.count restored ~f:Fn.id)
+      in
       (* Before settlements: a settlement of a replaced card matches through its card. *)
       let* cards =
         let* restored =
@@ -342,6 +359,7 @@ let restore db (snapshot : Decisions_portable.t) ~confirm =
       in
       let changes =
         { accounts
+        ; assets
         ; cards
         ; categories = List.length preview.categories_to_add
         ; rules = List.length preview.rules_to_add

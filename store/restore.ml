@@ -13,7 +13,7 @@ type category_restore_preview =
   ; rules_to_add : Classification_rule.t list
   ; decisions_to_apply : Bank_category.t list
   ; types_to_apply : (int64 * Movement_type.t) list
-  ; resolutions_to_apply : (int64 * string * string * Commodity.t) list
+  ; resolutions_to_apply : (int64 * string * string) list
   ; unchanged : int
   ; problems : string list
   }
@@ -163,23 +163,21 @@ let category_snapshot db =
       collect
         db
         (statement
-           "SELECT m.anchor_event_id,m.role,r.account,r.commodity,m.quantity,m.commodity \
-            FROM operation_movement_resolutions r JOIN operation_movements m ON \
+           "SELECT m.anchor_event_id,m.role,r.account,m.quantity,m.commodity FROM \
+            operation_movement_resolutions r JOIN operation_movements m ON \
             m.id=r.movement_id ORDER BY m.anchor_event_id,m.role"
            Row.(
-             t6
+             t5
                (int64 "event_id")
                (text "role")
                (text "account")
-               (text "commodity")
                (text "quantity")
                (text "source_commodity")))
     in
     let* resolutions =
       traverse
-        (fun (id, role, account, commodity, quantity, source_commodity) ->
+        (fun (id, role, account, quantity, source_commodity) ->
            let* event = event_of id ~missing:"resolved movement source missing" in
-           let* commodity = Json.decode Commodity.codec commodity in
            let* source_commodity = Json.decode Commodity.codec source_commodity in
            let* source_quantity =
              Or_error.try_with (fun () -> Quantity.of_string quantity)
@@ -199,9 +197,7 @@ let category_snapshot db =
                ; type_override = None
                }
            in
-           Ok
-             Category_portable.
-               { source; source_quantity; source_commodity; account; commodity })
+           Ok Category_portable.{ source; source_quantity; source_commodity; account })
         saved
     in
     Ok Category_portable.{ categories; rules; decisions; resolutions })
@@ -461,10 +457,9 @@ let preview_category_restore db (snapshot : Category_portable.t) =
   let lookup =
     Rel_sql.Stmt.(
       func
-        "SELECT \
-         c.operation_id,m.quantity,m.commodity,r.account,r.commodity,c.bank_event_id, \
-         c.linked FROM movement_claims c JOIN operation_movements m ON m.id=c.id LEFT \
-         JOIN operation_movement_resolutions r ON r.movement_id=c.id WHERE \
+        "SELECT c.operation_id,m.quantity,m.commodity,r.account,c.bank_event_id,c.linked \
+         FROM movement_claims c JOIN operation_movements m ON m.id=c.id LEFT JOIN \
+         operation_movement_resolutions r ON r.movement_id=c.id WHERE \
          c.anchor_event_id=? AND c.role=? AND EXISTS (SELECT 1 FROM \
          operation_movement_sources s WHERE s.movement_id=c.id AND \
          s.event_id=c.anchor_event_id AND s.operation_id=c.operation_id)"
@@ -472,12 +467,11 @@ let preview_category_restore db (snapshot : Category_portable.t) =
          @-> text
          @-> ret
                Row.(
-                 unit (fun a b c d e f g -> a, b, c, d, e, f, g)
+                 unit (fun a b c d e f -> a, b, c, d, e, f)
                  * int64 "operation_id"
                  * text "quantity"
                  * text "source_commodity"
                  * option Rel.Type.text "account"
-                 * option Rel.Type.text "commodity"
                  * option Rel.Type.int64 "bank_event_id"
                  * bool "linked")))
   in
@@ -507,14 +501,7 @@ let preview_category_restore db (snapshot : Category_portable.t) =
               | None ->
                 problem ("movement not found: " ^ label);
                 Ok None
-              | Some
-                  ( op
-                  , quantity
-                  , original
-                  , current_account
-                  , current_commodity
-                  , bank
-                  , linked ) ->
+              | Some (op, quantity, original, current_account, bank, linked) ->
                 let* original = Json.decode Commodity.codec original in
                 let* quantity =
                   Or_error.try_with (fun () -> Quantity.of_string quantity)
@@ -529,23 +516,17 @@ let preview_category_restore db (snapshot : Category_portable.t) =
                   problem ("movement interpretation differs: " ^ label);
                   Ok None)
                 else if
-                  Option.is_some bank
-                  || Result.is_error (Validation.account r.account)
-                  || Result.is_error (journal_symbol r.commodity)
+                  Option.is_some bank || Result.is_error (Validation.account r.account)
                 then (
                   problem ("invalid movement resolution: " ^ label);
                   Ok None)
                 else (
-                  let encoded = Json.encode Commodity.codec r.commodity in
-                  match current_account, current_commodity with
-                  | Some account, Some commodity
-                    when String.equal account r.account && String.equal commodity encoded
-                    -> Ok None
-                  | Some _, Some _ ->
+                  match current_account with
+                  | Some account when String.equal account r.account -> Ok None
+                  | Some _ ->
                     problem ("existing movement resolution differs: " ^ label);
                     Ok None
-                  | None, None when not linked ->
-                    Ok (Some (op, d.movement_role, r.account, r.commodity))
+                  | None when not linked -> Ok (Some (op, d.movement_role, r.account))
                   | _ ->
                     problem ("movement resolution conflicts with a transfer: " ^ label);
                     Ok None))
@@ -656,14 +637,13 @@ let restore_categories db (current : category_restore_preview) =
       in
       let* _ =
         traverse
-          (fun (operation_id, role, account, commodity) ->
+          (fun (operation_id, role, account) ->
              resolve_operation_movement_internal
                ~in_transaction:true
                db
                ~operation_id
                ~role
-               ~account
-               ~commodity)
+               ~account)
           current.resolutions_to_apply
       in
       Ok changed))

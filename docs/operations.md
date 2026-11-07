@@ -69,13 +69,18 @@ add bookkeeping, a bridge becoming an exchange, for no use in personal accountin
 network and the token contract stay evidence: they are in the source fields of every
 movement read from a chain.
 
-A symbol is trusted as an asset only through evidence that names the asset: a
-definition's list of known token contracts, or a reviewed resolution. A provider's
-symbol stays scoped to its provider until then, because anyone can deploy a token
-called USDC; an explorer's export lists such tokens next to the real one, and the
-contract list is what leaves them out. An asset cannot take an ISO code, which names
-fiat. Commodity identity and the account are independent: an account may hold several
-commodities.
+What a source reports is never trusted as an asset by its name. A token is reported by
+its contract, scoped to its network, and an exchange's ticker is scoped to the exchange,
+because anyone can deploy a token called USDC: an explorer's export lists such tokens
+next to the real one. The person says once what each reported symbol is, with
+`fin asset map PROVIDER SYMBOL CODE`, and it applies to every movement reporting it,
+past and future; `fin asset ignore` marks spam, whose movements stay as evidence and
+never count. These mappings are decisions like the others, exported and restored, so
+the list of known tokens is the person's data and grows without a new fin. The
+`resolved_movements` view is the one place a movement's commodity is read through its
+mapping. A mapping that confirmed transfers or exchanges rest on cannot change until
+they are undone. An asset cannot take an ISO code, which names fiat. Commodity identity
+and the account are independent: an account may hold several commodities.
 
 ## Persistence and migration
 

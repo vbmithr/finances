@@ -26,7 +26,6 @@ type quantity_spec =
 type commodity_spec =
   | Fiat_column of string
   | Code of string (* An ISO code is fiat; anything else is an asset. *)
-  | Asset_column of string
   | Reported_column of
       { column : string
       ; provider : string
@@ -186,8 +185,7 @@ let conflict_columns t = t.conflict_columns
 (* Columns, in order, under each role a definition gives them. *)
 let roles t =
   let commodity = function
-    | Fiat_column column | Asset_column column | Reported_column { column; _ } ->
-      [ column ]
+    | Fiat_column column | Reported_column { column; _ } -> [ column ]
     | Code _ -> []
   in
   let date (d : date_spec) = d.column :: Option.to_list d.fallback in
@@ -312,20 +310,18 @@ let quantity_codec =
 ;;
 
 let commodity_codec =
-  Jsont.Object.map (fun fiat code asset reported provider fiat_codes ->
-    match fiat, code, asset, reported, provider with
-    | Some column, None, None, None, None -> Fiat_column column
-    | None, Some code, None, None, None -> Code code
-    | None, None, Some column, None, None -> Asset_column column
-    | None, None, None, Some column, Some provider ->
+  Jsont.Object.map (fun fiat code reported provider fiat_codes ->
+    match fiat, code, reported, provider with
+    | Some column, None, None, None -> Fiat_column column
+    | None, Some code, None, None -> Code code
+    | None, None, Some column, Some provider ->
       Reported_column { column; provider; fiat_codes }
     | _ ->
       Jsont.Error.msgf
         Jsont.Meta.none
-        "a commodity is one of fiat, code, asset, or reported with provider")
+        "a commodity is one of fiat, code, or reported with provider")
   |> opt "fiat" Jsont.string
   |> opt "code" Jsont.string
-  |> opt "asset" Jsont.string
   |> opt "reported" Jsont.string
   |> opt "provider" Jsont.string
   |> list_or_empty "fiat_codes" Jsont.string
@@ -689,8 +685,7 @@ let named_columns t =
     (q.column :: Option.to_list q.minus) @ Option.to_list q.plus
   in
   let commodity = function
-    | Fiat_column column | Asset_column column | Reported_column { column; _ } ->
-      [ column ]
+    | Fiat_column column | Reported_column { column; _ } -> [ column ]
     | Code _ -> []
   in
   let conditions =
@@ -868,11 +863,7 @@ let optional_quantity t row name =
 let commodity_of t row = function
   | Fiat_column column ->
     Validation.currency column (cell t row column) |> Or_error.ok_exn |> Commodity.fiat
-  | Code code ->
-    (match Iso4217.of_alpha_code code with
-     | Some currency -> Commodity.fiat currency
-     | None -> Commodity.asset code |> Or_error.ok_exn)
-  | Asset_column column -> Commodity.asset (cell t row column) |> Or_error.ok_exn
+  | Code code -> Commodity.of_code code |> Or_error.ok_exn
   | Reported_column { column; provider; fiat_codes } ->
     let symbol = cell t row column in
     if List.mem fiat_codes symbol ~equal:String.equal

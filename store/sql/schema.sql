@@ -120,7 +120,6 @@ CREATE TABLE "operation_transfer_memberships" (
 CREATE TABLE "operation_movement_resolutions" (
   "movement_id" INTEGER NOT NULL,
   "account" TEXT NOT NULL,
-  "commodity" TEXT NOT NULL,
   PRIMARY KEY ("movement_id"),
   FOREIGN KEY ("movement_id") REFERENCES "operation_movements" ("id")
 ) STRICT;
@@ -128,13 +127,31 @@ CREATE TABLE "operation_resolution_changes" (
   "id" INTEGER NOT NULL,
   "movement_id" INTEGER NOT NULL,
   "account" TEXT NOT NULL,
-  "commodity" TEXT NOT NULL,
   "changed_at" TEXT NOT NULL DEFAULT ((strftime('%Y-%m-%dT%H:%M:%f','now') || '000000000Z')),
   PRIMARY KEY ("id"),
   FOREIGN KEY ("movement_id") REFERENCES "operation_movements" ("id")
 ) STRICT;
 CREATE TRIGGER "operation_resolution_changes_no_update" BEFORE UPDATE ON "operation_resolution_changes" BEGIN SELECT RAISE(ABORT, 'movement resolution history is append-only'); END;
 CREATE TRIGGER "operation_resolution_changes_no_delete" BEFORE DELETE ON "operation_resolution_changes" BEGIN SELECT RAISE(ABORT, 'movement resolution history is append-only'); END;
+CREATE TABLE "asset_mappings" (
+  "provider" TEXT NOT NULL,
+  "symbol" TEXT NOT NULL,
+  "commodity" TEXT,
+  PRIMARY KEY ("provider", "symbol")
+) STRICT;
+CREATE TABLE "asset_mapping_changes" (
+  "id" INTEGER NOT NULL,
+  "provider" TEXT NOT NULL,
+  "symbol" TEXT NOT NULL,
+  "previous" TEXT,
+  "commodity" TEXT,
+  "action" TEXT NOT NULL,
+  "changed_at" TEXT NOT NULL DEFAULT ((strftime('%Y-%m-%dT%H:%M:%f','now') || '000000000Z')),
+  PRIMARY KEY ("id"),
+  CHECK ("action" IN ('mapped','ignored','removed'))
+) STRICT;
+CREATE TRIGGER "asset_mapping_changes_no_update" BEFORE UPDATE ON "asset_mapping_changes" BEGIN SELECT RAISE(ABORT, 'asset mapping history is append-only'); END;
+CREATE TRIGGER "asset_mapping_changes_no_delete" BEFORE DELETE ON "asset_mapping_changes" BEGIN SELECT RAISE(ABORT, 'asset mapping history is append-only'); END;
 CREATE TABLE "operation_exchange_decisions" (
   "operation_id" INTEGER NOT NULL,
   "reason" TEXT NOT NULL,
@@ -586,4 +603,4 @@ CREATE TABLE "movement_type_changes" (
 ) STRICT;
 CREATE TRIGGER "movement_type_changes_no_update" BEFORE UPDATE ON "movement_type_changes" BEGIN SELECT RAISE(ABORT, 'movement type history is append-only'); END;
 CREATE TRIGGER "movement_type_changes_no_delete" BEFORE DELETE ON "movement_type_changes" BEGIN SELECT RAISE(ABORT, 'movement type history is append-only'); END;
-PRAGMA user_version = 39;
+PRAGMA user_version = 40;

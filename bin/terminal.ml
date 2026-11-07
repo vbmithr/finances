@@ -228,6 +228,9 @@ let operation_state (row : Report_json.operation_row) =
     match row.operation.review, row.operation.movements with
     | _, [] -> "needs interpretation"
     | Some _, _ -> ""
+    | None, movements
+      when List.for_all movements ~f:(fun (m : Review.operation_movement_review) ->
+             m.ignored) -> "ignored"
     | None, _ ->
       if
         List.exists

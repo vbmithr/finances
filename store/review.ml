@@ -735,6 +735,7 @@ type operation_movement_review =
   ; quantity : Quantity.t
   ; anchor_event_id : int64
   ; review : bank_review option
+  ; ignored : bool (** Its symbol is ignored, as spam is: it never counts. *)
   }
 
 type operation_review =
@@ -1029,25 +1030,35 @@ let operations
                   Row.(
                     unit
                       (fun
-                          canonical operation_id anchor role account commodity quantity ->
+                          canonical
+                           operation_id
+                           anchor
+                           role
+                           account
+                           commodity
+                           quantity
+                           ignored
+                         ->
                          ( canonical
                          , operation_id
                          , anchor
                          , role
                          , account
                          , commodity
-                         , quantity ))
+                         , quantity
+                         , ignored ))
                     * int64 "canonical"
                     * int64 "operation_id"
                     * int64 "anchor_event_id"
                     * text "role"
                     * option Rel.Type.text "account"
                     * text "commodity"
-                    * text "quantity")))
+                    * text "quantity"
+                    * bool "ignored")))
          (json_ids chosen))
   in
   let anchors =
-    List.map movement_rows ~f:(fun (_, _, anchor, _, _, _, _) -> anchor)
+    List.map movement_rows ~f:(fun (_, _, anchor, _, _, _, _, _) -> anchor)
     |> List.dedup_and_sort ~compare:Int64.compare
   in
   let* reviews = reviews_of_events db anchors in
@@ -1058,7 +1069,14 @@ let operations
   in
   let* movements =
     traverse
-      (fun (canonical, operation_id, anchor_event_id, role, account, commodity, quantity) ->
+      (fun ( canonical
+           , operation_id
+           , anchor_event_id
+           , role
+           , account
+           , commodity
+           , quantity
+           , ignored ) ->
          let* commodity = Json.decode Commodity.codec commodity in
          let* quantity = Or_error.try_with (fun () -> Quantity.of_string quantity) in
          Ok
@@ -1070,6 +1088,7 @@ let operations
              ; quantity
              ; anchor_event_id
              ; review = Hashtbl.find review_by_event anchor_event_id
+             ; ignored
              } ))
       movement_rows
   in
@@ -1209,11 +1228,9 @@ let resolve_operation_movement_internal
       ~operation_id
       ~role
       ~account
-      ~commodity
   =
   let* account = Validation.account account in
   let* _ = Validation.token "movement role" role in
-  let* _ = journal_symbol commodity in
   (if in_transaction then fun f -> f db else transaction db) (fun db ->
     let query =
       Rel_sql.Stmt.(
@@ -1244,40 +1261,34 @@ let resolve_operation_movement_internal
           "undo the confirmed operation before changing its movement resolution"
       else Ok ()
     in
-    let commodity = Json.encode Commodity.codec commodity in
     let previous =
       Rel_sql.Stmt.(
         func
-          "SELECT account,commodity FROM operation_movement_resolutions WHERE \
-           movement_id=?"
-          (int64 @-> ret Row.(t2 (text "account") (text "commodity"))))
+          "SELECT account FROM operation_movement_resolutions WHERE movement_id=?"
+          (int64 @-> ret Row.(t1 (text "account"))))
     in
     let* current = db_result (Db.first db.conn (previous movement_id)) in
-    if
-      Option.exists current ~f:(fun (old_account, old_commodity) ->
-        String.equal old_account account && String.equal old_commodity commodity)
+    if Option.exists current ~f:(String.equal account)
     then Ok false
     else (
       let update =
         Rel_sql.Stmt.(
           func
-            "INSERT INTO operation_movement_resolutions(movement_id,account,commodity) \
-             VALUES (?,?,?) ON CONFLICT(movement_id) DO UPDATE SET \
-             account=excluded.account,commodity=excluded.commodity"
-            (int64 @-> text @-> text @-> unit))
+            "INSERT INTO operation_movement_resolutions(movement_id,account) VALUES \
+             (?,?) ON CONFLICT(movement_id) DO UPDATE SET account=excluded.account"
+            (int64 @-> text @-> unit))
       in
       let audit =
         Rel_sql.Stmt.(
           func
-            "INSERT INTO operation_resolution_changes(movement_id,account,commodity) \
-             VALUES (?,?,?)"
-            (int64 @-> text @-> text @-> unit))
+            "INSERT INTO operation_resolution_changes(movement_id,account) VALUES (?,?)"
+            (int64 @-> text @-> unit))
       in
-      let* () = db_result (Db.exec db.conn (update movement_id account commodity)) in
-      let* () = db_result (Db.exec db.conn (audit movement_id account commodity)) in
+      let* () = db_result (Db.exec db.conn (update movement_id account)) in
+      let* () = db_result (Db.exec db.conn (audit movement_id account)) in
       Ok true))
 ;;
 
-let resolve_operation_movement db ~operation_id ~role ~account ~commodity =
-  resolve_operation_movement_internal db ~operation_id ~role ~account ~commodity
+let resolve_operation_movement db ~operation_id ~role ~account =
+  resolve_operation_movement_internal db ~operation_id ~role ~account
 ;;

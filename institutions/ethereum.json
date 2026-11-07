@@ -186,21 +186,7 @@
           "From",
           "To"
         ],
-        "values": [
-          {
-            "column": "ContractAddress",
-            "map": {
-              "0xa0b86991c6218b36c1d19d4a2e9eb0ce3606eb48": "USDC"
-            }
-          }
-        ],
         "only": [
-          {
-            "column": "ContractAddress",
-            "in": [
-              "USDC"
-            ]
-          },
           {
             "column": "TokenValue",
             "sign": "positive"
@@ -241,7 +227,8 @@
                   "negate": true
                 },
                 "commodity": {
-                  "asset": "ContractAddress"
+                  "reported": "ContractAddress",
+                  "provider": "ethereum"
                 }
               }
             ]
@@ -260,7 +247,8 @@
                   "column": "TokenValue"
                 },
                 "commodity": {
-                  "asset": "ContractAddress"
+                  "reported": "ContractAddress",
+                  "provider": "ethereum"
                 }
               }
             ]

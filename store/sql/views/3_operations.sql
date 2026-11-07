@@ -39,6 +39,8 @@ SELECT p.id, p.occurred, p.canonical, p.anchor, r.event_id, r.booked_on, r.amoun
        AND name = 'Description' ORDER BY event_id, ordinal LIMIT 1),
     (SELECT value FROM operation_fields WHERE operation_id = p.id
        AND name = 'description' ORDER BY event_id, ordinal LIMIT 1),
+    (SELECT CAST(e.payload AS TEXT) ->> '$.record.details.descriptions[0]'
+     FROM source_events e WHERE e.id = p.anchor AND e.kind = 'records-operation'),
     '')
   END AS description
 FROM operation_anchors p

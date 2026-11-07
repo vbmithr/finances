@@ -129,6 +129,7 @@ type operation_movement_review =
   ; quantity : Quantity.t
   ; anchor_event_id : int64
   ; review : bank_review option
+  ; ignored : bool (** Its symbol is ignored, as spam is: it never counts. *)
   }
 
 type operation_review =
@@ -214,7 +215,6 @@ val resolve_operation_movement
   -> operation_id:int64
   -> role:string
   -> account:string
-  -> commodity:Commodity.t
   -> bool Or_error.t
 
 (** The journal's name for a resolved commodity; a provider's symbol must be resolved to
@@ -233,7 +233,6 @@ val resolve_operation_movement_internal
   -> operation_id:int64
   -> role:String.t
   -> account:String.t
-  -> commodity:Commodity.t
   -> (bool, Error.t) Result.t
 
 val movement_source : Handle.t -> ((int64 * Source_event.t) List.t, Error.t) Result.t

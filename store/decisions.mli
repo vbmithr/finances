@@ -7,6 +7,7 @@ val export : Handle.t -> Decisions_portable.t Or_error.t
 
 type changes =
   { accounts : int
+  ; assets : int
   ; cards : int
   ; categories : int
   ; rules : int

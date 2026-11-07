@@ -9,20 +9,25 @@ short line of their own.
 ## Unreleased
 
 - **Action required: rebuild.** A crypto commodity is now its asset, such as `USDC`, one asset whichever
-  network holds it; the network stays in the source fields. Schema 39 drops the table of journal symbols,
-  since an asset's symbol is its name in the journal. `fin operation resolve` takes the commodity as a
-  code, `EUR` or `BTC`, instead of JSON, and has no `--symbol`. Saved decisions restore as before; a
-  saved resolution with a symbol, from an earlier build, is refused. Run `fin backup DIR` and
+  network holds it; the network stays in the source fields. What a source reports, a token's contract on
+  its network or an exchange's ticker, is mapped once with `fin asset map PROVIDER SYMBOL CODE`, for
+  every movement reporting it, or ignored as spam with `fin asset ignore`; `fin asset list` shows them
+  all with the name their rows give them. Mappings are saved and restored with your decisions.
+  `fin operation resolve` now assigns only an account. Schema 40 adds the mappings and drops the table of
+  journal symbols, since an asset's symbol is its journal name. Saved decisions restore as before; a
+  saved resolution with a commodity, from an earlier build, is refused. Run `fin backup DIR` and
   `fin decisions export FILE` with your current fin, then `fin delete`, `fin init`,
   `fin import --all DIR` and `fin decisions restore FILE`.
 - New institutions `ethereum` and `polygon` read a block explorer's exports of one address, Etherscan's
   and Polygonscan's Transactions and Token Transfers (ERC-20) CSVs, as wallet accounts. A transaction
-  sent costs its value and its network fee; only the token contracts a definition lists are read, which
-  leaves out spam tokens, look-alike `USDC` tokens and the zero-value transfers of address poisoning.
-  Today they list USDC. The movements are operations, whose accounts are still resolved with
+  sent costs its value and its network fee. Every token is reported by its contract, so spam tokens and
+  look-alike `USDC` tokens count for nothing until mapped; the zero-value transfers of address poisoning
+  are left out. The movements are operations, whose accounts are still resolved with
   `fin operation resolve`.
+- An operation from a records file is described by its record's description when its source has no
+  description column, such as a token's name.
 - CSV definitions gain what an explorer's export needs: `address` and `{@address}`, the `address`
-  condition, `{"asset": column}` and `{"code": "ETH"}` for assets, `thousands`, a quantity's `plus`, a
+  condition, `{"code": "ETH"}` for a network's own coin, `thousands`, a quantity's `plus`, a
   header entry ending with `*`, and a list of layouts under `csv`.
 - Internal: Rel writes the whole `CREATE TABLE`, checks (`Table.make ~checks`) and `STRICT`
   (`Rel_sqlite3.Strict`) included, from vbmithr/rel, pinned in `pin-depends`; fin no longer edits

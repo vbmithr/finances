@@ -39,9 +39,10 @@ let export_cmd =
 
 let print_changes (c : Decisions.changes) =
   printf
-    "accounts=%d cards=%d categories=%d rules=%d assignments=%d types=%d resolutions=%d \
-     settlements=%d reversals=%d exchanges=%d transfers=%d\n"
+    "accounts=%d assets=%d cards=%d categories=%d rules=%d assignments=%d types=%d \
+     resolutions=%d settlements=%d reversals=%d exchanges=%d transfers=%d\n"
     c.accounts
+    c.assets
     c.cards
     c.categories
     c.rules

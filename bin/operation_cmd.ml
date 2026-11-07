@@ -242,38 +242,22 @@ let transaction_show_cmd =
           & info [] ~docv:"OPERATION-ID" ~doc:"Operation ID from fin operation list."))
 ;;
 
-let operation_resolve database operation_id role account code =
-  let%bind commodity =
-    match Iso4217.of_alpha_code code with
-    | Some currency -> Ok (Commodity.fiat currency)
-    | None -> Commodity.asset code
-  in
+let operation_resolve database operation_id role account =
   with_database database (fun db ->
-    let%map changed =
-      Review.resolve_operation_movement db ~operation_id ~role ~account ~commodity
-    in
+    let%map changed = Review.resolve_operation_movement db ~operation_id ~role ~account in
     printf "movement_resolution_changes=%d\n" (if changed then 1 else 0))
 ;;
 
 let operation_resolve_cmd =
   command
     "resolve"
-    "Assign an account and a commodity, fiat or an asset, to a proposed movement."
+    "Assign an account to a proposed movement. Its commodity comes from fin asset map."
     Term.(
       const operation_resolve
       $ database
       $ Arg.(required & pos 0 (some int64) None & info [] ~docv:"OPERATION-ID")
       $ Arg.(required & pos 1 (some string) None & info [] ~docv:"ROLE")
-      $ Arg.(required & pos 2 (some string) None & info [] ~docv:"ACCOUNT")
-      $ Arg.(
-          required
-          & pos 3 (some string) None
-          & info
-              []
-              ~docv:"COMMODITY"
-              ~doc:
-                "An ISO currency code such as EUR, or an asset such as BTC or USDC, one \
-                 asset whichever network holds it."))
+      $ Arg.(required & pos 2 (some string) None & info [] ~docv:"ACCOUNT"))
 ;;
 
 let operation_exchange_review database operation_id undo yes =

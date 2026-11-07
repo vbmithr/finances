@@ -19,7 +19,6 @@ type resolution =
   ; source_quantity : Quantity.t
   ; source_commodity : Commodity.t
   ; account : string
-  ; commodity : Commodity.t
   }
 
 type t =

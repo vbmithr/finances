@@ -381,6 +381,7 @@ let operation_row_movement =
   |> field "commodity" Commodity.codec (fun m -> m.commodity)
   |> field "quantity" Json.quantity (fun m -> m.quantity)
   |> field "anchor_event_id" Json.int64_codec (fun m -> m.anchor_event_id)
+  |> field "ignored" Jsont.bool (fun m -> m.ignored)
   |> field "description" (Jsont.option Jsont.string) (fun m ->
     Option.map m.review ~f:(fun r -> r.description))
   |> field "counter_account" (Jsont.option Jsont.string) (fun m ->

@@ -290,21 +290,36 @@ operations are not posted and no opening balances are established. Transaction
 decision exports do not contain the original CSV evidence: use a full database
 backup or keep the original exports. Treat backups and JSON output as private.
 
-For a recognized two-movement exchange, inspect its roles with
-`fin operation show ID`, then assign an account and canonical commodity to each
-movement. For example, using the roles `from` and `to`:
+A crypto exchange or a block explorer reports symbols fin does not trust by name: a
+ticker scoped to the exchange, or a token's contract scoped to its network. Say once
+what each one is; it applies to every movement reporting it:
 
 ```sh
-fin operation resolve 123 from assets:exchange:eur EUR
-fin operation resolve 123 to assets:exchange:btc BTC
+fin asset list                        # every reported symbol, with the name its rows give it
+fin asset map cdc BTC BTC             # an exchange's ticker
+fin asset map polygon 0x3c49 USDC     # a token contract, by its first characters
+fin asset ignore polygon 0x5273       # spam: kept as evidence, never counted
+```
+
+The code is an ISO currency code, which is fiat, or an asset's symbol, which is also
+its name in the journal. An asset is one asset whichever network holds it: USDC on
+Ethereum and on Polygon is `USDC`, and which network a movement was on stays in its
+source fields. Map a token contract only once you have checked it, such as on its
+issuer's site: anyone can name a token USDC. `fin asset unmap` removes a mapping;
+neither changes while confirmed transfers or exchanges rely on it.
+
+For a recognized two-movement exchange, inspect its roles with
+`fin operation show ID`, then assign an account to each movement. For example, using
+the roles `from` and `to`:
+
+```sh
+fin operation resolve 123 from assets:exchange:eur
+fin operation resolve 123 to assets:exchange:btc
 fin operation exchange confirm 123
 fin journal export > journal.hledger
 ```
 
-The commodity is an ISO currency code, which is fiat, or an asset's symbol, which is
-also its name in the journal. An asset is one asset whichever network holds it: USDC
-on Ethereum and on Polygon is `USDC`, and which network a movement was on stays in its
-source fields. An asset cannot take an ISO code. Confirm only after checking the source, both accounts and
+Confirm only after checking the source, both accounts and
 quantities. Confirmation previews the two movements and two `equity:trading`
 postings, then asks for approval. `--yes` skips the prompt. Use
 `fin operation exchange undo ID` before changing a confirmed resolution.

@@ -24,8 +24,16 @@ type card =
   ; card_source_account : string
   }
 
+(** What a provider's symbol is, see docs/operations.md: [None] is ignored. *)
+type asset =
+  { provider : string
+  ; symbol : string
+  ; commodity : Commodity.t option
+  }
+
 type t =
   { accounts : Bank_account_config.t list option
+  ; assets : asset list option
   ; cards : card list option
   ; categories : string list option
   ; rules : Classification_rule.t list option

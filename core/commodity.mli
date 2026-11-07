@@ -18,6 +18,9 @@ val fiat : Iso4217.t -> t
 (** [asset symbol] refuses an ISO currency code, which names fiat. *)
 val asset : string -> t Or_error.t
 
+(** [of_code code] is fiat for an ISO currency code, else the asset [code]. *)
+val of_code : string -> t Or_error.t
+
 val reported : provider:string -> symbol:string -> t Or_error.t
 val provider : t -> string option
 val symbol : t -> string option

@@ -20,8 +20,16 @@ type card =
   ; card_source_account : string
   }
 
+(** What a provider's symbol is, see docs/operations.md: [None] is ignored. *)
+type asset =
+  { provider : string
+  ; symbol : string
+  ; commodity : Commodity.t option
+  }
+
 type t =
   { accounts : Bank_account_config.t list option
+  ; assets : asset list option
   ; cards : card list option
   ; categories : string list option
   ; rules : Classification_rule.t list option
@@ -68,6 +76,17 @@ let card =
   |> Jsont.Object.finish
 ;;
 
+let asset =
+  Jsont.Object.map (fun provider symbol commodity : asset ->
+    { provider; symbol; commodity })
+  |> Jsont.Object.mem "provider" Jsont.string ~enc:(fun (a : asset) -> a.provider)
+  |> Jsont.Object.mem "symbol" Jsont.string ~enc:(fun (a : asset) -> a.symbol)
+  |> Jsont.Object.mem "commodity" (Jsont.option Commodity.codec) ~enc:(fun (a : asset) ->
+    a.commodity)
+  |> Jsont.Object.error_unknown
+  |> Jsont.Object.finish
+;;
+
 let codec =
   let section name codec enc map = Jsont.Object.opt_mem name codec ~enc map in
   Jsont.Object.map
@@ -75,6 +94,7 @@ let codec =
         ()
          ()
          accounts
+         assets
          cards
          categories
          rules
@@ -85,6 +105,7 @@ let codec =
          transfers
        ->
        { accounts
+       ; assets
        ; cards
        ; categories
        ; rules
@@ -97,6 +118,7 @@ let codec =
   |> Jsont.Object.mem "format" (Json.tag "fin-decisions") ~enc:(fun _ -> ())
   |> Jsont.Object.mem "version" (Json.version 1) ~enc:(fun _ -> ())
   |> section "accounts" Bank_account_config.snapshot_jsont (fun r -> r.accounts)
+  |> section "assets" (Jsont.list asset) (fun r -> r.assets)
   |> section "cards" (Jsont.list card) (fun r -> r.cards)
   |> section "categories" (Jsont.list Jsont.string) (fun r -> r.categories)
   |> section "rules" (Jsont.list Category_portable.rule) (fun r -> r.rules)

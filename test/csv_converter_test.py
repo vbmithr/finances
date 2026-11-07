@@ -229,8 +229,10 @@ tokens = write("export-address-token-polygon.csv",
               ])))
 lines = convert("polygon", tokens)
 records = kind(lines, "record")
-assert [r["movements"][0]["quantity"] for r in records] == ["1000.5", "-250"], records
-assert all(r["movements"][0]["commodity"] == {"kind": "asset", "code": "USDC"} for r in records)
+# Every token is reported by its contract on the network; fin asset map says which is USDC.
+assert [r["movements"][0]["quantity"] for r in records] == ["1000.5", "-250", "99", "7"], records
+assert [r["movements"][0]["commodity"] for r in records] == [
+    {"kind": "reported", "code": c, "provider": "polygon"} for c in (usdc, usdc, spam, fake)], records
 account = kind(lines, "account")[0]
 assert (account["id"], account.get("type")) == (me, "wallet"), account
 strangers = write("export-strangers.csv", header

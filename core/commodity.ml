@@ -18,6 +18,12 @@ let asset symbol =
   else Ok (Asset symbol)
 ;;
 
+let of_code code =
+  match Iso4217.of_alpha_code code with
+  | Some currency -> Ok (Fiat currency)
+  | None -> asset code
+;;
+
 let reported ~provider ~symbol =
   let open Or_error.Let_syntax in
   let%bind provider = Validation.token "commodity provider" provider in

@@ -3,7 +3,7 @@ open Rel
 
 (** One current experimental baseline; older databases must be reimported. Banks
     have no tables of their own. *)
-let version = 39
+let version = 40
 
 let timestamp = `Expr "(strftime('%Y-%m-%dT%H:%M:%f','now') || '000000000Z')"
 
@@ -579,23 +579,20 @@ module Operation_transfer_links = struct
   let definition = Sqlite_schema.table table
 end
 
+(* The account a review gave a proposed movement. Its commodity comes from the movement, or from
+   the asset its symbol is mapped to. *)
 module Operation_movement_resolutions = struct
   type t =
     { movement_id : int64
     ; account : string
-    ; commodity : string
     }
 
   let movement_id = Col.make "movement_id" Type.int64 (fun (r : t) -> r.movement_id)
   let account = Col.make "account" Type.text (fun (r : t) -> r.account)
-  let commodity = Col.make "commodity" Type.text (fun (r : t) -> r.commodity)
 
   let row =
     Row.(
-      unit (fun movement_id account commodity -> { movement_id; account; commodity })
-      * movement_id
-      * account
-      * commodity)
+      unit (fun movement_id account -> { movement_id; account }) * movement_id * account)
   ;;
 
   let table =
@@ -617,19 +614,56 @@ module Operation_movement_resolutions = struct
   let definition = Sqlite_schema.table table
 end
 
-module Operation_resolution_changes = struct
+(* What a provider's symbol is: a token contract on a network, or an exchange's ticker, mapped
+   once to fiat or an asset for every movement that reports it. No commodity means ignored, as
+   spam is: its movements stay as evidence and never count. *)
+module Asset_mappings = struct
+  type t =
+    { provider : string
+    ; symbol : string
+    ; commodity : string option
+    }
+
+  let provider = Col.make "provider" Type.text (fun (r : t) -> r.provider)
+  let symbol = Col.make "symbol" Type.text (fun (r : t) -> r.symbol)
+  let commodity = Col.make "commodity" Type.(option text) (fun (r : t) -> r.commodity)
+
+  let row =
+    Row.(
+      unit (fun provider symbol commodity -> { provider; symbol; commodity })
+      * provider
+      * symbol
+      * commodity)
+  ;;
+
+  let table =
+    Table.make
+      ~params:[ Rel_sqlite3.Strict ]
+      ~primary_key:(Table.Primary_key.make [ Col.Def provider; Col.Def symbol ])
+      "asset_mappings"
+      row
+  ;;
+
+  let definition = Sqlite_schema.table table
+end
+
+module Asset_mapping_changes = struct
   type t =
     { id : int64
-    ; movement_id : int64
-    ; account : string
-    ; commodity : string
+    ; provider : string
+    ; symbol : string
+    ; previous : string option
+    ; commodity : string option
+    ; action : string
     ; changed_at : Ptime.t
     }
 
   let id = Col.make "id" Type.int64 (fun (r : t) -> r.id)
-  let movement_id = Col.make "movement_id" Type.int64 (fun (r : t) -> r.movement_id)
-  let account = Col.make "account" Type.text (fun (r : t) -> r.account)
-  let commodity = Col.make "commodity" Type.text (fun (r : t) -> r.commodity)
+  let provider = Col.make "provider" Type.text (fun (r : t) -> r.provider)
+  let symbol = Col.make "symbol" Type.text (fun (r : t) -> r.symbol)
+  let previous = Col.make "previous" Type.(option text) (fun (r : t) -> r.previous)
+  let commodity = Col.make "commodity" Type.(option text) (fun (r : t) -> r.commodity)
+  let action = Col.make "action" Type.text (fun (r : t) -> r.action)
 
   let changed_at =
     Col.make ~default:timestamp "changed_at" instant (fun (r : t) -> r.changed_at)
@@ -637,12 +671,54 @@ module Operation_resolution_changes = struct
 
   let row =
     Row.(
-      unit (fun id movement_id account commodity changed_at ->
-        { id; movement_id; account; commodity; changed_at })
+      unit (fun id provider symbol previous commodity action changed_at ->
+        { id; provider; symbol; previous; commodity; action; changed_at })
+      * id
+      * provider
+      * symbol
+      * previous
+      * commodity
+      * action
+      * changed_at)
+  ;;
+
+  let table =
+    Table.make
+      ~params:[ Rel_sqlite3.Strict ]
+      ~checks:Sqlite_schema.Check.[ one_of action [ "mapped"; "ignored"; "removed" ] ]
+      ~primary_key:(Table.Primary_key.make [ Col.Def id ])
+      "asset_mapping_changes"
+      row
+  ;;
+
+  let definition =
+    Sqlite_schema.table ~immutable:"asset mapping history is append-only" table
+  ;;
+end
+
+module Operation_resolution_changes = struct
+  type t =
+    { id : int64
+    ; movement_id : int64
+    ; account : string
+    ; changed_at : Ptime.t
+    }
+
+  let id = Col.make "id" Type.int64 (fun (r : t) -> r.id)
+  let movement_id = Col.make "movement_id" Type.int64 (fun (r : t) -> r.movement_id)
+  let account = Col.make "account" Type.text (fun (r : t) -> r.account)
+
+  let changed_at =
+    Col.make ~default:timestamp "changed_at" instant (fun (r : t) -> r.changed_at)
+  ;;
+
+  let row =
+    Row.(
+      unit (fun id movement_id account changed_at ->
+        { id; movement_id; account; changed_at })
       * id
       * movement_id
       * account
-      * commodity
       * changed_at)
   ;;
 
@@ -3098,6 +3174,8 @@ let definitions =
   ; Operation_transfer_memberships.definition
   ; Operation_movement_resolutions.definition
   ; Operation_resolution_changes.definition
+  ; Asset_mappings.definition
+  ; Asset_mapping_changes.definition
   ; Operation_exchange_decisions.definition
   ; Operation_exchange_changes.definition
   ; Operation_transfer_changes.definition

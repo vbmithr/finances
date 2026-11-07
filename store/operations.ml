@@ -42,11 +42,8 @@ let get_operation_in_transaction db operation_id =
   let rows =
     Rel_sql.Stmt.(
       func
-        "SELECT \
-         m.id,m.operation_id,m.anchor_event_id,m.role,COALESCE(r.account,m.account) AS \
-         account, COALESCE(r.commodity,m.commodity) AS commodity,m.quantity FROM \
-         operation_movements m LEFT JOIN operation_movement_resolutions r ON \
-         r.movement_id=m.id WHERE m.operation_id=? ORDER BY m.id"
+        "SELECT id,operation_id,anchor_event_id,role,account,commodity,quantity FROM \
+         resolved_movements WHERE operation_id=? ORDER BY id"
         (int64 @-> ret Db_schema.Operation_movements.row))
   in
   let* rows = collect db (rows operation_id) in
