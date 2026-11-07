@@ -102,6 +102,7 @@ module Source_events = struct
 
   let table =
     Table.make
+      ~params:[ Rel_sqlite3.Strict ]
       ~checks:
         Sqlite_schema.Check.
           [ canonical_instant occurred_at
@@ -267,6 +268,7 @@ module Movements = struct
 
   let table =
     Table.make
+      ~params:[ Rel_sqlite3.Strict ]
       ~checks:
         Sqlite_schema.Check.
           [ one_of principal_sign [ "+"; "-" ]
@@ -333,6 +335,7 @@ module Operations = struct
 
   let table =
     Table.make
+      ~params:[ Rel_sqlite3.Strict ]
       ~primary_key:(Table.Primary_key.make [ Col.Def id ])
       ~unique_keys:
         [ Table.Unique_key.make [ Col.Def bank_event_id ]
@@ -375,6 +378,7 @@ module Operation_sources = struct
 
   let table =
     Table.make
+      ~params:[ Rel_sqlite3.Strict ]
       ~primary_key:(Table.Primary_key.make [ Col.Def operation_id; Col.Def event_id ])
       ~foreign_keys:
         [ Table.Foreign_key.make
@@ -437,6 +441,7 @@ module Operation_movements = struct
 
   let table =
     Table.make
+      ~params:[ Rel_sqlite3.Strict ]
       ~primary_key:(Table.Primary_key.make [ Col.Def id ])
       ~unique_keys:
         [ Table.Unique_key.make [ Col.Def anchor_event_id; Col.Def role ]
@@ -487,6 +492,7 @@ module Operation_movement_sources = struct
 
   let table =
     Table.make
+      ~params:[ Rel_sqlite3.Strict ]
       ~primary_key:(Table.Primary_key.make [ Col.Def movement_id; Col.Def event_id ])
       ~foreign_keys:
         [ Table.Foreign_key.make
@@ -543,6 +549,7 @@ module Operation_transfer_links = struct
 
   let table =
     Table.make
+      ~params:[ Rel_sqlite3.Strict ]
       ~checks:
         Sqlite_schema.Check.
           [ different
@@ -593,6 +600,7 @@ module Operation_movement_resolutions = struct
 
   let table =
     Table.make
+      ~params:[ Rel_sqlite3.Strict ]
       ~primary_key:(Table.Primary_key.make [ Col.Def movement_id ])
       ~foreign_keys:
         [ Table.Foreign_key.make
@@ -624,6 +632,7 @@ module Commodity_symbols = struct
 
   let table =
     Table.make
+      ~params:[ Rel_sqlite3.Strict ]
       ~primary_key:(Table.Primary_key.make [ Col.Def commodity ])
       ~unique_keys:[ Table.Unique_key.make [ Col.Def symbol ] ]
       "commodity_symbols"
@@ -664,6 +673,7 @@ module Operation_resolution_changes = struct
 
   let table =
     Table.make
+      ~params:[ Rel_sqlite3.Strict ]
       ~primary_key:(Table.Primary_key.make [ Col.Def id ])
       ~foreign_keys:
         [ Table.Foreign_key.make
@@ -710,6 +720,7 @@ module Operation_transfer_memberships = struct
 
   let table =
     Table.make
+      ~params:[ Rel_sqlite3.Strict ]
       ~checks:
         Sqlite_schema.Check.
           [ either
@@ -779,6 +790,7 @@ module Operation_transfer_changes = struct
 
   let table =
     Table.make
+      ~params:[ Rel_sqlite3.Strict ]
       ~checks:Sqlite_schema.Check.[ one_of action [ "confirmed"; "undone" ] ]
       ~primary_key:(Table.Primary_key.make [ Col.Def id ])
       ~foreign_keys:
@@ -820,6 +832,7 @@ module Operation_exchange_decisions = struct
 
   let table =
     Table.make
+      ~params:[ Rel_sqlite3.Strict ]
       ~primary_key:(Table.Primary_key.make [ Col.Def operation_id ])
       ~foreign_keys:
         [ Table.Foreign_key.make
@@ -863,6 +876,7 @@ module Operation_exchange_changes = struct
 
   let table =
     Table.make
+      ~params:[ Rel_sqlite3.Strict ]
       ~checks:Sqlite_schema.Check.[ one_of action [ "confirmed"; "undone" ] ]
       ~primary_key:(Table.Primary_key.make [ Col.Def id ])
       ~foreign_keys:
@@ -905,6 +919,7 @@ module Source_event_fields = struct
 
   let table =
     Table.make
+      ~params:[ Rel_sqlite3.Strict ]
       ~checks:Sqlite_schema.Check.[ nonnegative ordinal ]
       ~primary_key:(Table.Primary_key.make [ Col.Def event_id; Col.Def ordinal ])
       ~foreign_keys:
@@ -953,6 +968,7 @@ module Source_event_digests = struct
 
   let table =
     Table.make
+      ~params:[ Rel_sqlite3.Strict ]
       ~primary_key:(Table.Primary_key.make [ Col.Def event_id ])
       ~foreign_keys:
         [ Table.Foreign_key.make
@@ -1000,6 +1016,7 @@ module Journal_entries = struct
 
   let table =
     Table.make
+      ~params:[ Rel_sqlite3.Strict ]
       ~primary_key:(Table.Primary_key.make [ Col.Def id ])
       ~unique_keys:[ Table.Unique_key.make [ Col.Def event_id; Col.Def projection_key ] ]
       ~foreign_keys:
@@ -1049,6 +1066,7 @@ module Postings = struct
 
   let table =
     Table.make
+      ~params:[ Rel_sqlite3.Strict ]
       ~checks:Sqlite_schema.Check.[ nonnegative ordinal ]
       ~primary_key:(Table.Primary_key.make [ Col.Def entry_id; Col.Def ordinal ])
       ~foreign_keys:
@@ -1094,6 +1112,7 @@ module Movement_evidence = struct
 
   let table =
     Table.make
+      ~params:[ Rel_sqlite3.Strict ]
       ~checks:Sqlite_schema.Check.[ one_of withdrawal_reversal [ "yes"; "no" ] ]
       ~primary_key:(Table.Primary_key.make [ Col.Def event_id ])
       ~foreign_keys:
@@ -1141,6 +1160,7 @@ module Import_documents = struct
 
   let table =
     Table.make
+      ~params:[ Rel_sqlite3.Strict ]
       ~primary_key:(Table.Primary_key.make [ Col.Def id ])
       ~unique_keys:[ Table.Unique_key.make [ Col.Def institution; Col.Def sha256 ] ]
       "import_documents"
@@ -1168,6 +1188,7 @@ module Import_document_events = struct
 
   let table =
     Table.make
+      ~params:[ Rel_sqlite3.Strict ]
       ~primary_key:(Table.Primary_key.make [ Col.Def document_id; Col.Def event_id ])
       ~foreign_keys:
         [ Table.Foreign_key.make
@@ -1227,6 +1248,7 @@ module Bank_account_mappings = struct
 
   let table =
     Table.make
+      ~params:[ Rel_sqlite3.Strict ]
       ~primary_key:
         (Table.Primary_key.make [ Col.Def institution; Col.Def source_account ])
       "bank_account_mappings"
@@ -1296,6 +1318,7 @@ module Bank_account_mapping_changes = struct
 
   let table =
     Table.make
+      ~params:[ Rel_sqlite3.Strict ]
       ~primary_key:(Table.Primary_key.make [ Col.Def id ])
       "bank_account_mapping_changes"
       row
@@ -1399,6 +1422,7 @@ module Statements = struct
 
   let table =
     Table.make
+      ~params:[ Rel_sqlite3.Strict ]
       ~primary_key:(Table.Primary_key.make [ Col.Def id ])
       ~unique_keys:[ Table.Unique_key.make [ Col.Def document_id; Col.Def ordinal ] ]
       ~foreign_keys:
@@ -1462,6 +1486,7 @@ module Stated_balances = struct
 
   let table =
     Table.make
+      ~params:[ Rel_sqlite3.Strict ]
       ~checks:
         Sqlite_schema.Check.
           [ one_of balance_type [ "opening"; "closing"; "available"; "day_end" ] ]
@@ -1506,6 +1531,7 @@ module Statement_events = struct
 
   let table =
     Table.make
+      ~params:[ Rel_sqlite3.Strict ]
       ~primary_key:(Table.Primary_key.make [ Col.Def statement_id; Col.Def event_id ])
       ~foreign_keys:
         [ Table.Foreign_key.make
@@ -1565,6 +1591,7 @@ module Companion_rows = struct
 
   let table =
     Table.make
+      ~params:[ Rel_sqlite3.Strict ]
       ~checks:Sqlite_schema.Check.[ positive row_number ]
       ~primary_key:(Table.Primary_key.make [ Col.Def id ])
       ~unique_keys:[ Table.Unique_key.make [ Col.Def document_id; Col.Def row_number ] ]
@@ -1632,6 +1659,7 @@ module Companion_matches = struct
 
   let table =
     Table.make
+      ~params:[ Rel_sqlite3.Strict ]
       ~checks:
         Sqlite_schema.Check.
           [ one_of state [ "matched"; "unmatched"; "ambiguous"; "conflict" ]
@@ -1739,6 +1767,7 @@ module Companion_match_changes = struct
 
   let table =
     Table.make
+      ~params:[ Rel_sqlite3.Strict ]
       ~primary_key:(Table.Primary_key.make [ Col.Def id ])
       ~foreign_keys:
         [ Table.Foreign_key.make
@@ -1775,6 +1804,7 @@ module Category_catalog = struct
 
   let table =
     Table.make
+      ~params:[ Rel_sqlite3.Strict ]
       ~primary_key:(Table.Primary_key.make [ Col.Def account ])
       "category_catalog"
       row
@@ -1808,6 +1838,7 @@ module Bank_categories = struct
 
   let table =
     Table.make
+      ~params:[ Rel_sqlite3.Strict ]
       ~primary_key:(Table.Primary_key.make [ Col.Def movement_id ])
       ~unique_keys:[ Table.Unique_key.make [ Col.Def event_id ] ]
       ~foreign_keys:
@@ -1869,6 +1900,7 @@ module Bank_category_changes = struct
 
   let table =
     Table.make
+      ~params:[ Rel_sqlite3.Strict ]
       ~primary_key:(Table.Primary_key.make [ Col.Def id ])
       ~foreign_keys:
         [ Table.Foreign_key.make
@@ -1920,6 +1952,7 @@ module Day_inventories = struct
 
   let table =
     Table.make
+      ~params:[ Rel_sqlite3.Strict ]
       ~primary_key:
         (Table.Primary_key.make
            [ Col.Def institution; Col.Def source_account; Col.Def booked_on ])
@@ -2017,6 +2050,7 @@ module Bank_import_attempts = struct
 
   let table =
     Table.make
+      ~params:[ Rel_sqlite3.Strict ]
       ~checks:
         Sqlite_schema.Check.
           [ one_of
@@ -2065,6 +2099,7 @@ module Document_contexts = struct
 
   let table =
     Table.make
+      ~params:[ Rel_sqlite3.Strict ]
       ~primary_key:(Table.Primary_key.make [ Col.Def document_id ])
       ~foreign_keys:
         [ Table.Foreign_key.make
@@ -2112,6 +2147,7 @@ module Bank_transfer_decisions = struct
 
   let table =
     Table.make
+      ~params:[ Rel_sqlite3.Strict ]
       ~checks:
         Sqlite_schema.Check.
           [ one_of state [ "confirmed"; "rejected" ]
@@ -2166,6 +2202,7 @@ module Bank_transfer_memberships = struct
 
   let table =
     Table.make
+      ~params:[ Rel_sqlite3.Strict ]
       ~checks:
         Sqlite_schema.Check.
           [ either (same event_id first_event_id) (same event_id second_event_id) ]
@@ -2248,6 +2285,7 @@ module Bank_transfer_changes = struct
 
   let table =
     Table.make
+      ~params:[ Rel_sqlite3.Strict ]
       ~checks:Sqlite_schema.Check.[ one_of state [ "confirmed"; "rejected" ] ]
       ~primary_key:(Table.Primary_key.make [ Col.Def id ])
       ~foreign_keys:
@@ -2294,6 +2332,7 @@ module Bank_account_identities = struct
 
   let table =
     Table.make
+      ~params:[ Rel_sqlite3.Strict ]
       ~primary_key:
         (Table.Primary_key.make [ Col.Def institution; Col.Def source_account ])
       "bank_account_identities"
@@ -2344,6 +2383,7 @@ module Bank_account_identity_changes = struct
 
   let table =
     Table.make
+      ~params:[ Rel_sqlite3.Strict ]
       ~primary_key:(Table.Primary_key.make [ Col.Def id ])
       "bank_account_identity_changes"
       row
@@ -2382,6 +2422,7 @@ module Bank_account_settlements = struct
 
   let table =
     Table.make
+      ~params:[ Rel_sqlite3.Strict ]
       ~primary_key:
         (Table.Primary_key.make [ Col.Def institution; Col.Def source_account ])
       "bank_account_settlements"
@@ -2451,6 +2492,7 @@ module Bank_account_settlement_changes = struct
 
   let table =
     Table.make
+      ~params:[ Rel_sqlite3.Strict ]
       ~primary_key:(Table.Primary_key.make [ Col.Def id ])
       "bank_account_settlement_changes"
       row
@@ -2491,6 +2533,7 @@ module Card_assignments = struct
 
   let table =
     Table.make
+      ~params:[ Rel_sqlite3.Strict ]
       ~primary_key:
         (Table.Primary_key.make [ Col.Def institution; Col.Def card_reference ])
       "card_assignments"
@@ -2563,6 +2606,7 @@ module Card_assignment_changes = struct
 
   let table =
     Table.make
+      ~params:[ Rel_sqlite3.Strict ]
       ~primary_key:(Table.Primary_key.make [ Col.Def id ])
       "card_assignment_changes"
       row
@@ -2611,6 +2655,7 @@ module Card_settlement_decisions = struct
 
   let table =
     Table.make
+      ~params:[ Rel_sqlite3.Strict ]
       ~primary_key:(Table.Primary_key.make [ Col.Def event_id ])
       ~foreign_keys:
         [ Table.Foreign_key.make
@@ -2689,6 +2734,7 @@ module Card_settlement_changes = struct
 
   let table =
     Table.make
+      ~params:[ Rel_sqlite3.Strict ]
       ~checks:Sqlite_schema.Check.[ one_of action [ "confirmed"; "undone" ] ]
       ~primary_key:(Table.Primary_key.make [ Col.Def id ])
       "card_settlement_changes"
@@ -2788,6 +2834,7 @@ module Classification_rules = struct
 
   let table =
     Table.make
+      ~params:[ Rel_sqlite3.Strict ]
       ~checks:
         Sqlite_schema.Check.
           [ one_of mode [ "automatic"; "review"; "disabled" ]
@@ -2825,6 +2872,7 @@ module Institution_definitions = struct
 
   let table =
     Table.make
+      ~params:[ Rel_sqlite3.Strict ]
       ~primary_key:(Table.Primary_key.make [ Col.Def name ])
       "institution_definitions"
       row
@@ -2856,7 +2904,11 @@ module Institutions = struct
   ;;
 
   let table =
-    Table.make ~primary_key:(Table.Primary_key.make [ Col.Def name ]) "institutions" row
+    Table.make
+      ~params:[ Rel_sqlite3.Strict ]
+      ~primary_key:(Table.Primary_key.make [ Col.Def name ])
+      "institutions"
+      row
   ;;
 
   let definition = Sqlite_schema.table table
@@ -2883,6 +2935,7 @@ module Reversal_pairs = struct
 
   let table =
     Table.make
+      ~params:[ Rel_sqlite3.Strict ]
       ~primary_key:(Table.Primary_key.make [ Col.Def original ])
       ~indices:
         [ Table.Index.make
@@ -2940,6 +2993,7 @@ module Reversal_changes = struct
 
   let table =
     Table.make
+      ~params:[ Rel_sqlite3.Strict ]
       ~checks:Sqlite_schema.Check.[ one_of action [ "confirmed"; "undone" ] ]
       ~primary_key:(Table.Primary_key.make [ Col.Def id ])
       "reversal_changes"
@@ -2971,6 +3025,7 @@ module Movement_type_overrides = struct
 
   let table =
     Table.make
+      ~params:[ Rel_sqlite3.Strict ]
       ~primary_key:(Table.Primary_key.make [ Col.Def movement_id ])
       ~unique_keys:[ Table.Unique_key.make [ Col.Def event_id ] ]
       ~foreign_keys:
@@ -3035,6 +3090,7 @@ module Movement_type_changes = struct
 
   let table =
     Table.make
+      ~params:[ Rel_sqlite3.Strict ]
       ~primary_key:(Table.Primary_key.make [ Col.Def id ])
       ~foreign_keys:
         [ Table.Foreign_key.make

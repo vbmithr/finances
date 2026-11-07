@@ -1,9 +1,8 @@
 open Base
 open Rel
 
-(** What the pinned Rel DDL generator lacks: STRICT tables and the triggers that keep
-    evidence immutable and histories append-only. [Check] writes Rel check constraints
-    from typed columns. *)
+(** What Rel's DDL lacks: the triggers that keep evidence immutable and histories
+    append-only. [Check] writes Rel check constraints from typed columns. *)
 module Check : sig
   type 'r t = 'r Table.Check.t
 
@@ -90,31 +89,7 @@ let rel_table (Definition (table, _)) = Table.Def table
 
 let statements (Definition (table, immutable)) =
   let dialect = Rel_sqlite3.dialect in
-  let sql = Rel_sql.Stmt.src (Rel_sql.create_table dialect table) |> String.strip in
-  (* Rel emits BIGINT for int64. SQLite STRICT requires INTEGER, which also
-     preserves rowid allocation for single integer primary keys. Rewrite only
-     column declaration prefixes, never defaults or other SQL expressions. *)
-  let sql =
-    String.split_lines sql
-    |> List.map ~f:(fun line ->
-      List.fold (Table.cols table) ~init:line ~f:(fun line (Col.Def col) ->
-        let prefix = Rel_sql.Syntax.id (Col.name col) ^ " BIGINT" in
-        let stripped = String.lstrip line in
-        match String.chop_prefix stripped ~prefix with
-        | None -> line
-        | Some suffix ->
-          String.prefix line (String.length line - String.length stripped)
-          ^ Rel_sql.Syntax.id (Col.name col)
-          ^ " INTEGER"
-          ^ suffix))
-    |> String.concat ~sep:"\n"
-  in
-  let body =
-    match String.chop_suffix sql ~suffix:");" with
-    | Some body -> body
-    | None -> failwith "Rel CREATE TABLE output no longer ends with );"
-  in
-  let create = String.rstrip body ^ "\n) STRICT;" in
+  let create = Rel_sql.Stmt.src (Rel_sql.create_table dialect table) |> String.strip in
   let indexes =
     List.map (Table.indices table) ~f:(fun index ->
       Rel_sql.Stmt.src (Rel_sql.create_index dialect table index))
