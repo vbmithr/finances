@@ -6,6 +6,7 @@ type decision =
   | Unmapped
   | Mapped of Commodity.t
   | Ignored
+  | Assumed_fiat of Iso4217.t
 
 type t =
   { provider : string
@@ -17,8 +18,12 @@ type t =
   ; decision : decision
   }
 
-let decision_of ~decided commodity =
+let decision_of ~decided ~symbol ~currency commodity =
   match decided, commodity with
+  | false, _ when currency ->
+    Or_error.of_option
+      (Option.map (Iso4217.of_alpha_code symbol) ~f:(fun c -> Assumed_fiat c))
+      ~error:(Error.createf "%s is not an ISO 4217 code" symbol)
   | false, _ -> Ok Unmapped
   | true, None -> Ok Ignored
   | true, Some json ->
@@ -33,7 +38,7 @@ let list db =
       (statement
          Sql.asset_list
          Row.(
-           unit (fun a b c d e f g h -> a, b, c, d, e, f, g, h)
+           unit (fun a b c d e f g h i -> a, b, c, d, e, f, g, h, i)
            * text "provider"
            * text "symbol"
            * int "movements"
@@ -41,12 +46,21 @@ let list db =
            * option Rel.Type.text "last_seen"
            * option Rel.Type.text "name"
            * bool "decided"
-           * option Rel.Type.text "commodity"))
+           * option Rel.Type.text "commodity"
+           * bool "currency"))
   in
   let date = Option.map ~f:Date.of_string in
   traverse
-    (fun (provider, symbol, movements, first_seen, last_seen, name, decided, commodity) ->
-       let* decision = decision_of ~decided commodity in
+    (fun ( provider
+         , symbol
+         , movements
+         , first_seen
+         , last_seen
+         , name
+         , decided
+         , commodity
+         , currency ) ->
+       let* decision = decision_of ~decided ~symbol ~currency commodity in
        Ok
          { provider
          ; symbol
@@ -101,7 +115,7 @@ let write db ~provider ~symbol ~previous next =
           provider
           symbol
       , "removed" )
-    | Mapped _ | Ignored ->
+    | Mapped _ | Ignored | Assumed_fiat _ ->
       let commodity =
         match next with
         | Mapped c -> Some c
@@ -126,7 +140,7 @@ let write db ~provider ~symbol ~previous next =
   in
   let commodity_of = function
     | Mapped c -> Some c
-    | Unmapped | Ignored -> None
+    | Unmapped | Ignored | Assumed_fiat _ -> None
   in
   let* () = db_result (Db.exec db.conn set) in
   db_result
@@ -143,6 +157,7 @@ let write db ~provider ~symbol ~previous next =
 let same a b =
   match a, b with
   | Unmapped, Unmapped | Ignored, Ignored -> true
+  | Assumed_fiat a, Assumed_fiat b -> Iso4217.equal a b
   | Mapped a, Mapped b -> Commodity.equal a b
   | _ -> false
 ;;
@@ -182,7 +197,7 @@ let mappings db =
   Ok
     (List.filter_map assets ~f:(fun a ->
        match a.decision with
-       | Unmapped -> None
+       | Unmapped | Assumed_fiat _ -> None
        | Mapped c -> Some (a.provider, a.symbol, Some c)
        | Ignored -> Some (a.provider, a.symbol, None)))
 ;;
@@ -206,7 +221,7 @@ let restore db ~provider ~symbol commodity =
     |> Option.value_map ~default:Unmapped ~f:(fun a -> a.decision)
   in
   match current with
-  | Unmapped ->
+  | Unmapped | Assumed_fiat _ ->
     let* () = write db ~provider ~symbol ~previous:Unmapped wanted in
     Ok true
   | current when same current wanted -> Ok false

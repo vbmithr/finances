@@ -300,6 +300,11 @@ fin asset map polygon 0x3c49 USDC     # a token contract, by its first character
 fin asset ignore polygon 0x5273       # spam: kept as evidence, never counted
 ```
 
+A reported symbol that is an ISO currency code, such as an exchange's `EUR`, counts as
+that currency until you decide otherwise; `fin asset list` shows it as assumed. Map or
+ignore it when a crypto ticker happens to be a currency code, such as Mantle's `MNT`:
+`fin asset map kraken MNT MANTLE`.
+
 The code is an ISO currency code, which is fiat, or an asset's symbol, which is also
 its name in the journal. An asset is one asset whichever network holds it: USDC on
 Ethereum and on Polygon is `USDC`, and which network a movement was on stays in its

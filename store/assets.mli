@@ -8,6 +8,8 @@ type decision =
   | Unmapped
   | Mapped of Commodity.t
   | Ignored (** Spam: its movements stay as evidence and never count. *)
+  | Assumed_fiat of Iso4217.t
+  (** Unmapped, but an ISO 4217 code, so it counts as that currency until mapped. *)
 
 type t =
   { provider : string

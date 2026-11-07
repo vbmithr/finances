@@ -286,6 +286,7 @@ class ImportOnboarding(unittest.TestCase):
         op = exchange_row['operation_id']
         assets = {(a['provider'], a['symbol']): a['decision'] for a in json.loads(self.run_fin('asset', 'list', '--json').stdout)}
         self.assertEqual(assets[('cdc', 'CRO')], 'unmapped')
+        self.assertEqual(assets[('cdc', 'EUR')], 'assumed')
         self.assertNotEqual(self.run_fin('asset', 'map', 'cdc', 'CRO', 'C R O', '--yes', check=False).returncode, 0)
         self.assertIn('Recorded.', self.run_fin('asset', 'map', 'cdc', 'CRO', 'CRO', '--yes').stdout)
         self.assertIn('Recorded.', self.run_fin('asset', 'map', 'cdc', 'EUR', 'EUR', '--yes').stdout)
@@ -357,8 +358,6 @@ class ImportOnboarding(unittest.TestCase):
         self.run_fin('import', 'cdc', path)
         row = json.loads(self.run_fin('operation', 'list', '--json').stdout)[0]
         op = row['operation_id']
-        for code in ['EUR', 'USD']:
-            self.run_fin('asset', 'map', 'cdc', code, code, '--yes')
         for role, account in [('from', 'assets:forex:eur'), ('to', 'assets:forex:usd')]:
             self.run_fin('operation', 'resolve', op, role, account)
         self.run_fin('operation', 'exchange', 'confirm', op, '--yes')
@@ -381,7 +380,6 @@ class ImportOnboarding(unittest.TestCase):
         rows = json.loads(self.run_fin('operation', 'list', '--json').stdout)
         bank_op = next(r['operation_id'] for r in rows if r['institution'] == 'revolut')
         wallet_op = next(r['operation_id'] for r in rows if r['institution'] == 'cdc')
-        self.run_fin('asset', 'map', 'cdc', 'EUR', 'EUR', '--yes')
         self.run_fin('operation', 'resolve', wallet_op, 'primary', 'assets:wallet:eur')
         resolutions = self.root / 'resolutions.json'
         resolutions.write_text(self.document(assignments=self.saved('assignments'), assets=self.saved('assets')))
@@ -408,6 +406,24 @@ class ImportOnboarding(unittest.TestCase):
         self.assertIn('assets:wallet:eur', self.run_fin('journal', 'export', '--database', rebuilt).stdout)
         self.assertIn('transfer_changes=1', self.run_fin('transfer', 'unlink', bank_op, '--yes').stdout)
         self.assertIn('equity:unclassified', self.run_fin('journal', 'export').stdout)
+
+    def test_a_currency_code_counts_as_fiat_until_decided(self):
+        path = self.root / 'deposit.csv'
+        path.write_text('Timestamp (UTC),Transaction Description,Currency,Amount,To Currency,To Amount,Native Currency,Native Amount,Native Amount (in USD),Transaction Kind,Transaction Hash\n'
+                        '2026-01-02 10:01:00,Deposit,EUR,10,,,EUR,10,11,crypto_deposit,\n')
+        self.run_fin('import', 'cdc', path)
+        decision = lambda: next(a for a in json.loads(self.run_fin('asset', 'list', '--json').stdout) if a['symbol'] == 'EUR')
+        movement = lambda: json.loads(self.run_fin('operation', 'list', '--json').stdout)[0]['movements'][0]
+        self.assertEqual((decision()['decision'], decision()['commodity']), ('assumed', {'kind': 'fiat', 'code': 'EUR'}))
+        self.assertEqual(movement()['commodity'], {'kind': 'fiat', 'code': 'EUR'})
+        self.assertIn('EUR (fiat, assumed)', self.run_fin('asset', 'list').stdout)
+        # Nothing assumed is saved as a decision.
+        self.assertEqual(self.saved('assets'), [])
+        self.run_fin('asset', 'ignore', 'cdc', 'EUR', '--yes')
+        self.assertEqual((movement()['commodity']['kind'], movement()['ignored']), ('reported', True))
+        self.run_fin('asset', 'unmap', 'cdc', 'EUR', '--yes')
+        self.assertEqual(decision()['decision'], 'assumed')
+        self.assertEqual(movement()['commodity'], {'kind': 'fiat', 'code': 'EUR'})
 
     def test_wallet_to_wallet_transfer(self):
         path = self.root / 'wallet-transfers.csv'

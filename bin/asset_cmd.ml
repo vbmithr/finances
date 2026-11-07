@@ -11,6 +11,7 @@ let decision_text = function
   | Assets.Unmapped -> "unmapped"
   | Ignored -> "ignored"
   | Mapped commodity -> Commodity.display commodity
+  | Assumed_fiat currency -> Iso4217.to_alpha_code currency ^ " (fiat, assumed)"
 ;;
 
 let asset_json =
@@ -29,13 +30,15 @@ let asset_json =
     match a.decision with
     | Unmapped -> "unmapped"
     | Ignored -> "ignored"
-    | Mapped _ -> "mapped")
+    | Mapped _ -> "mapped"
+    | Assumed_fiat _ -> "assumed")
   |> Jsont.Object.mem
        "commodity"
        (Jsont.option Commodity.codec)
        ~enc:(fun (a : Assets.t) ->
          match a.decision with
          | Mapped c -> Some c
+         | Assumed_fiat currency -> Some (Commodity.fiat currency)
          | Unmapped | Ignored -> None)
   |> Jsont.Object.finish
 ;;

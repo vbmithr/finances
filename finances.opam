@@ -55,5 +55,5 @@ dev-repo: "git+https://github.com/vbmithr/finances.git"
 pin-depends: [
   ["hledger.dev" "git+https://github.com/vbmithr/ocaml-hledger.git#cad809fa47876142cfdf361bde2a2e506ebdadad"]
   ["rel.dev" "git+https://github.com/vbmithr/rel.git#52d743bedd6f16e21cd625ac8b6746557fb56fe4"]
-  ["iso4217.dev" "git+https://github.com/deepmarker/ocaml-iso4217.git#834d45e771ba9ef9ff9c872b517a51efa7da4514"]
+  ["iso4217.dev" "git+https://github.com/deepmarker/ocaml-iso4217.git#3025949b1f761734577544ee044fc0953c1a4088"]
 ]

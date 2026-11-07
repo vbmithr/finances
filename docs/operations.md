@@ -78,7 +78,11 @@ past and future; `fin asset ignore` marks spam, whose movements stay as evidence
 never count. These mappings are decisions like the others, exported and restored, so
 the list of known tokens is the person's data and grows without a new fin. The
 `resolved_movements` view is the one place a movement's commodity is read through its
-mapping. A mapping that confirmed transfers or exchanges rest on cannot change until
+mapping. Until a symbol is mapped, one that is an ISO 4217 code counts as that currency:
+an exchange's `EUR` is euros. It is a default, never saved as a decision, and any
+mapping, including ignoring it, overrides it, for the few crypto tickers that are also
+currency codes, such as Mantle's `MNT`. The codes come from the iso4217 library, which
+each connection loads into a temporary table, so fin keeps no copy of the list. A mapping that confirmed transfers or exchanges rest on cannot change until
 they are undone. An asset cannot take an ISO code, which names fiat. Commodity identity
 and the account are independent: an account may hold several commodities.
 

@@ -2,16 +2,26 @@
 -- Every connection creates these views when it opens, file by file in name order, so a
 -- view comes after the views it reads. They hold no data: changing one needs no rebuild.
 
--- Each movement with the account a review gave it, else the imported one, and the
--- commodity its provider's symbol is mapped to, else the imported one. A symbol mapped to
--- nothing is ignored, as spam is: the movement stays as evidence and never counts.
+-- The ISO 4217 codes, which the connection fills from the library it was built with.
+CREATE TEMP TABLE currencies(code TEXT PRIMARY KEY) STRICT;
+
+-- Each movement with the account a review gave it, else the imported one, and its
+-- commodity: what its provider's symbol is mapped to; else, for a symbol that is an ISO
+-- 4217 code, that currency; else the imported one. A symbol mapped to nothing is ignored,
+-- as spam is: the movement stays as evidence and never counts.
 CREATE TEMP VIEW resolved_movements(id, operation_id, anchor_event_id, role, account,
                                     commodity, quantity, ignored) AS
 SELECT m.id, m.operation_id, m.anchor_event_id, m.role, coalesce(r.account, m.account),
-  coalesce(a.commodity, m.commodity), m.quantity,
-  a.provider IS NOT NULL AND a.commodity IS NULL
+  CASE
+    WHEN a.provider IS NOT NULL THEN coalesce(a.commodity, m.commodity)
+    WHEN c.code IS NOT NULL THEN json_object('kind', 'fiat', 'code', c.code)
+    ELSE m.commodity
+  END,
+  m.quantity, a.provider IS NOT NULL AND a.commodity IS NULL
 FROM operation_movements m
 LEFT JOIN operation_movement_resolutions r ON r.movement_id = m.id
 LEFT JOIN asset_mappings a
   ON m.commodity ->> 'kind' = 'reported'
-  AND a.provider = m.commodity ->> 'provider' AND a.symbol = m.commodity ->> 'code';
+  AND a.provider = m.commodity ->> 'provider' AND a.symbol = m.commodity ->> 'code'
+LEFT JOIN currencies c
+  ON m.commodity ->> 'kind' = 'reported' AND c.code = m.commodity ->> 'code';

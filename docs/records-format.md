@@ -293,8 +293,10 @@ to each other is left to a definition, because those columns are not in the reco
 - A quantity is `column`, with optional `negate`, `minus` and `plus` (other columns).
 - A commodity is `{"fiat": column}`, `{"code": "USD"}` (an ISO code is fiat, anything else an
   asset, so `{"code": "ETH"}` for a network's own coin), or `{"reported": column, "provider": name}`,
-  which may add `"fiat_codes": ["EUR"]`: those values are currencies. They are listed because a crypto
-  ticker can also be an ISO code. A definition never says which symbol is which asset: a token is
+  which may add `"fiat_codes": ["EUR"]`: those values are currencies, so a row in one of them is a
+  bank movement in that account's currency. They are listed because a crypto ticker can also be an
+  ISO code. A reported symbol that is an ISO code but not listed is still counted as that currency
+  until `fin asset map` says otherwise; it stays an operation. A definition never says which symbol is which asset: a token is
   reported by its contract, scoped to its network, and `fin asset map` says what it is.
 - A condition is `column` with `in`, `sign` (`positive`, `negative`), `filled`, or `address`.
 - `thousands` names a character that groups digits, such as Etherscan's `1,000.5`.

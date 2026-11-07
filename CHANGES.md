@@ -8,6 +8,9 @@ short line of their own.
 
 ## Unreleased
 
+- A reported symbol that is an ISO 4217 currency code, such as cdc's `EUR`, counts as that currency
+  until you map or ignore it: `fin asset list` shows it as `EUR (fiat, assumed)`, and nothing is saved.
+  The codes come from the iso4217 library, which gains `Iso4217.all` (pinned at 3025949).
 - `fin import` no longer asks for the IBAN of an account whose statements do not state it, and no
   longer prints `identity_changes=`. `fin account iban ID IBAN` sets it, for all the currencies of one
   account, and `--clear` removes it. `fin account list` says which accounts lack one, and
