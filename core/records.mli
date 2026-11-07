@@ -195,6 +195,17 @@ val row_of_string : string -> (account * record) Or_error.t
     of this survives a converter that later keeps more detail about the row. *)
 val row_identity : string -> string option
 
+(** What tells a stored payload apart from another: a row's [row_identity], else the
+    payload itself. Two exports of one record that state different [details], such as a
+    name a later converter gives, are one. *)
+val identity_text : string -> string
+
+(** [restates ~stored payload]: [payload] states the record [stored] does, as a later export
+    or converter may. They have one [identity_text], and every member of [details] that
+    [stored] states, [payload] states alike; [payload] may state members [stored] lacks, such
+    as a name an earlier converter did not give. Any other payload must be [stored]. *)
+val restates : stored:string -> string -> bool
+
 (** One section of a records file, as JSON Lines. *)
 val to_string : t -> string
 

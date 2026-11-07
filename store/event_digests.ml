@@ -18,7 +18,7 @@ let raw_fields_hash (e : Source_event.t) =
 
 let compute (e : Source_event.t) =
   let identity = Records.row_identity e.payload in
-  { payload = sha256 (Option.value identity ~default:e.payload)
+  { payload = sha256 (Records.identity_text e.payload)
   ; fields =
       (match identity with
        | Some identity -> sha256 identity

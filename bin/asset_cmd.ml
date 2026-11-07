@@ -51,17 +51,21 @@ let asset_list database json_output =
     else if List.is_empty assets
     then print_endline "No reported symbols: every movement is in fiat or a known asset."
     else (
+      (* Only a source with opaque symbols, such as token contracts, states names. *)
+      let named = List.exists assets ~f:(fun (a : Assets.t) -> Option.is_some a.name) in
+      let name_column f = if named then [ f ] else [] in
       Terminal.table
-        [ "Provider"; "Symbol"; "Name"; "Movements"; "From"; "To"; "Is" ]
+        ([ "Provider"; "Symbol" ]
+         @ name_column "Name"
+         @ [ "Movements"; "From"; "To"; "Is" ])
         (List.map assets ~f:(fun (a : Assets.t) ->
-           [ a.provider
-           ; a.symbol
-           ; Option.value a.name ~default:"-"
-           ; Int.to_string a.movements
-           ; date a.first_seen
-           ; date a.last_seen
-           ; decision_text a.decision
-           ]));
+           [ a.provider; a.symbol ]
+           @ name_column (Option.value a.name ~default:"-")
+           @ [ Int.to_string a.movements
+             ; date a.first_seen
+             ; date a.last_seen
+             ; decision_text a.decision
+             ]));
       if List.exists assets ~f:(fun a -> Poly.equal a.decision Unmapped)
       then
         print_endline

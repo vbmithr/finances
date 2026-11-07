@@ -664,7 +664,7 @@ let ingest_in_transaction db (e : Source_event.t) =
     if
       Option.equal Ptime.equal at previous.occurred_at
       && Option.equal String.equal on previous.occurred_on
-      && String.equal previous.payload e.payload
+      && Records.restates ~stored:previous.payload e.payload
     then
       let* () =
         if Registry.is_operation_kind db.registry e.kind

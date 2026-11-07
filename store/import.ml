@@ -713,7 +713,11 @@ let check_day_inventories db ~institution ~document_id groups =
     traverse
       (fun ((account, day), payloads) ->
          let signature =
-           encode_fields (List.sort payloads ~compare:String.compare)
+           (* A record's details are enrichment: only what identifies it signs the day. *)
+           encode_fields
+             (List.sort
+                (List.map payloads ~f:Records.identity_text)
+                ~compare:String.compare)
            |> Digestif.SHA256.digest_string
            |> Digestif.SHA256.to_hex
          in

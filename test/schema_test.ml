@@ -45,7 +45,7 @@ let initialize () =
          check "fresh database empty" 0 (List.length (ok (Ledger.events db)));
          Ok ()));
     raw path (fun db ->
-      check "latest baseline" 40 (scalar db "PRAGMA user_version");
+      check "latest baseline" 41 (scalar db "PRAGMA user_version");
       check
         "all tables are strict"
         54

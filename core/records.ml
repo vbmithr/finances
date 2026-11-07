@@ -609,6 +609,40 @@ let row_identity payload =
          { record with statements = []; details = no_details })
 ;;
 
+let identity_text payload = Option.value (row_identity payload) ~default:payload
+
+(* Each member of [details] on its own, so that one can be compared at a time. *)
+let detail_members =
+  let d = no_details in
+  [ (fun (x : details) -> { d with descriptions = x.descriptions })
+  ; (fun x -> { d with movement_type = x.movement_type })
+  ; (fun x -> { d with counterparty = x.counterparty })
+  ; (fun x -> { d with references = x.references })
+  ; (fun x -> { d with exchange = x.exchange })
+  ; (fun x -> { d with reported = x.reported })
+  ; (fun x -> { d with balance_after = x.balance_after })
+  ; (fun x -> { d with valuations = x.valuations })
+  ; (fun x -> { d with names = x.names })
+  ; (fun x -> { d with fields = x.fields })
+  ]
+;;
+
+let restates ~stored payload =
+  match row_identity stored, row_identity payload with
+  | Some a, Some b ->
+    String.equal a b
+    &&
+      (match row_of_string stored, row_of_string payload with
+      | Ok (_, old), Ok (_, now) ->
+        let text = Json.encode details_codec in
+        let empty = text no_details in
+        List.for_all detail_members ~f:(fun only ->
+          let before = text (only old.details) in
+          String.equal before empty || String.equal before (text (only now.details)))
+      | _ -> false)
+  | _ -> String.equal stored payload
+;;
+
 (* The first step of these rows, in this order, that does not add up. *)
 let balance_break rows =
   let stated =

@@ -8,6 +8,12 @@ short line of their own.
 
 ## Unreleased
 
+- **Action required: rebuild.** Reimporting a records file no longer refuses rows a newer converter
+  states more about, such as the token names explorer exports now give: a later export may add
+  details the stored row lacks, as the records format says, while changing one it states, or its
+  fixed part, is still refused. Days of inventory exports are signed by what identifies their rows,
+  which schema 41 needs a rebuild for; rebuilding also stores the token names. `fin asset list`
+  shows its Name column only when a source states names.
 - `fin asset list` showed a symbol's most common row description as its name, such as Kraken's
   `trade` for BTC. It now shows only a name the source states: a token's name, which explorer
   exports give for a contract. Records gain `details.names`, and a CSV definition's reported

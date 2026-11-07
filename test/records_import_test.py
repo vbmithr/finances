@@ -2,6 +2,7 @@
 """An institution imported through records, from statement to journal."""
 import os
 import pathlib
+import json
 import subprocess
 import sys
 import tempfile
@@ -71,5 +72,36 @@ Total,,,,,,20.90
     done = run("import", "fdm", cut, "-d", database, "--journal", root / "r.journal", check=False)
     assert "imported=0" in done.stdout or done.returncode != 0, done.stdout
     assert "end line" in done.stdout + done.stderr, done.stdout + done.stderr
+
+    # A later export may state details the stored record lacks, and the record is unchanged;
+    # changing a detail it states, or its fixed part, is refused.
+    plain = records.parent.joinpath("records.jsonl").read_text().splitlines()
+    def rewritten(name, change):
+        out = []
+        for line in plain:
+            row = json.loads(line)
+            if row["kind"] == "record":
+                change(row)
+            out.append(json.dumps(row))
+        path = root / name
+        path.write_text("\n".join(out) + "\n")
+        return path
+    database = root / "enriched.sqlite3"
+    run("init", "-d", database)
+    run("import", "fdm", records.parent / "records.jsonl", "-d", database, "--journal", root / "e.journal")
+    referenced = rewritten("referenced.jsonl", lambda row: row.setdefault("details", {}).update(
+        references={"hash": "added-later"}))
+    done = run("import", "fdm", referenced, "-d", database, "--journal", root / "e.journal")
+    assert "rejected=0" in done.stdout and "inserted=0 existing=3" in done.stdout, done.stdout
+    def other_description(row):
+        row["details"]["descriptions"] = ["Changed"]
+    changed = rewritten("described.jsonl", other_description)
+    done = run("import", "fdm", changed, "-d", database, "--journal", root / "e.journal", check=False)
+    assert "rejected=1" in done.stdout, done.stdout
+    def other_quantity(row):
+        row["movements"][0]["quantity"] = "-123456.78"
+    changed = rewritten("changed.jsonl", other_quantity)
+    done = run("import", "fdm", changed, "-d", database, "--journal", root / "e.journal", check=False)
+    assert "rejected=1" in done.stdout, done.stdout
 
 print("Verified the records import")
