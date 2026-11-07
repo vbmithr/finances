@@ -51,10 +51,17 @@ let account ?(separate = true) (a : Transfers.bank_account_info) =
     (text a.mapping.bank_id)
     (text a.mapping.account_id)
     (text a.mapping.account_type);
-  Stdio.printf
-    "  IBAN: %s (%s)\n"
-    (text (Option.value_map a.iban ~default:"none" ~f:Iban.to_string))
-    a.iban_source;
+  (match a.iban, a.iban_source with
+   | None, "missing" ->
+     Stdio.printf
+       "  IBAN: none, so transfers to and from it are matched by amount and date only; \
+        fin account iban %s IBAN sets it\n"
+       (Bank_account_mapping.id a.mapping)
+   | iban, source ->
+     Stdio.printf
+       "  IBAN: %s (%s)\n"
+       (text (Option.value_map iban ~default:"none" ~f:Iban.to_string))
+       source);
   Stdio.printf
     "  Records: %d movements in %s; %s to %s\n"
     a.movements

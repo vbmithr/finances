@@ -38,18 +38,20 @@ let decision_json =
   |> Jsont.Object.finish
 ;;
 
+let account_by_id accounts account_id =
+  match
+    List.filter accounts ~f:(fun (a : Transfers.bank_account_info) ->
+      String.equal (Bank_account_mapping.id a.mapping) account_id)
+  with
+  | [ account ] -> Ok account
+  | [] -> Or_error.error_string "no matching account ID; see fin account list"
+  | _ -> Or_error.error_string "account ID collision; use fin account list"
+;;
+
 let show_account database account_id json_output =
   with_database database (fun db ->
     let%bind accounts = Transfers.bank_account_info db in
-    let%bind account =
-      match
-        List.filter accounts ~f:(fun (a : Transfers.bank_account_info) ->
-          String.equal (Bank_account_mapping.id a.mapping) account_id)
-      with
-      | [ account ] -> Ok account
-      | [] -> Or_error.error_string "no matching account ID; see fin account list"
-      | _ -> Or_error.error_string "account ID collision; use fin account list"
-    in
+    let%bind account = account_by_id accounts account_id in
     let source = Bank_account_mapping.source_account account.mapping in
     let%bind cards = Cards.list db in
     let cards =
@@ -280,6 +282,52 @@ let accounts_link_card database card_id bank_id yes =
       Ok ()))
 ;;
 
+(* An IBAN registered for an account whose statements do not state one: transfers to and
+   from it are then matched by it, not only by amount and date. *)
+let account_iban database account_id iban clear =
+  let%bind change =
+    match iban, clear with
+    | Some text, false ->
+      let%map iban = Iban.of_string text in
+      Bank_account_config.Set iban
+    | None, true -> Ok Bank_account_config.Clear
+    | _ -> Or_error.error_string "give an IBAN, or --clear"
+  in
+  with_database database (fun db ->
+    let%bind accounts = Transfers.bank_account_info db in
+    let%bind account = account_by_id accounts account_id in
+    let%bind () =
+      match account.iban_source with
+      | "imported" ->
+        Or_error.error_string "its statements state its IBAN, which takes precedence"
+      | "not_applicable" -> Or_error.error_string "a card account has no IBAN"
+      | _ -> Ok ()
+    in
+    (* One real account: its currencies, which share its IBAN. *)
+    let siblings =
+      List.filter accounts ~f:(fun (other : Transfers.bank_account_info) ->
+        String.equal other.mapping.institution account.mapping.institution
+        && String.equal other.mapping.bank_id account.mapping.bank_id
+        && String.equal other.mapping.account_id account.mapping.account_id)
+    in
+    let%bind current = Accounts.export_bank_accounts db in
+    let updates =
+      List.filter_map current ~f:(fun row ->
+        if
+          List.exists siblings ~f:(fun (other : Transfers.bank_account_info) ->
+            String.equal
+              row.Bank_account_config.reference.institution
+              other.mapping.institution
+            && String.equal
+                 (Bank_account_config.source_account row.reference)
+                 (Bank_account_mapping.source_account other.mapping))
+        then Some { row with iban = change }
+        else None)
+    in
+    let%map report = Accounts.apply_bank_accounts db updates in
+    printf "identity_changes=%d\n" report.identity_changes)
+;;
+
 let cmd =
   Cmd.group
     (Cmd.info
@@ -322,6 +370,19 @@ let cmd =
               value
               & flag
               & info [ "yes" ] ~doc:"Apply the proposed setup without prompting."))
+    ; command
+        "iban"
+        "Set the IBAN of an account whose statements do not state it, so that transfers \
+         to and from it are matched by it."
+        Term.(
+          const account_iban
+          $ database
+          $ Arg.(
+              required
+              & pos 0 (some string) None
+              & info [] ~docv:"ID" ~doc:"Account ID shown by fin account list.")
+          $ Arg.(value & pos 1 (some string) None & info [] ~docv:"IBAN")
+          $ Arg.(value & flag & info [ "clear" ] ~doc:"Remove the IBAN set earlier."))
     ; command
         "edit"
         "Edit account names, IBANs and card settlement links in your editor, and apply \

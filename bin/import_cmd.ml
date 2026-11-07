@@ -89,7 +89,6 @@ let import_bank database institution paths journal max_mib account_id provider =
     let%bind report =
       Finances_import.Workflow.run
         ~registry
-        ~configure_new_accounts:Csv_setup.configure_new_accounts
         ?account_id
         ~max_file_bytes:Int64.(of_int max_mib * 1048576L)
         ~database
@@ -142,7 +141,6 @@ let import_bank database institution paths journal max_mib account_id provider =
       report.projection.inserted
       report.projection.existing
       report.journal;
-    printf "identity_changes=%d\n" report.identity_changes;
     printf
       "companions_matched=%d companions_unmatched=%d companions_ambiguous=%d \
        companions_conflicts=%d companions_changes=%d\n"
@@ -447,9 +445,7 @@ let cmd =
               [ "account-id" ]
               ~doc:
                 "Stable account label for account-free exports (Revolut and generic \
-                 CSV). Asked on a terminal if omitted; required in scripts. New accounts \
-                 missing an IBAN prompt once on a terminal; Enter skips, and account \
-                 edit can add it later.")
+                 CSV). Asked on a terminal if omitted; required in scripts.")
       $ Arg.(
           value
           & opt (some string) None

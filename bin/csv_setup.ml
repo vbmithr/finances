@@ -1,12 +1,11 @@
 open Base
 open Stdio
-open Finances
 open Finances_store
 open Or_error.Let_syntax
 open Cli
 
 (* Prompts live at the CLI boundary; library callers and redirected stdin never
-   need a terminal. EOF has the same meaning as skipping an optional IBAN. *)
+   need a terminal. *)
 let import_account_label registry institution account_id =
   let validate = Validation.token "account label" in
   match Registry.find registry institution with
@@ -36,84 +35,6 @@ let import_account_label registry institution account_id =
        read ()
      | None -> Or_error.error_string message)
   | _ -> Ok account_id
-;;
-
-let configure_new_accounts db fresh =
-  let same_group (a : Bank_account_mapping.t) (b : Bank_account_mapping.t) =
-    String.equal a.institution b.institution
-    && String.equal a.bank_id b.bank_id
-    && String.equal a.account_id b.account_id
-  in
-  let rec groups remaining =
-    match remaining with
-    | [] -> Ok 0
-    | (first : Transfers.bank_account_info) :: rest ->
-      let siblings, rest =
-        List.partition_tf rest ~f:(fun info ->
-          same_group first.mapping info.Transfers.mapping)
-      in
-      let group = first :: siblings in
-      let missing =
-        List.filter group ~f:(fun info ->
-          String.equal info.Transfers.iban_source "missing")
-      in
-      let%bind count =
-        match missing with
-        | [] -> Ok 0
-        | first :: _ ->
-          eprintf
-            "New account: %s %s (%s), %d movements, %s to %s.\n"
-            first.mapping.institution
-            first.mapping.account_id
-            (String.concat
-               ~sep:", "
-               (List.map missing ~f:(fun i -> i.Transfers.mapping.account_type)))
-            (List.sum (module Int) missing ~f:(fun i -> i.Transfers.movements))
-            (Date.to_string
-               (List.reduce_exn
-                  (List.map missing ~f:(fun i -> i.Transfers.first_on))
-                  ~f:(fun a b -> if Date.compare a b <= 0 then a else b)))
-            (Date.to_string
-               (List.reduce_exn
-                  (List.map missing ~f:(fun i -> i.Transfers.last_on))
-                  ~f:(fun a b -> if Date.compare a b >= 0 then a else b)));
-          let rec read () =
-            match
-              prompt "Its statements do not include an IBAN. IBAN (Enter to skip): "
-            with
-            | None | Some "" -> Ok None
-            | Some value ->
-              (match Iban.of_string value with
-               | Ok iban -> Ok (Some iban)
-               | Error error ->
-                 eprintf "%s\n" (Error.to_string_hum error);
-                 read ())
-          in
-          let%bind iban = read () in
-          (match iban with
-           | None -> Ok 0
-           | Some iban ->
-             let%bind current = Accounts.export_bank_accounts db in
-             let updates =
-               List.filter_map current ~f:(fun row ->
-                 if
-                   List.exists missing ~f:(fun info ->
-                     String.equal
-                       row.Bank_account_config.reference.institution
-                       info.Transfers.mapping.institution
-                     && String.equal
-                          (Bank_account_config.source_account row.reference)
-                          (Bank_account_mapping.source_account info.mapping))
-                 then Some { row with iban = Set iban }
-                 else None)
-             in
-             let%map result = Accounts.apply_bank_accounts db updates in
-             result.identity_changes)
-      in
-      let%map remaining = groups rest in
-      count + remaining
-  in
-  if Unix.isatty Unix.stdin then groups fresh else Ok 0
 ;;
 
 let csv_import_profile ?(setup_only = false) database path max_mib ~institution =

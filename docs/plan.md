@@ -459,8 +459,10 @@ The import side is done; turning movements into accounting is not.
   idempotent replay, bounded expansion and no filesystem extraction.
 
 - [x] Issue #1: shared-IBAN currency siblings do not contradict transfers; import
-  asks for missing labels and new account IBANs on a terminal and saves answers
-  in SQLite.
+  asks for missing labels on a terminal. It no longer asks for IBANs (2026-11-07):
+  `fin account iban` sets one when it helps, and transfer candidates say which IBAN
+  a counterparty states for an account without one. Next: propose that IBAN when
+  confirmed transfers agree on it.
 
 - [x] `fin account edit` sets IBANs, names and card links without handling the
   configuration file by hand.

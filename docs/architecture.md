@@ -556,8 +556,8 @@ to a known non-card account in the same currency and never create accounting ent
 snapshot validates source references, composes ledger/identity/relationship
 mutations inside one transaction, and checks existing projections and confirmed
 transfers. A dry run uses a savepoint and rolls back every update and audit row,
-while returning concrete planned changes. Account editing and the import
-command's new-account IBAN prompts update only SQLite. Snapshots are optional explicit exports and
+while returning concrete planned changes. Account editing and `fin account iban` update
+only SQLite. Snapshots are optional explicit exports and
 imports, with no default path and no automatic loading or rewriting.
 
 ## Explainable transfer ranking

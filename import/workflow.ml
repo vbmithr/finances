@@ -1,11 +1,9 @@
 open Base
 open Stdio
-open Finances
 open Finances_store
 
 type report =
   { inputs : Files.report
-  ; identity_changes : int
   ; projection : Ledger.projection_report
   ; companions : Ledger.companion_report
   ; journal : string
@@ -73,17 +71,7 @@ let write_journal ~path contents =
     ~tag:"atomic journal publication (TMPDIR and journal must share a filesystem)"
 ;;
 
-let run
-      ~registry
-      ?account_id
-      ?(configure_new_accounts = fun _ _ -> Ok 0)
-      ?max_file_bytes
-      ~database
-      ~institution
-      ~paths
-      ~journal
-      ()
-  =
+let run ~registry ?account_id ?max_file_bytes ~database ~institution ~paths ~journal () =
   let open Or_error.Let_syntax in
   let%bind database, paths, journal =
     Or_error.try_with (fun () ->
@@ -132,7 +120,6 @@ let run
                 | None -> false)
               |> String.concat ~sep:", "))
     in
-    let%bind before = Ledger.bank_accounts db in
     let%bind inputs =
       Files.scan
         ?account_id
@@ -142,22 +129,9 @@ let run
         ~institution
         ~paths
     in
-    let%bind current = Transfers.bank_account_info db in
-    let fresh =
-      List.filter current ~f:(fun info ->
-        not
-          (List.exists before ~f:(fun previous ->
-             String.equal
-               previous.Bank_account_mapping.institution
-               info.Transfers.mapping.institution
-             && String.equal
-                  (Bank_account_mapping.source_account previous)
-                  (Bank_account_mapping.source_account info.mapping))))
-    in
-    let%bind identity_changes = configure_new_accounts db fresh in
     let%bind companions = Ledger.match_companions db in
     let%bind projection = Ledger.project_bank db in
     let%bind contents = Finances_hledger.export db in
     let%map () = write_journal ~path:journal contents in
-    { inputs; identity_changes; projection; companions; journal })
+    { inputs; projection; companions; journal })
 ;;

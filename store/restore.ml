@@ -798,13 +798,14 @@ let known_account_ibans db source ~movement =
 let transfer_iban_evidence_with known ~a_iban ~b_iban a ta b tb =
   let a_counterparty = ta.Movement.counterparty_iban
   and b_counterparty = tb.Movement.counterparty_iban in
+  (* A hint says what would make evidence: it neither supports nor contradicts a pairing. *)
   let assess counterparty target target_account target_iban =
     match counterparty, target_iban with
     | None, _ -> None
     | Some cp, Some own when Iban.equal cp own ->
-      Some (true, "counterparty IBAN matches the other source account")
+      Some (`Match "counterparty IBAN matches the other source account")
     | Some _, Some _ ->
-      Some (false, "counterparty IBAN differs from the other source account's IBAN")
+      Some (`Conflict "counterparty IBAN differs from the other source account's IBAN")
     | Some cp, None ->
       let conflicting =
         List.find_map known ~f:(fun (event, (account : Movement.account), iban) ->
@@ -817,9 +818,22 @@ let transfer_iban_evidence_with known ~a_iban ~b_iban a ta b tb =
           then Some event.venue
           else None)
       in
-      Option.map conflicting ~f:(fun institution ->
-        ( false
-        , "counterparty IBAN belongs to a different known " ^ institution ^ " account" ))
+      (match conflicting with
+       | Some institution ->
+         Some
+           (`Conflict
+               ("counterparty IBAN belongs to a different known "
+                ^ institution
+                ^ " account"))
+       | None ->
+         Some
+           (`Hint
+               (Printf.sprintf
+                  "%s %s has no IBAN; if %s is its own, fin account iban sets it and \
+                   makes this evidence"
+                  target.Source_event.venue
+                  target_account.Movement.account_id
+                  (Iban.to_string cp))))
   in
   let evidence =
     List.filter_opt
@@ -827,11 +841,20 @@ let transfer_iban_evidence_with known ~a_iban ~b_iban a ta b tb =
       ; assess b_counterparty a ta.account a_iban
       ]
   in
-  let conflicts =
-    List.filter_map evidence ~f:(fun (matches, detail) ->
-      if matches then None else Some detail)
+  let compatible =
+    not
+      (List.exists evidence ~f:(function
+         | `Conflict _ -> true
+         | `Match _ | `Hint _ -> false))
+  and matched =
+    List.exists evidence ~f:(function
+      | `Match _ -> true
+      | `Conflict _ | `Hint _ -> false)
   in
-  Ok (List.is_empty conflicts, List.exists evidence ~f:fst, List.map evidence ~f:snd)
+  Ok
+    ( compatible
+    , matched
+    , List.map evidence ~f:(function `Match d | `Conflict d | `Hint d -> d) )
 ;;
 
 (* Every account's IBAN as evidence for pairings. Read once per batch: it visits every

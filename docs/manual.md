@@ -105,8 +105,7 @@ implicit account settings file.
 
 SQLite holds everything fin knows: the original statement contents, movements,
 accounting entries, account names, registered IBANs, card settlement links and
-review history. `fin account edit` and the import command's IBAN prompts update
-that database.
+review history. `fin account edit` and `fin account iban` update that database.
 
 `fin backup DIR` saves two files in a new dated folder: `fin.sqlite3`, a copy of the
 database, and `decisions.json`, everything you decided. `fin restore FOLDER` puts the copy
@@ -585,14 +584,15 @@ statements are reported as unsupported without failing the command.
 
 For Revolut no label is needed: a person has one personal account, with a balance per currency.
 
-On a terminal, import asks for an IBAN when it first discovers an account whose
-statements do not supply one. It asks once for a group of currency accounts with
-the same bank and account identifier, and registers the answer on all missing
-accounts in that group. Invalid IBANs are explained and can be entered again.
-Enter skips; importing those accounts again does not repeat the question. Use
-`fin account edit` to fill it later. Cards never prompt, and scripts never prompt
-for IBANs. Answers are audited in SQLite. Import reads and updates account settings
-only in the database. Exported snapshots are never read or rewritten during import.
+Import never asks for an IBAN. Some statements do not state their account's IBAN;
+transfers to and from such an account are then matched by amount and date only.
+`fin account list` says which accounts lack one, and `fin transfer candidates` shows
+the IBAN another bank's row gives as the counterparty, which is usually it. Set it
+with `fin account iban ID IBAN`, once for all the currencies of one account, or
+remove it with `--clear`; changes are audited in SQLite. A card account has no
+IBAN, and statements that state one take precedence. Import reads and updates
+account settings only in the database. Exported snapshots are never read or
+rewritten during import.
 
 You can add more exports and repeat the command. Unchanged documents and known
 transactions are recognized. Conflicting evidence is reported for review.

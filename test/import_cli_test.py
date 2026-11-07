@@ -143,6 +143,12 @@ class ImportOnboarding(unittest.TestCase):
     def accounts(self):
         return self.saved('accounts')['accounts']
 
+    def import_with_iban(self):
+        """Imports the Revolut statement and gives its account an IBAN, as fin account iban does."""
+        self.run_fin('import', 'revolut', self.csv)
+        account = json.loads(self.run_fin('account', 'list', '--json').stdout)[0]['id']
+        self.run_fin('account', 'iban', account, IBAN)
+
     def fullscreen(self, args, answers, size=(30, 120)):
         master, slave = pty.openpty()
         fcntl.ioctl(slave, termios.TIOCSWINSZ, struct.pack('HHHH', *size, 0, 0))
@@ -215,7 +221,6 @@ class ImportOnboarding(unittest.TestCase):
             ('Are outgoing amounts positive in the file?', '2'),
             ('Skip a summary row with an empty date?', '2'),
             ('Import these transactions?', '1'),
-            ('IBAN (Enter to skip):', ''),
         ])
         self.assertIn('account movement: -123.45 EUR', output)
         rows = json.loads(self.run_fin('operation', 'list', '--json').stdout)
@@ -438,7 +443,6 @@ class ImportOnboarding(unittest.TestCase):
             ('Are outgoing amounts positive in the file?', '2'),
             ('Skip a summary row with an empty date?', '2'),
             ('Import these transactions?', '1'),
-            ('IBAN (Enter to skip):', ''),
         ])
         self.assertIn('Detected date and time', output)
         row = json.loads(self.run_fin('operation', 'list', '--json').stdout)[0]
@@ -455,7 +459,6 @@ class ImportOnboarding(unittest.TestCase):
             ('Are outgoing amounts positive in the file?', '2'),
             ('Skip a summary row with an empty date?', '2'),
             ('Import these transactions?', '1'),
-            ('IBAN (Enter to skip):', ''),
         ])
         self.assertIn('3. Current account', output)
         self.assertIn('account movement: -120 EUR', output)
@@ -3294,7 +3297,6 @@ class ImportOnboarding(unittest.TestCase):
             ('Are outgoing amounts positive in the file?', '2'),
             ('Skip a summary row with an empty date?', '2'),
             ('Import these transactions?', '1'),
-            ('IBAN (Enter to skip):', ''),
         ])
         test = self.run_fin('rule', 'test', 'by-merchant', '--institution', 'mybank', '--field', 'Merchant ID',
                             '--description', '^M-2', '--set-type', 'deposit').stdout
@@ -3497,30 +3499,25 @@ class ImportOnboarding(unittest.TestCase):
         self.run_fin('import', 'revolut', self.csv)
         self.assertTrue(all(row['iban'] is None for row in self.accounts()))
 
-    def test_iban_retry_once_for_two_currencies(self):
-        output = self.terminal(['import', 'revolut', self.csv, self.usd], [
-            ('IBAN (Enter to skip):', 'invalid'),
-            ('IBAN (Enter to skip):', IBAN),
-        ])
-        self.assertEqual(output.count('New account:'), 1)
-        self.assertIn('identity_changes=2', output)
+    def test_import_never_asks_for_an_iban(self):
+        output = self.terminal(['import', 'revolut', self.csv, self.usd], [])
+        self.assertNotIn('IBAN', output)
         self.assertEqual(len(self.accounts()), 2)
+        self.assertTrue(all(row['iban'] is None for row in self.accounts()))
+        self.assertIn('matched by amount and date only', self.run_fin('account', 'list').stdout)
+        account = json.loads(self.run_fin('account', 'list', '--json').stdout)[0]['id']
+        self.assertNotEqual(self.run_fin('account', 'iban', account, 'invalid', check=False).returncode, 0)
+        self.assertNotEqual(self.run_fin('account', 'iban', account, check=False).returncode, 0)
+        # Its two currencies are one account, which has one IBAN.
+        self.assertIn('identity_changes=2', self.run_fin('account', 'iban', account, IBAN).stdout)
         self.assertTrue(all(row['iban'] == IBAN for row in self.accounts()))
-        history = json.loads(self.run_fin('account', 'history').stdout)
-        self.assertEqual(len(history), 2)
-        replay = self.terminal(['import', 'revolut', self.csv, self.usd], [])
-        self.assertNotIn('IBAN (Enter to skip):', replay)
-
-    def test_skip_is_not_repeated(self):
-        self.terminal(['import', 'revolut', self.csv],
-                      [('IBAN (Enter to skip):', '')])
-        replay = self.terminal(['import', 'revolut', self.csv], [])
-        self.assertNotIn('IBAN (Enter to skip):', replay)
-        self.assertIsNone(self.accounts()[0]['iban'])
+        self.assertEqual(len(json.loads(self.run_fin('account', 'history').stdout)), 2)
+        self.assertIn('identity_changes=0', self.run_fin('account', 'iban', account, IBAN).stdout)
+        self.assertIn('identity_changes=2', self.run_fin('account', 'iban', account, '--clear').stdout)
+        self.assertTrue(all(row['iban'] is None for row in self.accounts()))
 
     def test_snapshot_import_is_explicit_and_supports_dry_run(self):
-        self.terminal(['import', 'revolut', self.csv],
-                      [('IBAN (Enter to skip):', '')])
+        self.run_fin('import', 'revolut', self.csv)
         snapshot = self.root / 'saved-accounts.json'
         rows = self.saved('accounts')
         rows['accounts'][0]['iban'] = IBAN
@@ -3529,14 +3526,12 @@ class ImportOnboarding(unittest.TestCase):
         self.run_fin('decisions', 'restore', snapshot, '--yes')
         self.assertEqual(self.accounts()[0]['iban'], IBAN)
         before = snapshot.read_bytes()
-        self.terminal(['import', 'revolut', self.usd],
-                      [('IBAN (Enter to skip):', IBAN)])
+        self.run_fin('import', 'revolut', self.usd)
         self.assertEqual(snapshot.read_bytes(), before)
         self.assertFalse(self.config.exists())
 
     def test_restore_recovers_settings_reviews_and_evidence(self):
-        self.terminal(['import', 'revolut', self.csv],
-                      [('IBAN (Enter to skip):', IBAN)])
+        self.import_with_iban()
         review = json.loads(self.run_fin('operation', 'review', '--json').stdout)
         decisions = self.root / 'decisions.json'
         decisions.write_text(json.dumps([{'event_id': review[0]['event_id'],
@@ -3623,8 +3618,7 @@ class ImportOnboarding(unittest.TestCase):
     def test_legacy_config_is_not_used_or_changed(self):
         self.config.parent.mkdir(parents=True)
         self.config.write_text('Not a settings input')
-        self.terminal(['import', 'revolut', self.csv],
-                      [('IBAN (Enter to skip):', IBAN)])
+        self.import_with_iban()
         self.assertEqual(self.config.read_text(), 'Not a settings input')
         self.assertEqual(self.accounts()[0]['iban'], IBAN)
         paths = json.loads(self.run_fin('paths').stdout)
@@ -3656,8 +3650,7 @@ class ImportOnboarding(unittest.TestCase):
         self.assertFalse(draft.exists())
 
     def test_backup_and_delete_preserve_exported_snapshots(self):
-        self.terminal(['import', 'revolut', self.csv],
-                      [('IBAN (Enter to skip):', IBAN)])
+        self.import_with_iban()
         snapshot = self.root / 'data/fin/accounts.json'
         snapshot.write_text(self.exported('accounts'))
         original = snapshot.read_bytes()
@@ -3680,8 +3673,7 @@ class ImportOnboarding(unittest.TestCase):
         self.assertFalse(self.config.exists())
 
     def test_backup_copies_a_database_of_an_older_schema(self):
-        self.terminal(['import', 'revolut', self.csv],
-                      [('IBAN (Enter to skip):', IBAN)])
+        self.import_with_iban()
         database = self.root / 'data/fin/fin.sqlite3'
         with sqlite3.connect(database) as connection:
             connection.execute('PRAGMA user_version = 1')
@@ -3697,15 +3689,20 @@ class ImportOnboarding(unittest.TestCase):
         with sqlite3.connect(backup / 'fin.sqlite3') as copy:
             self.assertEqual(copy.execute('PRAGMA user_version').fetchone(), (1,))
 
-    def test_checking_prompts_but_associated_card_does_not(self):
+    def test_a_card_account_takes_no_iban(self):
         ofx = self.root / 'checking-and-card.ofx'
         ofx.write_text(Path('fixtures/bank.ofx').read_text()
                        .replace('<ACCTTYPE>SAVINGS</ACCTTYPE>', '<ACCTTYPE>CREDITCRD</ACCTTYPE>'))
-        output = self.terminal(['import', 'boursobank', ofx],
-                               [('IBAN (Enter to skip):', IBAN)])
-        self.assertEqual(output.count('New account:'), 1)
-        accounts = self.accounts()
-        self.assertEqual(sum(row['iban'] == IBAN for row in accounts), 1)
+        output = self.terminal(['import', 'boursobank', ofx], [])
+        self.assertNotIn('IBAN', output)
+        listed = json.loads(self.run_fin('account', 'list', '--json').stdout)
+        card = next(a['id'] for a in listed if a['iban_source'] == 'not_applicable')
+        checking = next(a['id'] for a in listed if a['iban_source'] == 'missing')
+        refused = self.run_fin('account', 'iban', card, IBAN, check=False)
+        self.assertNotEqual(refused.returncode, 0)
+        self.assertIn('card account has no IBAN', refused.stderr)
+        self.run_fin('account', 'iban', checking, IBAN)
+        self.assertEqual(sum(row['iban'] == IBAN for row in self.accounts()), 1)
         self.assertFalse(self.config.exists())
 
     def test_zip_cli_outcomes_and_history(self):
@@ -3732,7 +3729,7 @@ class ImportOnboarding(unittest.TestCase):
                        .replace('<ACCTTYPE>CHECKING</ACCTTYPE>', '<ACCTTYPE>CREDITCRD</ACCTTYPE>')
                        .replace('<ACCTTYPE>SAVINGS</ACCTTYPE>', '<ACCTTYPE>CREDITCRD</ACCTTYPE>'))
         output = self.terminal(['import', 'boursobank', csv], [])
-        self.assertNotIn('IBAN (Enter to skip):', output)
+        self.assertNotIn('IBAN', output)
 
 
 if __name__ == '__main__':

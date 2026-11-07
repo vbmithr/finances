@@ -8,6 +8,11 @@ short line of their own.
 
 ## Unreleased
 
+- `fin import` no longer asks for the IBAN of an account whose statements do not state it, and no
+  longer prints `identity_changes=`. `fin account iban ID IBAN` sets it, for all the currencies of one
+  account, and `--clear` removes it. `fin account list` says which accounts lack one, and
+  `fin transfer candidates` shows the IBAN another bank's row states for such an account, as a hint
+  that neither supports nor contradicts the pairing.
 - **Action required: rebuild.** A crypto commodity is now its asset, such as `USDC`, one asset whichever
   network holds it; the network stays in the source fields. What a source reports, a token's contract on
   its network or an exchange's ticker, is mapped once with `fin asset map PROVIDER SYMBOL CODE`, for

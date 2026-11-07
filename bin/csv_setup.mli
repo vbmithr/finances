@@ -8,11 +8,6 @@ val import_account_label
   -> String.t Option.t
   -> (String.t Option.t, Error.t) Result.t
 
-val configure_new_accounts
-  :  Finances_store.Handle.t
-  -> Finances_store.Transfers.bank_account_info List.t
-  -> Int.t Or_error.t
-
 val csv_import_profile
   :  ?setup_only:bool
   -> String.t

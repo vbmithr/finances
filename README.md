@@ -544,8 +544,8 @@ rows. A failure anywhere rolls back all account edits and posting renames togeth
 Identity edits that contradict confirmed transfers are rejected for review first.
 
 Snapshots are optional, explicit export/import files. There is no default file,
-XDG config directory or automatic loading during import. `account edit` and the import
-command's IBAN prompts update SQLite only. `fin backup` saves a consistent SQLite
+XDG config directory or automatic loading during import. `account edit` and
+`account iban` update SQLite only. `fin backup` saves a consistent SQLite
 snapshot, including settings, evidence and review decisions. `fin restore BACKUP`
 restores the full database from a backup folder or SQLite file; replacing existing
 state requires confirmation or `--yes`. Restoration validates the source and

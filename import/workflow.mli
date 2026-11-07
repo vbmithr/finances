@@ -3,7 +3,6 @@ open Base
 
 type report =
   { inputs : Files.report
-  ; identity_changes : int
   ; projection : Ledger.projection_report
   ; companions : Ledger.companion_report
   ; journal : string
@@ -16,10 +15,6 @@ type report =
 val run
   :  registry:Finances_core.Registry.t
   -> ?account_id:string
-  -> ?configure_new_accounts:
-       (Handle.t -> Transfers.bank_account_info list -> int Or_error.t)
-       (** Called after import, before projection, with only accounts
-      first seen in this run. Returns the number of audited IBAN registrations. *)
   -> ?max_file_bytes:int64
   -> database:string
   -> institution:string
