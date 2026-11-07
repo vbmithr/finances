@@ -22,6 +22,8 @@ let make
     let decode = Ofx_bank.decode
     let formats = [ Ofx_bank.ofx; csv ]
     let takes_account_label = false
+    let reports_tickers = false
+    let own_symbols = []
     let overlap = Adapter.Source_ids
     let companions = [ companion ]
 

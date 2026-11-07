@@ -298,12 +298,24 @@ fin asset list                        # every reported symbol, with the name its
 fin asset map cdc BTC BTC             # an exchange's ticker
 fin asset map polygon 0x3c49 USDC     # a token contract, by its first characters
 fin asset ignore polygon 0x5273       # spam: kept as evidence, never counted
+fin asset adopt CowSwap.json          # map the contracts a token list names
 ```
 
-A reported symbol that is an ISO currency code, such as an exchange's `EUR`, counts as
-that currency until you decide otherwise; `fin asset list` shows it as assumed. Map or
-ignore it when a crypto ticker happens to be a currency code, such as Mantle's `MNT`:
-`fin asset map kraken MNT MANTLE`.
+A token list, as CoW Swap, Uniswap or Coingecko publish them (tokenlists.org), says which
+contract on which chain is which token. `fin asset adopt LIST.json` matches your
+unmapped contracts on the networks whose definitions give their chain, shows what the
+list says of each, and maps them all after one confirmation; the history records the
+list's name and version. It never changes what you mapped or ignored, and skips a list
+symbol that cannot be an asset, such as `USDC.e`. A contract the list does not name is
+not thereby spam: lists are short, so ignore spam yourself.
+
+Most symbols need no decision. Until you map one, `fin asset list` shows what it is
+assumed to be: an exchange's ticker is the asset of that name (XLM on cdc and on Kraken
+is the same Stellar), an ISO currency code is that currency, and a unit an institution
+defines for itself, such as Kraken's fee credits, is what its definition says (`KFEE`).
+Map or ignore one when the assumption is wrong, such as a crypto ticker that is also a
+currency code (Mantle's `MNT`): `fin asset map kraken MNT MANTLE`. Token contracts are
+never assumed: map them yourself or with `fin asset adopt`.
 
 The code is an ISO currency code, which is fiat, or an asset's symbol, which is also
 its name in the journal. An asset is one asset whichever network holds it: USDC on

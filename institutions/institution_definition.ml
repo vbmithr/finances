@@ -11,6 +11,9 @@ type records =
   ; aliases : string list
   ; statement : statement option
   ; csv : Csv_converter.t list (* Each export layout the institution has. *)
+  ; chain_id : int option
+    (* The EVM chain a block explorer reads, as token lists name it: 1 is Ethereum. *)
+  ; own_symbols : Adapter.own_symbol list (* Units the institution defines for itself. *)
   ; stored_formats : string list
   }
 
@@ -115,6 +118,19 @@ let csv_codec =
   |> Jsont.Object.finish
 ;;
 
+let own_symbol_codec =
+  Jsont.Object.map (fun symbol asset name : Adapter.own_symbol ->
+    (* The asset is the journal's name for it, so it must be one. *)
+    ignore (Json.or_error (Commodity.asset asset) : Commodity.t);
+    { symbol; asset; name })
+  |> Jsont.Object.mem "symbol" Jsont.string ~enc:(fun (o : Adapter.own_symbol) ->
+    o.symbol)
+  |> Jsont.Object.mem "asset" Jsont.string ~enc:(fun (o : Adapter.own_symbol) -> o.asset)
+  |> Jsont.Object.mem "name" Jsont.string ~enc:(fun (o : Adapter.own_symbol) -> o.name)
+  |> Jsont.Object.error_unknown
+  |> Jsont.Object.finish
+;;
+
 (* One layout, or a list of them, such as an explorer's transactions and token transfers. *)
 let layouts_codec =
   let ok = function
@@ -133,19 +149,21 @@ let layouts_codec =
 ;;
 
 let records_codec =
-  Jsont.Object.map (fun institution aliases camt mt940 ofx csv stored_formats ->
-    let statement =
-      match camt, mt940, ofx with
-      | Some profile, None, None -> Some (Camt profile)
-      | None, Some profile, None -> Some (Mt940 profile)
-      | None, None, Some true -> Some Ofx
-      | None, None, (None | Some false) -> None
-      | _ -> failwith "a definition has one statement format"
-    in
-    let csv = Option.value csv ~default:[] in
-    if Option.is_none statement && List.is_empty csv
-    then failwith "a definition needs a statement format or a CSV layout";
-    ({ institution; aliases; statement; csv; stored_formats } : records))
+  Jsont.Object.map
+    (fun institution aliases camt mt940 ofx csv chain_id own_symbols stored_formats ->
+       let statement =
+         match camt, mt940, ofx with
+         | Some profile, None, None -> Some (Camt profile)
+         | None, Some profile, None -> Some (Mt940 profile)
+         | None, None, Some true -> Some Ofx
+         | None, None, (None | Some false) -> None
+         | _ -> failwith "a definition has one statement format"
+       in
+       let csv = Option.value csv ~default:[] in
+       if Option.is_none statement && List.is_empty csv
+       then failwith "a definition needs a statement format or a CSV layout";
+       ({ institution; aliases; statement; csv; chain_id; own_symbols; stored_formats }
+        : records))
   |> Jsont.Object.mem "institution" Jsont.string ~enc:(fun (r : records) -> r.institution)
   |> Jsont.Object.mem
        "aliases"
@@ -166,6 +184,13 @@ let records_codec =
     | _ -> None)
   |> Jsont.Object.opt_mem "csv" layouts_codec ~enc:(fun (r : records) ->
     Option.some_if (not (List.is_empty r.csv)) r.csv)
+  |> Jsont.Object.opt_mem "chain_id" Jsont.int ~enc:(fun (r : records) -> r.chain_id)
+  |> Jsont.Object.mem
+       "own_symbols"
+       (Jsont.list own_symbol_codec)
+       ~dec_absent:[]
+       ~enc_omit:List.is_empty
+       ~enc:(fun (r : records) -> r.own_symbols)
   |> Jsont.Object.mem
        "stored_formats"
        (Jsont.list Jsont.string)
@@ -204,6 +229,12 @@ let codec =
     p.rules)
   |> Jsont.Object.error_unknown
   |> Jsont.Object.finish
+;;
+
+let chain_id t =
+  match t.source with
+  | Records r -> r.chain_id
+  | Csv _ -> None
 ;;
 
 let institution t =
@@ -261,6 +292,8 @@ let adapter t =
     Records_adapter.make
       ~aliases:r.aliases
       ~stored_formats:r.stored_formats
+      ~tickers:(Institution_type.equal t.institution_type Crypto_exchange)
+      ~own_symbols:r.own_symbols
       ~institution:r.institution
       ~overlap:(overlap r)
       (sources r)

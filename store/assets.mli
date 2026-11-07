@@ -8,8 +8,9 @@ type decision =
   | Unmapped
   | Mapped of Commodity.t
   | Ignored (** Spam: its movements stay as evidence and never count. *)
-  | Assumed_fiat of Iso4217.t
-  (** Unmapped, but an ISO 4217 code, so it counts as that currency until mapped. *)
+  | Assumed of Commodity.t
+  (** Unmapped, but counted as this until mapped: the currency an ISO 4217 code names, or
+      the asset an exchange's ticker names. *)
 
 type t =
   { provider : string
@@ -29,8 +30,9 @@ val list : Handle.t -> t list Or_error.t
 val find : Handle.t -> provider:string -> symbol:string -> t Or_error.t
 
 (** [decide db asset decision] records it, refusing to change a symbol whose confirmed
-    operations rest on its current commodity. [false] when nothing changes. *)
-val decide : Handle.t -> t -> decision -> bool Or_error.t
+    operations rest on its current commodity. [source] says who decided, [by hand] unless a
+    token list did. [false] when nothing changes. *)
+val decide : ?source:string -> Handle.t -> t -> decision -> bool Or_error.t
 
 (** Mappings and ignored symbols, for decisions export: [None] is ignored. *)
 val mappings : Handle.t -> (string * string * Commodity.t option) list Or_error.t

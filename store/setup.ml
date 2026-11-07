@@ -409,21 +409,36 @@ let with_open ~registry path f =
     in
     let* () = initialize db in
     let* () = db_result (Db.exec_sql db.conn Sql.views) in
-    (* The ISO 4217 list the views read, from the library, so there is no copy to keep up. *)
-    let codes =
-      Json.encode
-        (Jsont.list Jsont.string)
-        (List.map Iso4217.all ~f:Iso4217.to_alpha_code)
+    (* What the views read and the code knows: the ISO 4217 list, from the library, and from
+       the registry the institutions whose symbols are tickers and the symbols institutions
+       define for themselves, so there is no copy. *)
+    let fill table values =
+      db_result
+        (Db.exec
+           db.conn
+           (Rel_sql.Stmt.(
+              func
+                (Printf.sprintf "INSERT INTO %s SELECT value FROM json_each(?)" table)
+                (text @-> unit))
+              (Json.encode (Jsont.list Jsont.string) values)))
     in
+    let* () = fill "currencies" (List.map Iso4217.all ~f:Iso4217.to_alpha_code) in
+    let* () = fill "ticker_providers" (Registry.ticker_institutions registry) in
     let* () =
       db_result
         (Db.exec
            db.conn
            (Rel_sql.Stmt.(
               func
-                "INSERT INTO currencies(code) SELECT value FROM json_each(?)"
+                "INSERT INTO own_symbols SELECT value->>0, value->>1, value->>2, \
+                 value->>3 FROM json_each(?)"
                 (text @-> unit))
-              codes))
+              (Json.encode
+                 (Jsont.list (Jsont.list Jsont.string))
+                 (List.map
+                    (Registry.own_symbols registry)
+                    ~f:(fun (provider, (o : Adapter.own_symbol)) ->
+                      [ provider; o.symbol; o.asset; o.name ])))))
     in
     f db)
 ;;

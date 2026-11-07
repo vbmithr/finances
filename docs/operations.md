@@ -76,12 +76,22 @@ next to the real one. The person says once what each reported symbol is, with
 `fin asset map PROVIDER SYMBOL CODE`, and it applies to every movement reporting it,
 past and future; `fin asset ignore` marks spam, whose movements stay as evidence and
 never count. These mappings are decisions like the others, exported and restored, so
-the list of known tokens is the person's data and grows without a new fin. The
+the list of known tokens is the person's data and grows without a new fin. A published
+token list can propose them in bulk (`fin asset adopt`), but fin neither ships nor
+fetches one, and adopting is still the person's decision, recorded with the list's name
+and version. The
 `resolved_movements` view is the one place a movement's commodity is read through its
-mapping. Until a symbol is mapped, one that is an ISO 4217 code counts as that currency:
-an exchange's `EUR` is euros. It is a default, never saved as a decision, and any
-mapping, including ignoring it, overrides it, for the few crypto tickers that are also
-currency codes, such as Mantle's `MNT`. The codes come from the iso4217 library, which
+mapping. Until a symbol is mapped, defaults apply, in this order, none saved as a decision
+and each overridden by any mapping, including ignoring it:
+
+- a unit an institution defines for itself, such as Kraken's fee credits, counts as the
+  asset its definition names (`own_symbols`);
+- an ISO 4217 code counts as that currency: an exchange's `EUR` is euros, while the few
+  crypto tickers that are also currency codes, such as Mantle's `MNT`, need a mapping;
+- an exchange's ticker counts as the asset of that name, since a ticker means one asset
+  across exchanges: XLM on cdc and on Kraken is Stellar. It applies to institutions of
+  type `crypto-exchange` and to tickers that can be asset names; a token contract never
+  gets one, since anyone can name a token USDC. The codes come from the iso4217 library, which
 each connection loads into a temporary table, so fin keeps no copy of the list. A mapping that confirmed transfers or exchanges rest on cannot change until
 they are undone. An asset cannot take an ISO code, which names fiat. Commodity identity
 and the account are independent: an account may hold several commodities.

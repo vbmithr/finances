@@ -3,7 +3,7 @@ open Rel
 
 (** One current experimental baseline; older databases must be reimported. Banks
     have no tables of their own. *)
-let version = 41
+let version = 42
 
 let timestamp = `Expr "(strftime('%Y-%m-%dT%H:%M:%f','now') || '000000000Z')"
 
@@ -655,6 +655,7 @@ module Asset_mapping_changes = struct
     ; previous : string option
     ; commodity : string option
     ; action : string
+    ; source : string
     ; changed_at : Ptime.t
     }
 
@@ -665,20 +666,24 @@ module Asset_mapping_changes = struct
   let commodity = Col.make "commodity" Type.(option text) (fun (r : t) -> r.commodity)
   let action = Col.make "action" Type.text (fun (r : t) -> r.action)
 
+  (* Who decided: by hand, a restore, or a token list by name and version. *)
+  let source = Col.make "source" Type.text (fun (r : t) -> r.source)
+
   let changed_at =
     Col.make ~default:timestamp "changed_at" instant (fun (r : t) -> r.changed_at)
   ;;
 
   let row =
     Row.(
-      unit (fun id provider symbol previous commodity action changed_at ->
-        { id; provider; symbol; previous; commodity; action; changed_at })
+      unit (fun id provider symbol previous commodity action source changed_at ->
+        { id; provider; symbol; previous; commodity; action; source; changed_at })
       * id
       * provider
       * symbol
       * previous
       * commodity
       * action
+      * source
       * changed_at)
   ;;
 

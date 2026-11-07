@@ -6,7 +6,7 @@ type decision =
   | Unmapped
   | Mapped of Commodity.t
   | Ignored
-  | Assumed_fiat of Iso4217.t
+  | Assumed of Commodity.t
 
 type t =
   { provider : string
@@ -18,15 +18,14 @@ type t =
   ; decision : decision
   }
 
-let decision_of ~decided ~symbol ~currency commodity =
-  match decided, commodity with
-  | false, _ when currency ->
-    Or_error.of_option
-      (Option.map (Iso4217.of_alpha_code symbol) ~f:(fun c -> Assumed_fiat c))
-      ~error:(Error.createf "%s is not an ISO 4217 code" symbol)
-  | false, _ -> Ok Unmapped
-  | true, None -> Ok Ignored
-  | true, Some json ->
+let decision_of ~decided ~assumed commodity =
+  match decided, commodity, assumed with
+  | false, _, Some json ->
+    let* commodity = Json.decode Commodity.codec json in
+    Ok (Assumed commodity)
+  | false, _, None -> Ok Unmapped
+  | true, None, _ -> Ok Ignored
+  | true, Some json, _ ->
     let* commodity = Json.decode Commodity.codec json in
     Ok (Mapped commodity)
 ;;
@@ -47,7 +46,7 @@ let list db =
            * option Rel.Type.text "name"
            * bool "decided"
            * option Rel.Type.text "commodity"
-           * bool "currency"))
+           * option Rel.Type.text "assumed"))
   in
   let date = Option.map ~f:Date.of_string in
   traverse
@@ -59,8 +58,8 @@ let list db =
          , name
          , decided
          , commodity
-         , currency ) ->
-       let* decision = decision_of ~decided ~symbol ~currency commodity in
+         , assumed ) ->
+       let* decision = decision_of ~decided ~assumed commodity in
        Ok
          { provider
          ; symbol
@@ -103,7 +102,7 @@ let confirmed_uses db ~provider ~symbol =
   Ok (Option.value count ~default:0)
 ;;
 
-let write db ~provider ~symbol ~previous next =
+let write db ~source ~provider ~symbol ~previous next =
   let encode = Option.map ~f:(Json.encode Commodity.codec) in
   let set, action =
     match next with
@@ -115,7 +114,7 @@ let write db ~provider ~symbol ~previous next =
           provider
           symbol
       , "removed" )
-    | Mapped _ | Ignored | Assumed_fiat _ ->
+    | Mapped _ | Ignored | Assumed _ ->
       let commodity =
         match next with
         | Mapped c -> Some c
@@ -134,13 +133,14 @@ let write db ~provider ~symbol ~previous next =
   let audit =
     Rel_sql.Stmt.(
       func
-        "INSERT INTO asset_mapping_changes(provider,symbol,previous,commodity,action) \
-         VALUES (?,?,?,?,?)"
-        (text @-> text @-> option text @-> option text @-> text @-> unit))
+        "INSERT INTO \
+         asset_mapping_changes(provider,symbol,previous,commodity,action,source) VALUES \
+         (?,?,?,?,?,?)"
+        (text @-> text @-> option text @-> option text @-> text @-> text @-> unit))
   in
   let commodity_of = function
     | Mapped c -> Some c
-    | Unmapped | Ignored | Assumed_fiat _ -> None
+    | Unmapped | Ignored | Assumed _ -> None
   in
   let* () = db_result (Db.exec db.conn set) in
   db_result
@@ -151,18 +151,19 @@ let write db ~provider ~symbol ~previous next =
           symbol
           (encode (commodity_of previous))
           (encode (commodity_of next))
-          action))
+          action
+          source))
 ;;
 
 let same a b =
   match a, b with
   | Unmapped, Unmapped | Ignored, Ignored -> true
-  | Assumed_fiat a, Assumed_fiat b -> Iso4217.equal a b
+  | Assumed a, Assumed b -> Commodity.equal a b
   | Mapped a, Mapped b -> Commodity.equal a b
   | _ -> false
 ;;
 
-let decide db (asset : t) decision =
+let decide ?(source = "by hand") db (asset : t) decision =
   let* () =
     match decision with
     | Mapped (Commodity.Reported _) ->
@@ -184,6 +185,7 @@ let decide db (asset : t) decision =
         let* () =
           write
             db
+            ~source
             ~provider:asset.provider
             ~symbol:asset.symbol
             ~previous:asset.decision
@@ -197,7 +199,7 @@ let mappings db =
   Ok
     (List.filter_map assets ~f:(fun a ->
        match a.decision with
-       | Unmapped | Assumed_fiat _ -> None
+       | Unmapped | Assumed _ -> None
        | Mapped c -> Some (a.provider, a.symbol, Some c)
        | Ignored -> Some (a.provider, a.symbol, None)))
 ;;
@@ -221,8 +223,10 @@ let restore db ~provider ~symbol commodity =
     |> Option.value_map ~default:Unmapped ~f:(fun a -> a.decision)
   in
   match current with
-  | Unmapped | Assumed_fiat _ ->
-    let* () = write db ~provider ~symbol ~previous:Unmapped wanted in
+  | Unmapped | Assumed _ ->
+    let* () =
+      write db ~source:"decisions restore" ~provider ~symbol ~previous:Unmapped wanted
+    in
     Ok true
   | current when same current wanted -> Ok false
   | _ -> Or_error.errorf "%s %s is already mapped differently" provider symbol

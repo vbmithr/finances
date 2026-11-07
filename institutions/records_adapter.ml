@@ -478,7 +478,14 @@ let of_definition format definition =
 
 (* An institution whose files reach fin as records, directly or through a converter. *)
 (* [stored_formats] are format names rows already in a database were stored under. *)
-let make ?(aliases = []) ?(stored_formats = []) ~institution ~overlap sources
+let make
+      ?(aliases = [])
+      ?(stored_formats = [])
+      ?(tickers = false)
+      ?(own_symbols = [])
+      ~institution
+      ~overlap
+      sources
   : (module Adapter.S)
   =
   let records = "records" in
@@ -495,6 +502,8 @@ let make ?(aliases = []) ?(stored_formats = []) ~institution ~overlap sources
     ;;
 
     let takes_account_label = false
+    let reports_tickers = tickers
+    let own_symbols = own_symbols
 
     let probe ~filename contents =
       if Records.is_records_of ~institution contents

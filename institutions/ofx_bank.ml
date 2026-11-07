@@ -7,6 +7,8 @@ let kinds = [ "bank-transaction" ]
 let ofx = "ofx"
 let formats = [ ofx ]
 let takes_account_label = false
+let reports_tickers = false
+let own_symbols = []
 let overlap = Adapter.Source_ids
 let companions = []
 
@@ -76,6 +78,8 @@ let make ~institution () : (module Adapter.S) =
     let formats = formats
     let probe = probe
     let takes_account_label = takes_account_label
+    let reports_tickers = reports_tickers
+    let own_symbols = own_symbols
 
     let parse ~context:_ ~format contents =
       if String.equal format ofx

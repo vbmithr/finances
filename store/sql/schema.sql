@@ -146,6 +146,7 @@ CREATE TABLE "asset_mapping_changes" (
   "previous" TEXT,
   "commodity" TEXT,
   "action" TEXT NOT NULL,
+  "source" TEXT NOT NULL,
   "changed_at" TEXT NOT NULL DEFAULT ((strftime('%Y-%m-%dT%H:%M:%f','now') || '000000000Z')),
   PRIMARY KEY ("id"),
   CHECK ("action" IN ('mapped','ignored','removed'))
@@ -603,4 +604,4 @@ CREATE TABLE "movement_type_changes" (
 ) STRICT;
 CREATE TRIGGER "movement_type_changes_no_update" BEFORE UPDATE ON "movement_type_changes" BEGIN SELECT RAISE(ABORT, 'movement type history is append-only'); END;
 CREATE TRIGGER "movement_type_changes_no_delete" BEFORE DELETE ON "movement_type_changes" BEGIN SELECT RAISE(ABORT, 'movement type history is append-only'); END;
-PRAGMA user_version = 41;
+PRAGMA user_version = 42;

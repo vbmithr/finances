@@ -120,6 +120,8 @@ let adapter
     let operation_rows = operation_rows
     let formats = formats
     let takes_account_label = takes_account_label
+    let reports_tickers = false
+    let own_symbols = []
     let overlap = overlap
     let companions = companions
     let decode = decode

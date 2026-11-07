@@ -285,7 +285,8 @@ class ImportOnboarding(unittest.TestCase):
         exchange_row = next(row for row in listed if row['description'] == 'Exchange')
         op = exchange_row['operation_id']
         assets = {(a['provider'], a['symbol']): a['decision'] for a in json.loads(self.run_fin('asset', 'list', '--json').stdout)}
-        self.assertEqual(assets[('cdc', 'CRO')], 'unmapped')
+        # An exchange's ticker counts as the asset it names until mapped.
+        self.assertEqual(assets[('cdc', 'CRO')], 'assumed')
         self.assertEqual(assets[('cdc', 'EUR')], 'assumed')
         self.assertNotEqual(self.run_fin('asset', 'map', 'cdc', 'CRO', 'C R O', '--yes', check=False).returncode, 0)
         self.assertIn('Recorded.', self.run_fin('asset', 'map', 'cdc', 'CRO', 'CRO', '--yes').stdout)
@@ -424,6 +425,62 @@ class ImportOnboarding(unittest.TestCase):
         self.run_fin('asset', 'unmap', 'cdc', 'EUR', '--yes')
         self.assertEqual(decision()['decision'], 'assumed')
         self.assertEqual(movement()['commodity'], {'kind': 'fiat', 'code': 'EUR'})
+
+    def test_asset_adopt_maps_what_a_token_list_names(self):
+        me, them = '0x' + '1' * 40, '0x' + '2' * 40
+        usdc, bridged, dai, spam = (
+            '0x3c499c542cef5e3811e1192ce70d8cc03d5c3359', '0x' + '3' * 40, '0x' + '4' * 40, '0x' + '9' * 40)
+        export = self.root / 'export-address-token-polygon.csv'
+        export.write_text(
+            'Transaction Hash,Blockno,UnixTimestamp,DateTime (UTC),From,To,TokenValue,USDValueDayOfTx,ContractAddress,TokenName,TokenSymbol\n'
+            # The spam comes from another sender, so that the wallet is the one address on
+            # every row.
+            + ''.join(f'0x{i},1,1,2026-07-29 11:00:0{i},{spam if c == spam else them},{me},5,N/A,{c},Token,T\n'
+                      for i, c in enumerate([usdc, bridged, dai, spam])))
+        self.run_fin('import', 'polygon', export)
+        self.run_fin('asset', 'ignore', 'polygon', dai, '--yes')
+        listed = self.root / 'list.json'
+        listed.write_text(json.dumps({
+            'name': 'Example', 'version': {'major': 1, 'minor': 2, 'patch': 3},
+            'timestamp': '2026-01-01T00:00:00Z', 'logoURI': 'https://example.invalid/logo.png',
+            'tokens': [
+                {'chainId': 137, 'address': usdc.upper().replace('0X', '0x'), 'symbol': 'USDC', 'name': 'USD Coin', 'decimals': 6},
+                {'chainId': 137, 'address': bridged, 'symbol': 'USDC.e', 'name': 'Bridged USDC', 'decimals': 6},
+                {'chainId': 137, 'address': dai, 'symbol': 'DAI', 'name': 'Dai', 'decimals': 18},
+                {'chainId': 1, 'address': spam, 'symbol': 'ETHONLY', 'name': 'On another chain', 'decimals': 18}]}))
+        self.assertNotEqual(self.run_fin('asset', 'adopt', listed, check=False).returncode, 0)
+        output = self.run_fin('asset', 'adopt', listed, '--yes').stdout
+        self.assertIn('Example 1.2.3 lists 4 tokens; 3 of your symbols are among them', output)
+        self.assertIn('USDC.e, which cannot be an asset', output)
+        self.assertIn('you ignored it, the list says DAI', output)
+        self.assertIn('Recorded 1, from Example 1.2.3.', output)
+        decisions = {a['symbol']: (a['decision'], a['commodity']) for a in json.loads(self.run_fin('asset', 'list', '--json').stdout)}
+        self.assertEqual(decisions[usdc], ('mapped', {'kind': 'asset', 'code': 'USDC'}))
+        self.assertEqual(decisions[bridged], ('unmapped', None))
+        self.assertEqual(decisions[dai], ('ignored', None))
+        self.assertEqual(decisions[spam], ('unmapped', None))
+        again = self.run_fin('asset', 'adopt', listed).stdout
+        self.assertIn('1 already mapped alike', again)
+        self.assertIn('Nothing to map.', again)
+
+    def test_tickers_and_an_institutions_own_symbols(self):
+        ledger = self.root / 'ledger.csv'
+        ledger.write_text('txid,refid,time,type,subtype,aclass,asset,amount,fee,balance\n'
+                          'L1,F1,2020-01-02 10:05:00,deposit,,currency,ZEUR,100.00,0.00,100.00\n'
+                          'L2,T1,2020-01-03 09:00:00,trade,,currency,ZEUR,-50.00,1.00,49.00\n'
+                          'L3,T1,2020-01-03 09:00:00,trade,,currency,XXBT,0.01,0,0.01\n'
+                          'L4,T1,2020-01-03 09:00:00,trade,,currency,KFEE,-2,0,8\n')
+        self.run_fin('import', 'kraken', ledger)
+        assets = {a['symbol']: a for a in json.loads(self.run_fin('asset', 'list', '--json').stdout)}
+        self.assertEqual((assets['BTC']['decision'], assets['BTC']['commodity']), ('assumed', {'kind': 'asset', 'code': 'BTC'}))
+        # Kraken's fee credits are its own unit, which its definition names.
+        self.assertEqual((assets['FEE']['decision'], assets['FEE']['commodity'], assets['FEE']['name']),
+                         ('assumed', {'kind': 'asset', 'code': 'KFEE'}, 'Kraken fee credits'))
+        self.assertIn('Kraken fee credits', self.run_fin('asset', 'list').stdout)
+        self.assertEqual(self.saved('assets'), [])
+        self.run_fin('asset', 'ignore', 'kraken', 'FEE', '--yes')
+        fee = next(a for a in json.loads(self.run_fin('asset', 'list', '--json').stdout) if a['symbol'] == 'FEE')
+        self.assertEqual(fee['decision'], 'ignored')
 
     def test_wallet_to_wallet_transfer(self):
         path = self.root / 'wallet-transfers.csv'

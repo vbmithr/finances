@@ -106,6 +106,18 @@ let create
 let institutions t = Map.keys t.adapters
 let is_registered t institution = Map.mem t.adapters institution
 
+let own_symbols t =
+  Map.to_alist t.adapters
+  |> List.concat_map ~f:(fun (institution, (module A : Adapter.S)) ->
+    List.map A.own_symbols ~f:(fun own -> institution, own))
+;;
+
+let ticker_institutions t =
+  Map.to_alist t.adapters
+  |> List.filter_map ~f:(fun (institution, (module A : Adapter.S)) ->
+    Option.some_if A.reports_tickers institution)
+;;
+
 let aliases t institution =
   match Map.find t.adapters institution with
   | None -> [ institution ]

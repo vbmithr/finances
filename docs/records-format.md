@@ -309,7 +309,11 @@ to each other is left to a definition, because those columns are not in the reco
   which tells what the wallet sent from what it received. A file where no address, or more than
   one, is on every row is refused.
 - `csv` may be a list of layouts, for an institution exporting several files, such as an explorer's
-  transactions and token transfers.
+  transactions and token transfers. Beside it, a block explorer's definition gives `chain_id`, the
+  EVM chain it reads as token lists name chains (1 is Ethereum, 137 Polygon), so that
+  `fin asset adopt` can match its contracts. `own_symbols` lists the units an institution
+  defines for itself, which are not market tickers, as `symbol`, the `asset` it is and its
+  `name`, such as Kraken's `FEE`, its fee credits.
 - A clock with no stated offset gives a date, unless `utc` says the column is in UTC.
 
 Every column stays in `fields`, as stated.

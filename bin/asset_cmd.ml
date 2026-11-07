@@ -11,7 +11,8 @@ let decision_text = function
   | Assets.Unmapped -> "unmapped"
   | Ignored -> "ignored"
   | Mapped commodity -> Commodity.display commodity
-  | Assumed_fiat currency -> Iso4217.to_alpha_code currency ^ " (fiat, assumed)"
+  | Assumed (Fiat currency) -> Iso4217.to_alpha_code currency ^ " (fiat, assumed)"
+  | Assumed commodity -> Commodity.display commodity ^ " (assumed)"
 ;;
 
 let asset_json =
@@ -31,14 +32,14 @@ let asset_json =
     | Unmapped -> "unmapped"
     | Ignored -> "ignored"
     | Mapped _ -> "mapped"
-    | Assumed_fiat _ -> "assumed")
+    | Assumed _ -> "assumed")
   |> Jsont.Object.mem
        "commodity"
        (Jsont.option Commodity.codec)
        ~enc:(fun (a : Assets.t) ->
          match a.decision with
          | Mapped c -> Some c
-         | Assumed_fiat currency -> Some (Commodity.fiat currency)
+         | Assumed commodity -> Some commodity
          | Unmapped | Ignored -> None)
   |> Jsont.Object.finish
 ;;
@@ -130,6 +131,112 @@ let asset_map database provider symbol code yes =
     ~question:(Printf.sprintf "Map it to %s?" (Commodity.display commodity))
 ;;
 
+(* What a token list says of one of your symbols. *)
+type finding =
+  | Adopt of Assets.t * Finances.Token_list.token * Commodity.t
+  | Unusable of Assets.t * Finances.Token_list.token * string
+  | Disagrees of Assets.t * Finances.Token_list.token * Commodity.t
+  | Ignored_listed of Assets.t * Finances.Token_list.token
+  | Agrees
+
+let findings ~chain_ids (list : Finances.Token_list.t) assets =
+  let find = Finances.Token_list.lookup list in
+  List.filter_map assets ~f:(fun (a : Assets.t) ->
+    let%bind.Option chain_id = List.Assoc.find chain_ids a.provider ~equal:String.equal in
+    let%map.Option token = find ~chain_id ~address:a.symbol in
+    match a.decision, Commodity.of_code token.symbol with
+    | (Unmapped | Assumed _), Ok commodity -> Adopt (a, token, commodity)
+    | (Unmapped | Assumed _), Error error -> Unusable (a, token, Error.to_string_hum error)
+    | Mapped mine, Ok listed when Commodity.equal mine listed -> Agrees
+    | Mapped mine, _ -> Disagrees (a, token, mine)
+    | Ignored, _ -> Ignored_listed (a, token))
+;;
+
+let asset_adopt database path yes =
+  let%bind text = read_file path in
+  let%bind list = Finances.Token_list.of_string text in
+  let%bind stored = institution_definitions database in
+  let chain_ids =
+    List.filter_map (Builtin.definitions @ stored) ~f:(fun d ->
+      Option.map (Institution_definition.chain_id d) ~f:(fun id ->
+        Institution_definition.institution d, id))
+  in
+  let source = Printf.sprintf "%s %s" list.name list.version in
+  with_database database (fun db ->
+    let%bind assets = Assets.list db in
+    let found = findings ~chain_ids list assets in
+    let adopt =
+      List.filter_map found ~f:(function
+        | Adopt (a, t, c) -> Some (a, t, c)
+        | _ -> None)
+    in
+    printf
+      "%s lists %d tokens; %d of your symbols are among them, %d already mapped alike.\n"
+      source
+      (List.length list.tokens)
+      (List.length found)
+      (List.count found ~f:(function
+         | Agrees -> true
+         | _ -> false));
+    List.iter found ~f:(function
+      | Disagrees (a, t, mine) ->
+        printf
+          "  %s %s: you mapped it to %s, the list says %s; left as it is.\n"
+          a.provider
+          a.symbol
+          (Commodity.display mine)
+          t.symbol
+      | Ignored_listed (a, t) ->
+        printf
+          "  %s %s: you ignored it, the list says %s (%s); left as it is.\n"
+          a.provider
+          a.symbol
+          t.symbol
+          t.name
+      | Unusable (a, t, why) ->
+        printf
+          "  %s %s: the list says %s, which cannot be an asset: %s. Map it with fin \
+           asset map.\n"
+          a.provider
+          a.symbol
+          t.symbol
+          why
+      | Adopt _ | Agrees -> ());
+    if List.is_empty adopt
+    then (
+      print_endline "Nothing to map.";
+      Ok ())
+    else (
+      Terminal.table
+        [ "Provider"; "Symbol"; "List says"; "Name"; "Movements" ]
+        (List.map
+           adopt
+           ~f:(fun ((a : Assets.t), (t : Finances.Token_list.token), commodity) ->
+             [ a.provider
+             ; a.symbol
+             ; Commodity.display commodity
+             ; t.name
+             ; Int.to_string a.movements
+             ]));
+      let%bind confirmed =
+        confirm
+          ~yes
+          ~destructive:false
+          (Printf.sprintf "Map these %d symbols as the list says?" (List.length adopt))
+      in
+      if not confirmed
+      then (
+        print_endline "Nothing changed.";
+        Ok ())
+      else (
+        let%map changed =
+          List.map adopt ~f:(fun (a, _, commodity) ->
+            Assets.decide ~source db a (Mapped commodity))
+          |> Or_error.all
+        in
+        printf "Recorded %d, from %s.\n" (List.count changed ~f:Fn.id) source)))
+;;
+
 let cmd =
   group
     "asset"
@@ -163,6 +270,28 @@ let cmd =
                   []
                   ~docv:"CODE"
                   ~doc:"An ISO currency code such as EUR, or an asset such as USDC.")
+          $ yes)
+    ; command
+        "adopt"
+        "Map your token contracts as a token list says, after one confirmation."
+        ~man:
+          [ `S Manpage.s_description
+          ; `P
+              "A token list says which contract on which chain is which token, as \
+               wallets and exchanges such as CoW Swap or Uniswap publish them \
+               (tokenlists.org). For each unmapped contract the list names, on a network \
+               whose definition gives its chain, fin proposes the list's symbol as the \
+               asset; one confirmation maps them all, recorded as coming from the list. \
+               What you mapped or ignored is never changed. A contract the list does not \
+               name is not thereby spam: lists are short."
+          ]
+        Term.(
+          const asset_adopt
+          $ database
+          $ Arg.(
+              required
+              & pos 0 (some string) None
+              & info [] ~docv:"LIST" ~doc:"A token list, in its JSON format.")
           $ yes)
     ; command
         "ignore"

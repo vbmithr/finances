@@ -23,6 +23,13 @@ val institutions : t -> string list
 
 val is_registered : t -> string -> bool
 
+(** The institutions whose reported symbols are market tickers, see
+    [Adapter.S.reports_tickers]. *)
+val ticker_institutions : t -> string list
+
+(** Each institution's own symbols, see [Adapter.S.own_symbols]. *)
+val own_symbols : t -> (string * Adapter.own_symbol) list
+
 (** The institution identifier and its adapter's aliases; just the identifier
     for an unregistered institution. *)
 val aliases : t -> string -> string list

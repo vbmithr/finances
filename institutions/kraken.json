@@ -158,7 +158,14 @@
         ]
       },
       "balance_after": "balance"
-    }
+    },
+    "own_symbols": [
+      {
+        "symbol": "FEE",
+        "asset": "KFEE",
+        "name": "Kraken fee credits"
+      }
+    ]
   },
   "rules": []
 }

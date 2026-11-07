@@ -8,6 +8,14 @@ type overlap =
 (** User-supplied import hints. *)
 type context = { account_label : string option }
 
+(** A unit an institution defines for itself, such as Kraken's fee credits: not a market
+    ticker, so its definition says which asset it is. *)
+type own_symbol =
+  { symbol : string
+  ; asset : string
+  ; name : string
+  }
+
 (** A bank, as the kernel knows it. Adapters are pure: they never access the
     database, and they decode only the events they produced. *)
 module type S = sig
@@ -46,6 +54,14 @@ module type S = sig
   (** Whether imports need [--account-id]: the export does not identify its
       account. *)
   val takes_account_label : bool
+
+  (** Whether the symbols it reports are market tickers, as an exchange's are: one ticker
+      names one asset across exchanges, so it counts as that asset until mapped. A token
+      contract is not one. *)
+  val reports_tickers : bool
+
+  (** The symbols the institution defines for itself. *)
+  val own_symbols : own_symbol list
 
   val parse : context:context -> format:string -> string -> Document.t Base.Or_error.t
   val overlap : overlap

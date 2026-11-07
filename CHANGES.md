@@ -8,6 +8,13 @@ short line of their own.
 
 ## Unreleased
 
+- An exchange's ticker counts as the asset of that name until you map it, so XLM, BTC or CRO from cdc
+  and Kraken need no decision; `fin asset list` shows them as assumed. Kraken's fee credits, `FEE`,
+  are the asset `KFEE`, named in its definition under `own_symbols`. Token contracts are never assumed.
+- `fin asset adopt LIST.json` maps your unmapped token contracts as a token list says, such as CoW
+  Swap's or Uniswap's (tokenlists.org), after one confirmation; what you mapped or ignored is never
+  changed. The `ethereum` and `polygon` definitions give their `chain_id`. **Rebuild:** schema 42
+  records who made each asset mapping: by hand, a restore, or a list by name and version.
 - **Action required: rebuild.** Reimporting a records file no longer refuses rows a newer converter
   states more about, such as the token names explorer exports now give: a later export may add
   details the stored row lacks, as the records format says, while changing one it states, or its

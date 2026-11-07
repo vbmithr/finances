@@ -263,7 +263,8 @@
           "hash": "Transaction Hash"
         }
       }
-    ]
+    ],
+    "chain_id": 137
   },
   "rules": []
 }
