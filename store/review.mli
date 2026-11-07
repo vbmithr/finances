@@ -183,6 +183,8 @@ type operation_filter =
   ; from_date : Date.t option
   ; to_date : Date.t option
   ; search : string option
+  ; include_ignored : bool
+    (** Also operations whose movements are all ignored, such as spam tokens. *)
   }
 
 val no_operation_filter : operation_filter

@@ -634,7 +634,9 @@ position observations, derive positions from fills, or calculate funding.
   provider-reported symbols to verified assets. Done 2026-11-07: a commodity is fiat, an asset
   by symbol whichever network holds it, or a provider's reported symbol; `fin asset map` maps a
   reported symbol once, for all its movements (schema 40); `ethereum` and `polygon` read explorer
-  exports, every token reported by its contract. Next: operation
+  exports, every token reported by its contract. `fin asset adopt` maps contracts from a token
+  list, `fin asset ignore-unmapped` ignores the rest, and `fin op list` hides operations whose
+  movements are all ignored (`--ignored` shows them). Next: operation
   movements take their account from the record's account, as bank movements do, so a wallet's
   rows need no `fin operation resolve`; then the deBridge orders (ETH on Ethereum, USDC on Polygon)
   as exchanges across two accounts, and the fdm top-ups once fdm exports its deposits (asked

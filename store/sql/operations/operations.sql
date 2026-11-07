@@ -14,6 +14,14 @@ WHERE v.canonical = v.id
   AND (?1 ->> '$.to_date' IS NULL OR substr(v.occurred, 1, 10) <= ?1 ->> '$.to_date')
   AND (?1 ->> '$.search' IS NULL
     OR instr(lower(v.description), lower(?1 ->> '$.search')) > 0)
+  -- A group whose movements are all ignored, such as a spam token's, is not listed. The
+  -- groups are found once, not per row.
+  AND (?1 ->> '$.include_ignored' IS NOT NULL
+    OR v.id NOT IN (SELECT coalesce(g.canonical, r.operation_id)
+                    FROM resolved_movements r
+                    LEFT JOIN grouped_operations g ON g.member = r.operation_id
+                    GROUP BY 1
+                    HAVING min(r.ignored) = 1))
   -- The remaining filters hold when any movement of the group passes.
   AND (?1 ->> '$.institution' IS NULL OR v.institution = ?1 ->> '$.institution'
     OR v.id IN (SELECT canonical FROM group_reviews

@@ -177,6 +177,23 @@ let occurrence (t : Temporal.t) =
 (* A one-movement operation keeps the amount and currency columns a bank row
    always had. A multi-movement operation has no single amount or currency, so
    both read "-" and MOVEMENTS carries the pair, for example "-2 CRO 0.2 EUR". *)
+(* A movement's commodity in a listing. A token contract fin has no asset for is shown short,
+   as explorers do, and said to be unmapped or ignored: fin asset list has it in full. *)
+let movement_commodity (m : Review.operation_movement_review) =
+  match m.commodity with
+  | Reported { symbol; _ } ->
+    let short =
+      if
+        String.length symbol = 42
+        && String.is_prefix symbol ~prefix:"0x"
+        && String.for_all (String.drop_prefix symbol 2) ~f:Char.is_hex_digit
+      then String.prefix symbol 6 ^ "\u{2026}" ^ String.suffix symbol 4
+      else symbol
+    in
+    text short ^ if m.ignored then " (ignored)" else " (unmapped)"
+  | Fiat _ | Asset _ -> text (Commodity.display m.commodity)
+;;
+
 let operation_amounts (row : Report_json.operation_row) =
   match row.operation.movements with
   | [] ->
@@ -185,10 +202,7 @@ let operation_amounts (row : Report_json.operation_row) =
      | Some amount, None -> text amount ^ " (reported)"
      | _ -> "-")
   | [ (m : Review.operation_movement_review) ] ->
-    Printf.sprintf
-      "%s %s"
-      (Quantity.to_string m.quantity)
-      (text (Commodity.display m.commodity))
+    Printf.sprintf "%s %s" (Quantity.to_string m.quantity) (movement_commodity m)
   | movements ->
     (* The way the money goes: what leaves, then what arrives. *)
     let outgoing, incoming =
@@ -202,7 +216,7 @@ let operation_amounts (row : Report_json.operation_row) =
            "%s%s %s"
            (if Quantity.(m.quantity > zero) then "+" else "")
            (Quantity.to_string m.quantity)
-           (text (Commodity.display m.commodity))))
+           (movement_commodity m)))
 ;;
 
 (* Who the operation involves, the way the money goes. A transfer belongs to both sides. *)

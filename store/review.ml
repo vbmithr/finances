@@ -881,6 +881,8 @@ type operation_filter =
   ; from_date : Date.t option
   ; to_date : Date.t option
   ; search : string option
+  ; include_ignored : bool
+    (** Also operations whose movements are all ignored, such as spam tokens. *)
   }
 
 let no_operation_filter =
@@ -892,6 +894,7 @@ let no_operation_filter =
   ; from_date = None
   ; to_date = None
   ; search = None
+  ; include_ignored = false
   }
 ;;
 
@@ -933,6 +936,7 @@ let operation_filter_values (filter : operation_filter) =
     ; Option.map filter.from_date ~f:(date "from_date")
     ; Option.map filter.to_date ~f:(date "to_date")
     ; Option.map filter.search ~f:(text "search")
+    ; Option.some_if filter.include_ignored ("include_ignored", "true")
     ]
 ;;
 

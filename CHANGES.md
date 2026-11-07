@@ -8,6 +8,11 @@ short line of their own.
 
 ## Unreleased
 
+- An ignored symbol's operations, such as a spam token's, no longer appear in `fin operation list`;
+  `--ignored` lists them. `fin asset ignore-unmapped [PROVIDER]` ignores every symbol still unmapped
+  after one confirmation, leaving assumed ones alone.
+- `fin operation list` shows a token contract with no asset short, as `0xf0dd…e088`, and says whether
+  it is unmapped or ignored; a mapped one shows its asset, such as USDC.
 - An exchange's ticker counts as the asset of that name until you map it, so XLM, BTC or CRO from cdc
   and Kraken need no decision; `fin asset list` shows them as assumed. Kraken's fee credits, `FEE`,
   are the asset `KFEE`, named in its definition under `own_symbols`. Token contracts are never assumed.

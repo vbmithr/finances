@@ -77,6 +77,7 @@ let list_transactions
       order_by
       order
       json_output
+      include_ignored
   =
   let%bind sort_columns = parse_transaction_sort order_by in
   let%bind from_date = parse_list_date "--from" from_date in
@@ -121,6 +122,7 @@ let list_transactions
           ; from_date
           ; to_date
           ; search
+          ; include_ignored
           }
         ~order:sort_columns
         ~ascending:order
@@ -280,5 +282,13 @@ let transaction_list_cmd =
               [ true, info [ "asc" ] ~doc:"Sort in ascending order."
               ; false, info [ "desc" ] ~doc:"Sort in descending order (default)."
               ])
-      $ json_output)
+      $ json_output
+      $ Arg.(
+          value
+          & flag
+          & info
+              [ "ignored" ]
+              ~doc:
+                "Also list operations whose movements are all ignored, such as spam \
+                 tokens; fin asset ignore ignores them."))
 ;;

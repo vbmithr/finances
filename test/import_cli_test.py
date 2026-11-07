@@ -414,7 +414,7 @@ class ImportOnboarding(unittest.TestCase):
                         '2026-01-02 10:01:00,Deposit,EUR,10,,,EUR,10,11,crypto_deposit,\n')
         self.run_fin('import', 'cdc', path)
         decision = lambda: next(a for a in json.loads(self.run_fin('asset', 'list', '--json').stdout) if a['symbol'] == 'EUR')
-        movement = lambda: json.loads(self.run_fin('operation', 'list', '--json').stdout)[0]['movements'][0]
+        movement = lambda: json.loads(self.run_fin('operation', 'list', '--ignored', '--json').stdout)[0]['movements'][0]
         self.assertEqual((decision()['decision'], decision()['commodity']), ('assumed', {'kind': 'fiat', 'code': 'EUR'}))
         self.assertEqual(movement()['commodity'], {'kind': 'fiat', 'code': 'EUR'})
         self.assertIn('EUR (fiat, assumed)', self.run_fin('asset', 'list').stdout)
@@ -462,6 +462,20 @@ class ImportOnboarding(unittest.TestCase):
         again = self.run_fin('asset', 'adopt', listed).stdout
         self.assertIn('1 already mapped alike', again)
         self.assertIn('Nothing to map.', again)
+        # Listings say what each amount is in: the asset, or a short unmapped or ignored contract.
+        table = self.run_fin('operation', 'list').stdout
+        self.assertIn('5 USDC', table)
+        self.assertIn('5 0x9999\u20269999 (unmapped)', table)
+        # An ignored token's operations are listed only on request.
+        self.assertNotIn('0x4444', table)
+        self.assertIn('5 0x4444\u20264444 (ignored)', self.run_fin('operation', 'list', '--ignored').stdout)
+        # What is still unmapped is ignored in one go, and nothing else.
+        self.assertNotEqual(self.run_fin('asset', 'ignore-unmapped', check=False).returncode, 0)
+        self.assertIn('Ignored 2.', self.run_fin('asset', 'ignore-unmapped', 'polygon', '--yes').stdout)
+        decisions = {a['symbol']: a['decision'] for a in json.loads(self.run_fin('asset', 'list', '--json').stdout)}
+        self.assertEqual((decisions[usdc], decisions[bridged], decisions[dai], decisions[spam]),
+                         ('mapped', 'ignored', 'ignored', 'ignored'))
+        self.assertIn('No unmapped symbols.', self.run_fin('asset', 'ignore-unmapped').stdout)
 
     def test_tickers_and_an_institutions_own_symbols(self):
         ledger = self.root / 'ledger.csv'

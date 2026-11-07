@@ -237,6 +237,48 @@ let asset_adopt database path yes =
         printf "Recorded %d, from %s.\n" (List.count changed ~f:Fn.id) source)))
 ;;
 
+(* Every symbol still unmapped, such as spam tokens once the real ones are mapped. *)
+let asset_ignore_unmapped database provider yes =
+  with_database database (fun db ->
+    let%bind assets = Assets.list db in
+    let unmapped =
+      List.filter assets ~f:(fun (a : Assets.t) ->
+        Poly.equal a.decision Unmapped
+        && Option.for_all provider ~f:(String.equal a.provider))
+    in
+    if List.is_empty unmapped
+    then (
+      print_endline "No unmapped symbols.";
+      Ok ())
+    else (
+      Terminal.table
+        [ "Provider"; "Symbol"; "Name"; "Movements" ]
+        (List.map unmapped ~f:(fun (a : Assets.t) ->
+           [ a.provider
+           ; a.symbol
+           ; Option.value a.name ~default:"-"
+           ; Int.to_string a.movements
+           ]));
+      let%bind confirmed =
+        confirm
+          ~yes
+          ~destructive:false
+          (Printf.sprintf
+             "Ignore these %d symbols? Their movements stay and never count; fin asset \
+              unmap undoes it."
+             (List.length unmapped))
+      in
+      if not confirmed
+      then (
+        print_endline "Nothing changed.";
+        Ok ())
+      else (
+        let%map changed =
+          List.map unmapped ~f:(fun a -> Assets.decide db a Ignored) |> Or_error.all
+        in
+        printf "Ignored %d.\n" (List.count changed ~f:Fn.id))))
+;;
+
 let cmd =
   group
     "asset"
@@ -302,6 +344,28 @@ let cmd =
           $ database
           $ provider_arg
           $ symbol_arg
+          $ yes)
+    ; command
+        "ignore-unmapped"
+        "Ignore every symbol still unmapped, such as spam tokens, after one confirmation."
+        ~man:
+          [ `S Manpage.s_description
+          ; `P
+              "Once the tokens you hold are mapped, by hand or with fin asset adopt, \
+               what is left unmapped is usually spam. Symbols assumed to be a currency, \
+               an exchange's ticker or an institution's own unit are not unmapped and \
+               are left alone."
+          ]
+        Term.(
+          const asset_ignore_unmapped
+          $ database
+          $ Arg.(
+              value
+              & pos 0 (some string) None
+              & info
+                  []
+                  ~docv:"PROVIDER"
+                  ~doc:"Only this provider's symbols, such as polygon.")
           $ yes)
     ; command
         "unmap"

@@ -299,7 +299,13 @@ fin asset map cdc BTC BTC             # an exchange's ticker
 fin asset map polygon 0x3c49 USDC     # a token contract, by its first characters
 fin asset ignore polygon 0x5273       # spam: kept as evidence, never counted
 fin asset adopt CowSwap.json          # map the contracts a token list names
+fin asset ignore-unmapped polygon     # then ignore what is left, usually spam
 ```
+
+An ignored symbol's operations leave `fin operation list`; `--ignored` lists them again.
+`fin asset ignore-unmapped [PROVIDER]` previews every symbol still unmapped and ignores
+them after one confirmation; assumed symbols, such as an exchange's tickers, are not
+unmapped and are left alone. `fin asset unmap` undoes either.
 
 A token list, as CoW Swap, Uniswap or Coingecko publish them (tokenlists.org), says which
 contract on which chain is which token. `fin asset adopt LIST.json` matches your
