@@ -236,7 +236,7 @@ let set_institution_definition database name path yes =
           | None -> Ok false
           | Some text ->
             let%map old = Json.decode Institution_definition.codec text in
-            Poly.equal old.source definition.source
+            Institution_definition.same_sources old definition
         in
         let%bind _ =
           with_database database (fun db ->

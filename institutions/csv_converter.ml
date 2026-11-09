@@ -628,7 +628,7 @@ let typed_codec =
   |> dec_only "format" (Json.tag "fin-csv-converter")
   |> dec_only "version" (Json.version 1)
   |> dec_only "institution" Jsont.string
-  |> dec_only "institution_type" Institution_type.jsont
+  |> dec_only "institution_type" Institution_type.kind_jsont
   |> Jsont.Object.mem "separator" separator_codec ~dec_absent:','
   |> Jsont.Object.mem "decimal" decimal_codec ~dec_absent:Dot
   |> opt "header" (Jsont.list Jsont.string)

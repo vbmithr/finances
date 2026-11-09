@@ -261,7 +261,7 @@ header nearly fits a layout.
 
 | Member | Meaning |
 |---|---|
-| `institution_type` | `bank` or `crypto-exchange` |
+| `institution_type` | `bank`, `crypto-exchange` or `wallet`; network details belong to the institution definition |
 | `header`, `headers` | The exact header, or `headers` listing each one the source has used, such as old and new exports; a file with another one is not this layout. Every column the layout uses must be in all of them |
 | `values` | `[{"column": "asset", "map": {"ZEUR": "EUR"}}]`: codes translated wherever the column is read, so that two eras' codes are one account. `fields` keeps what the file states |
 | `separator`, `decimal` | Default `,` and `dot`; spaces that group digits are ignored. Under `comma`, a dot in a number is refused |

@@ -287,13 +287,12 @@ dune exec fin -- import boursobank /path/to/statements
 ```
 
 Import statements with `fin import BANK PATH...`, replacing the old
-`fin bank sync` command. A generic CSV can also be passed directly as
-`fin import FILE.csv`. `BANK` names a built-in institution (`boursobank`,
+`fin bank sync` command. `BANK` names a built-in institution (`boursobank`,
 `bunq`, `revolut` or `wise`) or one added with `fin institution add NAME`.
 Runtime institution definitions can also describe supported CSV, OFX/CSV and
 CAMT/CSV profiles; see `fin institution definition --help` and the manual.
-User-added institutions support generic OFX 2.x, configurable account or card
-CSVs, and CSV companions for OFX; see the [manual](docs/manual.md#configure-a-csv-companion).
+User-added institutions support generic OFX 2.x, records-based CSV definitions,
+and CSV companions for OFX; see the [manual](docs/manual.md#configure-a-csv-companion).
 The institution's adapter recognizes each file's format; a file another bank recognizes is rejected
 with the institution to use instead. Keep this identifier consistent across
 imports. Each file's outcome lists inserted and existing movements; all accounts
@@ -437,8 +436,7 @@ The summary distinguishes imported documents, unchanged documents, rejected inpu
 unsupported formats, unreadable files, and ignored paths. The observed BoursoBank
 CSV layout, Wise 23-column CSV and Bunq seven-column CSV are companion observations.
 Revolut ten-column CSV supplies primary movements. Other account or card CSV
-layouts can be configured interactively with `fin import statement.csv` and
-provider and account options; see the [manual](docs/manual.md#configure-another-csv). Excel and QIF are unsupported. Companion CSV observations never create a second
+layouts use records converter definitions; see the [manual](docs/manual.md#configure-another-csv). Excel and QIF are unsupported. Companion CSV observations never create a second
 transaction stream; Revolut CSV is its own primary movement source.
 
 Successful files commit independently. Import generates a journal from successfully

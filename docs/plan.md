@@ -5,7 +5,7 @@ its status: tick off finished work, add discovered work, and refresh the "Where 
 are" figures when they move. History belongs in `CHANGES.md`; designs stay in the
 other documents, which this one links to rather than repeats.
 
-Last updated: 2026-11-04.
+Last updated: 2026-11-08.
 
 ## Direction
 
@@ -41,7 +41,7 @@ provider observations before treating them as authoritative.
 - Wise uses a matched, nonempty and consistent CSV `Merchant` as the effective
   transaction description, falling back to CAMT; source evidence remains intact.
 - Manual movement types can be set for a batch of transaction IDs atomically.
-- Generic CSV dates can include a validated clock; booking uses the calendar date.
+- Wallet institution types carry an EVM, other or unspecified network; institution definitions use one OCaml type and records converters; the old direct generic CSV adapter is removed. Existing `csv-movement` events retain their decoder.
 - Core commodities distinguish fiat, native network assets, contract tokens
   and provider-scoped symbols; `fin convert cdc` shows what a CSV states
   without a database. CDC CSV

@@ -55,10 +55,8 @@ let of_sources (sources : Records_adapter.source list) =
 ;;
 
 let converters () =
-  List.filter_map Builtin.definitions ~f:(fun definition ->
-    match definition.source with
-    | Records r -> Some (r.institution, of_sources (Institution_definition.sources r))
-    | Csv _ -> None)
+  List.map Builtin.definitions ~f:(fun definition ->
+    definition.institution, of_sources (Institution_definition.sources definition))
 ;;
 
 (* The same bound as fin import's default, on a file and on what an archive expands to. *)

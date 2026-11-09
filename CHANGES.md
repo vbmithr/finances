@@ -8,6 +8,24 @@ short line of their own.
 
 ## Unreleased
 
+- Wallet institution types now carry their network. Existing wallet `chain_id` fields
+  are read as EVM networks; an optional `network` names a non-EVM network. **Action
+  required:** remove network metadata from bank or exchange definitions, and do not
+  specify both `chain_id` and `network`; these combinations are now rejected.
+
+- Internal: flatten institution definitions into one OCaml type, preserving the JSON format and checks on changes to imported sources.
+
+- Removed the old generic CSV adapter and `kind: csv` institution definitions. CSV
+  layouts in institution definitions now go through records. **Action required:** replace
+  saved `kind: csv` definitions with records definitions using the previous executable
+  before upgrading; otherwise the new version cannot read the saved definition.
+  If the institution already has imported evidence, changing its definition requires
+  removing that evidence: back up first. Direct `fin import FILE.csv` and sample-based
+  CSV setup are no longer supported. Existing `csv-movement` events retain their
+  decoder; newly converted records use different identities and must not be imported
+  alongside the old events as the same transactions. Decisions on those old events
+  do not automatically restore onto the new records.
+
 - An ignored symbol's operations, such as a spam token's, no longer appear in `fin operation list`;
   `--ignored` lists them. `fin asset ignore-unmapped [PROVIDER]` ignores every symbol still unmapped
   after one confirmation, leaving assumed ones alone.

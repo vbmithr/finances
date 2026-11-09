@@ -31,7 +31,7 @@ type institution_origin =
   | Generic
 
 (* Every institution fin knows: bundled, installed from a definition, or added
-   as a generic CSV layout. A missing database only lacks the last two. *)
+   without one. A missing database only lacks the last two. *)
 let institution_entries database =
   let present = Stdlib.Sys.file_exists database in
   let%bind definitions = if present then institution_definitions database else Ok [] in
@@ -52,7 +52,7 @@ let institution_entries database =
       let name = Institution_definition.institution definition in
       Option.some_if
         (not (Registry.is_registered Builtin.registry name))
-        (name, Institution_definition.institution_type definition, Definition))
+        (name, Institution_definition.typ definition, Definition))
   in
   let%map generic =
     if not present
@@ -237,7 +237,7 @@ let institution_show database name =
       with
       | Some d ->
         print_institution_description
-          ~institution_type:(Institution_definition.institution_type d)
+          ~institution_type:(Institution_definition.typ d)
           (Institution_definition.describe d);
         print_institution_rules d;
         Ok ()
@@ -245,7 +245,7 @@ let institution_show database name =
         (match Builtin.definition name with
          | Some d ->
            print_institution_description
-             ~institution_type:(Institution_definition.institution_type d)
+             ~institution_type:(Institution_definition.typ d)
              (Institution_definition.describe d);
            print_institution_rules d;
            Ok ()
@@ -282,7 +282,7 @@ let institution_show_cmd =
       $ Arg.(value & pos 0 (some string) None & info [] ~docv:"INSTITUTION"))
 ;;
 
-let institution_add database name sample =
+let institution_add database name =
   let%bind name =
     match name with
     | Some name -> Ok name
@@ -302,48 +302,17 @@ let institution_add database name sample =
     let%bind existing = with_database database Setup.institutions in
     if List.mem existing name ~equal:String.equal
     then Or_error.errorf "institution already exists: %s" name
-    else (
-      let sample =
-        match sample with
-        | Some _ -> sample
-        | None when Unix.isatty Unix.stdin ->
-          Option.bind
-            (prompt "Sample CSV file (Enter to configure later): ")
-            ~f:(fun value ->
-              Option.some_if
-                (not (String.is_empty (String.strip value)))
-                (String.strip value))
-        | None -> None
-      in
-      let%bind profile =
-        match sample with
-        | None -> Ok None
-        | Some path ->
-          let%map profile =
-            Csv_setup.csv_import_profile
-              ~setup_only:true
-              database
-              path
-              64
-              ~institution:name
-          in
-          Some (Json.encode Csv_profile.codec profile)
-      in
+    else
       with_database database (fun db ->
-        let%bind () = Setup.add_institution ?profile db name in
-        printf
-          "Added %s.%s\n"
-          (Terminal.text name)
-          (if Option.is_some profile
-           then ""
-           else " Import an OFX file or a CSV file to configure its layout.");
-        Ok ())))
+        let%bind () = Setup.add_institution db name in
+        printf "Added %s. Attach a definition for CSV imports.\n" (Terminal.text name);
+        Ok ()))
 ;;
 
 let institution_add_cmd =
   command
     "add"
-    "Add an institution for generic CSV or OFX statements."
+    "Add an institution for OFX statements or an attached definition."
     Term.(
       const institution_add
       $ database
@@ -353,14 +322,7 @@ let institution_add_cmd =
           & info
               []
               ~docv:"NAME"
-              ~doc:"Institution name; prompted on a terminal if omitted.")
-      $ Arg.(
-          value
-          & pos 1 (some string) None
-          & info
-              []
-              ~docv:"SAMPLE.csv"
-              ~doc:"Sample CSV for layout setup; no transactions are imported."))
+              ~doc:"Institution name; prompted on a terminal if omitted."))
 ;;
 
 let institution_delete database name yes =

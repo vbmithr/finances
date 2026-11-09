@@ -6,76 +6,22 @@ open Cmdliner
 open Or_error.Let_syntax
 open Cli
 
-let import_bank database institution paths journal max_mib account_id provider =
+let import_bank database institution paths journal max_mib account_id =
   if max_mib < 1 || max_mib > 1024
   then Or_error.error_string "max-file-mib must be between 1 and 1024"
   else (
     let%bind () = require_database database in
     let%bind runtime_registry = registry_for database in
     let%bind definitions = institution_definitions database in
-    let%bind account_id =
-      Csv_setup.import_account_label runtime_registry institution account_id
-    in
     let journal =
       Option.value
         journal
         ~default:
           (Stdlib.Filename.concat (Stdlib.Filename.dirname database) "bank.journal")
     in
-    let selected_profile = ref None in
     let%bind companion_profiles = companion_profiles database in
     let%bind institution, registry =
-      if String.equal institution "csv"
-      then (
-        let%bind provider =
-          match provider with
-          | Some name -> Validation.token "CSV provider" name
-          | None when Unix.isatty Unix.stdin ->
-            let rec read_provider () =
-              match prompt "Provider name (required): " with
-              | None -> Or_error.error_string "CSV provider is required"
-              | Some name when String.is_empty (String.strip name) ->
-                eprintf "A provider name is required.\n";
-                read_provider ()
-              | Some name ->
-                (match Validation.token "CSV provider" (String.strip name) with
-                 | Ok name
-                   when not (Csv_setup.builtin_institution_name runtime_registry name) ->
-                   Ok name
-                 | Ok _ ->
-                   eprintf "Choose a provider name that is not a built-in institution.\n";
-                   read_provider ()
-                 | Error error ->
-                   eprintf "%s\n" (Error.to_string_hum error);
-                   read_provider ())
-            in
-            read_provider ()
-          | None -> Or_error.error_string "generic CSV imports require --provider NAME"
-        in
-        if Csv_setup.builtin_institution_name runtime_registry provider
-        then Or_error.error_string "CSV provider must not be a built-in institution name"
-        else (
-          let%bind () =
-            Csv_setup.ensure_generic_source database provider "csv-movement"
-          in
-          match paths with
-          | [ path ] ->
-            let%map profile =
-              Csv_setup.csv_import_profile database path max_mib ~institution:provider
-            in
-            selected_profile := Some (Json.encode Csv_profile.codec profile);
-            ( provider
-            , Builtin.registry_with_csv_profile
-                ~definitions
-                ~companions:companion_profiles
-                ~institution:provider
-                profile )
-          | _ ->
-            Or_error.error_string
-              "generic CSV import currently accepts one file at a time"))
-      else if Option.is_some provider
-      then Or_error.error_string "--provider applies only to generic CSV imports"
-      else if Registry.is_registered runtime_registry institution
+      if Registry.is_registered runtime_registry institution
       then Ok (institution, runtime_registry)
       else
         Ok
@@ -108,12 +54,8 @@ let import_bank database institution paths journal max_mib account_id provider =
         with_database database (fun db ->
           let%bind existing = Setup.institutions db in
           if List.mem existing institution ~equal:String.equal
-          then (
-            match !selected_profile with
-            | None -> Ok ()
-            | Some profile ->
-              Setup.set_institution_profile_if_missing db institution profile)
-          else Setup.add_institution ?profile:!selected_profile db institution)
+          then Ok ()
+          else Setup.add_institution db institution)
     in
     List.iter report.inputs.files ~f:(fun row ->
       printf
@@ -220,17 +162,13 @@ let statement_files ?(extensions = [ ".csv"; ".ofx"; ".zip" ]) paths =
 let generic_statement_files paths = statement_files paths
 
 (* One source, named as on the command line: an institution or alias with its paths, a
-   user-added institution, or a generic CSV file. *)
-let import_source database first paths journal max_mib account_id provider =
+   or a user-added institution. *)
+let import_source database first paths journal max_mib account_id =
   let%bind () = require_database database in
   let%bind runtime_registry = registry_for database in
   let institutions =
     List.filter (Registry.institutions runtime_registry) ~f:(fun institution ->
-      (not (String.equal institution "csv"))
-      && List.mem
-           (Registry.aliases runtime_registry institution)
-           first
-           ~equal:String.equal)
+      List.mem (Registry.aliases runtime_registry institution) first ~equal:String.equal)
   in
   let%bind user_institutions =
     if
@@ -243,47 +181,27 @@ let import_source database first paths journal max_mib account_id provider =
   | [ institution ] ->
     if List.is_empty paths
     then Or_error.error_string "provide at least one statement path"
-    else import_bank database institution paths journal max_mib account_id provider
+    else import_bank database institution paths journal max_mib account_id
   | _ :: _ :: _ -> Or_error.errorf "ambiguous institution alias: %s" first
   | [] when List.mem user_institutions first ~equal:String.equal ->
     if List.is_empty paths
     then Or_error.error_string "provide at least one statement file or directory"
-    else if Option.is_some provider
-    then Or_error.error_string "--provider is unnecessary when the institution is named"
     else (
       let%bind files = generic_statement_files paths in
       let%bind companion =
         with_database database (fun db -> Setup.institution_companion_profile db first)
       in
       if Option.is_some companion
-      then import_bank database first files journal max_mib account_id None
+      then import_bank database first files journal max_mib account_id
       else (
-        let csv, ofx =
-          List.partition_tf files ~f:(fun path ->
-            String.Caseless.equal (Stdlib.Filename.extension path) ".csv")
-        in
-        if (not (List.is_empty csv)) && not (List.is_empty ofx)
-        then
-          Or_error.error_string
-            "generic CSV and OFX are separate movement sources; import one format to \
-             avoid duplicate transactions"
-        else if not (List.is_empty ofx)
-        then (
-          let%bind () =
-            Csv_setup.ensure_generic_source database first "bank-transaction"
-          in
-          import_bank database first ofx journal max_mib account_id None)
-        else (
-          let%bind () = Csv_setup.ensure_generic_source database first "csv-movement" in
-          List.fold_result csv ~init:() ~f:(fun () path ->
-            printf "CSV file: %s\n" path;
-            Out_channel.flush stdout;
-            import_bank database "csv" [ path ] journal max_mib account_id (Some first)))))
+        let%bind () = Csv_setup.ensure_generic_source database first "bank-transaction" in
+        import_bank database first files journal max_mib account_id))
   | [] when Stdlib.Sys.file_exists first && Stdlib.Sys.is_directory first ->
     Or_error.error_string
       "name the bank before a directory, for example: fin import wise DIRECTORY"
   | [] when Stdlib.Sys.file_exists first ->
-    import_bank database "csv" (first :: paths) journal max_mib account_id provider
+    Or_error.error_string
+      "name an institution with a records converter before importing a CSV"
   | [] -> Or_error.errorf "unknown institution or file: %s" first
 ;;
 
@@ -308,8 +226,7 @@ let import_all database directory journal max_mib =
   let known name =
     List.mem user_institutions name ~equal:String.equal
     || List.exists (Registry.institutions runtime_registry) ~f:(fun institution ->
-      (not (String.equal institution "csv"))
-      && List.mem (Registry.aliases runtime_registry institution) name ~equal:String.equal)
+      List.mem (Registry.aliases runtime_registry institution) name ~equal:String.equal)
   in
   let unknown = List.filter folders ~f:(Fn.non known) in
   if List.is_empty folders
@@ -340,7 +257,6 @@ let import_all database directory journal max_mib =
             journal
             max_mib
             None
-            None
         in
         (match result with
          | Ok () -> ()
@@ -362,15 +278,13 @@ let cmd =
     ~man:
       [ `S Manpage.s_synopsis
       ; `P "$(b,fin import) [$(i,OPTION)]… $(i,INSTITUTION) $(i,PATH)…"
-      ; `P "$(b,fin import) [$(i,OPTION)]… $(i,CSV-FILE)"
       ; `P "$(b,fin import) --all [$(i,OPTION)]… $(i,DIRECTORY)"
       ; `S Manpage.s_description
       ; `P
           "Import an institution's files or directories by naming it, for example \
            $(b,fin import wise ~/statements/wise). Run $(b,fin institution list) to see \
-           institutions. User-added institutions support OFX 2.x or generic CSV; these \
-           are separate primary sources and cannot be mixed. To configure a generic CSV, \
-           pass its filename directly."
+           institutions. User-added institutions support OFX 2.x; attach a records \
+           definition to import their CSV files."
       ; `P
           "Movement CSV institutions (bundled: cdc) use the same command and the same \
            import pipeline as every other venue: $(b,fin import cdc FILE-OR-DIRECTORY) \
@@ -385,16 +299,15 @@ let cmd =
     "import"
     "Import a bank's statement files, apply mappings, and publish a bank journal."
     Term.(
-      const (fun database first paths journal max_mib account_id provider all ->
+      const (fun database first paths journal max_mib account_id all ->
         if all
         then
           if not (List.is_empty paths)
           then Or_error.error_string "--all takes one directory"
-          else if Option.is_some account_id || Option.is_some provider
-          then
-            Or_error.error_string "--account-id and --provider name one import, not --all"
+          else if Option.is_some account_id
+          then Or_error.error_string "--account-id names one import, not --all"
           else import_all database first journal max_mib
-        else import_source database first paths journal max_mib account_id provider)
+        else import_source database first paths journal max_mib account_id)
       $ database
       $ Arg.(
           required
@@ -403,13 +316,10 @@ let cmd =
               []
               ~docv:"SOURCE"
               ~doc:
-                ("Institution name or generic CSV filename. Built-in institutions: "
-                 ^ String.concat
-                     ~sep:", "
-                     (List.filter (Registry.institutions Builtin.registry) ~f:(fun name ->
-                        not (String.equal name "csv")))
+                ("Institution name. Built-in institutions: "
+                 ^ String.concat ~sep:", " (Registry.institutions Builtin.registry)
                  ^ ". Registered aliases are accepted (for example bourso and boursorama \
-                    for boursobank). Unknown CSV layouts are configured interactively."))
+                    for boursobank)."))
       $ Arg.(
           value
           & pos_right 0 string []
@@ -418,12 +328,9 @@ let cmd =
               ~docv:"PATH"
               ~doc:
                 "Statement files or directories for the named institution. Directories \
-                 are searched recursively; hidden files are skipped. Generic \
-                 institutions accept CSV or OFX files and OFX ZIPs, without mixing CSV \
-                 and OFX. ZIPs are read in memory; nested ZIPs and encrypted archives \
-                 are unsupported. Files are only read, never modified; repeated imports \
-                 add only new records. Revolut and Wise CSV clocks are assumed UTC; Wise \
-                 matching retains CAMT source-local clocks.")
+                 are searched recursively; hidden files are skipped. ZIPs are read in \
+                 memory; nested ZIPs and encrypted archives are unsupported. Files are \
+                 only read, never modified; repeated imports add only new records.")
       $ Arg.(
           value
           & opt (some string) None
@@ -441,17 +348,7 @@ let cmd =
       $ Arg.(
           value
           & opt (some string) None
-          & info
-              [ "account-id" ]
-              ~doc:
-                "Stable account label for account-free exports (Revolut and generic \
-                 CSV). Asked on a terminal if omitted; required in scripts.")
-      $ Arg.(
-          value
-          & opt (some string) None
-          & info
-              [ "provider" ]
-              ~doc:"Institution name for a generic CSV; prompted on a terminal.")
+          & info [ "account-id" ] ~doc:"Account label for an adapter that requires one.")
       $ Arg.(
           value
           & flag

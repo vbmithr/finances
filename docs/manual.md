@@ -190,8 +190,7 @@ fin decisions restore ~/fin-decisions.json
 
 `--all` imports each folder of `~/Statements` named after an institution or an alias (see
 [Importing statements](#importing-statements)); `fin import NAME FOLDER` imports one. Replace
-these paths with your own. Institutions you added with a generic CSV must be added
-and imported again, with their original institution and account labels.
+these paths with your own. User-added institutions and their records definitions must be added again.
 
 ### What a decisions file holds
 
@@ -355,16 +354,19 @@ further review tooling. `fin decisions export` saves movement resolutions and co
 Use `fin import INSTITUTION PATH...` to read exports. This replaces the former
 `fin bank sync` command; update existing scripts to use `fin import`.
 Run `fin institution list` to list built-in and user-added institutions with their
-type: `bank` or `crypto exchange` (brokers are not modelled yet). Every definition
-file, including the bundled ones, declares it with `"type": "bank"` or
-`"type": "crypto-exchange"`; it defaults to `bank` when omitted. `fin institution show`, without an
+type: `bank`, `crypto exchange` or `wallet` (brokers are not modelled yet). Every
+definition file, including the bundled ones, declares it with `"type": "bank"`,
+`"type": "crypto-exchange"` or `"type": "wallet"`; it defaults to `bank` when omitted.
+A wallet may name its EVM chain with `chain_id` in `records`, as Ethereum and Polygon
+do, or a non-EVM network with `network`, a nonempty string. A wallet may also leave
+its network unspecified. Banks and exchanges cannot specify either field, and a wallet
+cannot specify both. `fin institution show`, without an
 argument, gives an overview of every institution: type, origin, how many movements
 and operations are imported, how many operations are still unresolved, and the
 first and last observed dates.
 For BoursoBank, `bourso` and `boursorama` are accepted aliases for `boursobank`;
 all three import into the same institution.
-Add an institution with `fin institution add NAME`; optionally supply a sample
-CSV to configure its layout without importing it: `fin institution add NAME SAMPLE.csv`.
+Add an institution with `fin institution add NAME`. Attach a definition to import its CSV files.
 Remove an unused user-added institution and its saved layout with
 `fin institution delete NAME` (or `--yes` for scripts). Delete its accounts first
 if it has imported movements. Built-in institutions cannot be deleted.
@@ -379,24 +381,14 @@ fin import mybank ~/Statements/mybank/statement.ofx
 
 Generic OFX uses the same parser and source transaction IDs as the BoursoBank
 OFX importer. It does not automatically use BoursoBank rules or CSV enrichment.
-A generic primary CSV and OFX cannot be mixed for one institution: both create
-movements and could duplicate them. Instead, configure a CSV as an OFX companion
-as described below; companion rows enrich movements without creating new ones.
-
-Generic CSVs do not identify their account, so fin asks for an account label for each file unless
-`--account-id` is supplied. Only use the same label for files from the same account or card balance.
-Without a companion profile, generic directory imports process primary CSV files
-in name order or import OFX/ZIP files; mixing these sources is refused. With a
-companion profile, a directory can contain both OFX and companion CSV files.
-Earlier files remain imported if a later file fails. For a generic CSV, you can also use `fin import FILE.csv`;
-fin prompts for its provider and account details when needed.
+Configure a CSV companion as described below, or attach a records definition for
+a primary CSV. Earlier files remain imported if a later file fails.
 
 ### Attach an institution definition
 
-An institution definition is a versioned JSON file of one of two kinds. Kind `records`
-says how to turn an institution's files into [records](records-format.md): a statement
-format (`camt`, `mt940` or `ofx`), a CSV layout (`csv`), or both. Kind `csv` is what
-`fin institution add` writes for a single primary CSV. Validate a definition and preview
+An institution definition is a versioned JSON file that says how to turn an
+institution's files into [records](records-format.md): a statement format (`camt`,
+`mt940` or `ofx`), a CSV layout (`csv`), or both. Validate a definition and preview
 a sample before saving it:
 
 ```sh
@@ -414,42 +406,16 @@ before attaching it. The institution name in the file must match the selected
 institution. When adapting a bundled template for another institution, give
 its rules distinct names as well. `set` previews the rules to add and asks for
 confirmation; `--yes` accepts the preview in scripts. Existing rules with the
-same names are retained, including rules belonging to other institutions. For a primary CSV, `fin import` requires `--account-id`
-(or prompts for the label on a terminal). `check` accepts `--account-id` for its
-preview and defaults to `preview`; it prints up to five movements or companion
+same names are retained, including rules belonging to other institutions. `check`
+prints up to five movements or companion
 rows and does not open or change the database. Invalid samples report the first
 parse error. `show` accepts every built-in institution and installed
 definitions.
 
-For example, a primary CSV definition can be written as:
+A primary CSV uses a records CSV converter definition, as described in the
+[CSV definition reference](records-format.md#csv-definitions).
 
-```json
-{
-  "version": 1,
-  "kind": "csv",
-  "csv": {
-    "institution": "mycard",
-    "aliases": [],
-    "profile": {
-      "separator": ",",
-      "header": ["Date", "Merchant", "Amount"],
-      "date": "Date",
-      "date_format": "iso",
-      "amount_format": "dot",
-      "description": "Merchant",
-      "amount": "Amount",
-      "currency": "EUR",
-      "account_type": "prepaid-card",
-      "invert_amount": true,
-      "skip_column": null,
-      "skip_value": null
-    }
-  }
-}
-```
-
-This profile tracks one fixed currency; positive amounts in this example are
-purchases and are inverted to negative movements. Definitions can include default source-interpretation rules; these become normal
+Definitions can include default source-interpretation rules; these become normal
 editable rules in `fin rule list`. For example, add this top-level field to a
 definition:
 
@@ -648,58 +614,46 @@ additional detail, or use `fin import --help` for current options.
 
 ### Configure another CSV
 
-For a CSV that describes an account or card, initialize fin and run:
+Create a records definition for the institution, containing a CSV converter layout.
+For example, for a EUR account named `main` and a file with columns `Date`,
+`Description` and `Amount`, write `mybank.json`:
 
-```sh
-fin import statement.csv --provider my-provider --account-id main
+```json
+{
+  "version": 1,
+  "kind": "records",
+  "type": "bank",
+  "records": {
+    "institution": "mybank",
+    "csv": {
+      "format": "fin-csv-converter",
+      "version": 1,
+      "institution": "mybank",
+      "institution_type": "bank",
+      "header": ["Date", "Description", "Amount"],
+      "account": {"id": "main", "type": "current", "currency": {"code": "EUR"}},
+      "occurred": {"column": "Date", "layout": "iso-date"},
+      "cases": [{"movements": [{"role": "primary", "quantity": {"column": "Amount"},
+                                "commodity": {"code": "EUR"}}]}],
+      "descriptions": ["Description"]
+    }
+  }
+}
 ```
 
-The first import must run in a terminal. Fin detects a comma or semicolon
-separator from the header when unambiguous, and asks if it cannot decide. It
-then proposes date, description and account amount columns when it recognizes
-them. Accept the proposal or choose columns yourself. For questions with
-numbered choices, enter the number; empty and invalid choices are retried. It
-also asks for an account type (current, savings, prepaid card or credit card)
-and whether outgoing amounts are positive. ISO dates and dot-decimal amounts
-are recognized directly; for other supported dates and comma-decimal amounts,
-fin shows examples and asks which format to use. The account currency is fixed
-for the file. If there is a summary row, specify its label;
-fin skips it only when its date is empty. Review the preview and confirm to import.
-The preview shows each CSV amount beside the signed account movement; other
-CSV fields, such as local currency and exchange rate, retain their source signs.
-Generic CSV directory imports review each file separately. Raw fields are retained
-with the source evidence, including original currency amounts and exchange rates.
-The mapped account amount, not the local amount, is posted to the ledger.
+This assumes signed amounts and one account. Adapt the layout to the actual
+statement; see the [CSV definition reference](records-format.md#csv-definitions).
+Then check and attach it before importing:
 
-The provider name identifies the institution; fin prompts for a nonempty name
-when omitted on a terminal and retries invalid answers. The layout is saved with the accepted document in the database
-and reused for later files with the same header and provider. Supply the same `--account-id` for the same
-account, and different labels for separate account or card balances. A known layout can be
-imported without a terminal. Reimports are safe: repeated identical rows are
-preserved as distinct occurrences, and a changed or partial overlapping day is
-rejected for review. Layouts with the same header but different settings are
-ambiguous and require separate handling. Fin does not infer transfers between
-cards or from card top-ups.
+```sh
+fin institution add mybank
+fin institution definition check mybank.json statement.csv
+fin institution definition set mybank mybank.json
+fin import mybank statement.csv
+```
 
-For generic imports recorded under the former `csv` institution, delete the
-old account and import its files under the provider name. See account deletion
-below; reviews and account settings associated with the deleted account are lost.
-
-Current and savings accounts default to `assets:bank:PROVIDER:TYPE:ACCOUNT`.
-Fin can record an optional IBAN for them. A generic CSV profile still covers
-one account and one fixed currency. Supported dates are ISO `YYYY-MM-DD`,
-`YYYY-MM-DD HH:MM:SS` (the calendar date is used for booking; the original
-timestamp is retained in source fields),
-day-first `DD/MM/YYYY` or `DD-MM-YYYY`, and month-first `MM/DD/YYYY` or
-`MM-DD-YYYY`. Amounts use a dot decimal mark without grouping, or a comma
-with optional space grouping. Separate debit/credit columns, multiple currencies
-and other date or number formats are not yet supported.
-
-Prepaid card balances are assets. Select `prepaid-card` for a separately funded
-card and `credit-card` for a card paid later. New generic prepaid cards default
-to `assets:cards:PROVIDER:ACCOUNT` and credit cards to
-`liabilities:cards:PROVIDER:ACCOUNT`. Account settings can map either to another
-asset or liability account.
+The old interactive generic CSV importer and `kind: csv` institution definitions
+are no longer supported.
 
 ### Print a statement as records
 

@@ -56,7 +56,6 @@ let construction () =
     [ "boursobank"
     ; "bunq"
     ; "cdc"
-    ; "csv"
     ; "ethereum"
     ; "example"
     ; "fdm"
@@ -160,8 +159,8 @@ let unregistered_import () =
              (String.is_substring
                 (Option.value_exn report.message)
                 ~substring:
-                  "known institutions: boursobank, bunq, cdc, csv, ethereum, fdm, \
-                   kraken, polygon, revolut, wise");
+                  "known institutions: boursobank, bunq, cdc, ethereum, fdm, kraken, \
+                   polygon, revolut, wise");
            Alcotest.(check int) "no events" 0 (List.length (ok (Ledger.events db)));
            Ok ())))
 ;;
@@ -213,6 +212,62 @@ let bundled_definitions () =
     derived
 ;;
 
+let wallet_networks () =
+  let parse text = Json.decode Institution_definition.codec text in
+  let definition typ extra =
+    Printf.sprintf
+      {|{"version":1,"kind":"records","type":"%s","records":{"institution":"example","ofx":true%s}}|}
+      typ
+      extra
+  in
+  let evm = ok (parse (definition "wallet" {|,"chain_id":137|})) in
+  Alcotest.(check bool)
+    "wallet carries EVM chain"
+    true
+    (Institution_type.equal evm.typ (Wallet (Evm { chain_id = 137 })));
+  Alcotest.(check (option int))
+    "chain lookup"
+    (Some 137)
+    (Institution_definition.chain_id evm);
+  let other_chain = ok (parse (definition "wallet" {|,"chain_id":1|})) in
+  Alcotest.(check bool)
+    "changing network changes source"
+    false
+    (Institution_definition.same_sources evm other_chain);
+  let bank = ok (parse (definition "bank" "")) in
+  let exchange = ok (parse (definition "crypto-exchange" "")) in
+  Alcotest.(check bool)
+    "changing category alone leaves source unchanged"
+    true
+    (Institution_definition.same_sources bank exchange);
+  let encoded = Json.encode Institution_definition.codec evm in
+  let roundtrip = ok (parse encoded) in
+  Alcotest.(check bool)
+    "EVM roundtrip"
+    true
+    (Institution_type.equal roundtrip.typ evm.typ);
+  let other = ok (parse (definition "wallet" {|,"network":"bitcoin"|})) in
+  Alcotest.(check bool)
+    "other network roundtrip"
+    true
+    (Institution_type.equal
+       (ok (parse (Json.encode Institution_definition.codec other))).typ
+       (Wallet (Other "bitcoin")));
+  let unknown = ok (parse (definition "wallet" "")) in
+  Alcotest.(check bool)
+    "unspecified wallet"
+    true
+    (Institution_type.equal unknown.typ (Wallet Unspecified));
+  rejected "bank cannot name a chain" (parse (definition "bank" {|,"chain_id":1|}));
+  rejected
+    "exchange cannot name a network"
+    (parse (definition "crypto-exchange" {|,"network":"bitcoin"|}));
+  rejected
+    "network choices cannot be combined"
+    (parse (definition "wallet" {|,"chain_id":1,"network":"bitcoin"|}));
+  rejected "empty network name" (parse (definition "wallet" {|,"network":""|}))
+;;
+
 let () =
   Alcotest.run
     "registry"
@@ -222,6 +277,7 @@ let () =
         ; Alcotest.test_case "aliases" `Quick aliases
         ; Alcotest.test_case "unregistered institution import" `Quick unregistered_import
         ; Alcotest.test_case "bundled definitions" `Quick bundled_definitions
+        ; Alcotest.test_case "wallet networks" `Quick wallet_networks
         ] )
     ]
 ;;

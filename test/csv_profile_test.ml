@@ -1,5 +1,4 @@
 open Base
-open Finances_store
 open Finances_institutions
 
 let profile : Csv_profile.t =
@@ -165,40 +164,6 @@ let bank_account () =
      |> Or_error.ok_exn)
 ;;
 
-let integration () =
-  let registry = Builtin.registry_with_csv_profile profile in
-  let csv =
-    "Merchant,Date,USD\nShop,2026-10-01,12.50\nShop,2026-10-01,12.50\nTotal,,25.00\n"
-  in
-  Or_error.ok_exn
-    (Setup.with_open ~registry ":memory:" (fun db ->
-       let import account content =
-         Import.import_bank_file
-           ~account_label:account
-           db
-           ~institution:"csv"
-           ~path:"test.csv"
-           ~contents:content
-         |> Or_error.ok_exn
-       in
-       let first = import "card-a" csv in
-       Alcotest.(check int) "two occurrences imported" 2 first.inserted;
-       let again = import "card-a" csv in
-       Alcotest.(check int) "reimport inserts none" 0 again.inserted;
-       let changed =
-         import "card-a" "Merchant,Date,USD\nShop,2026-10-01,12.50\nTotal,,12.50\n"
-       in
-       Alcotest.(check bool)
-         "partial day rejected"
-         true
-         (Poly.equal changed.outcome Rejected);
-       let other =
-         import "card-b" "Merchant,Date,USD\nShop,2026-10-01,12.50\nTotal,,12.50\n"
-       in
-       Alcotest.(check int) "second card distinct" 1 other.inserted;
-       Ok ()))
-;;
-
 let provider_identity () =
   let rows =
     Csv_profile.parse profile "Merchant,Date,USD\nShop,2026-10-01,12.50\n"
@@ -273,7 +238,6 @@ let () =
         ; Alcotest.test_case "bank account" `Quick bank_account
         ; Alcotest.test_case "localized formats" `Quick localized_formats
         ; Alcotest.test_case "date and time" `Quick datetime_format
-        ; Alcotest.test_case "import and overlap" `Quick integration
         ; Alcotest.test_case "profile roundtrip" `Quick profile_roundtrip
         ; Alcotest.test_case "provider identity" `Quick provider_identity
         ; Alcotest.test_case "account names" `Quick account_names

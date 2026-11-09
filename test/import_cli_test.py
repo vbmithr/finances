@@ -188,45 +188,7 @@ class ImportOnboarding(unittest.TestCase):
                 child.wait()
             os.close(master)
 
-    def test_generic_provider_prompt_retries_invalid_values(self):
-        path = self.root / 'provider.csv'
-        path.write_text('Merchant,Date,USD\nShop,2026-10-01,11.00\n')
-        output = self.terminal(['import', str(path), '--account-id', 'card'], [
-            ('Provider name (required):', ''),
-            ('Provider name (required):', 'bad name'),
-            ('Provider name (required):', 'provider'),
-            ('Use these columns?', '1'),
-            ('Account type:', '9'),
-            ('Choose one of the numbered options.', ''),
-            ('Choose one of the numbered options.', '1'),
-            ('Are purchases positive amounts in the file?', '1'),
-            ('Skip a summary row with an empty date?', '2'),
-            ('Import these transactions?', '1'),
-        ])
-        self.assertEqual(output.count('Provider name (required):'), 3)
-        self.assertIn('A provider name is required.', output)
-        self.assertEqual(output.count('Choose one of the numbered options.'), 2)
-        self.assertNotIn('examplecard', output.lower())
-        self.assertIn('inserted=1', output)
-        self.assertEqual(self.accounts()[0]['institution'], 'provider')
 
-    def test_generic_bank_csv_localized_formats(self):
-        csv_path = self.root / 'localized.csv'
-        csv_path.write_text('Date;Description;EUR\n03/04/2026;Rent;-123,45\n14/04/2026;Salary;950,50\n')
-        output = self.terminal(['import', str(csv_path), '--account-id', 'main', '--provider', 'localbank'], [
-            ('Use these columns?', '1'),
-            ('Date format:', '2'),
-            ('Amount decimal mark:', '2'),
-            ('Account type:', '3'),
-            ('Are outgoing amounts positive in the file?', '2'),
-            ('Skip a summary row with an empty date?', '2'),
-            ('Import these transactions?', '1'),
-        ])
-        self.assertIn('account movement: -123.45 EUR', output)
-        rows = json.loads(self.run_fin('operation', 'list', '--json').stdout)
-        rent = next(row for row in rows if row['description'] == 'Rent')
-        self.assertEqual((rent['booked_on'], rent['amount']), ('2026-04-03', '-123.45'))
-        self.assertIn('inserted=0', self.run_fin('import', csv_path, '--account-id', 'main', '--provider', 'localbank').stdout)
 
     def test_cdc_inspection_is_read_only_and_conservative(self):
         path = self.root / 'cdc.csv'
@@ -517,141 +479,11 @@ class ImportOnboarding(unittest.TestCase):
         self.assertIn('transfer_changes=1', self.run_fin('transfer', 'unlink', first, '--yes').stdout)
         self.assertNotIn('assets:wallet:one', self.run_fin('journal', 'export').stdout)
 
-    def test_generic_csv_timestamp_setup(self):
-        path = self.root / 'timestamp.csv'
-        path.write_text('Timestamp (UTC),Transaction Description,Currency,Amount,To Currency,To Amount,Native Currency,Native Amount,Native Amount (in USD),Transaction Kind,Transaction Hash\n'
-                        '2025-06-09 17:56:16,Crv*Le Genre Urbain,EUR,-4.3,,,EUR,-4.3,-4.938386557,,\n')
-        output = self.terminal(['import', path, '--provider', 'mycdc', '--account-id', 'main'], [
-            ('Column containing the transaction date:', '1'),
-            ('Column containing the merchant or description:', '2'),
-            ('Column containing the amount charged to the account:', '4'),
-            ('Account currency (e.g. USD):', 'EUR'),
-            ('Account type:', '3'),
-            ('Are outgoing amounts positive in the file?', '2'),
-            ('Skip a summary row with an empty date?', '2'),
-            ('Import these transactions?', '1'),
-        ])
-        self.assertIn('Detected date and time', output)
-        row = json.loads(self.run_fin('operation', 'list', '--json').stdout)[0]
-        self.assertEqual((row['booked_on'], row['amount'], row['description']),
-                         ('2025-06-09', '-4.3', 'Crv*Le Genre Urbain'))
-        self.assertIn('inserted=0', self.run_fin('import', path, '--provider', 'mycdc', '--account-id', 'main').stdout)
 
-    def test_generic_bank_csv_setup_and_reimport(self):
-        csv_path = self.root / 'checking.csv'
-        csv_path.write_text('Date,Description,EUR\n2026-10-01,Rent,-120.00\n2026-10-02,Salary,950.00\n')
-        output = self.terminal(['import', str(csv_path), '--account-id', 'main', '--provider', 'mybank'], [
-            ('Use these columns?', '1'),
-            ('Account type:', '3'),
-            ('Are outgoing amounts positive in the file?', '2'),
-            ('Skip a summary row with an empty date?', '2'),
-            ('Import these transactions?', '1'),
-        ])
-        self.assertIn('3. Current account', output)
-        self.assertIn('account movement: -120 EUR', output)
-        self.assertIn('inserted=2', output)
-        rows = json.loads(self.run_fin('operation', 'list', '--json').stdout)
-        self.assertEqual({(r['description'], r['amount']) for r in rows}, {('Rent', '-120'), ('Salary', '950')})
-        account = self.accounts()[0]
-        self.assertEqual(account['ledger_account'], 'assets:bank:mybank:current:main')
-        self.assertEqual(account['account_type'], 'current')
-        self.assertIn('inserted=0', self.run_fin('import', csv_path, '--account-id', 'main', '--provider', 'mybank').stdout)
-        self.assertEqual(len(json.loads(self.run_fin('operation', 'list', '--json').stdout)), 2)
 
-    def test_generic_csv_setup_and_reimport(self):
-        csv_path = self.root / 'card.csv'
-        csv_path.write_text('Merchant,Category,Date,Local currency,Local amount,Exchange rate,USD\n'
-                            'Shop,Food,2026-10-01,EUR,10.00,1.1,11.00\n'
-                            'Total,,,,,,11.00\n')
-        output = self.terminal(['import', str(csv_path), '--account-id', 'card-a', '--provider', 'card-provider'], [
-            ('Use these columns?', '1'),
-            ('Account type:', '1'),
-            ('Are purchases positive amounts in the file?', '1'),
-            ('Skip this summary row?', '1'),
-            ('Import these transactions?', '1'),
-        ])
-        self.assertIn('Detected separator: comma.', output)
-        self.assertIn('Suggested mapping:', output)
-        self.assertIn('1. Prepaid card', output)
-        self.assertIn('2. Credit card', output)
-        self.assertIn('CSV amount: 11.00 USD; account movement: -11 USD', output)
-        self.assertIn('CSV details: Category: Food; Local currency: EUR', output)
-        self.assertIn('inserted=1', output)
-        result = self.run_fin('import', csv_path, '--account-id', 'card-a', '--provider', 'card-provider')
-        self.assertIn('inserted=0', result.stdout)
-        status = json.loads(self.run_fin('status', '--json').stdout)
-        self.assertEqual(status['movements'], 1)
-        accounts = self.accounts()
-        self.assertEqual([a['institution'] for a in accounts], ['card-provider'])
-        self.assertEqual(accounts[0]['ledger_account'], 'assets:cards:card-provider:card-a')
 
-    def test_generic_csv_numbered_separator_selection(self):
-        path = self.root / 'ambiguous.csv'
-        path.write_text('Merchant;Date;USD,Other\nShop;2026-10-01;11.00\n')
-        output = self.terminal(['import', str(path), '--account-id', 'card', '--provider', 'provider'], [
-            ('Separator:', '2'),
-            ('Column containing the transaction date', '2'),
-            ('Column containing the merchant or description:', '1'),
-            ('Column containing the amount charged to the account:', '3'),
-            ('Account currency (e.g. USD):', 'USD'),
-            ('Account type:', '1'),
-            ('Are purchases positive amounts in the file?', '1'),
-            ('Skip a summary row with an empty date?', '2'),
-            ('Import these transactions?', '1'),
-        ])
-        self.assertIn('1. Comma', output)
-        self.assertIn('2. Semicolon', output)
-        self.assertIn('inserted=1', output)
 
-    def test_generic_csv_can_change_suggested_columns(self):
-        path = self.root / 'manual-card.csv'
-        path.write_text('Merchant,Date,USD,Other\nShop,2026-10-01,11.00,9.00\n')
-        output = self.terminal(['import', str(path), '--account-id', 'manual', '--provider', 'manual-provider'], [
-            ('Use these columns?', '2'),
-            ('Column containing the transaction date', '2'),
-            ('Column containing the merchant or description:', '1'),
-            ('Column containing the amount charged to the account:', '4'),
-            ('Account currency (e.g. USD):', 'USD'),
-            ('Account type:', '1'),
-            ('Are purchases positive amounts in the file?', '1'),
-            ('Skip a summary row with an empty date?', '2'),
-            ('Import these transactions?', '1'),
-        ])
-        self.assertIn('-9 USD', output)
-        self.assertIn('inserted=1', output)
 
-    def test_delete_one_account_and_reimport(self):
-        a = self.root / 'delete-a.csv'
-        b = self.root / 'delete-b.csv'
-        a.write_text('Merchant,Date,USD\nDelete-only merchant,2026-10-01,11.00\n')
-        b.write_text('Merchant,Date,USD\nKeep-this merchant,2026-10-01,12.00\n')
-        self.terminal(['import', str(a), '--account-id', 'a', '--provider', 'provider'], [
-            ('Use these columns?', '1'),
-            ('Account type:', '1'),
-            ('Are purchases positive amounts in the file?', '1'),
-            ('Skip a summary row with an empty date?', '2'),
-            ('Import these transactions?', '1'),
-        ])
-        self.run_fin('import', b, '--account-id', 'b', '--provider', 'provider')
-        listed = json.loads(self.run_fin('account', 'list', '--json').stdout)
-        account_id = next(x['id'] for x in listed if x['account_id'] == 'a')
-        self.assertIn('ID: ' + account_id, self.run_fin('account', 'list').stdout)
-        self.assertNotEqual(self.run_fin('account', 'delete', 'unknown', '--yes', check=False).returncode, 0)
-        preview = self.run_fin('account', 'delete', account_id, '--dry-run')
-        self.assertIn('Transactions: 1', preview.stdout)
-        self.assertEqual(json.loads(self.run_fin('status', '--json').stdout)['movements'], 2)
-        self.assertNotEqual(self.run_fin('account', 'delete', account_id, check=False).returncode, 0)
-        result = self.run_fin('account', 'delete', account_id, '--yes')
-        self.assertIn('Account and its records deleted.', result.stdout)
-        self.assertEqual(json.loads(self.run_fin('status', '--json').stdout)['movements'], 1)
-        self.assertEqual([x['account_id'] for x in self.accounts()], ['b'])
-        journal = (self.root / 'data/fin/bank.journal').read_text()
-        self.assertNotIn('Delete-only merchant', journal)
-        self.assertIn('Keep-this merchant', journal)
-        self.run_fin('import', a, '--account-id', 'a', '--provider', 'provider')
-        self.assertEqual(json.loads(self.run_fin('status', '--json').stdout)['movements'], 2)
-        listed_after = json.loads(self.run_fin('account', 'list', '--json').stdout)
-        self.assertEqual(next(x['id'] for x in listed_after if x['account_id'] == 'a'), account_id)
 
     def test_account_delete_refuses_shared_document(self):
         ofx = self.root / 'shared.ofx'
@@ -1492,10 +1324,10 @@ class ImportOnboarding(unittest.TestCase):
         self.assertEqual(len(json.loads(self.run_fin('operation', 'list', '--json').stdout)), len(rows))
         mixed = self.run_fin('import', 'provider', 'fixtures/bank.ofx', self.csv, check=False)
         self.assertNotEqual(mixed.returncode, 0)
-        self.assertIn('separate movement sources', mixed.stderr)
+        self.assertIn('unsupported', mixed.stdout)
         sequential = self.run_fin('import', 'provider', self.csv, check=False)
         self.assertNotEqual(sequential.returncode, 0)
-        self.assertIn('another generic format', sequential.stderr)
+        self.assertIn('unsupported', sequential.stdout)
 
     def test_generic_ofx_csv_companion_profile(self):
         self.run_fin('institution', 'add', 'provider')
@@ -1545,14 +1377,6 @@ class ImportOnboarding(unittest.TestCase):
         self.assertIn('matched=4', self.run_fin('statement', 'match', '--institution', 'provider').stdout)
         self.assertEqual(len(json.loads(self.run_fin('statement', 'companions', '--institution', 'provider').stdout)), 4)
         self.assertEqual(len(json.loads(self.run_fin('operation', 'list', '--json').stdout)), 3)
-        primary = self.root / 'primary.csv'
-        primary.write_text('Date,Description,EUR\n2026-02-01,Shop,5.00\n')
-        self.terminal(['import', str(primary), '--account-id', 'card', '--provider', 'other'], [
-            ('Use these columns?', '1'), ('Account type:', '1'),
-            ('Are purchases positive amounts in the file?', '1'),
-            ('Skip a summary row with an empty date?', '2'), ('Import these transactions?', '1')])
-        self.assertEqual(len(json.loads(self.run_fin('operation', 'list', '--json').stdout)), 4)
-        self.assertIn('matched=4', self.run_fin('statement', 'match', '--institution', 'provider').stdout)
 
     def test_companion_currency_prevents_wrong_match(self):
         self.run_fin('institution', 'add', 'provider')
@@ -1599,30 +1423,6 @@ class ImportOnboarding(unittest.TestCase):
         self.assertNotEqual(self.run_fin('institution', 'add', 'provider', check=False).returncode, 0)
         self.assertNotEqual(self.run_fin('institution', 'add', 'bourso', check=False).returncode, 0)
 
-    def test_institution_setup_and_directory_import(self):
-        directory = self.root / 'cards'
-        directory.mkdir()
-        first = directory / 'a.csv'
-        second = directory / 'b.csv'
-        first.write_text('Merchant,Date,USD\nFirst,2026-10-01,11.00\n')
-        second.write_text('Merchant,Date,USD\nSecond,2026-10-02,12.00\n')
-        self.terminal(['institution', 'add', 'provider', str(first)], [
-            ('Use these columns?', '1'), ('Account type:', '1'),
-            ('Are purchases positive amounts in the file?', '1'),
-            ('Skip a summary row with an empty date?', '2'), ('Use this CSV layout?', '1'),
-        ])
-        self.assertEqual(json.loads(self.run_fin('status', '--json').stdout)['movements'], 0)
-        self.terminal(['import', 'provider', str(directory)], [
-            ('Label for this account', 'first-card'), ('Import these transactions?', '1'),
-            ('Label for this account', 'second-card'), ('Import these transactions?', '1'),
-        ])
-        accounts = self.accounts()
-        self.assertEqual({a['account_id'] for a in accounts}, {'first-card', 'second-card'})
-        self.assertTrue(all(a['institution'] == 'provider' for a in accounts))
-        self.assertEqual(json.loads(self.run_fin('status', '--json').stdout)['movements'], 2)
-        self.assertNotEqual(self.run_fin('institution', 'delete', 'provider', '--yes', check=False).returncode, 0)
-        self.run_fin('import', 'provider', first, '--account-id', 'first-card')
-        self.assertEqual(json.loads(self.run_fin('status', '--json').stdout)['movements'], 2)
 
     def test_delete_unused_institution_preserves_builtins(self):
         self.run_fin('institution', 'add', 'provider')
@@ -1641,24 +1441,11 @@ class ImportOnboarding(unittest.TestCase):
         self.assertNotIn('provider (bank, generic)', result)
         self.assertIn('wise (bank, built-in)', result)
 
-    def test_institution_first_import_saves_profile(self):
-        self.run_fin('institution', 'add', 'provider')
-        csv = self.root / 'first.csv'
-        csv.write_text('Merchant,Date,USD\nFirst,2026-10-01,11.00\n')
-        self.terminal(['import', 'provider', str(csv), '--account-id', 'card'], [
-            ('Use these columns?', '1'), ('Account type:', '1'),
-            ('Are purchases positive amounts in the file?', '1'),
-            ('Skip a summary row with an empty date?', '2'), ('Import these transactions?', '1'),
-        ])
-        with sqlite3.connect(self.root / 'data/fin/fin.sqlite3') as conn:
-            profile = conn.execute('SELECT profile FROM institutions WHERE name=?', ('provider',)).fetchone()[0]
-        self.assertIsNotNone(profile)
-        self.run_fin('import', 'provider', csv, '--account-id', 'card')
 
     def test_import_help_shows_distinct_forms(self):
         help_text = self.run_fin('import', '--help=plain').stdout
         self.assertIn('fin import [OPTION]… INSTITUTION PATH…', help_text)
-        self.assertIn('fin import [OPTION]… CSV-FILE', help_text)
+        self.assertNotIn('fin import [OPTION]… CSV-FILE', help_text)
         self.assertNotIn('fin import [OPTION]… csv CSV-FILE', help_text)
         self.assertNotIn('BANK-OR-CSV', help_text)
         rejected = self.run_fin('import', 'csv', self.csv, check=False)
@@ -3230,62 +3017,39 @@ class ImportOnboarding(unittest.TestCase):
                 self.assertIn('transactions', preview)
                 self.assertIn('no data was imported', preview)
 
-    def test_primary_csv_institution_definition(self):
-        definition = self.root / 'csv-definition.json'
-        definition.write_text(json.dumps({'version': 1, 'kind': 'csv', 'csv': {
-            'institution': 'examplecard', 'aliases': ['example'], 'profile': {
-                'separator': ',', 'header': ['Date', 'Merchant', 'Amount'],
-                'date': 'Date', 'description': 'Merchant', 'amount': 'Amount',
-                'currency': 'EUR', 'account_type': 'prepaid-card',
-                'invert_amount': True, 'skip_column': None, 'skip_value': None}}}))
-        sample = self.root / 'example.csv'
-        sample.write_text('Date,Merchant,Amount\n2025-01-01,Shop,12.50\n')
-        self.assertIn('1 transactions', self.run_fin('institution', 'definition', 'check', definition, sample).stdout)
-        self.run_fin('institution', 'add', 'examplecard')
-        self.run_fin('institution', 'definition', 'set', 'examplecard', definition, '--yes')
-        self.run_fin('import', 'example', sample, '--account-id', 'main')
-        self.run_fin('import', 'examplecard', sample, '--account-id', 'main')
-        rows = json.loads(self.run_fin('operation', 'list', '--institution', 'examplecard', '--json').stdout)
-        self.assertEqual(len(rows), 1)
-        self.assertEqual(rows[0]['amount'], '-12.5')
 
-    def test_definition_rules_are_previewed_and_preserve_edits(self):
-        self.run_fin('institution', 'add', 'examplecard')
-        self.run_fin('rule', 'add', 'existing-rule', '--institution', 'examplecard', '--description', '^Shop$', '--set-type', 'fee', '--automatic')
-        definition = self.root / 'rules-definition.json'
-        data = {'version': 1, 'kind': 'csv', 'csv': {
-            'institution': 'examplecard', 'aliases': [], 'profile': {
-                'separator': ',', 'header': ['Date', 'Merchant', 'Amount'],
-                'date': 'Date', 'description': 'Merchant', 'amount': 'Amount',
-                'currency': 'EUR', 'account_type': 'prepaid-card',
-                'invert_amount': True, 'skip_column': None, 'skip_value': None}},
-            'rules': [
-                {'name': 'existing-rule', 'pattern': '^Shop$', 'action': 'type', 'target': 'card'},
-                {'name': 'bonus-default', 'pattern': '^Gift$', 'action': 'type', 'target': 'bonus'}]}
-        definition.write_text(json.dumps(data))
-        transcript = self.terminal(['institution', 'definition', 'set', 'examplecard', str(definition)], [('Attach this definition?', 'n')])
-        self.assertIn('1 new rules, 1 existing rules retained', transcript)
-        self.assertIn('Nothing changed.', transcript)
-        before = json.loads(self.run_fin('rule', 'list', '--json').stdout)
-        self.assertFalse(any(r['name'] == 'bonus-default' for r in before))
-        self.run_fin('institution', 'definition', 'set', 'examplecard', definition, '--yes')
-        after = json.loads(self.run_fin('rule', 'list', '--json').stdout)
-        self.assertEqual(next(r['target'] for r in after if r['name'] == 'existing-rule'), 'fee')
-        self.assertEqual(next(r['target'] for r in after if r['name'] == 'bonus-default'), 'bonus')
-        sample = self.root / 'example.csv'
-        sample.write_text('Date,Merchant,Amount\n2025-01-01,Shop,12.50\n2025-01-02,Gift,5.00\n')
-        self.run_fin('import', 'examplecard', sample, '--account-id', 'main')
-        transactions = json.loads(self.run_fin('operation', 'list', '--institution', 'examplecard', '--json').stdout)
-        self.assertEqual({r['movement_type'] for r in transactions}, {'fee', 'bonus'})
-        data['rules'].append({'name': 'extra-default', 'pattern': '^Other$', 'action': 'type', 'target': 'card'})
-        definition.write_text(json.dumps(data))
-        self.run_fin('institution', 'definition', 'set', 'examplecard', definition, '--yes')
-        rules = json.loads(self.run_fin('rule', 'list', '--json').stdout)
-        self.assertTrue(any(r['name'] == 'extra-default' for r in rules))
-        self.assertEqual({r['movement_type'] for r in json.loads(self.run_fin('operation', 'list', '--institution', 'examplecard', '--json').stdout)}, {'fee', 'bonus'})
-        data['csv']['profile']['invert_amount'] = False
-        definition.write_text(json.dumps(data))
-        self.assertNotEqual(self.run_fin('institution', 'definition', 'set', 'examplecard', definition, '--yes', check=False).returncode, 0)
+
+    def test_records_csv_definition_import_and_legacy_rejection(self):
+        sample = self.root / 'custom.csv'
+        sample.write_text('Date,Description,Amount\n2025-01-01,Shop,-12.50\n')
+        layout = {'format': 'fin-csv-converter', 'version': 1, 'institution': 'mybank',
+                  'institution_type': 'bank', 'header': ['Date', 'Description', 'Amount'],
+                  'account': {'id': 'main', 'type': 'current', 'currency': {'code': 'EUR'}},
+                  'occurred': {'column': 'Date', 'layout': 'iso-date'},
+                  'cases': [{'movements': [{'role': 'primary', 'quantity': {'column': 'Amount'},
+                                             'commodity': {'code': 'EUR'}}]}],
+                  'descriptions': ['Description']}
+        definition = self.root / 'definition.json'
+        definition.write_text(json.dumps({'version': 1, 'kind': 'records', 'type': 'bank',
+                                          'records': {'institution': 'mybank', 'csv': layout}}))
+        self.assertNotEqual(self.run_fin('import', sample, check=False).returncode, 0)
+        self.assertIn('1 transactions', self.run_fin('institution', 'definition', 'check', definition, sample).stdout)
+        self.run_fin('institution', 'add', 'mybank')
+        self.run_fin('institution', 'definition', 'set', 'mybank', definition, '--yes')
+        self.assertIn('inserted=1', self.run_fin('import', 'mybank', sample).stdout)
+        self.assertIn('unchanged=1', self.run_fin('import', 'mybank', sample).stdout)
+        rows = json.loads(self.run_fin('operation', 'list', '--institution', 'mybank', '--json').stdout)
+        self.assertEqual([(r['description'], r['amount']) for r in rows], [('Shop', '-12.5')])
+        updated = json.loads(definition.read_text())
+        updated['rules'] = [{'name': 'shop', 'pattern': '^Shop$', 'action': 'type', 'target': 'card'}]
+        definition.write_text(json.dumps(updated))
+        self.run_fin('institution', 'definition', 'set', 'mybank', definition, '--yes')
+        self.assertTrue(any(r['name'] == 'shop' for r in json.loads(self.run_fin('rule', 'list', '--json').stdout)))
+        updated['records']['csv']['account']['id'] = 'other'
+        definition.write_text(json.dumps(updated))
+        self.assertNotEqual(self.run_fin('institution', 'definition', 'set', 'mybank', definition, '--yes', check=False).returncode, 0)
+        definition.write_text(json.dumps({'version': 1, 'kind': 'csv', 'csv': {}}))
+        self.assertNotEqual(self.run_fin('institution', 'definition', 'check', definition, check=False).returncode, 0)
 
     def test_runtime_institution_definition_and_sample_preview(self):
         profile = json.loads(self.run_fin('institution', 'definition', 'show', 'wise').stdout)
@@ -3374,25 +3138,6 @@ class ImportOnboarding(unittest.TestCase):
         test = self.run_fin('rule', 'test', 'by-balance', '--institution', 'revolut', '--field', 'Balance',
                             '--description', '^150', '--set-type', 'bonus').stdout
         self.assertIn('1 match.', test)
-        # A user-defined institution: a column the profile never named is a field too.
-        csv_path = self.root / 'extra.csv'
-        csv_path.write_text('Date,Description,EUR,Merchant ID\n2026-10-01,Rent,-120.00,M-100\n'
-                            '2026-10-02,Salary,950.00,M-200\n')
-        self.terminal(['import', str(csv_path), '--account-id', 'main', '--provider', 'mybank'], [
-            ('Use these columns?', '1'),
-            ('Account type:', '3'),
-            ('Are outgoing amounts positive in the file?', '2'),
-            ('Skip a summary row with an empty date?', '2'),
-            ('Import these transactions?', '1'),
-        ])
-        test = self.run_fin('rule', 'test', 'by-merchant', '--institution', 'mybank', '--field', 'Merchant ID',
-                            '--description', '^M-2', '--set-type', 'deposit').stdout
-        self.assertIn('1 match.', test)
-        self.assertIn('Salary', test)
-        self.assertIn('newly typed: 1', test)
-        own = next(r['event_id'] for r in json.loads(self.run_fin('operation', 'list', '--institution', 'mybank', '--json').stdout)
-                   if r['description'] == 'Rent')
-        self.assertRegex(self.run_fin('operation', 'show', own).stdout, r'Merchant ID\s+M-100')
 
     def test_type_rules_can_match_a_named_field_of_the_primary(self):
         # A CAMT statement alone: the bank's transaction code is the field reference.

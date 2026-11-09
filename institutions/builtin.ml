@@ -24,16 +24,9 @@ let definition name =
 ;;
 
 (** The type a bundled institution declares in its definition. *)
-let institution_type name =
-  Option.map (definition name) ~f:Institution_definition.institution_type
-;;
+let institution_type name = Option.map (definition name) ~f:Institution_definition.typ
 
-let records_of name =
-  Option.bind (definition name) ~f:(fun d ->
-    match d.source with
-    | Records r -> Some r
-    | Csv _ -> None)
-;;
+let records_of = definition
 
 (* Typed accessors for tests and tools that need one bundled profile. *)
 let camt_profile name =
@@ -53,7 +46,7 @@ let mt940_profile name =
 let csv_definition name = Option.bind (records_of name) ~f:(fun r -> List.hd r.csv)
 
 let adapters : (module Adapter.S) list =
-  List.map definitions ~f:Institution_definition.adapter @ [ (module Csv_adapter) ]
+  List.map definitions ~f:Institution_definition.adapter
 ;;
 
 let fallback = "csv-movement", Csv_movement.decode
@@ -95,41 +88,6 @@ let registry_with_companions ?(definitions = []) profiles =
     ~source_evidence
     ~fallback_institutions:(List.map profiles ~f:fst)
     (dynamic @ List.map definitions ~f:Institution_definition.adapter @ adapters)
-  |> Or_error.ok_exn
-;;
-
-let registry_with_csv_profile
-      ?(definitions = [])
-      ?(companions = [])
-      ?(institution = "csv")
-      profile
-  =
-  let adapters = without_definitions definitions adapters in
-  let companions =
-    List.filter companions ~f:(fun (name, _) ->
-      not
-        (List.exists definitions ~f:(fun d ->
-           String.equal name (Institution_definition.institution d))))
-  in
-  let dynamic =
-    List.filter_map companions ~f:(fun (name, layout) ->
-      Option.some_if
-        (not (String.equal name institution))
-        (Csv_ofx_adapter.make ~institution:name ~layout ()))
-  in
-  let adapters =
-    List.filter adapters ~f:(fun (module A : Adapter.S) ->
-      not (String.equal A.institution institution))
-  in
-  Registry.create
-    ~fallback
-    ~fallbacks
-    ~type_rules
-    ~source_evidence
-    ~fallback_institutions:(institution :: List.map companions ~f:fst)
-    ((Csv_adapter.make ~institution ~profile () :: dynamic)
-     @ List.map definitions ~f:Institution_definition.adapter
-     @ adapters)
   |> Or_error.ok_exn
 ;;
 

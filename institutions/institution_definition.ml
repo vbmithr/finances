@@ -1,31 +1,10 @@
 open Base
+open Institution_type
 
 type statement =
   | Camt of Camt_profile.t
   | Mt940 of Mt940_profile.t
   | Ofx
-
-(* An institution whose files reach fin as records: a statement format, a CSV layout, or both. *)
-type records =
-  { institution : string
-  ; aliases : string list
-  ; statement : statement option
-  ; csv : Csv_converter.t list (* Each export layout the institution has. *)
-  ; chain_id : int option
-    (* The EVM chain a block explorer reads, as token lists name it: 1 is Ethereum. *)
-  ; own_symbols : Adapter.own_symbol list (* Units the institution defines for itself. *)
-  ; stored_formats : string list
-  }
-
-type csv =
-  { institution : string
-  ; aliases : string list
-  ; profile : Csv_profile.t
-  }
-
-type source =
-  | Records of records
-  | Csv of csv
 
 type action =
   | Type
@@ -45,8 +24,13 @@ type rule =
   }
 
 type t =
-  { source : source
-  ; institution_type : Institution_type.t
+  { institution : string
+  ; aliases : string list
+  ; statement : statement option
+  ; csv : Csv_converter.t list (* Each export layout the institution has. *)
+  ; own_symbols : Adapter.own_symbol list (* Units the institution defines for itself. *)
+  ; stored_formats : string list
+  ; typ : Institution_type.t
   ; rules : rule list
   }
 
@@ -97,27 +81,6 @@ let rule_codec =
   |> Jsont.Object.finish
 ;;
 
-let csv_codec =
-  Jsont.Object.map (fun institution aliases profile ->
-    let institution = Validation.token "institution" institution |> Json.or_error in
-    let aliases =
-      List.map aliases ~f:(fun x ->
-        Validation.token "institution alias" x |> Json.or_error)
-    in
-    if List.is_empty profile.Csv_profile.header
-    then failwith "CSV header must not be empty";
-    List.iter
-      ([ profile.date_column; profile.description_column; profile.amount_column ]
-       @ Option.to_list (Option.map profile.skip_when ~f:fst))
-      ~f:(fun name -> ignore (Csv_profile.column profile.header name : int));
-    { institution; aliases; profile })
-  |> Jsont.Object.mem "institution" Jsont.string ~enc:(fun p -> p.institution)
-  |> Jsont.Object.mem "aliases" (Jsont.list Jsont.string) ~enc:(fun p -> p.aliases)
-  |> Jsont.Object.mem "profile" Csv_profile.codec ~enc:(fun p -> p.profile)
-  |> Jsont.Object.error_unknown
-  |> Jsont.Object.finish
-;;
-
 let own_symbol_codec =
   Jsont.Object.map (fun symbol asset name : Adapter.own_symbol ->
     (* The asset is the journal's name for it, so it must be one. *)
@@ -150,7 +113,18 @@ let layouts_codec =
 
 let records_codec =
   Jsont.Object.map
-    (fun institution aliases camt mt940 ofx csv chain_id own_symbols stored_formats ->
+    (fun
+        institution
+         aliases
+         camt
+         mt940
+         ofx
+         csv
+         chain_id
+         network
+         own_symbols
+         stored_formats
+       ->
        let statement =
          match camt, mt940, ofx with
          | Some profile, None, None -> Some (Camt profile)
@@ -162,69 +136,88 @@ let records_codec =
        let csv = Option.value csv ~default:[] in
        if Option.is_none statement && List.is_empty csv
        then failwith "a definition needs a statement format or a CSV layout";
-       ({ institution; aliases; statement; csv; chain_id; own_symbols; stored_formats }
-        : records))
-  |> Jsont.Object.mem "institution" Jsont.string ~enc:(fun (r : records) -> r.institution)
+       let typ =
+         match chain_id, network with
+         | Some id, None -> Institution_type.Wallet (Evm { chain_id = id })
+         | None, Some name when not (String.is_empty (String.strip name)) ->
+           Institution_type.Wallet (Other name)
+         | None, None -> Institution_type.Bank
+         | _ -> failwith "network needs one chain_id or a nonempty network name"
+       in
+       ({ institution
+        ; aliases
+        ; statement
+        ; csv
+        ; own_symbols
+        ; stored_formats
+        ; typ
+        ; rules = []
+        }
+        : t))
+  |> Jsont.Object.mem "institution" Jsont.string ~enc:(fun (r : t) -> r.institution)
   |> Jsont.Object.mem
        "aliases"
        (Jsont.list Jsont.string)
        ~dec_absent:[]
-       ~enc:(fun (r : records) -> r.aliases)
-  |> Jsont.Object.opt_mem "camt" Camt_profile.codec ~enc:(fun (r : records) ->
+       ~enc:(fun (r : t) -> r.aliases)
+  |> Jsont.Object.opt_mem "camt" Camt_profile.codec ~enc:(fun (r : t) ->
     match r.statement with
     | Some (Camt p) -> Some p
     | _ -> None)
-  |> Jsont.Object.opt_mem "mt940" Mt940_profile.codec ~enc:(fun (r : records) ->
+  |> Jsont.Object.opt_mem "mt940" Mt940_profile.codec ~enc:(fun (r : t) ->
     match r.statement with
     | Some (Mt940 p) -> Some p
     | _ -> None)
-  |> Jsont.Object.opt_mem "ofx" Jsont.bool ~enc:(fun (r : records) ->
+  |> Jsont.Object.opt_mem "ofx" Jsont.bool ~enc:(fun (r : t) ->
     match r.statement with
     | Some Ofx -> Some true
     | _ -> None)
-  |> Jsont.Object.opt_mem "csv" layouts_codec ~enc:(fun (r : records) ->
+  |> Jsont.Object.opt_mem "csv" layouts_codec ~enc:(fun (r : t) ->
     Option.some_if (not (List.is_empty r.csv)) r.csv)
-  |> Jsont.Object.opt_mem "chain_id" Jsont.int ~enc:(fun (r : records) -> r.chain_id)
+  |> Jsont.Object.opt_mem "chain_id" Jsont.int ~enc:(fun (r : t) ->
+    match r.typ with
+    | Wallet (Evm { chain_id }) -> Some chain_id
+    | _ -> None)
+  |> Jsont.Object.opt_mem "network" Jsont.string ~enc:(fun (r : t) ->
+    match r.typ with
+    | Wallet (Other name) -> Some name
+    | _ -> None)
   |> Jsont.Object.mem
        "own_symbols"
        (Jsont.list own_symbol_codec)
        ~dec_absent:[]
        ~enc_omit:List.is_empty
-       ~enc:(fun (r : records) -> r.own_symbols)
+       ~enc:(fun (r : t) -> r.own_symbols)
   |> Jsont.Object.mem
        "stored_formats"
        (Jsont.list Jsont.string)
        ~dec_absent:[]
        ~enc_omit:List.is_empty
-       ~enc:(fun (r : records) -> r.stored_formats)
+       ~enc:(fun (r : t) -> r.stored_formats)
   |> Jsont.Object.error_unknown
   |> Jsont.Object.finish
 ;;
 
 let codec =
-  Jsont.Object.map (fun () kind institution_type records csv rules ->
-    match kind, records, csv with
-    | "records", Some r, None -> { source = Records r; institution_type; rules }
-    | "csv", None, Some p -> { source = Csv p; institution_type; rules }
-    | _ -> failwith "definition kind and source do not agree")
+  Jsont.Object.map (fun () () typ source rules ->
+    let typ =
+      match typ, source.typ with
+      | Institution_type.Wallet _, Wallet network -> Wallet network
+      | Wallet _, Bank -> Wallet Unspecified
+      | (Bank | Crypto_exchange), Wallet _ ->
+        failwith "network metadata is only valid for a wallet"
+      | (Bank | Crypto_exchange), Bank -> typ
+      | _, Crypto_exchange -> assert false
+    in
+    { source with typ; rules })
   |> Jsont.Object.mem "version" (Json.version 1) ~enc:(fun _ -> ())
-  |> Jsont.Object.mem "kind" Jsont.string ~enc:(fun p ->
-    match p.source with
-    | Records _ -> "records"
-    | Csv _ -> "csv")
+  |> Jsont.Object.mem "kind" (Json.tag "records") ~enc:(fun _ -> ())
   |> Jsont.Object.mem
        "type"
-       Institution_type.jsont
+       Institution_type.kind_jsont
        ~dec_absent:Institution_type.Bank
-       ~enc:(fun p -> p.institution_type)
-  |> Jsont.Object.opt_mem "records" records_codec ~enc:(fun p ->
-    match p.source with
-    | Records r -> Some r
-    | Csv _ -> None)
-  |> Jsont.Object.opt_mem "csv" csv_codec ~enc:(fun p ->
-    match p.source with
-    | Csv p -> Some p
-    | Records _ -> None)
+       ~enc:(fun p -> p.typ)
+  |> Jsont.Object.mem "records" records_codec ~enc:Fn.id
   |> Jsont.Object.mem "rules" (Jsont.list rule_codec) ~dec_absent:[] ~enc:(fun p ->
     p.rules)
   |> Jsont.Object.error_unknown
@@ -232,19 +225,15 @@ let codec =
 ;;
 
 let chain_id t =
-  match t.source with
-  | Records r -> r.chain_id
-  | Csv _ -> None
+  match t.typ with
+  | Wallet (Evm { chain_id }) -> Some chain_id
+  | Bank | Crypto_exchange | Wallet (Other _ | Unspecified) -> None
 ;;
 
-let institution t =
-  match t.source with
-  | Records r -> r.institution
-  | Csv p -> p.institution
-;;
+let institution t = t.institution
 
 (* What can read this institution's files, statement format first. *)
-let sources (r : records) =
+let sources (r : t) =
   let statement =
     Option.map r.statement ~f:(function
       | Camt profile ->
@@ -278,7 +267,7 @@ let sources (r : records) =
   Option.to_list statement @ layouts
 ;;
 
-let overlap (r : records) : Adapter.overlap =
+let overlap (r : t) : Adapter.overlap =
   match r.statement, r.csv with
   | Some (Camt _ | Ofx), _ -> Source_ids
   | Some (Mt940 _), _ -> Day_inventory
@@ -287,35 +276,31 @@ let overlap (r : records) : Adapter.overlap =
 ;;
 
 let adapter t =
-  match t.source with
-  | Records r ->
-    Records_adapter.make
-      ~aliases:r.aliases
-      ~stored_formats:r.stored_formats
-      ~tickers:(Institution_type.equal t.institution_type Crypto_exchange)
-      ~own_symbols:r.own_symbols
-      ~institution:r.institution
-      ~overlap:(overlap r)
-      (sources r)
-  | Csv p ->
-    let module A =
-      (val Csv_adapter.make ~institution:p.institution ~profile:p.profile () : Adapter.S)
-    in
-    (module struct
-      include A
-
-      let aliases = p.aliases
-    end : Adapter.S)
+  let r = t in
+  Records_adapter.make
+    ~aliases:r.aliases
+    ~stored_formats:r.stored_formats
+    ~tickers:(Institution_type.equal t.typ Crypto_exchange)
+    ~own_symbols:r.own_symbols
+    ~institution:r.institution
+    ~overlap:(overlap r)
+    (sources r)
 ;;
 
-let aliases t =
-  match t.source with
-  | Records r -> r.aliases
-  | Csv p -> p.aliases
+let aliases t = t.aliases
+
+let same_sources a b =
+  let source_type = function
+    | Institution_type.Wallet ((Evm _ | Other _) as network) -> Wallet network
+    | Bank | Crypto_exchange | Wallet Unspecified -> Bank
+  in
+  Poly.equal
+    { a with typ = source_type a.typ; rules = [] }
+    { b with typ = source_type b.typ; rules = [] }
 ;;
 
 let names t = institution t :: aliases t
-let institution_type t = t.institution_type
+let typ t = t.typ
 
 (* Default rules, in the shapes the registry and the store consume. A bundled
    definition's [Type] rules are named [INSTITUTION-default-NN] with priority
@@ -383,41 +368,22 @@ let describe t =
     ; rule_inputs
     }
   in
-  match t.source with
-  | Records r ->
-    let statement =
-      match r.statement with
-      | Some (Camt _) -> [ "statement", "CAMT.053" ]
-      | Some (Mt940 _) -> [ "statement", "MT940" ]
-      | Some Ofx -> [ "statement", "OFX" ]
-      | None -> []
-    in
-    let roles = List.concat_map r.csv ~f:Csv_converter.roles in
-    base
-      "Records"
-      (statement
-       @ List.map roles ~f:(fun (role, columns) -> role, String.concat ~sep:", " columns)
-      )
-      (List.concat_map r.csv ~f:Csv_converter.header)
-      (List.concat_map roles ~f:snd)
-      [ "the description (type rules)"
-      ; "any field of the row, named as the source names it, with --field (type rules)"
-      ]
-  | Csv p ->
-    let profile = p.profile in
-    let fields =
-      [ "date", profile.date_column
-      ; "description", profile.description_column
-      ; "amount", profile.amount_column
-      ]
-      @ Option.to_list (Option.map profile.skip_when ~f:(fun (n, _) -> "skip rows by", n))
-    in
-    base
-      "Generic CSV (primary)"
-      fields
-      profile.header
-      (List.map fields ~f:snd)
-      [ Printf.sprintf "the description column %S (type rules)" profile.description_column
-      ; "any column of the file, named by its header, with --field (type rules)"
-      ]
+  let r = t in
+  let statement =
+    match r.statement with
+    | Some (Camt _) -> [ "statement", "CAMT.053" ]
+    | Some (Mt940 _) -> [ "statement", "MT940" ]
+    | Some Ofx -> [ "statement", "OFX" ]
+    | None -> []
+  in
+  let roles = List.concat_map r.csv ~f:Csv_converter.roles in
+  base
+    "Records"
+    (statement
+     @ List.map roles ~f:(fun (role, columns) -> role, String.concat ~sep:", " columns))
+    (List.concat_map r.csv ~f:Csv_converter.header)
+    (List.concat_map roles ~f:snd)
+    [ "the description (type rules)"
+    ; "any field of the row, named as the source names it, with --field (type rules)"
+    ]
 ;;
