@@ -388,8 +388,8 @@ a primary CSV. Earlier files remain imported if a later file fails.
 
 An institution definition is a versioned TOML file that describes an institution,
 its statement formats and its default rules. Each `[[statements]]` section names a
-format; a CSV section references a separate converter JSON file, relative to the
-TOML file. For example:
+format; a CSV section references a converter JSON file or an experimental Lua
+2.5 script, relative to the TOML file. For example:
 
 ```toml
 version = 1
@@ -418,17 +418,30 @@ fin institution list
 fin import mybank ~/Statements/mybank
 ```
 
+To use a Lua converter, replace the `definition` line with
+`script = "mybank.lua"`. The script declares its institution, CSV header,
+account and converter metadata, and returns records from each row; see the
+[Lua converter guide](lua-csv-converters.md) for the contract and the bundled
+CDC example. The Lua
+integration is experimental: it currently supports one fixed account, exact
+headers with distinct names and row-based conversion. An institution cannot mix JSON and Lua CSV
+converters yet. File-wide totals, multiple accounts, row skipping, and general
+decimal arithmetic and observation enrichment are not yet supported. Lua numbers
+are floating point; use the `decimal` and `sign` helpers for exact quantities.
+Only run scripts you trust: they can loop indefinitely.
+
 The institution name in the TOML and each CSV converter must match the selected
 institution. `set` previews the rules to add and asks for confirmation; `--yes`
 accepts the preview in scripts. Existing rules with the same names are retained,
-including rules belonging to other institutions. `check` prints up to five movements
+including rules belonging to other institutions. `check` prints up to five movements, an operation count,
 or companion rows and does not open or change the database. Invalid samples report
 the first parse error. `show` prints the resolved definition as JSON, including its
 CSV layouts, for any built-in or installed institution. The previous self-contained
 JSON definition format remains accepted by `check` and `set`.
 
-A CSV converter uses the format described in the
-[CSV definition reference](records-format.md#csv-definitions). Definitions can
+For a walkthrough of CSV converter definitions, see the
+[CSV converter guide](csv-converter.md); the [field reference](records-format.md#csv-definitions)
+lists the available settings. Definitions can
 include default source-interpretation rules; these become normal editable rules in
 `fin rule list`.
 
@@ -448,7 +461,7 @@ nonempty `Merchant` value when CSV rows agree, otherwise the CAMT description. O
 source descriptions and CSV fields remain available as evidence.
 
 Fin saves the validated definition in its database, so later edits or removal of
-the TOML or referenced JSON files do not change existing imports. To update it, run `definition set`
+the TOML or referenced JSON or Lua files do not change existing imports. To update it, run `definition set`
 again. Rule-only changes can be saved after import without changing existing
 transactions; existing rules with the same names are not overwritten. Changes to
 the source interpretation require removing the institution's imported evidence
@@ -707,11 +720,12 @@ fin convert wise ~/statements/wise -o wise.jsonl.zst
 `-o` writes a file and prints a summary, and a name ending in `.zst` compresses it with
 zstd. Fin reads plain and compressed files alike, and concatenated files too.
 
-A CSV-only institution needs no code. A definition file says which column means what, as
-described in [records-format.md](records-format.md#csv-definitions):
+A CSV definition can be a [JSON layout](records-format.md#csv-definitions) or an
+experimental Lua script:
 
 ```sh
 fin convert --definition mine.json statement.csv
+fin convert --definition mine.lua statement.csv
 ```
 
 A directory is walked recursively in name order, leaving out hidden and partial files and

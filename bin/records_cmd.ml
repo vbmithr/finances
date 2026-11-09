@@ -125,11 +125,27 @@ let convert_statements definition arguments output =
     match definition, arguments with
     | Some file, paths ->
       let%bind text = read_file file in
-      let%map definition =
-        Result.map_error (Csv_converter.of_string text) ~f:(fun error ->
-          Error.of_string (file ^ ": " ^ Error.to_string_hum error))
-      in
-      of_sources [ Records_adapter.of_definition "csv" definition ], paths
+      if String.is_suffix file ~suffix:".lua"
+      then (
+        let%map definition =
+          Lua_csv_converter.of_string text
+          |> Result.map_error ~f:(fun error ->
+            Error.of_string (file ^ ": " ^ Error.to_string_hum error))
+        in
+        let source =
+          Records_adapter.statement_source
+            "csv"
+            ~recognizes:(fun ~filename:_ contents ->
+              Lua_csv_converter.recognizes definition contents)
+            ~convert:(Lua_csv_converter.convert definition)
+        in
+        of_sources [ source ], paths)
+      else (
+        let%map definition =
+          Result.map_error (Csv_converter.of_string text) ~f:(fun error ->
+            Error.of_string (file ^ ": " ^ Error.to_string_hum error))
+        in
+        of_sources [ Records_adapter.of_definition "csv" definition ], paths)
     | None, institution :: paths ->
       let converters = converters () in
       (match
@@ -195,9 +211,8 @@ let convert_cmd =
            and skipped. A corrupt or encrypted member, a nested archive, a statement \
            that fails to parse, or finding no statement at all stops the command."
       ; `P
-          "A CSV-only institution needs no code. $(b,--definition) names a file that \
-           says which column means what, and fin's own CSV layouts are written the same \
-           way."
+          "$(b,--definition) names a CSV converter: a JSON layout or an experimental Lua \
+           2.5 script."
       ; `P
           "With $(b,--output), writes the file instead and prints a summary. A name \
            ending in $(b,.zst) compresses it with zstd. Everything that reads records \
@@ -212,8 +227,7 @@ let convert_cmd =
               [ "definition" ]
               ~docv:"FILE"
               ~doc:
-                "Use the CSV layout this file describes, instead of naming an \
-                 institution.")
+                "Use a CSV JSON layout or Lua script, instead of naming an institution.")
       $ Arg.(non_empty & pos_all string [] & info [] ~docv:"INSTITUTION PATH")
       $ Arg.(
           value

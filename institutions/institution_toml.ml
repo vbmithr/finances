@@ -120,17 +120,29 @@ let decode ~load text =
         then fail "unknown field: %s" key)
     in
     let csv = ref []
+    and lua_csv = ref []
     and statement = ref None in
     List.iter parsed.statements ~f:(fun { format; settings } ->
       match format with
       | "csv" ->
-        check_fields settings [ "definition" ];
-        let path = string (require settings "definition") in
-        let contents = load path |> Or_error.ok_exn in
-        let layout = Csv_converter.of_string contents |> Or_error.ok_exn in
-        if not (String.equal (Csv_converter.institution layout) parsed.institution)
-        then fail "CSV definition %s belongs to a different institution" path;
-        csv := !csv @ [ contents ]
+        check_fields settings [ "definition"; "script" ];
+        (match field settings "definition", field settings "script" with
+         | Some value, None ->
+           let path = string value in
+           let contents = load path |> Or_error.ok_exn in
+           let layout = Csv_converter.of_string contents |> Or_error.ok_exn in
+           if not (String.equal (Csv_converter.institution layout) parsed.institution)
+           then fail "CSV definition %s belongs to a different institution" path;
+           csv := !csv @ [ contents ]
+         | None, Some value ->
+           let path = string value in
+           let contents = load path |> Or_error.ok_exn in
+           ignore
+             (Lua_csv_converter.create ~institution:parsed.institution contents
+              |> Or_error.ok_exn
+              : Lua_csv_converter.t);
+           lua_csv := !lua_csv @ [ json_string contents ]
+         | _ -> failwith "a CSV statement needs exactly one definition or script")
       | "ofx" | "camt" | "mt940" ->
         if Option.is_some !statement
         then failwith "only one non-CSV statement format is supported";
@@ -167,10 +179,13 @@ let decode ~load text =
       @ Option.to_list
           (Option.map parsed.own_symbols ~f:(fun value -> "own_symbols", json value))
       @ Option.to_list !statement
+      @ (if List.is_empty !csv
+         then []
+         else [ "csv", "[" ^ String.concat ~sep:"," !csv ^ "]" ])
       @
-      if List.is_empty !csv
+      if List.is_empty !lua_csv
       then []
-      else [ "csv", "[" ^ String.concat ~sep:"," !csv ^ "]" ]
+      else [ "lua_csv", "[" ^ String.concat ~sep:"," !lua_csv ^ "]" ]
     in
     let obj fields =
       "{"

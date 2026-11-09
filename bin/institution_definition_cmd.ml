@@ -80,7 +80,16 @@ let check_institution_definition path sample account_id =
       document.events
       @ List.concat_map document.statements ~f:(fun s -> s.Document.events)
     in
-    let%bind movements = List.map events ~f:A.decode |> Or_error.combine_errors in
+    let operation_events, movement_events =
+      List.partition_tf events ~f:(fun event ->
+        List.mem A.operation_kinds event.Source_event.kind ~equal:String.equal)
+    in
+    let%bind _ =
+      List.map operation_events ~f:A.operation_rows |> Or_error.combine_errors
+    in
+    let%bind movements =
+      List.map movement_events ~f:A.decode |> Or_error.combine_errors
+    in
     let%bind rules = definition_rules definition in
     let rules =
       List.sort rules ~compare:(fun a b ->
@@ -116,6 +125,8 @@ let check_institution_definition path sample account_id =
       (List.length document.statements)
       (List.length movements)
       (List.length document.companion_rows);
+    if not (List.is_empty operation_events)
+    then printf "  %d operations.\n" (List.length operation_events);
     List.take movements 5
     |> List.iter ~f:(fun m ->
       printf

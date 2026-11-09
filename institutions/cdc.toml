@@ -5,4 +5,4 @@ type = "crypto-exchange"
 
 [[statements]]
 format = "csv"
-definition = "csv/cdc.json"
+script = "lua/cdc.lua"

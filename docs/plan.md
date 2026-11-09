@@ -175,6 +175,10 @@ start with bundled definitions that users can inspect and adjust. Definitions
 are saved configuration for the existing workflow, not institutions themselves
 or a competing setup path.
 
+A [CSV converter guide](csv-converter.md) explains how definitions map rows to
+records and points to bundled examples. Complex layouts still require following
+several concepts together; reassess their readability with real exports.
+
 Improve the generic readers and configuration using real institution exports.
 Keep fin's existing internal representation; do not introduce a public interchange
 format or external converter framework until a concrete case demonstrates the
@@ -205,9 +209,11 @@ configurable yet.
 - [ ] Extend sample diagnostics to identify all rejected rows where possible,
   and test a previously unsupported institution. Generalize multi-account and
   multi-currency CSV, identifiers, signs and companion matching as needed.
-- [ ] Reassess scripting when a concrete provider needs behavior that cannot
-  reasonably be expressed in a definition. A small native adapter remains an
-  option for genuinely unusual formats.
+- [ ] Extend the experimental Lua CSV host beyond CDC. Lua scripts are saved
+  with institution definitions and produce validated records. Compare with the
+  prior CDC layout; add file-wide behavior, multiple accounts, exact decimal
+  arithmetic, row-skipping diagnostics and execution limits before migrating
+  the remaining institutions.
 
 - [x] Allow a user-added institution to import supported OFX 2.x without an
   institution-specific adapter; preserve account identity and FITID deduplication.

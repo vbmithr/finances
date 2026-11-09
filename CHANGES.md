@@ -8,6 +8,16 @@ short line of their own.
 
 ## Unreleased
 
+- Experimental Lua 2.5 CSV converters: institution TOML may reference a script,
+  whose source is saved in the database. `fin convert --definition` also accepts
+  `.lua` files. CDC now uses a Lua converter; its records and identities match
+  the prior layout on tested inputs. Definition preview also handles operations.
+  Lua scripts must be trusted; only one fixed account and exact headers are
+  currently supported. Building now requires the `lua-ml` opam package.
+
+- Added a guide to reading and trying CSV converter definitions, with examples
+  of primary statements and observations.
+
 - Institution definitions can be written in TOML, with CSV converter JSON files
   referenced relative to the TOML file. Bundled definitions now use this split;
   installed definitions retain their resolved layouts in the database. Existing

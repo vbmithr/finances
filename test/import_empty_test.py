@@ -35,7 +35,7 @@ with tempfile.TemporaryDirectory() as directory:
         # A statement format's settings can name the CSV's header too.
         toml = tomllib.loads(definition.read_text())
         layouts = [json.loads((INSTITUTIONS / s["definition"]).read_text())
-                   for s in toml["statements"] if s["format"] == "csv"]
+                   for s in toml["statements"] if s["format"] == "csv" and "definition" in s]
         headers = {tuple(p["header"]): p for layout in layouts for p in profiles(layout)}
         for profile in headers.values():
             statement = root / f"{name}.csv"

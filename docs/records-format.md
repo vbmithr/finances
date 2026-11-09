@@ -233,11 +233,12 @@ the value date. Fin will need the descriptions or the source order for those.
 
 ## CSV definitions
 
-A definition describes one CSV layout. It holds no logic beyond conditions on a cell, so it
-stays readable; what it cannot say needs a converter of its own. The bundled ones are the
-`csv` member of [`institutions`](../institutions)' files. Fin refuses a definition with an
-unknown member or a column not in its header. `fin convert` says what differs when a file's
-header nearly fits a layout.
+A definition configures Fin's generic converter for one CSV layout. For a guided
+example and the conversion workflow, see [CSV converter definitions](csv-converter.md).
+Bundled definitions live in [`institutions/csv`](../institutions/csv) and are
+referenced by the institution TOML files. Fin refuses unknown members and columns
+not in the header. `fin convert` reports differences when a file's header nearly
+fits a layout.
 
 ```json
 {
@@ -301,15 +302,14 @@ to each other is left to a definition, because those columns are not in the reco
   but not listed is still counted as that currency
   until `fin asset map` says otherwise; it stays an operation. A definition never says which symbol is which asset: a token is
   reported by its contract, scoped to its network, and `fin asset map` says what it is.
-- A condition is `column` with `in`, `sign` (`positive`, `negative`), `filled`, or `address`.
 - `thousands` names a character that groups digits, such as Etherscan's `1,000.5`.
 - `address` lists the columns holding a wallet's address, such as `["From", "To"]`: in an
   explorer's export of one address it is the one value found on every row. `{@address}` in the
   account `id` is that address, and the condition `"address": true` holds when the column is it,
   which tells what the wallet sent from what it received. A file where no address, or more than
   one, is on every row is refused.
-- `csv` may be a list of layouts, for an institution exporting several files, such as an explorer's
-  transactions and token transfers. Beside it, a block explorer's definition gives `chain_id`, the
+- An institution may reference multiple CSV definitions, for example an explorer's
+  transactions and token transfers. Its TOML definition gives `chain_id`, the
   EVM chain it reads as token lists name chains (1 is Ethereum, 137 Polygon), so that
   `fin asset adopt` can match its contracts. `own_symbols` lists the units an institution
   defines for itself, which are not market tickers, as `symbol`, the `asset` it is and its

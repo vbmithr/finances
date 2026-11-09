@@ -3051,6 +3051,31 @@ class ImportOnboarding(unittest.TestCase):
         definition.write_text(json.dumps({'version': 1, 'kind': 'csv', 'csv': {}}))
         self.assertNotEqual(self.run_fin('institution', 'definition', 'check', definition, check=False).returncode, 0)
 
+    def test_toml_lua_converter_is_snapshotted_and_source_changes_are_blocked(self):
+        profile = json.loads(self.run_fin('institution', 'definition', 'show', 'cdc').stdout)
+        source = profile['records']['lua_csv'][0].replace('institution = "cdc"', 'institution = "samplelua"').replace('bank = "cdc"', 'bank = "samplelua"')
+        script = self.root / 'converter.lua'
+        script.write_text(source)
+        definition = self.root / 'samplelua.toml'
+        definition.write_text('version = 1\ninstitution = "samplelua"\ntype = "crypto-exchange"\n'
+                              '[[statements]]\nformat = "csv"\nscript = "converter.lua"\n')
+        statement = self.root / 'sample.csv'
+        statement.write_text('Timestamp (UTC),Transaction Description,Currency,Amount,To Currency,To Amount,Native Currency,Native Amount,Native Amount (in USD),Transaction Kind,Transaction Hash\n'
+                             '2025-06-09 17:56:16,Reward,CRO,1,,,EUR,0.10,0.12,crypto_deposit,\n')
+        self.run_fin('institution', 'definition', 'check', definition, statement)
+        self.run_fin('convert', '--definition', script, statement)
+        self.run_fin('institution', 'add', 'samplelua')
+        self.run_fin('institution', 'definition', 'set', 'samplelua', definition, '--yes')
+        script.unlink()
+        definition.unlink()
+        self.run_fin('import', 'samplelua', statement)
+        self.assertIn('unchanged=1', self.run_fin('import', 'samplelua', statement).stdout)
+        script.write_text(source + '\n-- changed source\n')
+        definition.write_text('version = 1\ninstitution = "samplelua"\ntype = "crypto-exchange"\n'
+                              '[[statements]]\nformat = "csv"\nscript = "converter.lua"\n')
+        result = self.run_fin('institution', 'definition', 'set', 'samplelua', definition, '--yes', check=False)
+        self.assertNotEqual(result.returncode, 0)
+
     def test_toml_definition_resolves_csv_and_saves_it(self):
         profile = json.loads(self.run_fin('institution', 'definition', 'show', 'revolut').stdout)
         layout = self.root / 'layout.json'

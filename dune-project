@@ -39,6 +39,8 @@
    (>= 0.2.0))
   bytesrw
   nox-toml
+  (lua-ml
+   (>= 0.9.5))
   conf-zstd
   uutf
   xmlm

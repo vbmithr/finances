@@ -594,3 +594,11 @@
   base
   stdio
   alcotest))
+
+(test
+ (name lua_csv_converter_test)
+ (modules lua_csv_converter_test)
+ (deps fixtures/cdc-converter.json fixtures/lua-example-bank.lua)
+ (flags
+  (:standard -open Finances_core -open Finances_institutions))
+ (libraries finances.core finances.institutions base stdio alcotest))
