@@ -11,20 +11,31 @@
 (rule
  (targets bundled_definitions.ml)
  (deps
-  boursobank.json
-  wise.json
-  revolut.json
-  bunq.json
-  cdc.json
-  kraken.json
-  fdm.json
-  ethereum.json
-  polygon.json
+  boursobank.toml
+  wise.toml
+  revolut.toml
+  bunq.toml
+  cdc.toml
+  kraken.toml
+  fdm.toml
+  ethereum.toml
+  polygon.toml
+  csv/boursobank.json
+  csv/bunq.json
+  csv/cdc.json
+  csv/ethereum-1.json
+  csv/ethereum-2.json
+  csv/fdm.json
+  csv/kraken.json
+  csv/polygon-1.json
+  csv/polygon-2.json
+  csv/revolut.json
+  csv/wise.json
   companion_example.json)
  (action
   (write-file
    %{targets}
-   "let boursobank = {fin|%{read:boursobank.json}|fin}\n\nlet wise = {fin|%{read:wise.json}|fin}\n\nlet revolut = {fin|%{read:revolut.json}|fin}\n\nlet bunq = {fin|%{read:bunq.json}|fin}\n\nlet cdc = {fin|%{read:cdc.json}|fin}\n\nlet fdm = {fin|%{read:fdm.json}|fin}\n\nlet ethereum = {fin|%{read:ethereum.json}|fin}\n\nlet polygon = {fin|%{read:polygon.json}|fin}\n\nlet kraken = {fin|%{read:kraken.json}|fin}\n\nlet companion_example = {fin|%{read:companion_example.json}|fin}\n")))
+   "let boursobank = {fin|%{read:boursobank.toml}|fin}\nlet wise = {fin|%{read:wise.toml}|fin}\nlet revolut = {fin|%{read:revolut.toml}|fin}\nlet bunq = {fin|%{read:bunq.toml}|fin}\nlet cdc = {fin|%{read:cdc.toml}|fin}\nlet kraken = {fin|%{read:kraken.toml}|fin}\nlet fdm = {fin|%{read:fdm.toml}|fin}\nlet ethereum = {fin|%{read:ethereum.toml}|fin}\nlet polygon = {fin|%{read:polygon.toml}|fin}\nlet csv = [\n  \"csv/boursobank.json\", {fin|%{read:csv/boursobank.json}|fin};\n  \"csv/bunq.json\", {fin|%{read:csv/bunq.json}|fin};\n  \"csv/cdc.json\", {fin|%{read:csv/cdc.json}|fin};\n  \"csv/ethereum-1.json\", {fin|%{read:csv/ethereum-1.json}|fin};\n  \"csv/ethereum-2.json\", {fin|%{read:csv/ethereum-2.json}|fin};\n  \"csv/fdm.json\", {fin|%{read:csv/fdm.json}|fin};\n  \"csv/kraken.json\", {fin|%{read:csv/kraken.json}|fin};\n  \"csv/polygon-1.json\", {fin|%{read:csv/polygon-1.json}|fin};\n  \"csv/polygon-2.json\", {fin|%{read:csv/polygon-2.json}|fin};\n  \"csv/revolut.json\", {fin|%{read:csv/revolut.json}|fin};\n  \"csv/wise.json\", {fin|%{read:csv/wise.json}|fin};\n]\nlet companion_example = {fin|%{read:companion_example.json}|fin}\n")))
 
 ; Adapters are pure: no Rel or SQLite dependency, enforced here.
 
@@ -42,6 +53,7 @@
   mt940
   base
   jsont
+  nox-toml
   xmlm
   re
   digestif

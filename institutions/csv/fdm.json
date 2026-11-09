@@ -1,0 +1,74 @@
+{
+  "format": "fin-csv-converter",
+  "version": 1,
+  "institution": "fdm",
+  "institution_type": "bank",
+  "header": [
+    "Merchant",
+    "Category",
+    "Date",
+    "Local currency",
+    "Local amount",
+    "Exchange rate",
+    "USD"
+  ],
+  "total": {
+    "when": [
+      {
+        "column": "Date",
+        "filled": false
+      }
+    ],
+    "quantity": {
+      "column": "USD",
+      "negate": true
+    },
+    "commodity": {
+      "code": "USD"
+    }
+  },
+  "account": {
+    "id": "card",
+    "bank": "fdm",
+    "type": "prepaid-card",
+    "currency": {
+      "code": "USD"
+    }
+  },
+  "occurred": {
+    "column": "Date",
+    "layout": "iso-date"
+  },
+  "cases": [
+    {
+      "movements": [
+        {
+          "role": "primary",
+          "quantity": {
+            "column": "USD",
+            "negate": true
+          },
+          "commodity": {
+            "code": "USD"
+          }
+        }
+      ]
+    }
+  ],
+  "descriptions": [
+    "Merchant"
+  ],
+  "counterparty_name": [
+    "Merchant"
+  ],
+  "exchange": {
+    "source": {
+      "value": "USD"
+    },
+    "target": {
+      "column": "Local currency"
+    },
+    "rate": "Exchange rate",
+    "target_quantity": "Local amount"
+  }
+}

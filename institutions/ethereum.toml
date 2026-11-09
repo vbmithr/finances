@@ -1,0 +1,13 @@
+version = 1
+institution = "ethereum"
+aliases = []
+type = "wallet"
+chain_id = 1
+
+[[statements]]
+format = "csv"
+definition = "csv/ethereum-1.json"
+
+[[statements]]
+format = "csv"
+definition = "csv/ethereum-2.json"

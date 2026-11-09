@@ -1,0 +1,8 @@
+version = 1
+institution = "fdm"
+aliases = []
+type = "bank"
+
+[[statements]]
+format = "csv"
+definition = "csv/fdm.json"

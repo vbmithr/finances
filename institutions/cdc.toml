@@ -1,0 +1,8 @@
+version = 1
+institution = "cdc"
+aliases = []
+type = "crypto-exchange"
+
+[[statements]]
+format = "csv"
+definition = "csv/cdc.json"

@@ -1,0 +1,9 @@
+version = 1
+institution = "kraken"
+aliases = []
+type = "crypto-exchange"
+own_symbols = [{ "symbol" = "FEE", "asset" = "KFEE", "name" = "Kraken fee credits" }]
+
+[[statements]]
+format = "csv"
+definition = "csv/kraken.json"

@@ -1,0 +1,157 @@
+{
+  "format": "fin-csv-converter",
+  "version": 1,
+  "institution": "polygon",
+  "institution_type": "wallet",
+  "header": [
+    "Transaction Hash",
+    "Blockno",
+    "UnixTimestamp",
+    "DateTime (UTC)",
+    "From",
+    "To",
+    "ContractAddress",
+    "Value_IN(POL)",
+    "Value_OUT(POL)",
+    "CurrentValue @ *",
+    "TxnFee(POL)",
+    "TxnFee(USD)",
+    "Historical $Price/POL",
+    "Status",
+    "ErrCode",
+    "Method"
+  ],
+  "address": [
+    "From",
+    "To"
+  ],
+  "account": {
+    "id": "{@address}",
+    "bank": "polygon",
+    "type": "wallet"
+  },
+  "id": {
+    "columns": [
+      "Transaction Hash"
+    ]
+  },
+  "occurred": {
+    "column": "DateTime (UTC)",
+    "layout": "iso-datetime",
+    "utc": true
+  },
+  "cases": [
+    {
+      "when": [
+        {
+          "column": "From",
+          "address": true
+        },
+        {
+          "column": "ErrCode",
+          "filled": true
+        }
+      ],
+      "movements": [
+        {
+          "role": "primary",
+          "quantity": {
+            "column": "TxnFee(POL)",
+            "negate": true
+          },
+          "commodity": {
+            "code": "POL"
+          }
+        }
+      ],
+      "fee": {
+        "column": "TxnFee(POL)"
+      }
+    },
+    {
+      "when": [
+        {
+          "column": "From",
+          "address": true
+        },
+        {
+          "column": "Value_OUT(POL)",
+          "sign": "positive"
+        }
+      ],
+      "movements": [
+        {
+          "role": "primary",
+          "quantity": {
+            "column": "Value_OUT(POL)",
+            "plus": "TxnFee(POL)",
+            "negate": true
+          },
+          "commodity": {
+            "code": "POL"
+          }
+        }
+      ],
+      "fee": {
+        "column": "TxnFee(POL)"
+      }
+    },
+    {
+      "when": [
+        {
+          "column": "From",
+          "address": true
+        }
+      ],
+      "movements": [
+        {
+          "role": "primary",
+          "quantity": {
+            "column": "TxnFee(POL)",
+            "negate": true
+          },
+          "commodity": {
+            "code": "POL"
+          }
+        }
+      ],
+      "fee": {
+        "column": "TxnFee(POL)"
+      }
+    },
+    {
+      "when": [
+        {
+          "column": "To",
+          "address": true
+        },
+        {
+          "column": "Value_IN(POL)",
+          "sign": "positive"
+        },
+        {
+          "column": "ErrCode",
+          "filled": false
+        }
+      ],
+      "movements": [
+        {
+          "role": "primary",
+          "quantity": {
+            "column": "Value_IN(POL)"
+          },
+          "commodity": {
+            "code": "POL"
+          }
+        }
+      ]
+    }
+  ],
+  "descriptions": [
+    "Method"
+  ],
+  "type": "Method",
+  "references": {
+    "hash": "Transaction Hash"
+  }
+}

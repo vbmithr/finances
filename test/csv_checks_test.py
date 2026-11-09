@@ -133,7 +133,7 @@ bunq.bad("one decimal", "unexpected Amount", changed(bunq.rows, 0, Amount="-1,5"
 bunq.bad("account", "unexpected Account", changed(bunq.rows, 0, Account="a b"))
 
 # BoursoBank states its amount with a comma and its balance with a dot.
-definition = json.loads((INSTITUTIONS / "boursobank.json").read_text())["records"]["csv"]
+definition = json.loads((INSTITUTIONS / "csv" / "boursobank.json").read_text())
 header = definition["header"]
 def bourso(amount, balance):
     row = [""] * len(header)

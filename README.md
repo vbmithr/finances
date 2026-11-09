@@ -202,7 +202,8 @@ Use an opam switch with OCaml 5.1 or later and SQLite development headers
 `135d8f6246e17ccc4700029c503ca96e341cd3bf`, which adds static SQLite extension
 support and is not yet published upstream. Pin a checkout containing that commit
 before installing the dependencies. `conf-sqlite3` is required so Rel builds its
-SQLite backend.
+SQLite backend. Institution TOML uses the pinned `nox-toml` development codec;
+its dependencies currently require the opam overlay below.
 The OCaml `hledger` binding is also pinned to upstream commit
 `cad809fa47876142cfdf361bde2a2e506ebdadad` of
 [ocaml-hledger](https://github.com/vbmithr/ocaml-hledger). This opam package is
@@ -214,6 +215,7 @@ From this directory, in your chosen switch:
 mkdir -p "$HOME/.cache/codex/scratch/finances"
 export TMPDIR="$HOME/.cache/codex/scratch/finances"
 git submodule update --init --recursive
+opam repository add nox-toml-overlay git+https://tangled.org/gazagnaire.org/opam-overlay.git
 # Replace this path with the absolute path of your Rel checkout.
 REL_REPOSITORY=/absolute/path/to/rel
 opam pin add --no-action rel \

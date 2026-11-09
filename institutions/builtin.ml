@@ -15,7 +15,12 @@ let definitions : Institution_definition.t list =
     ; Bundled_definitions.ethereum
     ; Bundled_definitions.polygon
     ]
-    ~f:(fun json -> Json.decode Institution_definition.codec json |> Or_error.ok_exn)
+    ~f:(fun toml ->
+      Institution_toml.decode toml ~load:(fun path ->
+        List.Assoc.find Bundled_definitions.csv path ~equal:String.equal
+        |> Or_error.of_option
+             ~error:(Error.of_string ("missing bundled CSV definition: " ^ path)))
+      |> Or_error.ok_exn)
 ;;
 
 let definition name =

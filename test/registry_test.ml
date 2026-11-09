@@ -184,12 +184,32 @@ let bundled_definitions () =
     (List.map raw ~f:fst)
     (List.map Builtin.definitions ~f:Institution_definition.institution);
   List.iter2_exn raw Builtin.definitions ~f:(fun (name, text) definition ->
-    (* The file is the canonical encoding, so [definition show] prints it unchanged. *)
+    let decoded =
+      Institution_toml.decode text ~load:(fun path ->
+        List.Assoc.find Bundled_definitions.csv path ~equal:String.equal
+        |> Or_error.of_option ~error:(Error.of_string "missing CSV layout"))
+      |> Or_error.ok_exn
+    in
     Alcotest.(check string)
-      (name ^ " is canonical")
-      (String.strip text)
-      (String.strip
-         (Json.encode ~format:Jsont.Indent Institution_definition.codec definition));
+      (name ^ " TOML round trip")
+      (Json.encode Institution_definition.codec definition)
+      (Json.encode Institution_definition.codec decoded);
+    let file =
+      Toml.of_string Institution_toml.file_codec text
+      |> Result.map_error ~f:(fun e -> Error.of_string (Toml.Error.to_string e))
+      |> Or_error.ok_exn
+    in
+    let encoded = Toml.to_string Institution_toml.file_codec file in
+    let roundtrip =
+      Institution_toml.decode encoded ~load:(fun path ->
+        List.Assoc.find Bundled_definitions.csv path ~equal:String.equal
+        |> Or_error.of_option ~error:(Error.of_string "missing CSV layout"))
+      |> Or_error.ok_exn
+    in
+    Alcotest.(check string)
+      (name ^ " TOML codec encoding round trip")
+      (Json.encode Institution_definition.codec definition)
+      (Json.encode Institution_definition.codec roundtrip);
     (* A bundled rule keeps its own name and priority when installed. *)
     List.iter definition.rules ~f:(fun (r : Institution_definition.rule) ->
       Alcotest.(check bool)

@@ -206,7 +206,7 @@ Review workflows consume those stored clues and still require confirmation.
 institution explicitly: `Ofx_bank.parse ~institution contents`. User-added
 institutions can use a generic OFX adapter. BoursoBank composes that importer,
 its CSV companion and aliases from its bundled definition,
-`institutions/boursobank.json`; source evidence and typing come from the
+`institutions/boursobank.toml`; source evidence and typing come from the
 definition's ordinary default rules. A user-added OFX
 institution can configure an exact-match CSV companion; its layout is stored
 with each document. Generic

@@ -5,7 +5,7 @@ its status: tick off finished work, add discovered work, and refresh the "Where 
 are" figures when they move. History belongs in `CHANGES.md`; designs stay in the
 other documents, which this one links to rather than repeats.
 
-Last updated: 2026-11-08.
+Last updated: 2026-11-09.
 
 ## Direction
 
@@ -273,7 +273,7 @@ configurable yet.
   `reported-other` removed, a bank's code is a column, `{value}` templates), then
   derived types without the refresh commands (step 4, done 2026-10-31, schema 30) and
   dropping the unused `payee` and `details_type` definition columns (step 5, done).
-- [x] Wise rules shipped in `wise.json` (2026-10-31), on the `TransferWise ID`
+- [x] Wise rules shipped in `wise.toml` (2026-10-31), on the `TransferWise ID`
   column rather than the description: `FEE-` to `fee` (187 rows), `BALANCE_CASHBACK-`
   to `interest` (29, originally typed `bonus`) and the `MONEY_ADDED` code to
   `deposit` (2). They are ordinary
@@ -292,17 +292,15 @@ configurable yet.
   description, with a suggested expression (2026-10-31). The grouping key is a
   heuristic to tune on real data.
 - [x] Revolut typing from its CSV `Type` column (2026-10-31): six values plus a
-  catch-all, as reported-type rules in `institutions/revolut.json`. A movement
+  catch-all, as reported-type rules in `institutions/revolut.toml`. A movement
   carries the bank's own code and `Source_typing` applies reported rules as the
   base type before description rules. Existing databases need the rules added
   (the bundled rules are installed only into a new database), which is the
   provenance and update work below.
 - [x] Express each bundled institution as one institution definition file
-  (`institutions/{boursobank,wise,bunq,revolut}.json`), replacing nine files of
-  presets, profiles and default rules. Verified 2026-10-31: `definition show`
-  output and the 19 default rules of a fresh database are byte-identical to
-  before, and a registry test pins the canonical form, rule naming and unique
-  rule names.
+  (`institutions/{boursobank,wise,bunq,revolut}.toml`, with CSV layouts in
+  separate JSON files), replacing separate presets, profiles and rule files.
+  The TOML is validated at startup; default rules retain their names and priorities.
 - [ ] Add metadata and `examples` to definitions; `fin institution definition
   check` runs the examples and warns about personal-looking text. A dune test
   checks every bundled definition.
@@ -499,7 +497,7 @@ position observations, derive positions from fills, or calculate funding.
   review transfers between banks, wallets and exchanges.
 - [x] Expose CDC through `fin import cdc` and general
   `fin db sources` instead of a separate `fin crypto` group.
-- [x] Describe CDC as data (`cdc.json`) interpreted by the generic
+- [x] Describe CDC as data (`cdc.toml` and its CSV layout) interpreted by the generic
   `Movement_csv`, with no institution-specific OCaml.
 - [ ] Database work in SQL ([sql-first.md](sql-first.md)). Done: schema 36 stores ledger names,
   short account IDs and companion display names; `store/sql/views/` defines the shared reads

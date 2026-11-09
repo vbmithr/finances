@@ -493,7 +493,7 @@ The baseline includes Revolut document/account context,
 immutable daily movement inventories, current transfer decisions, unique per-event
 confirmed memberships, and append-only transfer changes.
 
-Revolut's definition (`institutions/revolut.json`) describes the observed Current-account CSV:
+Revolut's definition (`institutions/revolut.toml`) describes the observed Current-account CSV:
 completed rows are movements, reverted rows (no completion date, no balance) are skipped. The file
 cannot identify the account, so a person's one personal account is named `personal`. Records keep the
 original start and completion clock text, signed principal and nonnegative fee. Clocks are read as UTC;

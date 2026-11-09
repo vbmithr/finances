@@ -3051,6 +3051,23 @@ class ImportOnboarding(unittest.TestCase):
         definition.write_text(json.dumps({'version': 1, 'kind': 'csv', 'csv': {}}))
         self.assertNotEqual(self.run_fin('institution', 'definition', 'check', definition, check=False).returncode, 0)
 
+    def test_toml_definition_resolves_csv_and_saves_it(self):
+        profile = json.loads(self.run_fin('institution', 'definition', 'show', 'revolut').stdout)
+        layout = self.root / 'layout.json'
+        layout.write_text(json.dumps(profile['records']['csv']))
+        definition = self.root / 'revolut.toml'
+        definition.write_text('version = 1\ninstitution = "revolut"\ntype = "bank"\n'
+                              '[[statements]]\nformat = "csv"\ndefinition = "layout.json"\n')
+        self.assertIn('Definition is valid', self.run_fin('institution', 'definition', 'check', definition).stdout)
+        self.run_fin('institution', 'definition', 'set', 'revolut', definition, '--yes')
+        layout.unlink()
+        definition.unlink()
+        self.run_fin('import', 'revolut', self.csv)
+        self.assertTrue(json.loads(self.run_fin('operation', 'list', '--json').stdout))
+        definition.write_text('version = 1\ninstitution = "revolut"\n'
+                              '[[statements]]\nformat = "csv"\ndefinition = "missing.json"\n')
+        self.assertNotEqual(self.run_fin('institution', 'definition', 'check', definition, check=False).returncode, 0)
+
     def test_runtime_institution_definition_and_sample_preview(self):
         profile = json.loads(self.run_fin('institution', 'definition', 'show', 'wise').stdout)
         records = profile['records']

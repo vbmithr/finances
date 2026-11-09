@@ -113,7 +113,7 @@ reviewed decisions remain authoritative. Editing or deleting a rule affects
 future imports only; existing results change through an explicit refresh or
 `rule apply`. Institution definitions may carry `rules` (type, evidence and
 reported-type actions); bundled defaults live in each bundled institution's definition
-(`institutions/<institution>.json`) and are installed only into a fresh database.
+(`institutions/<institution>.toml`) and are installed only into a fresh database.
 
 Gaps:
 
@@ -167,9 +167,9 @@ institution's customization, and the way to share one.
 
 What is missing:
 
-- Bundled institutions are definitions (done 2026-10-31): `institutions/boursobank.json`,
-  `wise.json`, `bunq.json` and `revolut.json` each hold the source profile and the
-  default rules, and `fin institution definition show` prints the same file.
+- Bundled institutions are definitions (done 2026-10-31): `institutions/boursobank.toml`,
+  `wise.toml`, `bunq.toml` and `revolut.toml` reference CSV profiles and hold the
+  default rules; `fin institution definition show` prints resolved JSON.
   Contributing a bank and contributing rules are therefore the same operation.
 - Definitions carry no metadata or examples. Add an id, definition version, title,
   authors, license and `examples` (a description or reported code and its expected

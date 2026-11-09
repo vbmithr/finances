@@ -6,6 +6,7 @@ import pathlib
 import subprocess
 import sys
 import tempfile
+import tomllib
 
 FIN, INSTITUTIONS = sys.argv[1], pathlib.Path(sys.argv[2])
 
@@ -27,12 +28,15 @@ with tempfile.TemporaryDirectory() as directory:
                XDG_CONFIG_HOME=str(root / "config"), XDG_STATE_HOME=str(root / "state"),
                XDG_CACHE_HOME=str(root / "cache"))
     checked = 0
-    for definition in sorted(INSTITUTIONS.glob("*.json")):
+    for definition in sorted(INSTITUTIONS.glob("*.toml")):
         if definition.stem == "companion_example":
             continue
         name = definition.stem
         # A statement format's settings can name the CSV's header too.
-        headers = {tuple(p["header"]): p for p in profiles(json.loads(definition.read_text()))}
+        toml = tomllib.loads(definition.read_text())
+        layouts = [json.loads((INSTITUTIONS / s["definition"]).read_text())
+                   for s in toml["statements"] if s["format"] == "csv"]
+        headers = {tuple(p["header"]): p for layout in layouts for p in profiles(layout)}
         for profile in headers.values():
             statement = root / f"{name}.csv"
             statement.write_text(profile.get("separator", ",").join(profile["header"]) + "\n")

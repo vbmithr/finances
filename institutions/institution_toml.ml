@@ -1,0 +1,192 @@
+open Base
+
+(* The institution is typed at the TOML boundary. Format-specific profiles
+   remain values until their existing JSON codecs validate them. *)
+type statement =
+  { format : string
+  ; settings : (string * Toml.Value.t) list
+  }
+
+type file =
+  { version : int
+  ; institution : string
+  ; aliases : string list
+  ; kind : string
+  ; chain_id : int option
+  ; network : string option
+  ; own_symbols : Toml.Value.t option
+  ; stored_formats : string list
+  ; statements : statement list
+  ; rules : (string * Toml.Value.t) list
+  }
+
+let statement_codec =
+  let open Toml.Codec in
+  Table.(
+    obj (fun format settings -> { format; settings })
+    |> mem "format" string ~enc:(fun s -> s.format)
+    |> keep_unknown ~enc:(fun s -> s.settings) (Mems.assoc Toml.Value.codec)
+    |> finish)
+;;
+
+let rules_codec =
+  let open Toml.Codec in
+  Table.(obj Fn.id |> keep_unknown ~enc:Fn.id (Mems.assoc Toml.Value.codec) |> finish)
+;;
+
+let file_codec =
+  let open Toml.Codec in
+  Table.(
+    obj
+      (fun
+          version
+           institution
+           aliases
+           kind
+           chain_id
+           network
+           own_symbols
+           stored_formats
+           statements
+           rules
+         ->
+         { version
+         ; institution
+         ; aliases
+         ; kind
+         ; chain_id
+         ; network
+         ; own_symbols
+         ; stored_formats
+         ; statements
+         ; rules
+         })
+    |> mem "version" int ~enc:(fun f -> f.version)
+    |> mem "institution" string ~enc:(fun f -> f.institution)
+    |> mem "aliases" (list string) ~enc:(fun f -> f.aliases) ~dec_absent:[]
+    |> mem "type" string ~enc:(fun f -> f.kind) ~dec_absent:"bank"
+    |> opt_mem "chain_id" int ~enc:(fun f -> f.chain_id)
+    |> opt_mem "network" string ~enc:(fun f -> f.network)
+    |> opt_mem "own_symbols" Toml.Value.codec ~enc:(fun f -> f.own_symbols)
+    |> mem "stored_formats" (list string) ~enc:(fun f -> f.stored_formats) ~dec_absent:[]
+    |> mem "statements" (array_of_tables statement_codec) ~enc:(fun f -> f.statements)
+    |> mem "rules" rules_codec ~enc:(fun f -> f.rules) ~dec_absent:[]
+    |> error_unknown
+    |> finish)
+;;
+
+(* Resolve CSV files before building the existing, self-contained definition. *)
+let decode ~load text =
+  Or_error.try_with (fun () ->
+    let fail fmt = Printf.ksprintf failwith fmt in
+    let parsed =
+      match Toml.of_string file_codec text with
+      | Ok value -> value
+      | Error error -> fail "TOML: %s" (Toml.Error.to_string error)
+    in
+    let table = function
+      | Toml.Value.Table (fields, _) ->
+        List.map fields ~f:(fun ((key, _), value) -> key, value)
+      | _ -> failwith "expected a TOML table"
+    in
+    let json_string s = Json.encode Jsont.string s in
+    let rec json = function
+      | Toml.Value.String (s, _) -> json_string s
+      | Int (i, _) -> Int64.to_string i
+      | Bool (b, _) -> Bool.to_string b
+      | Array (values, _) -> "[" ^ String.concat ~sep:"," (List.map values ~f:json) ^ "]"
+      | Table (fields, _) -> object_ (List.map fields ~f:(fun ((k, _), v) -> k, v))
+      | _ -> failwith "unsupported TOML value in institution definition"
+    and object_ fields =
+      "{"
+      ^ String.concat
+          ~sep:","
+          (List.map fields ~f:(fun (k, v) -> json_string k ^ ":" ^ json v))
+      ^ "}"
+    in
+    let field fields key = List.Assoc.find fields key ~equal:String.equal in
+    let require fields key =
+      match field fields key with
+      | Some value -> value
+      | None -> fail "missing %s" key
+    in
+    let string = function
+      | Toml.Value.String (s, _) -> s
+      | _ -> failwith "expected a TOML string"
+    in
+    let check_fields fields allowed =
+      List.iter fields ~f:(fun (key, _) ->
+        if not (List.mem allowed key ~equal:String.equal)
+        then fail "unknown field: %s" key)
+    in
+    let csv = ref []
+    and statement = ref None in
+    List.iter parsed.statements ~f:(fun { format; settings } ->
+      match format with
+      | "csv" ->
+        check_fields settings [ "definition" ];
+        let path = string (require settings "definition") in
+        let contents = load path |> Or_error.ok_exn in
+        let layout = Csv_converter.of_string contents |> Or_error.ok_exn in
+        if not (String.equal (Csv_converter.institution layout) parsed.institution)
+        then fail "CSV definition %s belongs to a different institution" path;
+        csv := !csv @ [ contents ]
+      | "ofx" | "camt" | "mt940" ->
+        if Option.is_some !statement
+        then failwith "only one non-CSV statement format is supported";
+        if String.equal format "ofx"
+        then check_fields settings []
+        else check_fields settings [ "profile" ];
+        statement
+        := Some
+             ( format
+             , if String.equal format "ofx"
+               then "true"
+               else json (require settings "profile") )
+      | _ -> fail "unknown statement format: %s" format);
+    let rules =
+      List.map parsed.rules ~f:(fun (name, value) ->
+        let fields = table value in
+        if Option.is_some (field fields "name")
+        then failwith "rule name belongs in its table header";
+        object_ (("name", Toml.Value.string name) :: fields))
+    in
+    let record_fields =
+      [ "institution", json_string parsed.institution
+      ; ( "aliases"
+        , "[" ^ String.concat ~sep:"," (List.map parsed.aliases ~f:json_string) ^ "]" )
+      ; ( "stored_formats"
+        , "["
+          ^ String.concat ~sep:"," (List.map parsed.stored_formats ~f:json_string)
+          ^ "]" )
+      ]
+      @ Option.to_list
+          (Option.map parsed.chain_id ~f:(fun id -> "chain_id", Int.to_string id))
+      @ Option.to_list
+          (Option.map parsed.network ~f:(fun name -> "network", json_string name))
+      @ Option.to_list
+          (Option.map parsed.own_symbols ~f:(fun value -> "own_symbols", json value))
+      @ Option.to_list !statement
+      @
+      if List.is_empty !csv
+      then []
+      else [ "csv", "[" ^ String.concat ~sep:"," !csv ^ "]" ]
+    in
+    let obj fields =
+      "{"
+      ^ String.concat
+          ~sep:","
+          (List.map fields ~f:(fun (k, v) -> json_string k ^ ":" ^ v))
+      ^ "}"
+    in
+    let full =
+      obj
+        [ "version", Int.to_string parsed.version
+        ; "kind", json_string "records"
+        ; "type", json_string parsed.kind
+        ; "records", obj record_fields
+        ; "rules", "[" ^ String.concat ~sep:"," rules ^ "]"
+        ]
+    in
+    Json.decode Institution_definition.codec full |> Or_error.ok_exn)
+;;

@@ -530,7 +530,8 @@
  (alias runtest)
  (deps
   import_empty_test.py
-  (glob_files ../institutions/*.json))
+  (glob_files ../institutions/*.toml)
+  (glob_files ../institutions/csv/*.json))
  (action
   (run
    python3
@@ -544,7 +545,8 @@
   csv_checks_test.py
   fixtures/wise.csv
   fixtures/bunq.csv
-  (glob_files ../institutions/*.json))
+  (glob_files ../institutions/*.toml)
+  (glob_files ../institutions/csv/*.json))
  (action
   (run
    python3

@@ -240,7 +240,7 @@ symbolic links, as for any import.
 
 ### Inspect CDC CSV exports
 
-CDC is a bundled institution definition, `institutions/cdc.json`, not code: it lists
+CDC is a bundled institution definition, `institutions/cdc.toml`, not code: it lists
 the expected CSV header, the columns and what each reported transaction kind moves.
 Name it `cdc`.
 
@@ -386,44 +386,51 @@ a primary CSV. Earlier files remain imported if a later file fails.
 
 ### Attach an institution definition
 
-An institution definition is a versioned JSON file that says how to turn an
-institution's files into [records](records-format.md): a statement format (`camt`,
-`mt940` or `ofx`), a CSV layout (`csv`), or both. Validate a definition and preview
-a sample before saving it:
+An institution definition is a versioned TOML file that describes an institution,
+its statement formats and its default rules. Each `[[statements]]` section names a
+format; a CSV section references a separate converter JSON file, relative to the
+TOML file. For example:
+
+```toml
+version = 1
+institution = "mybank"
+type = "bank"
+
+[[statements]]
+format = "csv"
+definition = "mybank-csv.json"
+
+[rules.mybank-card]
+pattern = '^CARD '
+action = "type"
+target = "card"
+```
+
+Copy a bundled TOML file and its referenced files from `institutions/` to use as a
+starting point, then adjust the institution name, converter and rule names. Validate
+a definition and preview a sample before saving it:
 
 ```sh
-fin institution definition show wise > institution.json
-$EDITOR institution.json
-fin institution definition check institution.json sample.xml
+fin institution definition check mybank.toml sample.csv
 fin institution add mybank
-fin institution definition set mybank institution.json
+fin institution definition set mybank mybank.toml
 fin institution list
 fin import mybank ~/Statements/mybank
 ```
 
-Change the institution and any provider-specific settings in the template
-before attaching it. The institution name in the file must match the selected
-institution. When adapting a bundled template for another institution, give
-its rules distinct names as well. `set` previews the rules to add and asks for
-confirmation; `--yes` accepts the preview in scripts. Existing rules with the
-same names are retained, including rules belonging to other institutions. `check`
-prints up to five movements or companion
-rows and does not open or change the database. Invalid samples report the first
-parse error. `show` accepts every built-in institution and installed
-definitions.
+The institution name in the TOML and each CSV converter must match the selected
+institution. `set` previews the rules to add and asks for confirmation; `--yes`
+accepts the preview in scripts. Existing rules with the same names are retained,
+including rules belonging to other institutions. `check` prints up to five movements
+or companion rows and does not open or change the database. Invalid samples report
+the first parse error. `show` prints the resolved definition as JSON, including its
+CSV layouts, for any built-in or installed institution. The previous self-contained
+JSON definition format remains accepted by `check` and `set`.
 
-A primary CSV uses a records CSV converter definition, as described in the
-[CSV definition reference](records-format.md#csv-definitions).
-
-Definitions can include default source-interpretation rules; these become normal
-editable rules in `fin rule list`. For example, add this top-level field to a
-definition:
-
-```json
-"rules": [
-  {"name": "mycard-purchase", "pattern": "^CARD ", "action": "type", "target": "card"}
-]
-```
+A CSV converter uses the format described in the
+[CSV definition reference](records-format.md#csv-definitions). Definitions can
+include default source-interpretation rules; these become normal editable rules in
+`fin rule list`.
 
 Supported actions are `type`, `card-reference` and `withdrawal-reversal`. A `type`
 rule may also name a `field` to test (see "What a type rule matches"), and its
@@ -441,7 +448,7 @@ nonempty `Merchant` value when CSV rows agree, otherwise the CAMT description. O
 source descriptions and CSV fields remain available as evidence.
 
 Fin saves the validated definition in its database, so later edits or removal of
-the JSON file do not change existing imports. To update it, run `definition set`
+the TOML or referenced JSON files do not change existing imports. To update it, run `definition set`
 again. Rule-only changes can be saved after import without changing existing
 transactions; existing rules with the same names are not overwritten. Changes to
 the source interpretation require removing the institution's imported evidence
@@ -614,31 +621,62 @@ additional detail, or use `fin import --help` for current options.
 
 ### Configure another CSV
 
-Create a records definition for the institution, containing a CSV converter layout.
-For example, for a EUR account named `main` and a file with columns `Date`,
-`Description` and `Amount`, write `mybank.json`:
+For a EUR account named `main` and a file with columns `Date`, `Description`
+and `Amount`, save this converter as `mybank-csv.json`:
 
 ```json
 {
+  "format": "fin-csv-converter",
   "version": 1,
-  "kind": "records",
-  "type": "bank",
-  "records": {
-    "institution": "mybank",
-    "csv": {
-      "format": "fin-csv-converter",
-      "version": 1,
-      "institution": "mybank",
-      "institution_type": "bank",
-      "header": ["Date", "Description", "Amount"],
-      "account": {"id": "main", "type": "current", "currency": {"code": "EUR"}},
-      "occurred": {"column": "Date", "layout": "iso-date"},
-      "cases": [{"movements": [{"role": "primary", "quantity": {"column": "Amount"},
-                                "commodity": {"code": "EUR"}}]}],
-      "descriptions": ["Description"]
+  "institution": "mybank",
+  "institution_type": "bank",
+  "header": [
+    "Date",
+    "Description",
+    "Amount"
+  ],
+  "account": {
+    "id": "main",
+    "type": "current",
+    "currency": {
+      "code": "EUR"
     }
-  }
+  },
+  "occurred": {
+    "column": "Date",
+    "layout": "iso-date"
+  },
+  "cases": [
+    {
+      "movements": [
+        {
+          "role": "primary",
+          "quantity": {
+            "column": "Amount"
+          },
+          "commodity": {
+            "code": "EUR"
+          }
+        }
+      ]
+    }
+  ],
+  "descriptions": [
+    "Description"
+  ]
 }
+```
+
+Create `mybank.toml` alongside it:
+
+```toml
+version = 1
+institution = "mybank"
+type = "bank"
+
+[[statements]]
+format = "csv"
+definition = "mybank-csv.json"
 ```
 
 This assumes signed amounts and one account. Adapt the layout to the actual
@@ -647,8 +685,8 @@ Then check and attach it before importing:
 
 ```sh
 fin institution add mybank
-fin institution definition check mybank.json statement.csv
-fin institution definition set mybank mybank.json
+fin institution definition check mybank.toml statement.csv
+fin institution definition set mybank mybank.toml
 fin import mybank statement.csv
 ```
 
@@ -1356,9 +1394,9 @@ NAME` to review and apply decisions to existing transactions. Reimporting the
 same source does not rerun automatic rules. The database and backups contain
 rules; the bundled defaults are installed for a fresh database from each bundled
 institution's definition, one file per institution:
-[BoursoBank](../institutions/boursobank.json), [Wise](../institutions/wise.json),
-[Bunq](../institutions/bunq.json) and [Revolut](../institutions/revolut.json).
-`fin institution definition show INSTITUTION` prints the same file.
+[BoursoBank](../institutions/boursobank.toml), [Wise](../institutions/wise.toml),
+[Bunq](../institutions/bunq.toml) and [Revolut](../institutions/revolut.toml).
+`fin institution definition show INSTITUTION` prints the resolved definition as JSON.
 `fin institution show INSTITUTION` summarizes one in plain text: its kind, what fin
 reads from each source column by role, the columns it does not read, what rules
 can match (type rules test the main description, or any field a rule names, such as

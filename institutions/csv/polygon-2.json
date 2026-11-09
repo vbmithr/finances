@@ -1,0 +1,100 @@
+{
+  "format": "fin-csv-converter",
+  "version": 1,
+  "institution": "polygon",
+  "institution_type": "wallet",
+  "header": [
+    "Transaction Hash",
+    "Blockno",
+    "UnixTimestamp",
+    "DateTime (UTC)",
+    "From",
+    "To",
+    "TokenValue",
+    "USDValueDayOfTx",
+    "ContractAddress",
+    "TokenName",
+    "TokenSymbol"
+  ],
+  "thousands": ",",
+  "address": [
+    "From",
+    "To"
+  ],
+  "only": [
+    {
+      "column": "TokenValue",
+      "sign": "positive"
+    }
+  ],
+  "account": {
+    "id": "{@address}",
+    "bank": "polygon",
+    "type": "wallet"
+  },
+  "id": {
+    "columns": [
+      "Transaction Hash",
+      "From",
+      "To",
+      "ContractAddress",
+      "TokenValue"
+    ]
+  },
+  "occurred": {
+    "column": "DateTime (UTC)",
+    "layout": "iso-datetime",
+    "utc": true
+  },
+  "cases": [
+    {
+      "when": [
+        {
+          "column": "From",
+          "address": true
+        }
+      ],
+      "movements": [
+        {
+          "role": "primary",
+          "quantity": {
+            "column": "TokenValue",
+            "negate": true
+          },
+          "commodity": {
+            "reported": "ContractAddress",
+            "provider": "polygon",
+            "name": "TokenName"
+          }
+        }
+      ]
+    },
+    {
+      "when": [
+        {
+          "column": "To",
+          "address": true
+        }
+      ],
+      "movements": [
+        {
+          "role": "primary",
+          "quantity": {
+            "column": "TokenValue"
+          },
+          "commodity": {
+            "reported": "ContractAddress",
+            "provider": "polygon",
+            "name": "TokenName"
+          }
+        }
+      ]
+    }
+  ],
+  "descriptions": [
+    "TokenName"
+  ],
+  "references": {
+    "hash": "Transaction Hash"
+  }
+}

@@ -8,6 +8,13 @@ short line of their own.
 
 ## Unreleased
 
+- Institution definitions can be written in TOML, with CSV converter JSON files
+  referenced relative to the TOML file. Bundled definitions now use this split;
+  installed definitions retain their resolved layouts in the database. Existing
+  self-contained JSON definitions remain accepted. `definition show` prints
+  resolved JSON. Building requires the `nox-toml` opam dependency and its overlay;
+  see the README.
+
 - Wallet institution types now carry their network. Existing wallet `chain_id` fields
   are read as EVM networks; an optional `network` names a non-EVM network. **Action
   required:** remove network metadata from bank or exchange definitions, and do not

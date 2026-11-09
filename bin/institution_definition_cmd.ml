@@ -41,7 +41,13 @@ let definition_rules (definition : Institution_definition.t) =
 
 let read_institution_definition path =
   let%bind text = read_file path in
-  let%bind definition = Json.decode Institution_definition.codec text in
+  let%bind definition =
+    if String.is_suffix path ~suffix:".toml"
+    then
+      Institution_toml.decode text ~load:(fun relative ->
+        read_file (Stdlib.Filename.concat (Stdlib.Filename.dirname path) relative))
+    else Json.decode Institution_definition.codec text
+  in
   let%map _ = definition_rules definition in
   definition
 ;;
@@ -154,10 +160,11 @@ let check_institution_definition path sample account_id =
 let institution_definition_check_cmd =
   command
     "check"
-    "Validate an institution definition and preview a sample statement."
+    "Validate a TOML or JSON institution definition and preview a sample statement. CSV \
+     paths in TOML are relative to its directory."
     Term.(
       const check_institution_definition
-      $ Arg.(required & pos 0 (some string) None & info [] ~docv:"DEFINITION.json")
+      $ Arg.(required & pos 0 (some string) None & info [] ~docv:"DEFINITION.toml")
       $ Arg.(value & pos 1 (some string) None & info [] ~docv:"SAMPLE")
       $ Arg.(
           value
@@ -295,12 +302,13 @@ let set_institution_definition database name path yes =
 let institution_definition_set_cmd =
   command
     "set"
-    "Attach an import definition to an existing institution."
+    "Attach a TOML or JSON import definition to an existing institution. CSV paths in \
+     TOML are relative to its directory."
     Term.(
       const set_institution_definition
       $ database
       $ Arg.(required & pos 0 (some string) None & info [] ~docv:"INSTITUTION")
-      $ Arg.(required & pos 1 (some string) None & info [] ~docv:"DEFINITION.json")
+      $ Arg.(required & pos 1 (some string) None & info [] ~docv:"DEFINITION.toml")
       $ Arg.(value & flag & info [ "yes" ] ~doc:"Accept the preview without prompting."))
 ;;
 
