@@ -74,16 +74,6 @@ let compare_converters () =
     "rejects bad date"
     true
     (Result.is_error (Lua_csv_converter.convert lua ~name:"sample.csv" invalid));
-  let duplicate_header =
-    String.substr_replace_first
-      (bundled "lua/cdc.lua")
-      ~pattern:"\"Transaction Hash\""
-      ~with_:"\"Transaction Kind\""
-  in
-  Alcotest.(check bool)
-    "rejects duplicate headers"
-    true
-    (Result.is_error (Lua_csv_converter.create ~institution:"cdc" duplicate_header));
   let mixed =
     "version = 1\ninstitution = \"cdc\"\ntype = \"crypto-exchange\"\n"
     ^ "[[statements]]\nformat = \"csv\"\ndefinition = \"old.json\"\n"
@@ -266,6 +256,84 @@ let bunq_equivalence () =
         (Result.is_error (Lua_csv_converter.convert lua ~name:"bad.csv" contents)))
 ;;
 
+let bourso_equivalence () =
+  let old =
+    Csv_converter.of_string
+      (Stdio.In_channel.read_all "fixtures/boursobank-converter.json")
+    |> ok
+  in
+  let lua =
+    Lua_csv_converter.create ~institution:"boursobank" (bundled "lua/boursobank.lua")
+    |> ok
+  in
+  Alcotest.(check (list (pair string string)))
+    "journal tags"
+    (Csv_converter.journal_tags old)
+    (Lua_csv_converter.tags lua);
+  Alcotest.(check (list string))
+    "conflict columns"
+    (Csv_converter.conflict_columns old)
+    (Lua_csv_converter.conflict_columns lua);
+  let compare name contents =
+    let normalize document =
+      Records.merge_all [ document ] |> ok |> List.hd_exn |> Records.to_string
+    in
+    let expected = Csv_converter.convert old ~name contents |> ok |> normalize in
+    let actual = Lua_csv_converter.convert lua ~name contents |> ok |> normalize in
+    Alcotest.(check string) name expected actual
+  in
+  let ambiguous =
+    String.substr_replace_first
+      (bundled "lua/boursobank.lua")
+      ~pattern:"\"Libellé\""
+      ~with_:"\"Solde#2\""
+  in
+  Alcotest.(check bool)
+    "reject ambiguous duplicate column aliases"
+    true
+    (Result.is_error (Lua_csv_converter.create ~institution:"boursobank" ambiguous));
+  let invalid_column =
+    String.substr_replace_first
+      (bundled "lua/boursobank.lua")
+      ~pattern:"\"Catégorie Parente\", \"Commentaire\" }"
+      ~with_:"\"Catégorie Parente\", \"Missing\" }"
+  in
+  Alcotest.(check bool)
+    "reject unknown conflict column"
+    true
+    (Result.is_error (Lua_csv_converter.create ~institution:"boursobank" invalid_column));
+  compare "fixture.csv" (Stdio.In_channel.read_all "fixtures/bank.csv");
+  let header =
+    "Date Opération;Date Valeur;Libellé;Libellé Suggéré;Catégorie;Catégorie \
+     Parente;Solde;Commentaire;Numéro Compte;Libellé Compte;Solde;Pointage\n"
+  in
+  compare "empty.csv" header;
+  compare
+    "accounts.csv"
+    (header
+     ^ "2025-01-02;2025-01-03; A ;A;C;P;-1 234,50;;111;Main;100.00;Non\n"
+     ^ "2025-01-02;2025-01-03;B;;C;P;-1,00;;111;Main;100.00;Non\n"
+     ^ "2025-01-04;2025-01-05;;C;C;P;2,00;;222;Main;;Non\n");
+  List.iter
+    [ "-1.00", "12.50"; "-1,00", "12,50" ]
+    ~f:(fun (amount, balance) ->
+      let contents =
+        header
+        ^ Printf.sprintf
+            "2025-01-02;2025-01-02;Shop;Shop;C;P;%s;;111;Main;%s;Non\n"
+            amount
+            balance
+      in
+      Alcotest.(check bool)
+        "legacy rejects invalid decimal"
+        true
+        (Result.is_error (Csv_converter.convert old ~name:"bad" contents));
+      Alcotest.(check bool)
+        "Lua rejects invalid decimal"
+        true
+        (Result.is_error (Lua_csv_converter.convert lua ~name:"bad" contents)))
+;;
+
 let other_institution () =
   let source = Stdio.In_channel.read_all "fixtures/lua-example-bank.lua" in
   let converter = Lua_csv_converter.create ~institution:"example-bank" source |> ok in
@@ -291,6 +359,7 @@ let () =
       , [ Alcotest.test_case "CDC equivalence" `Quick compare_converters
         ; Alcotest.test_case "FDM equivalence" `Quick fdm_equivalence
         ; Alcotest.test_case "Bunq equivalence" `Quick bunq_equivalence
+        ; Alcotest.test_case "BoursoBank equivalence" `Quick bourso_equivalence
         ; Alcotest.test_case "another institution" `Quick other_institution
         ] )
     ]

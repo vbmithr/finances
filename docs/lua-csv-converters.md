@@ -5,7 +5,8 @@ A Lua CSV converter is a Lua 2.5 program that turns each CSV row into a
 records. The institution-specific header, account and interpretation belong in
 the script. The [CDC converter](../institutions/lua/cdc.lua) is a complete
 example; [FDM](../institutions/lua/fdm.lua) emits a file-level total, and
-[Bunq](../institutions/lua/bunq.lua) describes observations for several accounts.
+[Bunq](../institutions/lua/bunq.lua) describes observations for several accounts;
+[BoursoBank](../institutions/lua/boursobank.lua) also emits day-end balances.
 
 Refer to a script from an institution TOML file:
 
@@ -78,7 +79,9 @@ not assign a spending category.
 The global `config` table declares:
 
 - `institution`: the institution name; it must match the TOML definition.
-- `header`: the exact CSV header as a Lua array, with distinct names.
+- `header`: the exact CSV header as a Lua array. Repeated names use the first
+  occurrence by name; later occurrences use `#2`, `#3` and so on in `row`
+  and `raw`. Ambiguous generated names are refused.
 - `separator`: an optional single character; the default is a comma.
 - `identity`: `source` or `inventory`, as described in the records format.
 - `converter` and `version`: strings identifying the converter in the output.
@@ -142,6 +145,21 @@ config.observation = { journal_tags = {} }
 config.observation.journal_tags["bunq-counterparty"] = "Counterparty"
 ```
 
+## Stated balances
+
+For a record row, `convert` may return a records-format balance table as its
+second result, or `nil` if the row states no balance. The table has
+`kind = "balance"`, `type`, `quantity`,
+`commodity` and `as_of`; Fin supplies the selected account. As with records, an
+explicit account must agree with the selected account. Repeated identical
+balances are merged; conflicting balances are refused. BoursoBank uses this to
+capture its second `Solde` column as a day-end balance.
+
+For observation sources, `config.observation.conflict_columns` is an array of
+CSV field names whose differences between matched exports require review.
+Original field names and values, including repeated names, remain in the record's
+source fields.
+
 ## Statement totals
 
 A script can optionally define `classify(row)`, returning `"record"` or
@@ -162,10 +180,10 @@ movements. The original source file is also retained.
 
 ## Current limits
 
-This is an experimental integration, currently used by CDC, FDM and Bunq. It
+This is an experimental integration, currently used by CDC, FDM, Bunq and BoursoBank. It
 supports one exact header per script, static or row-derived accounts, row-based
-records, observations and statement claims. It does not yet support duplicate
-headers, arbitrary file-wide checks, row skipping, general decimal arithmetic,
+records, balances, observations and statement claims. It does not yet support
+arbitrary file-wide checks, row skipping, general decimal arithmetic,
 or the full range of observation matching settings.
 An institution cannot combine JSON and Lua CSV converters in one definition yet.
 The Lua program is run once per file and its state persists across rows. Only run

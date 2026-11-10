@@ -193,6 +193,20 @@ let lua_list table =
   go 1 []
 ;;
 
+(* Duplicate CSV names have stable aliases in Lua; original names remain in fields. *)
+let column_keys header =
+  let seen = Hashtbl.create (module String) in
+  let keys =
+    List.map header ~f:(fun name ->
+      let n = 1 + Option.value (Hashtbl.find seen name) ~default:0 in
+      Hashtbl.set seen ~key:name ~data:n;
+      if n = 1 then name else Printf.sprintf "%s#%d" name n)
+  in
+  if List.contains_dup keys ~compare:String.compare
+  then failwith "CSV header has ambiguous numbered column names";
+  keys
+;;
+
 type t =
   { source : string
   ; institution : string
@@ -200,6 +214,7 @@ type t =
   ; header : string list
   ; separator : char
   ; tags : (string * string) list
+  ; conflict_columns : string list
   }
 
 let initialize source =
@@ -269,8 +284,8 @@ let create ~institution source =
     then fail "Lua converter belongs to institution %s, expected %s" declared institution;
     if not (List.mem [ "source"; "inventory" ] identity ~equal:String.equal)
     then fail "unknown identity: %s" identity;
-    if List.is_empty header || List.contains_dup header ~compare:String.compare
-    then failwith "Lua converters require a nonempty header with distinct names";
+    if List.is_empty header then failwith "Lua converters require a nonempty header";
+    ignore (column_keys header : string list);
     if not (V.eq (get config "journal_tags") L.Nil)
     then failwith "move journal_tags into config.observation";
     let tags =
@@ -288,7 +303,18 @@ let create ~institution source =
     List.iter tags ~f:(fun (_, column) ->
       if not (List.mem header column ~equal:String.equal)
       then fail "journal tag column is not in header: %s" column);
-    { source; institution; identity; header; separator; tags })
+    let conflict_columns =
+      match get config "observation" with
+      | L.Table observation ->
+        (match get observation "conflict_columns" with
+         | L.Nil -> []
+         | value -> lua_table value |> lua_list |> List.map ~f:string)
+      | _ -> []
+    in
+    List.iter conflict_columns ~f:(fun column ->
+      if not (List.mem header column ~equal:String.equal)
+      then fail "conflict column is not in header: %s" column);
+    { source; institution; identity; header; separator; tags; conflict_columns })
 ;;
 
 let of_string source =
@@ -345,6 +371,7 @@ let convert t ~name contents =
       | L.Table _ -> true
       | _ -> failwith "observation must be a table"
     in
+    let balances = ref [] in
     let accounts = Hashtbl.create (module String) in
     let positions = Hashtbl.create (module String) in
     let inventory prefix = function
@@ -370,6 +397,7 @@ let convert t ~name contents =
     in
     if not (List.equal String.equal header expected)
     then failwith "CSV header does not match script";
+    let keys = column_keys header in
     (* First classify the rows, then interpret transactions before statement
        claims. This lets the script describe a file total wherever it occurs. *)
     let rows =
@@ -380,8 +408,9 @@ let convert t ~name contents =
         then fail "row %d has the wrong number of columns" (i + 1)
         else (
           let raw = List.zip_exn header cells in
+          let named = List.zip_exn keys cells in
           let normalized =
-            List.map raw ~f:(fun (key, value) -> key, String.strip value)
+            List.map named ~f:(fun (key, value) -> key, String.strip value)
           in
           let kind =
             match classify with
@@ -394,12 +423,12 @@ let convert t ~name contents =
                with
                | exn -> fail "row %d: %s" (i + 1) (Exn.to_string exn))
           in
-          Some (i, cells, raw, normalized, kind)))
+          Some (i, cells, raw, named, normalized, kind)))
     in
     let record_rows, statement_rows =
-      List.partition_tf rows ~f:(fun (_, _, _, _, kind) -> String.equal kind "record")
+      List.partition_tf rows ~f:(fun (_, _, _, _, _, kind) -> String.equal kind "record")
     in
-    let interpret (i, cells, raw, normalized, kind) =
+    let interpret (i, cells, raw, named, normalized, kind) =
       let fields =
         raw
         |> List.filter ~f:(fun (_, v) -> not (String.is_empty (String.strip v)))
@@ -438,48 +467,63 @@ let convert t ~name contents =
             Some id)
           else None
         in
-        match apply [ string_table normalized; string_table raw; context ] with
-        | [ L.Table result ] ->
-          let default name value =
-            if V.eq (get result name) L.Nil
-            then V.Table.bind result ~key:(L.String name) ~data:value
-          in
-          (match row_account_id with
-           | None -> ()
-           | Some id ->
-             (match get result "account" with
-              | L.Nil -> default "account" (L.String id)
-              | L.String declared when String.equal declared id -> ()
-              | _ -> failwith "record account does not match selected account");
-             if observation
-             then (
-               match get result "observation" with
-               | L.Nil -> default "observation" (L.Userdata (Userdata.Boolean true))
-               | L.Userdata (Userdata.Boolean true) -> ()
-               | _ -> failwith "record contradicts observation configuration");
-             let details =
-               match get result "details" with
-               | L.Nil ->
-                 let d = V.Table.create 1 in
-                 default "details" (L.Table d);
-                 d
-               | value -> lua_table value
-             in
-             if V.eq (get details "fields") L.Nil
-             then V.Table.bind details ~key:(L.String "fields") ~data:fields);
-          if not (String.equal (get_string result "kind") kind)
-          then failwith "returned kind does not match classification";
-          if
-            String.equal kind "record"
-            && link_statements
-            && not (V.eq (get result "statements") L.Nil)
-          then failwith "record cannot set statements when link_statements is enabled";
-          let id =
-            if String.equal kind "statement" then Some (get_string result "id") else None
-          in
-          id, json (L.Table result)
-        | [ L.Nil ] -> failwith "skipping rows in Lua converters is not supported yet"
-        | _ -> failwith "convert must return a record or statement table"
+        let returned = apply [ string_table normalized; string_table named; context ] in
+        let result, balance =
+          match returned with
+          | [ L.Table result ] -> result, L.Nil
+          | [ L.Table result; balance ] -> result, balance
+          | [ L.Nil ] -> failwith "skipping rows in Lua converters is not supported yet"
+          | _ -> failwith "convert must return a record and optionally a balance"
+        in
+        (match balance, row_account_id with
+         | L.Nil, _ -> ()
+         | L.Table balance, Some id ->
+           (match get balance "account" with
+            | L.Nil -> V.Table.bind balance ~key:(L.String "account") ~data:(L.String id)
+            | L.String declared when String.equal declared id -> ()
+            | _ -> failwith "balance account does not match selected account");
+           if not (String.equal (get_string balance "kind") "balance")
+           then failwith "second result must be a balance table";
+           balances := json (L.Table balance) :: !balances
+         | _ -> failwith "second result must be a balance table for a record");
+        let default name value =
+          if V.eq (get result name) L.Nil
+          then V.Table.bind result ~key:(L.String name) ~data:value
+        in
+        (match row_account_id with
+         | None -> ()
+         | Some id ->
+           (match get result "account" with
+            | L.Nil -> default "account" (L.String id)
+            | L.String declared when String.equal declared id -> ()
+            | _ -> failwith "record account does not match selected account");
+           if observation
+           then (
+             match get result "observation" with
+             | L.Nil -> default "observation" (L.Userdata (Userdata.Boolean true))
+             | L.Userdata (Userdata.Boolean true) -> ()
+             | _ -> failwith "record contradicts observation configuration");
+           let details =
+             match get result "details" with
+             | L.Nil ->
+               let d = V.Table.create 1 in
+               default "details" (L.Table d);
+               d
+             | value -> lua_table value
+           in
+           if V.eq (get details "fields") L.Nil
+           then V.Table.bind details ~key:(L.String "fields") ~data:fields);
+        if not (String.equal (get_string result "kind") kind)
+        then failwith "returned kind does not match classification";
+        if
+          String.equal kind "record"
+          && link_statements
+          && not (V.eq (get result "statements") L.Nil)
+        then failwith "record cannot set statements when link_statements is enabled";
+        let id =
+          if String.equal kind "statement" then Some (get_string result "id") else None
+        in
+        id, json (L.Table result)
       with
       | exn -> fail "row %d: %s" (i + 1) (Exn.to_string exn)
     in
@@ -536,6 +580,7 @@ let convert t ~name contents =
       header
       ^ source
       ^ accounts
+      ^ String.concat ~sep:"" (List.rev_map !balances ~f:(fun b -> b ^ "\n"))
       ^ String.concat
           ~sep:""
           (List.map statements ~f:(fun (_, statement) -> statement ^ "\n"))
@@ -556,3 +601,4 @@ let overlap t : Adapter.overlap =
 ;;
 
 let tags t = t.tags
+let conflict_columns t = t.conflict_columns

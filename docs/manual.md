@@ -423,11 +423,10 @@ To use a Lua converter, replace the `definition` line with
 account and converter metadata, and returns records from each row; see the
 [Lua converter guide](lua-csv-converters.md) for the contract and bundled
 examples. The Lua integration is experimental: it supports static or row-derived
-accounts, exact headers with distinct names, observations and statement claims.
+accounts, exact headers, stated balances, observations and statement claims.
 Lua observation settings, including journal tags, live in `config.observation`;
 the host supplies the selected account and source fields for records.
-An institution cannot mix JSON and Lua CSV converters yet. Duplicate headers,
-file-wide checks, row skipping, general decimal arithmetic and some observation
+An institution cannot mix JSON and Lua CSV converters yet. File-wide checks, row skipping, general decimal arithmetic and some observation
 matching settings are not yet supported. Lua numbers are floating point; use
 `decimal`, `decimal_comma`, `negate` and `sign` for exact quantities.
 Only run scripts you trust: they can loop indefinitely.

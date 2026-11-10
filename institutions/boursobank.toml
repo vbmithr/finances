@@ -8,7 +8,7 @@ format = "ofx"
 
 [[statements]]
 format = "csv"
-definition = "csv/boursobank.json"
+script = "lua/boursobank.lua"
 
 [rules."boursobank-default-01"]
 pattern = '^(?:Relevé différé Carte |Relev\{ diff\{r\{ Carte ).+'

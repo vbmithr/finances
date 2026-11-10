@@ -290,6 +290,7 @@ let sources (r : t) =
            ~convert:(Lua_csv_converter.convert definition))
         with
         tags = Lua_csv_converter.tags definition
+      ; conflict_columns = Lua_csv_converter.conflict_columns definition
       })
   in
   Option.to_list statement @ layouts @ scripts

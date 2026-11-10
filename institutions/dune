@@ -20,7 +20,7 @@
   fdm.toml
   ethereum.toml
   polygon.toml
-  csv/boursobank.json
+  lua/boursobank.lua
   lua/bunq.lua
   lua/cdc.lua
   csv/ethereum-1.json
@@ -35,7 +35,7 @@
  (action
   (write-file
    %{targets}
-   "let boursobank = {fin|%{read:boursobank.toml}|fin}\nlet wise = {fin|%{read:wise.toml}|fin}\nlet revolut = {fin|%{read:revolut.toml}|fin}\nlet bunq = {fin|%{read:bunq.toml}|fin}\nlet cdc = {fin|%{read:cdc.toml}|fin}\nlet kraken = {fin|%{read:kraken.toml}|fin}\nlet fdm = {fin|%{read:fdm.toml}|fin}\nlet ethereum = {fin|%{read:ethereum.toml}|fin}\nlet polygon = {fin|%{read:polygon.toml}|fin}\nlet csv = [\n  \"csv/boursobank.json\", {fin|%{read:csv/boursobank.json}|fin};\n  \"lua/bunq.lua\", {fin|%{read:lua/bunq.lua}|fin};\n  \"lua/cdc.lua\", {fin|%{read:lua/cdc.lua}|fin};\n  \"csv/ethereum-1.json\", {fin|%{read:csv/ethereum-1.json}|fin};\n  \"csv/ethereum-2.json\", {fin|%{read:csv/ethereum-2.json}|fin};\n  \"lua/fdm.lua\", {fin|%{read:lua/fdm.lua}|fin};\n  \"csv/kraken.json\", {fin|%{read:csv/kraken.json}|fin};\n  \"csv/polygon-1.json\", {fin|%{read:csv/polygon-1.json}|fin};\n  \"csv/polygon-2.json\", {fin|%{read:csv/polygon-2.json}|fin};\n  \"csv/revolut.json\", {fin|%{read:csv/revolut.json}|fin};\n  \"csv/wise.json\", {fin|%{read:csv/wise.json}|fin};\n]\nlet companion_example = {fin|%{read:companion_example.json}|fin}\n")))
+   "let boursobank = {fin|%{read:boursobank.toml}|fin}\nlet wise = {fin|%{read:wise.toml}|fin}\nlet revolut = {fin|%{read:revolut.toml}|fin}\nlet bunq = {fin|%{read:bunq.toml}|fin}\nlet cdc = {fin|%{read:cdc.toml}|fin}\nlet kraken = {fin|%{read:kraken.toml}|fin}\nlet fdm = {fin|%{read:fdm.toml}|fin}\nlet ethereum = {fin|%{read:ethereum.toml}|fin}\nlet polygon = {fin|%{read:polygon.toml}|fin}\nlet csv = [\n  \"lua/boursobank.lua\", {fin|%{read:lua/boursobank.lua}|fin};\n  \"lua/bunq.lua\", {fin|%{read:lua/bunq.lua}|fin};\n  \"lua/cdc.lua\", {fin|%{read:lua/cdc.lua}|fin};\n  \"csv/ethereum-1.json\", {fin|%{read:csv/ethereum-1.json}|fin};\n  \"csv/ethereum-2.json\", {fin|%{read:csv/ethereum-2.json}|fin};\n  \"lua/fdm.lua\", {fin|%{read:lua/fdm.lua}|fin};\n  \"csv/kraken.json\", {fin|%{read:csv/kraken.json}|fin};\n  \"csv/polygon-1.json\", {fin|%{read:csv/polygon-1.json}|fin};\n  \"csv/polygon-2.json\", {fin|%{read:csv/polygon-2.json}|fin};\n  \"csv/revolut.json\", {fin|%{read:csv/revolut.json}|fin};\n  \"csv/wise.json\", {fin|%{read:csv/wise.json}|fin};\n]\nlet companion_example = {fin|%{read:companion_example.json}|fin}\n")))
 
 ; Adapters are pure: no Rel or SQLite dependency, enforced here.
 

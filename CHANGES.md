@@ -8,6 +8,9 @@ short line of their own.
 
 ## Unreleased
 
+- BoursoBank CSV observations now use Lua. The shared host supports repeated
+  column names, row-stated balances and observation conflict columns.
+
 - Preserve source-stated totals and their linked events; `fin statement totals`
   reports differences against comparable movements. **Action required:**
   rebuild the database and reimport sources for schema version 43.

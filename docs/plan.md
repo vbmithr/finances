@@ -5,7 +5,7 @@ its status: tick off finished work, add discovered work, and refresh the "Where 
 are" figures when they move. History belongs in `CHANGES.md`; designs stay in the
 other documents, which this one links to rather than repeats.
 
-Last updated: 2026-11-10.
+Last updated: 2026-11-11.
 
 ## Direction
 
@@ -219,8 +219,10 @@ configurable yet.
 - [x] Derive Lua record accounts and source fields, and group observation settings.
 - [x] Port Bunq CSV observations to Lua, supporting row-derived accounts,
   comma decimals and journal tags while preserving MT940 matching.
-- [ ] Extend the experimental Lua CSV host beyond CDC, FDM and Bunq: add
-  duplicate headers, general exact decimal arithmetic, row-skipping diagnostics,
+- [x] Port BoursoBank CSV observations to Lua, preserving OFX matching and
+  day-end balances; support repeated headers and conflict columns.
+- [ ] Extend the experimental Lua CSV host beyond these converters: add
+  general exact decimal arithmetic, row-skipping diagnostics,
   remaining observation matching settings and execution limits before migrating
   the remaining institutions.
 - [x] Preserve FDM's stated total and compare it with its linked transactions.

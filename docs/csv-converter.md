@@ -141,13 +141,12 @@ or `balances`; they are evidence for checking the movements.
 that row states a total rather than another movement. Its script also records
 the local currency, amount and exchange rate when available.
 
-[BoursoBank](../institutions/csv/boursobank.json) has a different role. Its CSV
-currently supplies **observations** to enrich movements from OFX, rather than
-creating another set of movements. `observation: true` says so. The two `Solde`
-columns mean different things; `Solde#2` selects the second. `journal_tags` selects information for the journal after a CSV observation is
-paired with an OFX movement. `conflict_columns` names columns that exports of
-the same CSV row must agree on. See [BoursoBank's institution file](../institutions/boursobank.toml)
-for both statement sections.
+[BoursoBank](../institutions/lua/boursobank.lua) now uses Lua. Its CSV supplies
+observations that enrich OFX movements. The two `Solde` columns mean different
+things; the script reads the second as `Solde#2` and emits day-end balances. Its
+observation settings specify journal tags and fields to check for conflicts. See
+[BoursoBank's institution file](../institutions/boursobank.toml) for both
+statement sections.
 
 [Revolut](../institutions/csv/revolut.json) illustrates row filters, checks and
 fees. [Ethereum](../institutions/ethereum.toml) points to two CSV definitions:
