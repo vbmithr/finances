@@ -156,9 +156,9 @@ emitted statement. The record must not itself set `statements`. With no records,
 statement rows are not converted and no account or statement is emitted. This
 matches the existing converter's treatment of an empty FDM statement.
 
-FDM's total is retained in records output, but Fin does not currently check it
-against the sum of the records. The import stores the original source file; it
-does not yet store this stated total as a statement reconciliation.
+Fin stores FDM's stated total and links it to its records on import. Use
+`fin statement totals --institution fdm` to compare the total with the linked
+movements. The original source file is also retained.
 
 ## Current limits
 

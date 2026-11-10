@@ -642,6 +642,55 @@ let link_statement =
       (int64 @-> int64 @-> unit))
 ;;
 
+let store_total db ~document_id ~ordinal ~institution (claim : Document.total_claim) =
+  let insert =
+    Rel_sql.Stmt.(
+      func
+        "INSERT INTO \
+         statement_totals(document_id,ordinal,institution,source_account,reference,commodity_json,quantity,complete) \
+         VALUES (?,?,?,?,?,?,?,?) ON CONFLICT(document_id,ordinal) DO NOTHING"
+        (int64 @-> int @-> text @-> text @-> text @-> text @-> text @-> bool @-> unit))
+  in
+  let* () =
+    db_result
+      (Db.exec
+         db.conn
+         (insert
+            document_id
+            ordinal
+            institution
+            claim.source_account
+            claim.reference
+            (Json.encode Commodity.codec claim.amount.commodity)
+            (Quantity.to_string claim.amount.quantity)
+            claim.complete))
+  in
+  let find =
+    let open Db_schema.Statement_totals in
+    select_by_pair table document_id ordinal id
+  in
+  let* id = db_result (Db.first db.conn (find document_id ordinal)) in
+  let* id = Or_error.of_option id ~error:(Error.of_string "missing statement total") in
+  let link =
+    Rel_sql.Stmt.(
+      func
+        "INSERT INTO statement_total_events(total_id,event_id) VALUES (?,?) ON CONFLICT \
+         DO NOTHING"
+        (int64 @-> int64 @-> unit))
+  in
+  List.fold_result claim.events ~init:() ~f:(fun () event ->
+    let* stored =
+      db_result
+        (Db.first
+           db.conn
+           (find_source event.venue event.account event.kind event.source_id))
+    in
+    let* stored =
+      Or_error.of_option stored ~error:(Error.of_string "missing total event")
+    in
+    db_result (Db.exec db.conn (link id stored.id)))
+;;
+
 (* Ingest events from one document, linking each to it and to its statement. *)
 let ingest_linked ?statement_id db ~document_id events =
   let rec ingest inserted existing = function
@@ -838,6 +887,13 @@ let import_document
         store_balance db ~document_id ~institution balance)
     in
     let* loose = ingest_linked db ~document_id document.events in
+    let* () =
+      List.fold_result
+        (List.mapi document.totals ~f:(fun i claim -> i, claim))
+        ~init:()
+        ~f:(fun () (ordinal, claim) ->
+          store_total db ~document_id ~ordinal ~institution claim)
+    in
     let counts = loose :: counts in
     let* message =
       if List.is_empty document.companion_rows

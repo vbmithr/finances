@@ -123,6 +123,86 @@ let statement_reconciliations ?institution db =
     statements
 ;;
 
+type total_reconciliation =
+  { total_id : int64
+  ; document_id : int64
+  ; institution : string
+  ; source_account : string
+  ; reference : string
+  ; amount : Records.amount
+  ; movements : Quantity.t option
+  ; entries : int
+  ; difference : Quantity.t option
+  }
+
+let statement_totals ?institution db =
+  let* claims =
+    collect
+      db
+      (statement
+         "SELECT \
+          id,document_id,ordinal,institution,source_account,reference,commodity_json,quantity,complete \
+          FROM statement_totals ORDER BY id"
+         Db_schema.Statement_totals.row)
+  in
+  let claims =
+    List.filter claims ~f:(fun (claim : Db_schema.Statement_totals.t) ->
+      Option.for_all institution ~f:(String.equal claim.institution))
+  in
+  let events =
+    Rel_sql.Stmt.(
+      func
+        "SELECT e.payload FROM statement_total_events l JOIN source_events e ON \
+         e.id=l.event_id WHERE l.total_id=? ORDER BY e.id"
+        (int64 @-> ret Row.(t1 (blob "payload"))))
+  in
+  traverse
+    (fun (claim : Db_schema.Statement_totals.t) ->
+       let* commodity = Json.decode Commodity.codec claim.commodity_json in
+       let* quantity = Or_error.try_with (fun () -> Quantity.of_string claim.quantity) in
+       let* payloads = collect db (events claim.id) in
+       let* records =
+         traverse
+           (fun payload ->
+              let* _, record = Records.row_of_string payload in
+              Ok record)
+           payloads
+       in
+       let quantities =
+         List.map records ~f:(fun (record : Records.record) ->
+           let matching =
+             List.filter record.movements ~f:(fun m ->
+               Commodity.equal m.commodity commodity)
+           in
+           if List.is_empty matching
+           then None
+           else
+             Some
+               (List.fold matching ~init:Quantity.zero ~f:(fun sum m ->
+                  Quantity.(sum + m.quantity))))
+       in
+       let movements =
+         if not claim.complete
+         then None
+         else
+           Option.all quantities
+           |> Option.map ~f:(List.fold ~init:Quantity.zero ~f:Quantity.( + ))
+       in
+       let difference = Option.map movements ~f:(fun sum -> Quantity.(sum - quantity)) in
+       Ok
+         { total_id = claim.id
+         ; document_id = claim.document_id
+         ; institution = claim.institution
+         ; source_account = claim.source_account
+         ; reference = claim.reference
+         ; amount = { Records.quantity; commodity }
+         ; movements
+         ; entries = List.length records
+         ; difference
+         })
+    claims
+;;
+
 let set_bank_categories_in_transaction ?(only_unclassified = false) db decisions =
   let* decisions =
     traverse

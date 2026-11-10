@@ -246,6 +246,26 @@ let statement =
   |> Jsont.Object.finish
 ;;
 
+let statement_total =
+  let field name codec (enc : Review.total_reconciliation -> _) map =
+    Jsont.Object.mem name codec ~enc map
+  in
+  Jsont.Object.enc_only ()
+  |> field "total_id" Json.int64_codec (fun r -> r.total_id)
+  |> field "document_id" Json.int64_codec (fun r -> r.document_id)
+  |> field "institution" Jsont.string (fun r -> r.institution)
+  |> field "source_account" Jsont.string (fun r -> r.source_account)
+  |> field "reference" Jsont.string (fun r -> r.reference)
+  |> field "commodity" Commodity.codec (fun r -> r.amount.commodity)
+  |> field "stated" Json.quantity (fun r -> r.amount.quantity)
+  |> field "movements" (Jsont.option Json.quantity) (fun r -> r.movements)
+  |> field "entries" Json.integer (fun r -> r.entries)
+  |> field "difference" (Jsont.option Json.quantity) (fun r -> r.difference)
+  |> field "reconciled" (Jsont.option Jsont.bool) (fun r ->
+    Option.map r.difference ~f:Quantity.is_zero)
+  |> Jsont.Object.finish
+;;
+
 let stated_balance =
   let field name codec (enc : Ledger.stated_balance -> _) map =
     Jsont.Object.mem name codec ~enc map

@@ -8,6 +8,10 @@ short line of their own.
 
 ## Unreleased
 
+- Preserve source-stated totals and their linked events; `fin statement totals`
+  reports differences against comparable movements. **Action required:**
+  rebuild the database and reimport sources for schema version 43.
+
 - Lua records use the selected account and retain source fields by default.
   **Action required:** move custom Lua `config.journal_tags` into
   `config.observation.journal_tags` and update affected definitions.
@@ -19,8 +23,7 @@ short line of their own.
 
 - FDM CSV statements now use a Lua converter. The Lua host can classify
   statement rows, link their claims to records, and negate exact quantities.
-  FDM's stated total is included in records output; as before, it is not yet
-  reconciled against transaction sums or stored as a reconciliation on import.
+  FDM's stated total is included in records output.
 
 - Removed obsolete CSV companion settings from the Bunq MT940 profile. CAMT and
   MT940 profiles in institution TOML now inherit the institution and profile

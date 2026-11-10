@@ -288,6 +288,31 @@ CREATE TABLE "statements" (
 ) STRICT;
 CREATE TRIGGER "statements_no_update" BEFORE UPDATE ON "statements" BEGIN SELECT RAISE(ABORT, 'statements are immutable'); END;
 CREATE TRIGGER "statements_no_delete" BEFORE DELETE ON "statements" BEGIN SELECT RAISE(ABORT, 'statements are immutable'); END;
+CREATE TABLE "statement_totals" (
+  "id" INTEGER NOT NULL,
+  "document_id" INTEGER NOT NULL,
+  "ordinal" INTEGER NOT NULL,
+  "institution" TEXT NOT NULL,
+  "source_account" TEXT NOT NULL,
+  "reference" TEXT NOT NULL,
+  "commodity_json" TEXT NOT NULL,
+  "quantity" TEXT NOT NULL,
+  "complete" INTEGER NOT NULL,
+  PRIMARY KEY ("id"),
+  UNIQUE ("document_id", "ordinal"),
+  FOREIGN KEY ("document_id") REFERENCES "import_documents" ("id")
+) STRICT;
+CREATE TRIGGER "statement_totals_no_update" BEFORE UPDATE ON "statement_totals" BEGIN SELECT RAISE(ABORT, 'statement totals are immutable'); END;
+CREATE TRIGGER "statement_totals_no_delete" BEFORE DELETE ON "statement_totals" BEGIN SELECT RAISE(ABORT, 'statement totals are immutable'); END;
+CREATE TABLE "statement_total_events" (
+  "total_id" INTEGER NOT NULL,
+  "event_id" INTEGER NOT NULL,
+  PRIMARY KEY ("total_id", "event_id"),
+  FOREIGN KEY ("total_id") REFERENCES "statement_totals" ("id"),
+  FOREIGN KEY ("event_id") REFERENCES "source_events" ("id")
+) STRICT;
+CREATE TRIGGER "statement_total_events_no_update" BEFORE UPDATE ON "statement_total_events" BEGIN SELECT RAISE(ABORT, 'statement total links are immutable'); END;
+CREATE TRIGGER "statement_total_events_no_delete" BEFORE DELETE ON "statement_total_events" BEGIN SELECT RAISE(ABORT, 'statement total links are immutable'); END;
 CREATE TABLE "stated_balances" (
   "document_id" INTEGER NOT NULL,
   "institution" TEXT NOT NULL,
@@ -604,4 +629,4 @@ CREATE TABLE "movement_type_changes" (
 ) STRICT;
 CREATE TRIGGER "movement_type_changes_no_update" BEFORE UPDATE ON "movement_type_changes" BEGIN SELECT RAISE(ABORT, 'movement type history is append-only'); END;
 CREATE TRIGGER "movement_type_changes_no_delete" BEFORE DELETE ON "movement_type_changes" BEGIN SELECT RAISE(ABORT, 'movement type history is append-only'); END;
-PRAGMA user_version = 42;
+PRAGMA user_version = 43;

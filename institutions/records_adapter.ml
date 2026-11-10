@@ -5,8 +5,7 @@ open Base
    which is an operation: several legs, a reported commodity, or no effect at all. An observation
    is a companion row, paired with a counted record by [match_rows].
 
-   Not stored yet, though kept in the archived file: a statement's stated total, and a statement
-   that is not a period with an opening and a closing. *)
+   A stated total is stored separately from period balances. *)
 
 let movement_kind = "records-movement"
 let operation_kind = "records-operation"
@@ -138,8 +137,26 @@ let document ~institution (t : Records.t) =
         (statement ~institution t ~events:(listed_by s.id) s)
         ~f:(fun document -> s.id, document))
   in
+  let totals =
+    List.filter_map t.statements ~f:(fun (s : Records.statement) ->
+      Option.bind s.total ~f:(fun amount ->
+        List.find t.accounts ~f:(fun (a : Records.account) -> String.equal a.id s.account)
+        |> Option.map ~f:(fun account ->
+          { Document.source_account = account_identity ~institution account
+          ; reference = s.id
+          ; amount
+          ; complete =
+              not
+                (List.exists observations ~f:(fun record ->
+                   List.mem record.statements s.id ~equal:String.equal))
+          ; events =
+              List.filter_map rows ~f:(fun (record, event) ->
+                Option.some_if (List.mem record.statements s.id ~equal:String.equal) event)
+          })))
+  in
   { Document.empty with
     statements = List.map stored ~f:snd
+  ; totals
   ; companion_rows
   ; balances =
       List.map t.balances ~f:(fun (b : Records.balance) : Document.balance ->
@@ -529,6 +546,7 @@ let make
         ~f:(fun (all : Document.t) (d : Document.t) ->
           { all with
             statements = all.statements @ d.statements
+          ; totals = all.totals @ d.totals
           ; balances = all.balances @ d.balances
           ; events = all.events @ d.events
           ; companion_rows =

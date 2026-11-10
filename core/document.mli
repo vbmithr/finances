@@ -16,6 +16,15 @@ type statement =
   ; events : Source_event.t list
   }
 
+(** A source-stated total and the events it covers, without implied balances. *)
+type total_claim =
+  { source_account : string
+  ; reference : string
+  ; amount : Records.amount
+  ; complete : bool
+  ; events : Source_event.t list
+  }
+
 (** A balance the source states at a point in time. [account] is the source's own name for
     the account, so that files naming one account differently stay comparable later. *)
 type balance =
@@ -28,6 +37,7 @@ type balance =
 
 type t =
   { statements : statement list
+  ; totals : total_claim list
   ; balances : balance list
   ; events : Source_event.t list (** Movements outside any statement. *)
   ; companion_rows : (int * string list) list (** Row number and raw fields. *)

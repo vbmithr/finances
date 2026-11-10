@@ -11,6 +11,14 @@ type statement =
   ; events : Source_event.t list
   }
 
+type total_claim =
+  { source_account : string
+  ; reference : string
+  ; amount : Records.amount
+  ; complete : bool
+  ; events : Source_event.t list
+  }
+
 type balance =
   { account : string
   ; balance_type : Records.balance_type
@@ -21,6 +29,7 @@ type balance =
 
 type t =
   { statements : statement list
+  ; totals : total_claim list
   ; balances : balance list
   ; events : Source_event.t list
   ; companion_rows : (int * string list) list
@@ -28,5 +37,11 @@ type t =
   }
 
 let empty =
-  { statements = []; balances = []; events = []; companion_rows = []; context = [] }
+  { statements = []
+  ; totals = []
+  ; balances = []
+  ; events = []
+  ; companion_rows = []
+  ; context = []
+  }
 ;;

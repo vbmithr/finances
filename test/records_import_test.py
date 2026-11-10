@@ -36,6 +36,13 @@ Total,,,,,,20.90
         assert "imported=1" in first.stdout and "inserted=3" in first.stdout, first.stdout
         again = run("import", "fdm", source, "-d", database, "--journal", journal)
         assert "unchanged=1" in again.stdout and "inserted=0" in again.stdout, again.stdout
+        totals = json.loads(run("statement", "totals", "--institution", "fdm", "-d", database).stdout)
+        assert len(totals) == 1, totals
+        total = totals[0]
+        assert total["stated"] == "-20.9", total
+        assert total["movements"] == "-20.9", total
+        assert total["entries"] == 3 and total["difference"] == "0", total
+        assert total["reconciled"] is True, total
         return database, journal
 
     # From the CSV, identical rows included.
@@ -51,6 +58,15 @@ Total,,,,,,20.90
     assert "Kind: Records" in shown, shown
     assert "fdm" in run("status", "-d", database).stdout
 
+    # A source discrepancy remains visible instead of rejecting its evidence.
+    mismatch = root / "mismatch.csv"
+    mismatch.write_text(statement.read_text().replace("Total,,,,,,20.90", "Total,,,,,,20.91"))
+    mismatch_db = root / "mismatch.sqlite3"
+    run("init", "-d", mismatch_db)
+    run("import", "fdm", mismatch, "-d", mismatch_db, "--journal", root / "mismatch.journal")
+    mismatch_total = json.loads(run("statement", "totals", "-d", mismatch_db).stdout)[0]
+    assert mismatch_total["difference"] == "0.01" and mismatch_total["reconciled"] is False, mismatch_total
+
     # Evidence imported through the old JSON converter matches the new Lua CSV.
     legacy = root / "legacy.jsonl"
     run("convert", "--definition", LEGACY_DEFINITION, statement, "-o", legacy)
@@ -64,6 +80,39 @@ Total,,,,,,20.90
         run("convert", "fdm", statement, "-o", records)
         _, other = imported(name, records)
         assert other.read_text() == text, name
+
+    # A different stated commodity cannot be compared to the USD rows.
+    converted = records.parent.joinpath("records.jsonl").read_text().splitlines()
+    other_commodity = root / "other-commodity.jsonl"
+    out = []
+    for line in converted:
+        row = json.loads(line)
+        if row["kind"] == "statement":
+            row["total"]["commodity"]["code"] = "EUR"
+        out.append(json.dumps(row))
+    other_commodity.write_text("\n".join(out) + "\n")
+    other_db = root / "other-commodity.sqlite3"
+    run("init", "-d", other_db)
+    run("import", "fdm", other_commodity, "-d", other_db, "--journal", root / "other.journal")
+    comparison = json.loads(run("statement", "totals", "-d", other_db).stdout)[0]
+    assert comparison["movements"] is None and comparison["reconciled"] is None, comparison
+
+    # An observation is not a counted event; do not claim a partial sum reconciles.
+    observed = root / "observed.jsonl"
+    out = []
+    marked = False
+    for line in converted:
+        row = json.loads(line)
+        if row["kind"] == "record" and not marked:
+            row["observation"] = True
+            marked = True
+        out.append(json.dumps(row))
+    observed.write_text("\n".join(out) + "\n")
+    observed_db = root / "observed.sqlite3"
+    run("init", "-d", observed_db)
+    run("import", "fdm", observed, "-d", observed_db, "--journal", root / "observed.journal")
+    comparison = json.loads(run("statement", "totals", "-d", observed_db).stdout)[0]
+    assert comparison["entries"] == 2 and comparison["reconciled"] is None, comparison
 
     # A records file of another institution is not this one's, and a broken one says why.
     other = root / "other.jsonl"

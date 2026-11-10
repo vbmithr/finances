@@ -616,14 +616,18 @@ and history when import reports an error:
 ```sh
 fin institution history
 fin statement list
+fin statement totals
 fin statement companions --review
 ```
 
 `fin statement list` compares each bank statement's stated balances with the
-movements it lists. `fin statement companions` lists the enrichment exports (the
-BoursoBank, Wise and Bunq CSV files) with their fields and match state;
-`--review` keeps the rows that still need attention. Both accept
-`--institution` to show one bank. `fin statement match` recomputes the matches;
+movements it lists. `fin statement totals` compares source-stated totals with
+the records they name. It reports the difference as movements minus the stated
+total; `reconciled` and `difference` are null if a linked observation or a
+record without a movement in the stated commodity prevents comparison.
+`fin statement companions` lists the enrichment exports (the BoursoBank, Wise
+and Bunq CSV files) with their fields and match state; `--review` keeps the rows
+that still need attention. These commands accept `--institution` to show one bank. `fin statement match` recomputes the matches;
 `fin import` already does this.
 
 `fin institution history` is a log of file import attempts, not a list of transactions.
@@ -757,8 +761,10 @@ fin import fdm records.jsonl.zst
 ```
 
 Observations in a records file are paired with its counted records, and balances are stored:
-`fin statement balances` lists them as JSON. Stated totals, and a statement with no opening and
-closing such as BoursoBank's OFX, stay in the archived file for now.
+`fin statement balances` lists them as JSON. Source-stated totals are retained
+and compared with linked records by `fin statement totals`. A statement without
+opening and closing balances, such as BoursoBank's OFX, is not listed as a
+balance reconciliation.
 
 ### Check a records file
 
@@ -1810,7 +1816,7 @@ above; no automatic migration runs.
 | `fin account --help` | Account listing, config and history |
 | `fin institution --help` | Institution list and generic import setup |
 | `fin operation --help` | Imported transaction listing |
-| `fin statement --help` | Statement reconciliation, stated balances and companion files |
+| `fin statement --help` | Statement reconciliation, stated balances and totals, and companion files |
 | `fin convert INSTITUTION PATH...` | Print statement files, directories and ZIPs as records; `--definition` for any other CSV |
 | `fin records check FILE` | Validate a statement converter's output |
 | `fin reversal --help` | Withdrawal reversal candidates and review |

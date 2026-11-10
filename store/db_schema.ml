@@ -3,7 +3,7 @@ open Rel
 
 (** One current experimental baseline; older databases must be reimported. Banks
     have no tables of their own. *)
-let version = 42
+let version = 43
 
 let timestamp = `Expr "(strftime('%Y-%m-%dT%H:%M:%f','now') || '000000000Z')"
 
@@ -1494,6 +1494,131 @@ module Statements = struct
   ;;
 
   let definition = Sqlite_schema.table ~immutable:"statements are immutable" table
+end
+
+module Statement_totals = struct
+  type t =
+    { id : int64
+    ; document_id : int64
+    ; ordinal : int
+    ; institution : string
+    ; source_account : string
+    ; reference : string
+    ; commodity_json : string
+    ; quantity : string
+    ; complete : bool
+    }
+
+  let id = Col.make "id" Type.int64 (fun (r : t) -> r.id)
+  let document_id = Col.make "document_id" Type.int64 (fun (r : t) -> r.document_id)
+  let ordinal = Col.make "ordinal" Type.int (fun (r : t) -> r.ordinal)
+  let institution = Col.make "institution" Type.text (fun (r : t) -> r.institution)
+
+  let source_account =
+    Col.make "source_account" Type.text (fun (r : t) -> r.source_account)
+  ;;
+
+  let reference = Col.make "reference" Type.text (fun (r : t) -> r.reference)
+
+  let commodity_json =
+    Col.make "commodity_json" Type.text (fun (r : t) -> r.commodity_json)
+  ;;
+
+  let quantity = Col.make "quantity" Type.text (fun (r : t) -> r.quantity)
+  let complete = Col.make "complete" Type.bool (fun (r : t) -> r.complete)
+
+  let row =
+    Row.(
+      unit
+        (fun
+            id
+             document_id
+             ordinal
+             institution
+             source_account
+             reference
+             commodity_json
+             quantity
+             complete
+           ->
+           { id
+           ; document_id
+           ; ordinal
+           ; institution
+           ; source_account
+           ; reference
+           ; commodity_json
+           ; quantity
+           ; complete
+           })
+      * id
+      * document_id
+      * ordinal
+      * institution
+      * source_account
+      * reference
+      * commodity_json
+      * quantity
+      * complete)
+  ;;
+
+  let table =
+    Table.make
+      ~params:[ Rel_sqlite3.Strict ]
+      ~primary_key:(Table.Primary_key.make [ Col.Def id ])
+      ~unique_keys:[ Table.Unique_key.make [ Col.Def document_id; Col.Def ordinal ] ]
+      ~foreign_keys:
+        [ Table.Foreign_key.make
+            ~cols:[ Col.Def document_id ]
+            ~parent:
+              (Table.Foreign_key.Table
+                 (Import_documents.table, [ Col.Def Import_documents.id ]))
+            ()
+        ]
+      "statement_totals"
+      row
+  ;;
+
+  let definition = Sqlite_schema.table ~immutable:"statement totals are immutable" table
+end
+
+module Statement_total_events = struct
+  type t =
+    { total_id : int64
+    ; event_id : int64
+    }
+
+  let total_id = Col.make "total_id" Type.int64 (fun (r : t) -> r.total_id)
+  let event_id = Col.make "event_id" Type.int64 (fun (r : t) -> r.event_id)
+
+  let row =
+    Row.(unit (fun total_id event_id -> { total_id; event_id }) * total_id * event_id)
+  ;;
+
+  let table =
+    Table.make
+      ~params:[ Rel_sqlite3.Strict ]
+      ~primary_key:(Table.Primary_key.make [ Col.Def total_id; Col.Def event_id ])
+      ~foreign_keys:
+        [ Table.Foreign_key.make
+            ~cols:[ Col.Def total_id ]
+            ~parent:
+              (Table.Foreign_key.Table
+                 (Statement_totals.table, [ Col.Def Statement_totals.id ]))
+            ()
+        ; Table.Foreign_key.make
+            ~cols:[ Col.Def event_id ]
+            ~parent:
+              (Table.Foreign_key.Table (Source_events.table, [ Col.Def Source_events.id ]))
+            ()
+        ]
+      "statement_total_events"
+      row
+  ;;
+
+  let definition =
+    Sqlite_schema.table ~immutable:"statement total links are immutable" table
+  ;;
 end
 
 module Stated_balances = struct
@@ -3194,6 +3319,8 @@ let definitions =
   ; Bank_account_mappings.definition
   ; Bank_account_mapping_changes.definition
   ; Statements.definition
+  ; Statement_totals.definition
+  ; Statement_total_events.definition
   ; Stated_balances.definition
   ; Statement_events.definition
   ; Companion_rows.definition

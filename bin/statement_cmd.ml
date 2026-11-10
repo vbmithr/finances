@@ -42,6 +42,19 @@ let balances_cmd =
     Term.(const balances $ database $ institution_filter)
 ;;
 
+let totals database institution =
+  with_database database (fun db ->
+    let%map totals = Review.statement_totals ?institution db in
+    Report_json.print (Jsont.list Report_json.statement_total) totals)
+;;
+
+let totals_cmd =
+  command
+    "totals"
+    "Compare source-stated totals with their linked records, as JSON."
+    Term.(const totals $ database $ institution_filter)
+;;
+
 let companions database institution review =
   with_database database (fun db ->
     let%bind observations = Ledger.companion_observations ?institution db in
@@ -115,5 +128,5 @@ let cmd =
   group
     "statement"
     "Inspect and reconcile imported statements and companion files."
-    [ statements_cmd; balances_cmd; companions_cmd; match_companions_cmd ]
+    [ statements_cmd; balances_cmd; totals_cmd; companions_cmd; match_companions_cmd ]
 ;;

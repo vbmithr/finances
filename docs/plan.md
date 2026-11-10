@@ -223,8 +223,8 @@ configurable yet.
   duplicate headers, general exact decimal arithmetic, row-skipping diagnostics,
   remaining observation matching settings and execution limits before migrating
   the remaining institutions.
-- [ ] Reconcile FDM's stated total against its transactions and preserve the
-  statement claim on import; it is currently emitted but not reconciled.
+- [x] Preserve FDM's stated total and compare it with its linked transactions.
+- [ ] Compare totals linked to observations after matching them to counted records.
 
 - [x] Allow a user-added institution to import supported OFX 2.x without an
   institution-specific adapter; preserve account identity and FITID deduplication.
@@ -606,7 +606,7 @@ position observations, derive positions from fills, or calculate funding.
   all CSV files seen, and reproduce fin's CDC interpretation and the Wise rows. OFX and MT940
   have converters, so every file seen so far converts.
   `Records_adapter` imports records through the usual pipeline, for every bundled institution, pairing
-  observations and storing balances; stated totals stay in the archived file.
+  observations, storing balances and reconciling stated totals.
   Comparing real files through the old adapters and through records showed every
   posting's date and amount already agrees for Wise, bunq, BoursoBank and Revolut, and records pairs
   19 BoursoBank rows the adapter leaves ambiguous.

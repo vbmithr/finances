@@ -26,6 +26,22 @@ val statement_reconciliations
   -> t
   -> statement_reconciliation list Or_error.t
 
+(** A stated total compared to the linked records. A missing comparison means at
+    least one record has no movement in the stated commodity. *)
+type total_reconciliation =
+  { total_id : int64
+  ; document_id : int64
+  ; institution : string
+  ; source_account : string
+  ; reference : string
+  ; amount : Records.amount
+  ; movements : Quantity.t option
+  ; entries : int
+  ; difference : Quantity.t option
+  }
+
+val statement_totals : ?institution:string -> t -> total_reconciliation list Or_error.t
+
 (** Atomically apply explicit category decisions and audit their reasons. Verify
     existing generated postings before changing only the counter-account.
     Replays are idempotent. New decisions also apply before first projection.
