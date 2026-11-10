@@ -216,10 +216,13 @@ configurable yet.
   definitions after the profile cleanup.
 - [x] Port FDM to Lua and support statement claims and exact negation. Compare
   its generated records with the previous CSV layout.
-- [ ] Extend the experimental Lua CSV host beyond CDC and FDM: add multiple
-  accounts, general exact decimal arithmetic, row-skipping diagnostics,
-  observation enrichment and execution limits before migrating the remaining
-  institutions.
+- [x] Derive Lua record accounts and source fields, and group observation settings.
+- [x] Port Bunq CSV observations to Lua, supporting row-derived accounts,
+  comma decimals and journal tags while preserving MT940 matching.
+- [ ] Extend the experimental Lua CSV host beyond CDC, FDM and Bunq: add
+  duplicate headers, general exact decimal arithmetic, row-skipping diagnostics,
+  remaining observation matching settings and execution limits before migrating
+  the remaining institutions.
 - [ ] Reconcile FDM's stated total against its transactions and preserve the
   statement claim on import; it is currently emitted but not reconciled.
 

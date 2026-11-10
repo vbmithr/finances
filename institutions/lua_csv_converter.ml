@@ -62,6 +62,26 @@ let decimal = function
   | _ -> failwith "decimal expects one string"
 ;;
 
+let decimal_comma = function
+  | [ L.String text ] ->
+    if String.mem text '.' then fail "invalid quantity: %S" text;
+    let text = String.substr_replace_all text ~pattern:"," ~with_:"." in
+    [ L.String (Quantity.to_string (quantity text)) ]
+  | _ -> failwith "decimal_comma expects one string"
+;;
+
+let matches = function
+  | [ L.String value; L.String pattern ] ->
+    if Re.execp (Re.Perl.compile_pat pattern) value then [ L.Number 1. ] else [ L.Nil ]
+  | _ -> failwith "matches expects two strings"
+;;
+
+let valid_iban = function
+  | [ L.String value ] ->
+    if Result.is_ok (Iban.of_string value) then [ L.Number 1. ] else [ L.Nil ]
+  | _ -> failwith "valid_iban expects one string"
+;;
+
 let negate = function
   | [ L.String text ] -> [ L.String (Quantity.to_string (Quantity.neg (quantity text))) ]
   | _ -> failwith "negate expects one string"
@@ -152,6 +172,7 @@ let rec json value =
         List.map entries ~f:(function
           | L.String key, value -> key, value
           | _ -> failwith "Lua object keys must be strings")
+        |> List.sort ~compare:(fun (a, _) (b, _) -> String.compare a b)
       in
       "{"
       ^ String.concat
@@ -178,6 +199,7 @@ type t =
   ; identity : string
   ; header : string list
   ; separator : char
+  ; tags : (string * string) list
   }
 
 let initialize source =
@@ -189,6 +211,13 @@ let initialize source =
           | _ -> failwith "array expects no arguments") )
     ; "sign", V.caml_func sign
     ; "decimal", V.caml_func decimal
+    ; "decimal_comma", V.caml_func decimal_comma
+    ; "matches", V.caml_func matches
+    ; "valid_iban", V.caml_func valid_iban
+    ; ( "reject"
+      , V.caml_func (function
+          | [ L.String reason ] -> failwith reason
+          | _ -> failwith "reject expects one string") )
     ; "negate", V.caml_func negate
     ; "utc_datetime", V.caml_func utc_datetime
     ; "yes", L.Userdata (Userdata.Boolean true)
@@ -201,7 +230,11 @@ let initialize source =
   let identity = get_string config "identity" in
   let converter = get_string config "converter" in
   let version = get_string config "version" in
-  let account = get config "account" |> lua_table in
+  let account =
+    match get config "account" with
+    | L.Nil -> V.Table.create 0
+    | value -> lua_table value
+  in
   let expected = get config "header" |> lua_table |> lua_list |> List.map ~f:string in
   let separator =
     match get config "separator" with
@@ -221,6 +254,11 @@ let create ~institution source =
   Or_error.try_with (fun () ->
     let state, declared, identity, _, _, _, header, separator, _ = initialize source in
     let config = I.getglobal state (L.String "config") |> lua_table in
+    (match get config "account", I.getglobal state (L.String "account") with
+     | L.Nil, L.Function _ | L.Table _, L.Nil -> ()
+     | L.Nil, L.Nil -> failwith "provide config.account or an account function"
+     | L.Table _, L.Function _ -> failwith "use config.account or account, not both"
+     | _ -> failwith "invalid account configuration");
     (match get config "link_statements" with
      | L.Nil | L.Userdata (Userdata.Boolean _) -> ()
      | _ -> failwith "link_statements must be yes or no");
@@ -233,7 +271,24 @@ let create ~institution source =
     then fail "unknown identity: %s" identity;
     if List.is_empty header || List.contains_dup header ~compare:String.compare
     then failwith "Lua converters require a nonempty header with distinct names";
-    { source; institution; identity; header; separator })
+    if not (V.eq (get config "journal_tags") L.Nil)
+    then failwith "move journal_tags into config.observation";
+    let tags =
+      match get config "observation" with
+      | L.Nil -> []
+      | L.Table observation ->
+        (match get observation "journal_tags" with
+         | L.Nil -> []
+         | L.Table table ->
+           V.Luahash.fold (fun k v acc -> (string k, string v) :: acc) table []
+           |> List.sort ~compare:(fun (a, _) (b, _) -> String.compare a b)
+         | _ -> failwith "journal_tags must be a table")
+      | _ -> failwith "observation must be a table"
+    in
+    List.iter tags ~f:(fun (_, column) ->
+      if not (List.mem header column ~equal:String.equal)
+      then fail "journal tag column is not in header: %s" column);
+    { source; institution; identity; header; separator; tags })
 ;;
 
 let of_string source =
@@ -278,16 +333,31 @@ let convert t ~name contents =
       | L.Function (_, fn) -> Some fn
       | _ -> failwith "classify must be a function"
     in
+    let account_fn =
+      match I.getglobal state (L.String "account") with
+      | L.Nil -> None
+      | L.Function (_, fn) -> Some fn
+      | _ -> failwith "account must be a function"
+    in
+    let observation =
+      match get config "observation" with
+      | L.Nil -> false
+      | L.Table _ -> true
+      | _ -> failwith "observation must be a table"
+    in
+    let accounts = Hashtbl.create (module String) in
     let positions = Hashtbl.create (module String) in
+    let inventory prefix = function
+      | [ L.String account; L.String date ] ->
+        let key = account ^ "\000" ^ date in
+        let position = 1 + Option.value (Hashtbl.find positions key) ~default:0 in
+        Hashtbl.set positions ~key ~data:position;
+        [ L.String (Printf.sprintf "%s%s/%d" prefix date position) ]
+      | _ -> failwith "inventory ID expects an account and date"
+    in
     I.register_globals
-      [ ( "inventory_id"
-        , V.caml_func (function
-            | [ L.String account; L.String date ] ->
-              let key = account ^ "\000" ^ date in
-              let position = 1 + Option.value (Hashtbl.find positions key) ~default:0 in
-              Hashtbl.set positions ~key ~data:position;
-              [ L.String (Printf.sprintf "%s/%d" date position) ]
-            | _ -> failwith "inventory_id expects an account and date") )
+      [ "inventory_id", V.caml_func (inventory "")
+      ; "observation_id", V.caml_func (inventory "observation/")
       ]
       state;
     let sha256 = Digestif.SHA256.(digest_string contents |> to_hex) in
@@ -348,8 +418,55 @@ let convert t ~name contents =
           ]
       in
       try
+        let row_account_id =
+          if String.equal kind "record"
+          then (
+            let row_account =
+              match account_fn with
+              | None -> account
+              | Some fn ->
+                (match fn [ string_table normalized ] with
+                 | [ value ] -> lua_table value
+                 | _ -> failwith "account must return one table")
+            in
+            let id = get_string row_account "id" in
+            let encoded = json (L.Table row_account) in
+            (match Hashtbl.find accounts id with
+             | None -> Hashtbl.set accounts ~key:id ~data:encoded
+             | Some previous when String.equal previous encoded -> ()
+             | Some _ -> fail "conflicting accounts: %s" id);
+            Some id)
+          else None
+        in
         match apply [ string_table normalized; string_table raw; context ] with
         | [ L.Table result ] ->
+          let default name value =
+            if V.eq (get result name) L.Nil
+            then V.Table.bind result ~key:(L.String name) ~data:value
+          in
+          (match row_account_id with
+           | None -> ()
+           | Some id ->
+             (match get result "account" with
+              | L.Nil -> default "account" (L.String id)
+              | L.String declared when String.equal declared id -> ()
+              | _ -> failwith "record account does not match selected account");
+             if observation
+             then (
+               match get result "observation" with
+               | L.Nil -> default "observation" (L.Userdata (Userdata.Boolean true))
+               | L.Userdata (Userdata.Boolean true) -> ()
+               | _ -> failwith "record contradicts observation configuration");
+             let details =
+               match get result "details" with
+               | L.Nil ->
+                 let d = V.Table.create 1 in
+                 default "details" (L.Table d);
+                 d
+               | value -> lua_table value
+             in
+             if V.eq (get details "fields") L.Nil
+             then V.Table.bind details ~key:(L.String "fields") ~data:fields);
           if not (String.equal (get_string result "kind") kind)
           then failwith "returned kind does not match classification";
           if
@@ -408,19 +525,12 @@ let convert t ~name contents =
         ; "sha256", json_string sha256
         ]
     in
-    let account_fields =
-      V.Luahash.fold
-        (fun k v acc ->
-           match k with
-           | L.String s -> (s, json v) :: acc
-           | _ -> failwith "account keys must be strings")
-        account
-        []
-    in
     let accounts =
-      if List.is_empty records
-      then ""
-      else object_line (("kind", json_string "account") :: account_fields)
+      Hashtbl.to_alist accounts
+      |> List.sort ~compare:(fun (a, _) (b, _) -> String.compare a b)
+      |> List.map ~f:(fun (_, account) ->
+        String.drop_prefix account 1 |> fun rest -> "{\"kind\":\"account\"," ^ rest ^ "\n")
+      |> String.concat
     in
     let text =
       header
@@ -444,3 +554,5 @@ let source t = t.source
 let overlap t : Adapter.overlap =
   if String.equal t.identity "source" then Source_ids else Day_inventory
 ;;
+
+let tags t = t.tags

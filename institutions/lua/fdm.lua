@@ -51,12 +51,11 @@ function convert(row, raw, context)
   return {
     kind = "record",
     id = inventory_id(config.account.id, row["Date"]),
-    account = config.account.id,
     occurred = row["Date"],
     movements = {
       { role = "primary", quantity = negate(row["USD"]), commodity = usd }
     },
     details = { descriptions = descriptions, counterparty = counterparty,
-                exchange = exchange, fields = context.fields }
+                exchange = exchange }
   }
 end

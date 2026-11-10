@@ -8,6 +8,15 @@ short line of their own.
 
 ## Unreleased
 
+- Lua records use the selected account and retain source fields by default.
+  **Action required:** move custom Lua `config.journal_tags` into
+  `config.observation.journal_tags` and update affected definitions.
+
+- Bunq CSV observations now use a Lua converter. The generic host supports
+  row-derived accounts, comma decimals, observation IDs and journal tags.
+  MT940 matching and tested record identities are preserved. The Lua converter
+  guide now includes a complete example and an assessment of the interface.
+
 - FDM CSV statements now use a Lua converter. The Lua host can classify
   statement rows, link their claims to records, and negate exact quantities.
   FDM's stated total is included in records output; as before, it is not yet
@@ -24,8 +33,7 @@ short line of their own.
   whose source is saved in the database. `fin convert --definition` also accepts
   `.lua` files. CDC now uses a Lua converter; its records and identities match
   the prior layout on tested inputs. Definition preview also handles operations.
-  Lua scripts must be trusted; only one fixed account and exact headers are
-  currently supported. Building now requires the `lua-ml` opam package.
+  Lua scripts must be trusted; exact headers are currently required. Building now requires the `lua-ml` opam package.
 
 - Added a guide to reading and trying CSV converter definitions, with examples
   of primary statements and observations.

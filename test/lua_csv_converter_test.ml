@@ -183,6 +183,89 @@ let fdm_equivalence () =
       (Result.is_error actual))
 ;;
 
+let bunq_equivalence () =
+  let old =
+    Csv_converter.of_string (Stdio.In_channel.read_all "fixtures/bunq-converter.json")
+    |> ok
+  in
+  let lua = Lua_csv_converter.create ~institution:"bunq" (bundled "lua/bunq.lua") |> ok in
+  Alcotest.(check (list (pair string string)))
+    "journal tag mapping"
+    (Csv_converter.journal_tags old)
+    (Lua_csv_converter.tags lua);
+  let invalid_tags =
+    String.substr_replace_first
+      (bundled "lua/bunq.lua")
+      ~pattern:"= \"Counterparty\""
+      ~with_:"= \"Missing\""
+  in
+  Alcotest.(check bool)
+    "reject unknown journal column"
+    true
+    (Result.is_error (Lua_csv_converter.create ~institution:"bunq" invalid_tags));
+  let compare name contents =
+    let expected = Csv_converter.convert old ~name contents |> ok in
+    let actual = Lua_csv_converter.convert lua ~name contents |> ok in
+    Alcotest.(check string) name (Records.to_string expected) (Records.to_string actual)
+  in
+  compare "fixture.csv" (Stdio.In_channel.read_all "fixtures/bunq.csv");
+  let header = "Date,Interest Date,Amount,Account,Counterparty,Name,Description\n" in
+  compare
+    "many.csv"
+    (header
+     ^ "2025-01-01,2025-01-02,\"1 234,50\",one,BE68539007547034, Shop ,Text\n\
+        2025-01-01,2025-01-02,\"-1,00\",two,invalid,,Text\n\
+        2025-01-01,2025-01-02,\"-1,00\",two,invalid,,Text\n");
+  compare "empty.csv" header;
+  let contradictory field value =
+    let source =
+      String.substr_replace_first
+        (bundled "lua/bunq.lua")
+        ~pattern:"kind = \"record\","
+        ~with_:(Printf.sprintf "kind = \"record\", %s = %s," field value)
+    in
+    let converter = Lua_csv_converter.create ~institution:"bunq" source |> ok in
+    let row = header ^ "2025-01-01,2025-01-02,\"1,00\",one,,,Text\n" in
+    Alcotest.(check bool)
+      ("reject contradictory " ^ field)
+      true
+      (Result.is_error (Lua_csv_converter.convert converter ~name:"bad.csv" row))
+  in
+  contradictory "account" "\"other\"";
+  contradictory "observation" "no";
+  let conflicting_source =
+    String.substr_replace_first
+      (bundled "lua/bunq.lua")
+      ~pattern:"bank = \"bunq\""
+      ~with_:"bank = row[\"Name\"]"
+  in
+  let conflicting =
+    Lua_csv_converter.create ~institution:"bunq" conflicting_source |> ok
+  in
+  let rows =
+    header
+    ^ "2025-01-01,2025-01-02,\"1,00\",one,,BankA,Text\n\
+       2025-01-01,2025-01-02,\"1,00\",one,,BankB,Text\n"
+  in
+  Alcotest.(check bool)
+    "conflicting account details are rejected"
+    true
+    (Result.is_error (Lua_csv_converter.convert conflicting ~name:"bad.csv" rows));
+  List.iter
+    [ header ^ "2025-01-01,2025-01-02,1.00,one,,,Text\n"
+    ; header ^ "2025-01-01,2025-01-02,\"1,00\",bad account,,,Text\n"
+    ]
+    ~f:(fun contents ->
+      Alcotest.(check bool)
+        "old rejects invalid"
+        true
+        (Result.is_error (Csv_converter.convert old ~name:"bad.csv" contents));
+      Alcotest.(check bool)
+        "Lua rejects invalid"
+        true
+        (Result.is_error (Lua_csv_converter.convert lua ~name:"bad.csv" contents)))
+;;
+
 let other_institution () =
   let source = Stdio.In_channel.read_all "fixtures/lua-example-bank.lua" in
   let converter = Lua_csv_converter.create ~institution:"example-bank" source |> ok in
@@ -207,6 +290,7 @@ let () =
     [ ( "converter"
       , [ Alcotest.test_case "CDC equivalence" `Quick compare_converters
         ; Alcotest.test_case "FDM equivalence" `Quick fdm_equivalence
+        ; Alcotest.test_case "Bunq equivalence" `Quick bunq_equivalence
         ; Alcotest.test_case "another institution" `Quick other_institution
         ] )
     ]

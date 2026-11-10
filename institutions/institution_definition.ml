@@ -283,11 +283,14 @@ let sources (r : t) =
     List.mapi r.lua_csv ~f:(fun i definition ->
       let index = List.length r.csv + i in
       let format = if index = 0 then "csv" else Printf.sprintf "csv-%d" (index + 1) in
-      Records_adapter.statement_source
-        format
-        ~recognizes:(fun ~filename:_ contents ->
-          Lua_csv_converter.recognizes definition contents)
-        ~convert:(Lua_csv_converter.convert definition))
+      { (Records_adapter.statement_source
+           format
+           ~recognizes:(fun ~filename:_ contents ->
+             Lua_csv_converter.recognizes definition contents)
+           ~convert:(Lua_csv_converter.convert definition))
+        with
+        tags = Lua_csv_converter.tags definition
+      })
   in
   Option.to_list statement @ layouts @ scripts
 ;;

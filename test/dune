@@ -606,6 +606,8 @@
  (deps
   fixtures/cdc-converter.json
   fixtures/fdm-converter.json
+  fixtures/bunq-converter.json
+  fixtures/bunq.csv
   fixtures/lua-example-bank.lua)
  (flags
   (:standard -open Finances_core -open Finances_institutions))

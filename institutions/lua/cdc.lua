@@ -85,7 +85,6 @@ function convert(row, raw, context)
   return {
     kind = "record",
     id = context.row_hash,
-    account = config.account.id,
     occurred = utc_datetime(row["Timestamp (UTC)"]),
     movements = movements,
     details = {
@@ -94,7 +93,6 @@ function convert(row, raw, context)
       references = { hash = present(row["Transaction Hash"]) },
       reported = fallback,
       valuations = valuations,
-      fields = context.fields
     }
   }
 end

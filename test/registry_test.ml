@@ -276,10 +276,11 @@ let statement_profile_metadata () =
         (Institution_definition.same_sources original old_identifiers);
       let changed_load path =
         Result.map (load path) ~f:(fun contents ->
-          String.substr_replace_all
-            contents
-            ~pattern:"\"observation\": true"
-            ~with_:"\"observation\": false")
+          contents
+          |> String.substr_replace_all
+               ~pattern:"\"observation\": true"
+               ~with_:"\"observation\": false"
+          |> String.substr_replace_all ~pattern:"= \"Counterparty\"" ~with_:"= \"Name\"")
       in
       let changed = ok (Institution_toml.decode text ~load:changed_load) in
       Alcotest.(check bool)

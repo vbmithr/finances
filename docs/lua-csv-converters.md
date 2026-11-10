@@ -4,7 +4,8 @@ A Lua CSV converter is a Lua 2.5 program that turns each CSV row into a
 [record](records-format.md). Fin reads the CSV and validates the resulting
 records. The institution-specific header, account and interpretation belong in
 the script. The [CDC converter](../institutions/lua/cdc.lua) is a complete
-example; [FDM](../institutions/lua/fdm.lua) also emits a file-level total.
+example; [FDM](../institutions/lua/fdm.lua) emits a file-level total, and
+[Bunq](../institutions/lua/bunq.lua) describes observations for several accounts.
 
 Refer to a script from an institution TOML file:
 
@@ -28,54 +29,118 @@ fin convert --definition converter.lua statement.csv -o records.jsonl
 fin records check records.jsonl
 ```
 
+## Write a converter
+
+Suppose `statement.csv` contains:
+
+```csv
+Date,Description,Amount
+2026-01-02,Coffee,-3.50
+```
+
+Save this complete program as `converter.lua`:
+
+```lua
+config = {
+  institution = "mybank",
+  identity = "source",
+  converter = "mybank csv",
+  version = "1",
+  account = { id = "checking", currency = "EUR" },
+  header = { "Date", "Description", "Amount" }
+}
+
+function convert(row, raw, context)
+  local descriptions = array()
+  if row["Description"] ~= "" then
+    descriptions = { raw["Description"] }
+  end
+  return {
+    kind = "record",
+    id = context.row_hash,
+    occurred = row["Date"],
+    movements = {
+      { role = "primary", quantity = decimal(row["Amount"]),
+        commodity = { kind = "fiat", code = "EUR" } }
+    },
+    details = { descriptions = descriptions }
+  }
+end
+```
+
+Run the two `fin convert` and `fin records check` commands above. The record
+has one movement of `-3.5 EUR`, on `checking`, dated 2026-01-02, with the
+original description and source fields. It states what the CSV says; it does
+not assign a spending category.
+
 ## Script contract
 
-The script defines a global `config` table with:
+The global `config` table declares:
 
 - `institution`: the institution name; it must match the TOML definition.
 - `header`: the exact CSV header as a Lua array, with distinct names.
 - `separator`: an optional single character; the default is a comma.
 - `identity`: `source` or `inventory`, as described in the records format.
 - `converter` and `version`: strings identifying the converter in the output.
-- `account`: one static records-format account object, such as
-  `{ id = "checking", bank = "mybank", currency = "EUR" }`.
+- `account`: a static records-format account object, as in the example. For
+  several accounts, omit it and define `account(row)` instead. It returns an
+  account object for each row. Fin uses its `id` for the record and refuses
+  conflicting account objects with the same ID.
 
-It also defines `convert(row, raw, context)`. Fin passes tables of trimmed cells
-and original cells, indexed by column name. `context.row_hash` is a stable hash
-of the row, suitable as an ID when the source does not provide one;
-`context.fields` holds nonempty source cells in records-format field pairs.
-Return a records-format table with `kind = "record"`, an `id`, the account ID,
-`occurred`, `movements`, and any desired `details`. Fin supplies the header,
-source, account and end lines and validates the complete records document.
+`convert(row, raw, context)` receives tables of trimmed cells and original
+cells, indexed by column name. `context.row_hash` is a hash of the entire row;
+`context.fields` holds its nonempty original cells as records-format field pairs.
+Return a records-format table with `kind = "record"`, an `id`, `occurred`,
+`movements`, and any desired `details`. Fin supplies the selected account and,
+unless provided explicitly, the original source fields. It also supplies the
+header, source, account and end lines and validates the complete document. If a
+record supplies an `account`, it must agree with the selected account.
 
-A simple record body looks like this, inside `convert`:
+A whole-row hash changes if *any* cell changes. Use it as the record ID only
+when that is appropriate for the source. If the source has no stable row IDs,
+`inventory_id(account, date)` assigns a position per account and date in the
+file. For observations, `observation_id(account, date)` uses the same numbering
+with the observation prefix. These helpers preserve identical rows; they do
+not turn them into independently identifiable source transactions.
+
+## Amounts, checks and Lua values
+
+Lua numbers are floating point. Keep financial amounts as strings:
+
+- `decimal(text)` parses and normalizes an exact decimal with a dot;
+  `decimal_comma(text)` does the same with a comma and rejects dots.
+- `sign(text)` returns `"positive"`, `"negative"`, `"zero"`, or `nil` if the
+  dot-decimal input is invalid. `negate(text)` returns its exact negation.
+- `matches(text, pattern)` tests a Perl-style regular expression and
+  `valid_iban(text)` checks an IBAN; both return a truthy value or `nil`.
+  `reject(message)` aborts the conversion and reports the source row.
+- `utc_datetime(text)` turns an ISO date-time without an offset into a UTC
+  records timestamp. Use it only when the source says the clock is UTC.
+
+`array()` makes an empty array; nonempty sequential tables are treated as
+arrays. `yes` and `no` are host-provided booleans for records fields. They are
+userdata values: do not use `no` as a Lua conditional, because Lua treats it as
+truthy. Lua's `nil` omits an object field. Returning `nil` instead of a record
+is currently rejected; row skipping is not yet supported.
+
+## Observations and accounts
+
+Bunq has an account column and its CSV describes movements counted from MT940.
+Its [script](../institutions/lua/bunq.lua) defines `account(row)`, declares `config.observation`, and uses
+`observation_id` for its IDs. Fin marks every record from this source as an
+observation; the script cannot override that setting for individual records.
+`observation_id` allocates IDs within each account and date, preserving duplicate
+rows. The ID alone does not match records: Fin matches observations with counted
+records using the existing records adapter and its matching rules.
+
+For journal enrichment, `config.observation.journal_tags` maps tag names to CSV field names.
+Lua 2.5 cannot use arbitrary string keys in the same table-constructor syntax as
+modern Lua, so Bunq creates the table and then assigns its hyphenated key:
 
 ```lua
-return {
-  kind = "record",
-  id = context.row_hash,
-  account = config.account.id,
-  occurred = row["Date"],
-  movements = {
-    { role = "primary", quantity = decimal(row["Amount"]),
-      commodity = { kind = "fiat", code = "EUR" } }
-  },
-  details = { fields = context.fields }
-}
+config.observation = { journal_tags = {} }
+config.observation.journal_tags["bunq-counterparty"] = "Counterparty"
 ```
-
-`decimal(text)` parses and normalizes a decimal exactly; `sign(text)` returns
-`"positive"`, `"negative"`, `"zero"`, or `nil` for an invalid quantity.
-`negate(text)` returns the exact negation as a decimal string.
-`inventory_id(account, date)` assigns a per-account, per-date position in this
-file. `utc_datetime(text)` converts an ISO date-time without an offset into a UTC
-records timestamp. Lua numbers are floating point and are rejected in output
-records. Use decimal strings and these helpers for amounts.
-
-`array()` makes an empty array; nonempty sequential tables are treated as arrays.
-`yes` and `no` are booleans for records fields. Lua's `nil` omits object fields.
-Returning `nil` instead of a record is currently rejected; row skipping is not
-yet supported.
 
 ## Statement totals
 
@@ -97,11 +162,25 @@ does not yet store this stated total as a statement reconciliation.
 
 ## Current limits
 
-This is an experimental integration, currently used by CDC and FDM. It supports
-one static account, one exact header per script, row-based records and statement
-claims. It does not yet support duplicate headers, multiple accounts, file-wide
-checks, row skipping, observation enrichment, or general decimal arithmetic.
+This is an experimental integration, currently used by CDC, FDM and Bunq. It
+supports one exact header per script, static or row-derived accounts, row-based
+records, observations and statement claims. It does not yet support duplicate
+headers, arbitrary file-wide checks, row skipping, general decimal arithmetic,
+or the full range of observation matching settings.
 An institution cannot combine JSON and Lua CSV converters in one definition yet.
 The Lua program is run once per file and its state persists across rows. Only run
 scripts you trust: the host does not expose the standard Lua IO library, but it
 does not limit execution time or memory.
+
+## What the interface reveals
+
+The script makes provider decisions visible in ordinary conditionals and Fin
+owns CSV parsing, exact quantities and records validation. CDC's branching and
+Bunq's account selection fit that split well.
+
+The API is still rough. `array()`, `yes` and `no` expose Lua 2.5
+representation details, and decimal strings and special helpers make
+arithmetic less natural. FDM's total needs a separate classification pass and a
+linking flag. Movements use records-format tables directly.
+A more cohesive file-level API remains worth exploring; this interface is
+experimental.
