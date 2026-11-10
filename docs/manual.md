@@ -421,13 +421,13 @@ fin import mybank ~/Statements/mybank
 To use a Lua converter, replace the `definition` line with
 `script = "mybank.lua"`. The script declares its institution, CSV header,
 account and converter metadata, and returns records from each row; see the
-[Lua converter guide](lua-csv-converters.md) for the contract and the bundled
-CDC example. The Lua
-integration is experimental: it currently supports one fixed account, exact
-headers with distinct names and row-based conversion. An institution cannot mix JSON and Lua CSV
-converters yet. File-wide totals, multiple accounts, row skipping, and general
-decimal arithmetic and observation enrichment are not yet supported. Lua numbers
-are floating point; use the `decimal` and `sign` helpers for exact quantities.
+[Lua converter guide](lua-csv-converters.md) for the contract and bundled
+examples. The Lua integration is experimental: it currently supports one fixed
+account, exact headers with distinct names, row-based conversion and statement
+claims. An institution cannot mix JSON and Lua CSV converters yet. File-wide
+checks, multiple accounts, row skipping, general decimal arithmetic and observation
+enrichment are not yet supported. Lua numbers are floating point; use the
+`decimal`, `negate` and `sign` helpers for exact quantities.
 Only run scripts you trust: they can loop indefinitely.
 
 The institution name in the TOML and each CSV converter must match the selected

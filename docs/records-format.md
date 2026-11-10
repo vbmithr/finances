@@ -225,7 +225,8 @@ Measured, so these are not guesses: Wise and Revolut running balances reconcile 
 consecutive pair, with Revolut's balance moving by `Amount` minus `Fee`. BoursoBank has
 exactly one balance per value date on every account. It reconciles from day to day on most
 days of two accounts and hardly ever on a third, apparently a card, so it is stated
-evidence, not a running total. FDM's last row is the exact sum of its dated rows.
+evidence, not a running total. In the FDM export examined, the last row is the exact
+sum of its dated rows. Fin records that total but does not yet verify the sum.
 
 For pairing, reference and date do not always decide. bunq has no references: account, booking
 date and quantity pair all 332 rows, 22 of which share a key with another row, against 113 on

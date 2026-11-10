@@ -62,6 +62,11 @@ let decimal = function
   | _ -> failwith "decimal expects one string"
 ;;
 
+let negate = function
+  | [ L.String text ] -> [ L.String (Quantity.to_string (Quantity.neg (quantity text))) ]
+  | _ -> failwith "negate expects one string"
+;;
+
 let utc_datetime = function
   | [ L.String text ] ->
     if
@@ -184,6 +189,7 @@ let initialize source =
           | _ -> failwith "array expects no arguments") )
     ; "sign", V.caml_func sign
     ; "decimal", V.caml_func decimal
+    ; "negate", V.caml_func negate
     ; "utc_datetime", V.caml_func utc_datetime
     ; "yes", L.Userdata (Userdata.Boolean true)
     ; "no", L.Userdata (Userdata.Boolean false)
@@ -213,7 +219,14 @@ let initialize source =
 
 let create ~institution source =
   Or_error.try_with (fun () ->
-    let _, declared, identity, _, _, _, header, separator, _ = initialize source in
+    let state, declared, identity, _, _, _, header, separator, _ = initialize source in
+    let config = I.getglobal state (L.String "config") |> lua_table in
+    (match get config "link_statements" with
+     | L.Nil | L.Userdata (Userdata.Boolean _) -> ()
+     | _ -> failwith "link_statements must be yes or no");
+    (match I.getglobal state (L.String "classify") with
+     | L.Nil | L.Function _ -> ()
+     | _ -> failwith "classify must be a function");
     if not (String.equal institution declared)
     then fail "Lua converter belongs to institution %s, expected %s" declared institution;
     if not (List.mem [ "source"; "inventory" ] identity ~equal:String.equal)
@@ -240,9 +253,44 @@ let recognizes t contents =
 
 let convert t ~name contents =
   Or_error.try_with (fun () ->
-    let _, institution, identity, converter, version, account, expected, separator, apply =
+    let ( state
+        , institution
+        , identity
+        , converter
+        , version
+        , account
+        , expected
+        , separator
+        , apply )
+      =
       initialize t.source
     in
+    let config = I.getglobal state (L.String "config") |> lua_table in
+    let link_statements =
+      match get config "link_statements" with
+      | L.Nil | L.Userdata (Userdata.Boolean false) -> false
+      | L.Userdata (Userdata.Boolean true) -> true
+      | _ -> failwith "link_statements must be yes or no"
+    in
+    let classify =
+      match I.getglobal state (L.String "classify") with
+      | L.Nil -> None
+      | L.Function (_, fn) -> Some fn
+      | _ -> failwith "classify must be a function"
+    in
+    let positions = Hashtbl.create (module String) in
+    I.register_globals
+      [ ( "inventory_id"
+        , V.caml_func (function
+            | [ L.String account; L.String date ] ->
+              let key = account ^ "\000" ^ date in
+              let position = 1 + Option.value (Hashtbl.find positions key) ~default:0 in
+              Hashtbl.set positions ~key ~data:position;
+              [ L.String (Printf.sprintf "%s/%d" date position) ]
+            | _ -> failwith "inventory_id expects an account and date") )
+      ]
+      state;
+    let sha256 = Digestif.SHA256.(digest_string contents |> to_hex) in
     Csv_reader.check_utf8 ~name:institution contents;
     let lines = Csv.input_all (Csv_reader.channel ~separator contents) in
     let header, rows =
@@ -252,7 +300,9 @@ let convert t ~name contents =
     in
     if not (List.equal String.equal header expected)
     then failwith "CSV header does not match script";
-    let records =
+    (* First classify the rows, then interpret transactions before statement
+       claims. This lets the script describe a file total wherever it occurs. *)
+    let rows =
       List.filter_mapi rows ~f:(fun i cells ->
         if List.for_all cells ~f:(fun cell -> String.is_empty (String.strip cell))
         then None
@@ -263,28 +313,74 @@ let convert t ~name contents =
           let normalized =
             List.map raw ~f:(fun (key, value) -> key, String.strip value)
           in
-          let fields =
-            raw
-            |> List.filter ~f:(fun (_, v) -> not (String.is_empty (String.strip v)))
-            |> List.map ~f:(fun (k, v) -> array [ L.String k; L.String v ])
-            |> array
+          let kind =
+            match classify with
+            | None -> "record"
+            | Some fn ->
+              (try
+                 match fn [ string_table normalized ] with
+                 | [ L.String (("record" | "statement") as kind) ] -> kind
+                 | _ -> failwith "classify must return record or statement"
+               with
+               | exn -> fail "row %d: %s" (i + 1) (Exn.to_string exn))
           in
-          let hash =
-            Digestif.SHA256.(
-              digest_string (Json.encode (Jsont.list Jsont.string) cells) |> to_hex)
-          in
-          let context =
-            table [ "row_hash", L.String ("row-sha256-" ^ hash); "fields", fields ]
-          in
-          try
-            match apply [ string_table normalized; string_table raw; context ] with
-            | [ L.Nil ] -> failwith "skipping rows in Lua converters is not supported yet"
-            | [ (L.Table _ as value) ] -> Some (json value)
-            | _ -> failwith "convert must return a record table or nil"
-          with
-          | exn -> fail "row %d: %s" (i + 1) (Exn.to_string exn)))
+          Some (i, cells, raw, normalized, kind)))
     in
-    let sha256 = Digestif.SHA256.(digest_string contents |> to_hex) in
+    let record_rows, statement_rows =
+      List.partition_tf rows ~f:(fun (_, _, _, _, kind) -> String.equal kind "record")
+    in
+    let interpret (i, cells, raw, normalized, kind) =
+      let fields =
+        raw
+        |> List.filter ~f:(fun (_, v) -> not (String.is_empty (String.strip v)))
+        |> List.map ~f:(fun (k, v) -> array [ L.String k; L.String v ])
+        |> array
+      in
+      let hash =
+        Digestif.SHA256.(
+          digest_string (Json.encode (Jsont.list Jsont.string) cells) |> to_hex)
+      in
+      let context =
+        table
+          [ "row_hash", L.String ("row-sha256-" ^ hash)
+          ; "source_hash_prefix", L.String (String.prefix sha256 16)
+          ; "fields", fields
+          ]
+      in
+      try
+        match apply [ string_table normalized; string_table raw; context ] with
+        | [ L.Table result ] ->
+          if not (String.equal (get_string result "kind") kind)
+          then failwith "returned kind does not match classification";
+          if
+            String.equal kind "record"
+            && link_statements
+            && not (V.eq (get result "statements") L.Nil)
+          then failwith "record cannot set statements when link_statements is enabled";
+          let id =
+            if String.equal kind "statement" then Some (get_string result "id") else None
+          in
+          id, json (L.Table result)
+        | [ L.Nil ] -> failwith "skipping rows in Lua converters is not supported yet"
+        | _ -> failwith "convert must return a record or statement table"
+      with
+      | exn -> fail "row %d: %s" (i + 1) (Exn.to_string exn)
+    in
+    let records = List.map record_rows ~f:interpret |> List.map ~f:snd in
+    let statements =
+      if List.is_empty records then [] else List.map statement_rows ~f:interpret
+    in
+    let statement_ids = List.map statements ~f:(fun (id, _) -> Option.value_exn id) in
+    let records =
+      if link_statements && not (List.is_empty statement_ids)
+      then (
+        let ids =
+          "[" ^ String.concat ~sep:"," (List.map statement_ids ~f:json_string) ^ "]"
+        in
+        List.map records ~f:(fun record ->
+          String.drop_suffix record 1 ^ ",\"statements\":" ^ ids ^ "}"))
+      else records
+    in
     let object_line fields =
       "{"
       ^ String.concat
@@ -330,6 +426,9 @@ let convert t ~name contents =
       header
       ^ source
       ^ accounts
+      ^ String.concat
+          ~sep:""
+          (List.map statements ~f:(fun (_, statement) -> statement ^ "\n"))
       ^ String.concat ~sep:"" (List.map records ~f:(fun r -> r ^ "\n"))
       ^ object_line
           [ "kind", json_string "end"; "records", Int.to_string (List.length records) ]

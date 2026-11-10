@@ -576,9 +576,13 @@
 
 (rule
  (alias runtest)
- (deps records_import_test.py)
+ (deps records_import_test.py fixtures/fdm-converter.json)
  (action
-  (run python3 %{dep:records_import_test.py} %{exe:../bin/main.exe})))
+  (run
+   python3
+   %{dep:records_import_test.py}
+   %{exe:../bin/main.exe}
+   %{dep:fixtures/fdm-converter.json})))
 
 (test
  (name records_adapter_test)
@@ -599,7 +603,10 @@
 (test
  (name lua_csv_converter_test)
  (modules lua_csv_converter_test)
- (deps fixtures/cdc-converter.json fixtures/lua-example-bank.lua)
+ (deps
+  fixtures/cdc-converter.json
+  fixtures/fdm-converter.json
+  fixtures/lua-example-bank.lua)
  (flags
   (:standard -open Finances_core -open Finances_institutions))
  (libraries finances.core finances.institutions base stdio alcotest))

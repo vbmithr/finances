@@ -8,6 +8,11 @@ short line of their own.
 
 ## Unreleased
 
+- FDM CSV statements now use a Lua converter. The Lua host can classify
+  statement rows, link their claims to records, and negate exact quantities.
+  FDM's stated total is included in records output; as before, it is not yet
+  reconciled against transaction sums or stored as a reconciliation on import.
+
 - Removed obsolete CSV companion settings from the Bunq MT940 profile. CAMT and
   MT940 profiles in institution TOML now inherit the institution and profile
   version, with legacy event identifiers defaulted from the institution name.

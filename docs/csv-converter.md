@@ -137,10 +137,9 @@ or `balances`; they are evidence for checking the movements.
 
 ## Reading the bundled definitions
 
-Start with [FDM](../institutions/csv/fdm.json), which has one movement case.
-It also has a `total` row: that row states a total rather than another movement.
-Its `exchange` section records the local currency, amount and exchange rate when
-available.
+[FDM](../institutions/lua/fdm.lua) now uses Lua. Its CSV has a `total` row:
+that row states a total rather than another movement. Its script also records
+the local currency, amount and exchange rate when available.
 
 [BoursoBank](../institutions/csv/boursobank.json) has a different role. Its CSV
 currently supplies **observations** to enrich movements from OFX, rather than

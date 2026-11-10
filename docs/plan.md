@@ -214,11 +214,14 @@ configurable yet.
   TOML. Retain decoding of old saved profile fields and preserve record identities.
 - [ ] Revisit which CAMT and MT940 reader settings belong inline in institution
   definitions after the profile cleanup.
-- [ ] Extend the experimental Lua CSV host beyond CDC. Lua scripts are saved
-  with institution definitions and produce validated records. Compare with the
-  prior CDC layout; add file-wide behavior, multiple accounts, exact decimal
-  arithmetic, row-skipping diagnostics and execution limits before migrating
-  the remaining institutions.
+- [x] Port FDM to Lua and support statement claims and exact negation. Compare
+  its generated records with the previous CSV layout.
+- [ ] Extend the experimental Lua CSV host beyond CDC and FDM: add multiple
+  accounts, general exact decimal arithmetic, row-skipping diagnostics,
+  observation enrichment and execution limits before migrating the remaining
+  institutions.
+- [ ] Reconcile FDM's stated total against its transactions and preserve the
+  statement claim on import; it is currently emitted but not reconciled.
 
 - [x] Allow a user-added institution to import supported OFX 2.x without an
   institution-specific adapter; preserve account identity and FITID deduplication.

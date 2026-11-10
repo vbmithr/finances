@@ -5,4 +5,4 @@ type = "bank"
 
 [[statements]]
 format = "csv"
-definition = "csv/fdm.json"
+script = "lua/fdm.lua"

@@ -7,7 +7,7 @@ import subprocess
 import sys
 import tempfile
 
-FIN = sys.argv[1]
+FIN, LEGACY_DEFINITION = sys.argv[1:3]
 
 with tempfile.TemporaryDirectory() as directory:
     root = pathlib.Path(directory)
@@ -50,6 +50,13 @@ Total,,,,,,20.90
     shown = run("institution", "show", "fdm", "-d", database).stdout
     assert "Kind: Records" in shown, shown
     assert "fdm" in run("status", "-d", database).stdout
+
+    # Evidence imported through the old JSON converter matches the new Lua CSV.
+    legacy = root / "legacy.jsonl"
+    run("convert", "--definition", LEGACY_DEFINITION, statement, "-o", legacy)
+    migrated, migrated_journal = imported("legacy", legacy)
+    replay = run("import", "fdm", statement, "-d", migrated, "--journal", migrated_journal)
+    assert "inserted=0 existing=3" in replay.stdout, replay.stdout
 
     # A records file gives the same journal, plain or compressed.
     for name in ("records.jsonl", "records.jsonl.zst"):
