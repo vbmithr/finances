@@ -3051,6 +3051,25 @@ class ImportOnboarding(unittest.TestCase):
         definition.write_text(json.dumps({'version': 1, 'kind': 'csv', 'csv': {}}))
         self.assertNotEqual(self.run_fin('institution', 'definition', 'check', definition, check=False).returncode, 0)
 
+    def test_old_bunq_profile_remains_usable_after_cleanup(self):
+        cleaned = json.loads(self.run_fin('institution', 'definition', 'show', 'bunq').stdout)
+        old = json.loads(json.dumps(cleaned))
+        old['records']['mt940'].update({
+            'aliases': [], 'format': 'bunq_mt940', 'companion_format': 'bunq_csv',
+            'matching_policy': 'bunq-csv-v1', 'metadata_prefix': 'bunq',
+            'header': ['Date', 'Interest Date', 'Amount', 'Account', 'Counterparty', 'Name', 'Description'],
+            'columns': {'booked_on': 'Date', 'value_on': 'Interest Date', 'amount': 'Amount',
+                        'account_id': 'Account', 'counterparty': 'Counterparty',
+                        'name': 'Name', 'description': 'Description'},
+        })
+        definition = self.root / 'bunq.json'
+        definition.write_text(json.dumps(old))
+        self.run_fin('institution', 'definition', 'set', 'bunq', definition, '--yes')
+        self.run_fin('import', 'bunq', 'fixtures/bunq.mt940')
+        definition.write_text(json.dumps(cleaned))
+        self.run_fin('institution', 'definition', 'set', 'bunq', definition, '--yes')
+        self.assertIn('unchanged=1', self.run_fin('import', 'bunq', 'fixtures/bunq.mt940').stdout)
+
     def test_toml_lua_converter_is_snapshotted_and_source_changes_are_blocked(self):
         profile = json.loads(self.run_fin('institution', 'definition', 'show', 'cdc').stdout)
         source = profile['records']['lua_csv'][0].replace('institution = "cdc"', 'institution = "samplelua"').replace('bank = "cdc"', 'bank = "samplelua"')

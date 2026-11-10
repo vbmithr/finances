@@ -154,7 +154,39 @@ let decode ~load text =
              ( format
              , if String.equal format "ofx"
                then "true"
-               else json (require settings "profile") )
+               else (
+                 let profile = table (require settings "profile") in
+                 let profile =
+                   match field profile "institution" with
+                   | None ->
+                     ("institution", Toml.Value.string parsed.institution) :: profile
+                   | Some value when String.equal (string value) parsed.institution ->
+                     profile
+                   | Some _ -> failwith "statement profile institution does not match"
+                 in
+                 let profile =
+                   if Option.is_some (field profile "version")
+                   then profile
+                   else ("version", Toml.Value.int_of_int 1) :: profile
+                 in
+                 (* Legacy source-event codecs still need their identifiers;
+                    the bundled defaults follow the institution name. *)
+                 let add_default profile name value =
+                   if Option.is_some (field profile name)
+                   then profile
+                   else (name, Toml.Value.string value) :: profile
+                 in
+                 let kind = if String.equal format "camt" then "event_kind" else "kind" in
+                 let payload_suffix =
+                   if String.equal format "camt" then "-camt-v1" else "-v1"
+                 in
+                 let profile =
+                   add_default profile kind (parsed.institution ^ "-transaction")
+                 in
+                 let profile =
+                   add_default profile "payload_tag" (parsed.institution ^ payload_suffix)
+                 in
+                 object_ profile) )
       | _ -> fail "unknown statement format: %s" format);
     let rules =
       List.map parsed.rules ~f:(fun (name, value) ->

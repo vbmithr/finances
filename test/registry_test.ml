@@ -232,6 +232,68 @@ let bundled_definitions () =
     derived
 ;;
 
+let statement_profile_metadata () =
+  let load path =
+    List.Assoc.find Bundled_definitions.csv path ~equal:String.equal
+    |> Or_error.of_option ~error:(Error.of_string "missing CSV layout")
+  in
+  List.iter
+    [ "wise", Bundled_definitions.wise; "bunq", Bundled_definitions.bunq ]
+    ~f:(fun (name, text) ->
+      let with_metadata institution version =
+        String.substr_replace_first
+          text
+          ~pattern:"[statements.profile]"
+          ~with_:
+            (Printf.sprintf
+               "[statements.profile]\ninstitution = %S\nversion = %d"
+               institution
+               version)
+      in
+      let original = ok (Institution_toml.decode text ~load) in
+      let old = ok (Institution_toml.decode (with_metadata name 1) ~load) in
+      Alcotest.(check bool)
+        (name ^ " inherits the same profile")
+        true
+        (Institution_definition.same_sources original old);
+      let kind = if String.equal name "wise" then "event_kind" else "kind" in
+      let payload = if String.equal name "wise" then "wise-camt-v1" else "bunq-v1" in
+      let explicit =
+        String.substr_replace_first
+          text
+          ~pattern:"[statements.profile]"
+          ~with_:
+            (Printf.sprintf
+               "[statements.profile]\n%s = %S\npayload_tag = %S"
+               kind
+               (name ^ "-transaction")
+               payload)
+      in
+      let old_identifiers = ok (Institution_toml.decode explicit ~load) in
+      Alcotest.(check bool)
+        (name ^ " legacy identifiers")
+        true
+        (Institution_definition.same_sources original old_identifiers);
+      let changed_load path =
+        Result.map (load path) ~f:(fun contents ->
+          String.substr_replace_all
+            contents
+            ~pattern:"\"observation\": true"
+            ~with_:"\"observation\": false")
+      in
+      let changed = ok (Institution_toml.decode text ~load:changed_load) in
+      Alcotest.(check bool)
+        (name ^ " CSV changes remain source changes")
+        false
+        (Institution_definition.same_sources original changed);
+      rejected
+        (name ^ " profile institution mismatch")
+        (Institution_toml.decode (with_metadata "different" 1) ~load);
+      rejected
+        (name ^ " unsupported profile version")
+        (Institution_toml.decode (with_metadata name 2) ~load))
+;;
+
 let wallet_networks () =
   let parse text = Json.decode Institution_definition.codec text in
   let definition typ extra =
@@ -297,6 +359,10 @@ let () =
         ; Alcotest.test_case "aliases" `Quick aliases
         ; Alcotest.test_case "unregistered institution import" `Quick unregistered_import
         ; Alcotest.test_case "bundled definitions" `Quick bundled_definitions
+        ; Alcotest.test_case
+            "statement profile metadata"
+            `Quick
+            statement_profile_metadata
         ; Alcotest.test_case "wallet networks" `Quick wallet_networks
         ] )
     ]

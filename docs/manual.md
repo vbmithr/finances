@@ -453,7 +453,10 @@ rule may also name a `field` to test (see "What a type rule matches"), and its
 `fin rule add` for personal accounting rules. The CAMT reader supports the settings
 exposed by the Wise-shaped profile rather than every bank's CAMT format; likewise,
 the MT940 reader covers the observed Bunq-style structure, not every bank's MT940
-variant.
+variant. CAMT and MT940 statement profiles inherit their institution
+and profile version from the enclosing TOML definition. Legacy event identifiers
+default from the institution name, and the Bunq profile no longer requires CSV
+companion settings. Previously saved JSON profiles remain readable.
 
 The bundled Wise CSV layout names `Merchant` as its `journal_description`, rather than
 the constructed `Description` column. Fin chooses one effective description: the matched,

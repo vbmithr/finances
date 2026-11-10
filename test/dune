@@ -390,6 +390,7 @@
   fixtures/revolut.csv
   fixtures/bank.ofx
   fixtures/bank.csv
+  fixtures/bunq.mt940
   fixtures/wise.xml
   fixtures/wise.csv)
  (action

@@ -323,9 +323,21 @@ let same_sources a b =
     | Institution_type.Wallet ((Evm _ | Other _) as network) -> Wallet network
     | Bank | Crypto_exchange | Wallet Unspecified -> Bank
   in
-  Poly.equal
-    { a with typ = source_type a.typ; rules = [] }
-    { b with typ = source_type b.typ; rules = [] }
+  (* CSV layouts retain the parsed JSON and its source locations. Locations
+     depend on surrounding definition text and do not change interpretation. *)
+  let same_csv =
+    List.equal
+      (fun x y ->
+         String.equal
+           (Json.encode Csv_converter.codec x)
+           (Json.encode Csv_converter.codec y))
+      a.csv
+      b.csv
+  in
+  same_csv
+  && Poly.equal
+       { a with typ = source_type a.typ; rules = []; csv = [] }
+       { b with typ = source_type b.typ; rules = []; csv = [] }
 ;;
 
 let names t = institution t :: aliases t

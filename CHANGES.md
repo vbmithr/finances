@@ -8,6 +8,13 @@ short line of their own.
 
 ## Unreleased
 
+- Removed obsolete CSV companion settings from the Bunq MT940 profile. CAMT and
+  MT940 profiles in institution TOML now inherit the institution and profile
+  version, with legacy event identifiers defaulted from the institution name.
+  Previously saved JSON definitions remain readable; record identities
+  and the current statement conversion are unchanged. Comparing a definition
+  no longer treats CSV parser locations as a source change.
+
 - Experimental Lua 2.5 CSV converters: institution TOML may reference a script,
   whose source is saved in the database. `fin convert --definition` also accepts
   `.lua` files. CDC now uses a Lua converter; its records and identities match

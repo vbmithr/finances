@@ -5,7 +5,7 @@ its status: tick off finished work, add discovered work, and refresh the "Where 
 are" figures when they move. History belongs in `CHANGES.md`; designs stay in the
 other documents, which this one links to rather than repeats.
 
-Last updated: 2026-11-09.
+Last updated: 2026-11-10.
 
 ## Direction
 
@@ -209,6 +209,11 @@ configurable yet.
 - [ ] Extend sample diagnostics to identify all rejected rows where possible,
   and test a previously unsupported institution. Generalize multi-account and
   multi-currency CSV, identifiers, signs and companion matching as needed.
+- [x] Remove obsolete CSV companion fields from the MT940 profile and inherit
+  the institution, profile version and legacy event identifiers in CAMT and MT940
+  TOML. Retain decoding of old saved profile fields and preserve record identities.
+- [ ] Revisit which CAMT and MT940 reader settings belong inline in institution
+  definitions after the profile cleanup.
 - [ ] Extend the experimental Lua CSV host beyond CDC. Lua scripts are saved
   with institution definitions and produce validated records. Compare with the
   prior CDC layout; add file-wide behavior, multiple accounts, exact decimal
