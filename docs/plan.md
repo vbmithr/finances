@@ -219,6 +219,7 @@ configurable yet.
 - [x] Derive Lua record accounts and source fields, and group observation settings.
 - [x] Port Bunq CSV observations to Lua, supporting row-derived accounts,
   comma decimals and journal tags while preserving MT940 matching.
+- [x] Decode Lua results as typed records and validate the assembled document.
 - [x] Port BoursoBank CSV observations to Lua, preserving OFX matching and
   day-end balances; support repeated headers and conflict columns.
 - [ ] Extend the experimental Lua CSV host beyond these converters: add

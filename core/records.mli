@@ -177,6 +177,16 @@ val merge : t list -> t Or_error.t
     first appearance. A source with row IDs and one without cannot share a section. *)
 val merge_all : t list -> t list Or_error.t
 
+(** Decode individual tagged lines with the same codecs as a records file. *)
+val account_of_line : string -> account Or_error.t
+
+val statement_of_line : string -> statement Or_error.t
+val balance_of_line : string -> balance Or_error.t
+val record_of_line : string -> record Or_error.t
+
+(** Validate metadata and a document, then merge its repeated evidence as a file reader does. *)
+val validate_document : t -> t Or_error.t
+
 (** Read a records file, plain or compressed with zstd, which is told from its first
     bytes. Its sections go through {!merge_all}. [file] names the input
     in errors. *)

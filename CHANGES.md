@@ -8,6 +8,9 @@ short line of their own.
 
 ## Unreleased
 
+- Assemble and validate Lua converter output as typed records, without
+  constructing and reparsing a complete JSON Lines document.
+
 - BoursoBank CSV observations now use Lua. The shared host supports repeated
   column names, row-stated balances and observation conflict columns.
 

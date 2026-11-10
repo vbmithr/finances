@@ -345,6 +345,30 @@ let other_institution () =
     |> ok
   in
   Alcotest.(check string) "institution" "example-bank" document.institution;
+  let invalid_metadata =
+    String.substr_replace_first
+      source
+      ~pattern:"converter = \"fin csv example-bank\""
+      ~with_:"converter = \"\""
+    |> Lua_csv_converter.create ~institution:"example-bank"
+    |> ok
+  in
+  Alcotest.(check bool)
+    "invalid converter metadata rejected"
+    true
+    (Result.is_error
+       (Lua_csv_converter.convert
+          invalid_metadata
+          ~name:"bank.csv"
+          "Date,Description,Amount\n2026-01-02,Coffee,-3.50\n"));
+  Alcotest.(check bool)
+    "duplicate row identities rejected"
+    true
+    (Result.is_error
+       (Lua_csv_converter.convert
+          converter
+          ~name:"bank.csv"
+          "Date,Description,Amount\n2026-01-02,Coffee,-3.50\n2026-01-02,Coffee,-3.50\n"));
   let row = List.hd_exn document.records in
   Alcotest.(check string)
     "amount"

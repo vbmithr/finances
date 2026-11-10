@@ -332,6 +332,176 @@ let recognizes t contents =
   | Error _ -> false
 ;;
 
+type interpreted =
+  | Record of Records.record
+  | Statement of Records.statement
+
+let read_rows ~institution ~contents ~separator ~expected ~classify =
+  Csv_reader.check_utf8 ~name:institution contents;
+  let lines = Csv.input_all (Csv_reader.channel ~separator contents) in
+  let header, rows =
+    match lines with
+    | [] -> failwith "the CSV has no header"
+    | h :: rows -> h, rows
+  in
+  if not (List.equal String.equal header expected)
+  then failwith "CSV header does not match script";
+  let keys = column_keys header in
+  (* First classify the rows, then interpret transactions before statement
+       claims. This lets the script describe a file total wherever it occurs. *)
+  let rows =
+    List.filter_mapi rows ~f:(fun i cells ->
+      if List.for_all cells ~f:(fun cell -> String.is_empty (String.strip cell))
+      then None
+      else if List.length cells <> List.length header
+      then fail "row %d has the wrong number of columns" (i + 1)
+      else (
+        let raw = List.zip_exn header cells in
+        let named = List.zip_exn keys cells in
+        let normalized =
+          List.map named ~f:(fun (key, value) -> key, String.strip value)
+        in
+        let kind =
+          match classify with
+          | None -> "record"
+          | Some fn ->
+            (try
+               match fn [ string_table normalized ] with
+               | [ L.String (("record" | "statement") as kind) ] -> kind
+               | _ -> failwith "classify must return record or statement"
+             with
+             | exn -> fail "row %d: %s" (i + 1) (Exn.to_string exn))
+        in
+        Some (i, cells, raw, named, normalized, kind)))
+  in
+  rows
+;;
+
+let interpret_row
+      ~accounts
+      ~balances
+      ~account_fn
+      ~account
+      ~apply
+      ~observation
+      ~link_statements
+      ~sha256
+      (i, cells, raw, named, normalized, kind)
+  =
+  let fields =
+    raw
+    |> List.filter ~f:(fun (_, v) -> not (String.is_empty (String.strip v)))
+    |> List.map ~f:(fun (k, v) -> array [ L.String k; L.String v ])
+    |> array
+  in
+  let hash =
+    Digestif.SHA256.(
+      digest_string (Json.encode (Jsont.list Jsont.string) cells) |> to_hex)
+  in
+  let context =
+    table
+      [ "row_hash", L.String ("row-sha256-" ^ hash)
+      ; "source_hash_prefix", L.String (String.prefix sha256 16)
+      ; "fields", fields
+      ]
+  in
+  try
+    let row_account_id =
+      if String.equal kind "record"
+      then (
+        let row_account =
+          match account_fn with
+          | None -> account
+          | Some fn ->
+            (match fn [ string_table normalized ] with
+             | [ value ] -> lua_table value
+             | _ -> failwith "account must return one table")
+        in
+        let id = get_string row_account "id" in
+        let encoded = json (L.Table row_account) in
+        (match Hashtbl.find accounts id with
+         | None ->
+           if not (V.eq (get row_account "kind") L.Nil)
+           then failwith "account must not set kind";
+           let tagged =
+             V.Luahash.fold
+               (fun key value acc -> (string key, value) :: acc)
+               row_account
+               []
+             |> V.Table.of_list
+           in
+           V.Table.bind tagged ~key:(L.String "kind") ~data:(L.String "account");
+           let decoded =
+             Records.account_of_line (json (L.Table tagged)) |> Or_error.ok_exn
+           in
+           Hashtbl.set accounts ~key:id ~data:(encoded, decoded)
+         | Some (previous, _) when String.equal previous encoded -> ()
+         | Some _ -> fail "conflicting accounts: %s" id);
+        Some id)
+      else None
+    in
+    let returned = apply [ string_table normalized; string_table named; context ] in
+    let result, balance =
+      match returned with
+      | [ L.Table result ] -> result, L.Nil
+      | [ L.Table result; balance ] -> result, balance
+      | [ L.Nil ] -> failwith "skipping rows in Lua converters is not supported yet"
+      | _ -> failwith "convert must return a record and optionally a balance"
+    in
+    (match balance, row_account_id with
+     | L.Nil, _ -> ()
+     | L.Table balance, Some id ->
+       (match get balance "account" with
+        | L.Nil -> V.Table.bind balance ~key:(L.String "account") ~data:(L.String id)
+        | L.String declared when String.equal declared id -> ()
+        | _ -> failwith "balance account does not match selected account");
+       if not (String.equal (get_string balance "kind") "balance")
+       then failwith "second result must be a balance table";
+       balances
+       := (Records.balance_of_line (json (L.Table balance)) |> Or_error.ok_exn)
+          :: !balances
+     | _ -> failwith "second result must be a balance table for a record");
+    let default name value =
+      if V.eq (get result name) L.Nil
+      then V.Table.bind result ~key:(L.String name) ~data:value
+    in
+    (match row_account_id with
+     | None -> ()
+     | Some id ->
+       (match get result "account" with
+        | L.Nil -> default "account" (L.String id)
+        | L.String declared when String.equal declared id -> ()
+        | _ -> failwith "record account does not match selected account");
+       if observation
+       then (
+         match get result "observation" with
+         | L.Nil -> default "observation" (L.Userdata (Userdata.Boolean true))
+         | L.Userdata (Userdata.Boolean true) -> ()
+         | _ -> failwith "record contradicts observation configuration");
+       let details =
+         match get result "details" with
+         | L.Nil ->
+           let d = V.Table.create 1 in
+           default "details" (L.Table d);
+           d
+         | value -> lua_table value
+       in
+       if V.eq (get details "fields") L.Nil
+       then V.Table.bind details ~key:(L.String "fields") ~data:fields);
+    if not (String.equal (get_string result "kind") kind)
+    then failwith "returned kind does not match classification";
+    if
+      String.equal kind "record"
+      && link_statements
+      && not (V.eq (get result "statements") L.Nil)
+    then failwith "record cannot set statements when link_statements is enabled";
+    if String.equal kind "statement"
+    then Statement (Records.statement_of_line (json (L.Table result)) |> Or_error.ok_exn)
+    else Record (Records.record_of_line (json (L.Table result)) |> Or_error.ok_exn)
+  with
+  | exn -> fail "row %d: %s" (i + 1) (Exn.to_string exn)
+;;
+
 let convert t ~name contents =
   Or_error.try_with (fun () ->
     let ( state
@@ -388,210 +558,67 @@ let convert t ~name contents =
       ]
       state;
     let sha256 = Digestif.SHA256.(digest_string contents |> to_hex) in
-    Csv_reader.check_utf8 ~name:institution contents;
-    let lines = Csv.input_all (Csv_reader.channel ~separator contents) in
-    let header, rows =
-      match lines with
-      | [] -> failwith "the CSV has no header"
-      | h :: rows -> h, rows
-    in
-    if not (List.equal String.equal header expected)
-    then failwith "CSV header does not match script";
-    let keys = column_keys header in
-    (* First classify the rows, then interpret transactions before statement
-       claims. This lets the script describe a file total wherever it occurs. *)
-    let rows =
-      List.filter_mapi rows ~f:(fun i cells ->
-        if List.for_all cells ~f:(fun cell -> String.is_empty (String.strip cell))
-        then None
-        else if List.length cells <> List.length header
-        then fail "row %d has the wrong number of columns" (i + 1)
-        else (
-          let raw = List.zip_exn header cells in
-          let named = List.zip_exn keys cells in
-          let normalized =
-            List.map named ~f:(fun (key, value) -> key, String.strip value)
-          in
-          let kind =
-            match classify with
-            | None -> "record"
-            | Some fn ->
-              (try
-                 match fn [ string_table normalized ] with
-                 | [ L.String (("record" | "statement") as kind) ] -> kind
-                 | _ -> failwith "classify must return record or statement"
-               with
-               | exn -> fail "row %d: %s" (i + 1) (Exn.to_string exn))
-          in
-          Some (i, cells, raw, named, normalized, kind)))
-    in
+    let rows = read_rows ~institution ~contents ~separator ~expected ~classify in
     let record_rows, statement_rows =
       List.partition_tf rows ~f:(fun (_, _, _, _, _, kind) -> String.equal kind "record")
     in
-    let interpret (i, cells, raw, named, normalized, kind) =
-      let fields =
-        raw
-        |> List.filter ~f:(fun (_, v) -> not (String.is_empty (String.strip v)))
-        |> List.map ~f:(fun (k, v) -> array [ L.String k; L.String v ])
-        |> array
-      in
-      let hash =
-        Digestif.SHA256.(
-          digest_string (Json.encode (Jsont.list Jsont.string) cells) |> to_hex)
-      in
-      let context =
-        table
-          [ "row_hash", L.String ("row-sha256-" ^ hash)
-          ; "source_hash_prefix", L.String (String.prefix sha256 16)
-          ; "fields", fields
-          ]
-      in
-      try
-        let row_account_id =
-          if String.equal kind "record"
-          then (
-            let row_account =
-              match account_fn with
-              | None -> account
-              | Some fn ->
-                (match fn [ string_table normalized ] with
-                 | [ value ] -> lua_table value
-                 | _ -> failwith "account must return one table")
-            in
-            let id = get_string row_account "id" in
-            let encoded = json (L.Table row_account) in
-            (match Hashtbl.find accounts id with
-             | None -> Hashtbl.set accounts ~key:id ~data:encoded
-             | Some previous when String.equal previous encoded -> ()
-             | Some _ -> fail "conflicting accounts: %s" id);
-            Some id)
-          else None
-        in
-        let returned = apply [ string_table normalized; string_table named; context ] in
-        let result, balance =
-          match returned with
-          | [ L.Table result ] -> result, L.Nil
-          | [ L.Table result; balance ] -> result, balance
-          | [ L.Nil ] -> failwith "skipping rows in Lua converters is not supported yet"
-          | _ -> failwith "convert must return a record and optionally a balance"
-        in
-        (match balance, row_account_id with
-         | L.Nil, _ -> ()
-         | L.Table balance, Some id ->
-           (match get balance "account" with
-            | L.Nil -> V.Table.bind balance ~key:(L.String "account") ~data:(L.String id)
-            | L.String declared when String.equal declared id -> ()
-            | _ -> failwith "balance account does not match selected account");
-           if not (String.equal (get_string balance "kind") "balance")
-           then failwith "second result must be a balance table";
-           balances := json (L.Table balance) :: !balances
-         | _ -> failwith "second result must be a balance table for a record");
-        let default name value =
-          if V.eq (get result name) L.Nil
-          then V.Table.bind result ~key:(L.String name) ~data:value
-        in
-        (match row_account_id with
-         | None -> ()
-         | Some id ->
-           (match get result "account" with
-            | L.Nil -> default "account" (L.String id)
-            | L.String declared when String.equal declared id -> ()
-            | _ -> failwith "record account does not match selected account");
-           if observation
-           then (
-             match get result "observation" with
-             | L.Nil -> default "observation" (L.Userdata (Userdata.Boolean true))
-             | L.Userdata (Userdata.Boolean true) -> ()
-             | _ -> failwith "record contradicts observation configuration");
-           let details =
-             match get result "details" with
-             | L.Nil ->
-               let d = V.Table.create 1 in
-               default "details" (L.Table d);
-               d
-             | value -> lua_table value
-           in
-           if V.eq (get details "fields") L.Nil
-           then V.Table.bind details ~key:(L.String "fields") ~data:fields);
-        if not (String.equal (get_string result "kind") kind)
-        then failwith "returned kind does not match classification";
-        if
-          String.equal kind "record"
-          && link_statements
-          && not (V.eq (get result "statements") L.Nil)
-        then failwith "record cannot set statements when link_statements is enabled";
-        let id =
-          if String.equal kind "statement" then Some (get_string result "id") else None
-        in
-        id, json (L.Table result)
-      with
-      | exn -> fail "row %d: %s" (i + 1) (Exn.to_string exn)
+    let interpret =
+      interpret_row
+        ~accounts
+        ~balances
+        ~account_fn
+        ~account
+        ~apply
+        ~observation
+        ~link_statements
+        ~sha256
     in
-    let records = List.map record_rows ~f:interpret |> List.map ~f:snd in
+    let records =
+      List.map record_rows ~f:(fun row ->
+        match interpret row with
+        | Record record -> record
+        | Statement _ -> assert false)
+    in
     let statements =
-      if List.is_empty records then [] else List.map statement_rows ~f:interpret
+      if List.is_empty records
+      then []
+      else
+        List.map statement_rows ~f:(fun row ->
+          match interpret row with
+          | Statement statement -> statement
+          | Record _ -> assert false)
     in
-    let statement_ids = List.map statements ~f:(fun (id, _) -> Option.value_exn id) in
+    let statement_ids = List.map statements ~f:(fun (s : Records.statement) -> s.id) in
     let records =
       if link_statements && not (List.is_empty statement_ids)
-      then (
-        let ids =
-          "[" ^ String.concat ~sep:"," (List.map statement_ids ~f:json_string) ^ "]"
-        in
-        List.map records ~f:(fun record ->
-          String.drop_suffix record 1 ^ ",\"statements\":" ^ ids ^ "}"))
+      then
+        List.map records ~f:(fun (record : Records.record) ->
+          { record with statements = statement_ids })
       else records
-    in
-    let object_line fields =
-      "{"
-      ^ String.concat
-          ~sep:","
-          (List.map fields ~f:(fun (k, v) -> json_string k ^ ":" ^ v))
-      ^ "}\n"
-    in
-    let header =
-      object_line
-        [ "kind", json_string "header"
-        ; "format", json_string "fin-records"
-        ; "version", "1"
-        ; "institution", json_string institution
-        ; "identity", json_string identity
-        ; ( "converter"
-          , String.strip
-              (object_line
-                 [ "name", json_string converter; "version", json_string version ]) )
-        ]
-    in
-    let source =
-      object_line
-        [ "kind", json_string "source"
-        ; "name", json_string name
-        ; "sha256", json_string sha256
-        ]
     in
     let accounts =
       Hashtbl.to_alist accounts
       |> List.sort ~compare:(fun (a, _) (b, _) -> String.compare a b)
-      |> List.map ~f:(fun (_, account) ->
-        String.drop_prefix account 1 |> fun rest -> "{\"kind\":\"account\"," ^ rest ^ "\n")
-      |> String.concat
+      |> List.map ~f:(fun (_, (_, account)) -> account)
     in
-    let text =
-      header
-      ^ source
-      ^ accounts
-      ^ String.concat ~sep:"" (List.rev_map !balances ~f:(fun b -> b ^ "\n"))
-      ^ String.concat
-          ~sep:""
-          (List.map statements ~f:(fun (_, statement) -> statement ^ "\n"))
-      ^ String.concat ~sep:"" (List.map records ~f:(fun r -> r ^ "\n"))
-      ^ object_line
-          [ "kind", json_string "end"; "records", Int.to_string (List.length records) ]
+    let identity =
+      match identity with
+      | "source" -> Records.Source
+      | "inventory" -> Records.Inventory
+      | _ -> fail "unknown identity: %s" identity
     in
-    let documents = Records.of_string text |> Or_error.ok_exn in
-    match documents with
-    | [ document ] -> document
-    | _ -> failwith "expected one records section")
+    let document : Records.t =
+      { institution
+      ; identity
+      ; converter = Some { name = converter; version = Some version }
+      ; sources = [ { name; sha256 } ]
+      ; accounts
+      ; statements
+      ; balances = List.rev !balances
+      ; records
+      }
+    in
+    Records.validate_document document |> Or_error.ok_exn)
 ;;
 
 let source t = t.source

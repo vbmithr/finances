@@ -582,6 +582,39 @@ let line_codec =
   |> finish
 ;;
 
+(* Decode a single converter result using the same tagged-line codec as files. *)
+let account_of_line text =
+  let open Or_error.Let_syntax in
+  let%bind line = Json.decode line_codec text in
+  match line with
+  | Account_line account -> Ok account
+  | _ -> Or_error.error_string "expected an account line"
+;;
+
+let statement_of_line text =
+  let open Or_error.Let_syntax in
+  let%bind line = Json.decode line_codec text in
+  match line with
+  | Statement_line statement -> Ok statement
+  | _ -> Or_error.error_string "expected a statement line"
+;;
+
+let balance_of_line text =
+  let open Or_error.Let_syntax in
+  let%bind line = Json.decode line_codec text in
+  match line with
+  | Balance_line balance -> Ok balance
+  | _ -> Or_error.error_string "expected a balance line"
+;;
+
+let record_of_line text =
+  let open Or_error.Let_syntax in
+  let%bind line = Json.decode line_codec text in
+  match line with
+  | Record_line record -> Ok record
+  | _ -> Or_error.error_string "expected a record line"
+;;
+
 let row_codec =
   Jsont.Object.map (fun () account record -> account, record)
   |> Jsont.Object.mem "format" (Json.tag "fin-records-row") ~enc:(fun _ -> ())
@@ -918,6 +951,26 @@ let merge_all documents =
     if List.exists groups ~f:(same t) then groups else t :: groups)
   |> List.rev_map ~f:(fun group -> List.filter documents ~f:(same group) |> merge)
   |> Or_error.all
+;;
+
+(* Apply the same header/source decoding and document checks as a records file. *)
+let validate_document (t : t) =
+  let open Or_error.Let_syntax in
+  let header =
+    { institution = t.institution; identity = t.identity; converter = t.converter }
+  in
+  let%bind header_json = Or_error.try_with (fun () -> Json.encode header_codec header) in
+  let%bind _ = Json.decode header_codec header_json in
+  let%bind _ =
+    List.map t.sources ~f:(fun source ->
+      let%bind encoded = Or_error.try_with (fun () -> Json.encode source_codec source) in
+      Json.decode source_codec encoded)
+    |> Or_error.all
+  in
+  let%bind documents = merge_all [ t ] in
+  match documents with
+  | [ document ] -> Ok document
+  | _ -> Or_error.error_string "expected one records section"
 ;;
 
 let zstd_magic = "\x28\xB5\x2F\xFD"
