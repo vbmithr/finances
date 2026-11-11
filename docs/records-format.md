@@ -76,9 +76,11 @@ and `currency`. `iban` gives its IBAN, and `no_iban` says it has none, such as a
 with neither, a registered IBAN may supply it.
 
 A statement has `id` and `account`, and optionally `period_start` with `period_end`, and
-`total`, what its rows add up to with signs as in the movements, as a `quantity` and a
-`commodity`. A source may state neither. Rows list it in `statements`. Fin reports a
-statement that does not reconcile; it does not refuse it, because exports can be partial.
+`total`, the source-stated `quantity` and `commodity`. A source may state neither.
+Rows list it in `statements` only when their relationship to the total is known.
+Fin compares explicitly linked rows; without linked rows the comparison is
+unavailable. Fin reports a total that does not reconcile instead of refusing it,
+because exports can be partial.
 
 A balance has `account`, `quantity`, `commodity`, `as_of` and a `type`: `opening`, `closing`,
 `available`, or `day_end` for one balance per day whichever rows it follows. It stands alone,
@@ -216,7 +218,7 @@ source file is often no statement at all, only a list of movements.
 | bunq CSV | Row list with date and value date, no IDs, identical rows | observations, `inventory` identity |
 | Revolut CSV | Row list per currency, running balance, `REVERTED` rows | `balance_after`; a reverted row has no movements and a `reported` amount |
 | CDC CSV | Row list of up to two legs, stated fiat values, some hashes | `valuations`, `references.hash`, a signed exchange target |
-| FDM CSV | Card rows with local and USD amounts, a final total row | `exchange`, a `statement` with a `total` |
+| FDM CSV | Card rows with local and USD amounts, file total rows | `exchange`, unlinked `statement` totals |
 
 All of these have been converted from real files. bunq's opening balance plus its rows equals
 its closing balance exactly.
@@ -225,8 +227,8 @@ Measured, so these are not guesses: Wise and Revolut running balances reconcile 
 consecutive pair, with Revolut's balance moving by `Amount` minus `Fee`. BoursoBank has
 exactly one balance per value date on every account. It reconciles from day to day on most
 days of two accounts and hardly ever on a third, apparently a card, so it is stated
-evidence, not a running total. In the FDM export examined, the last row is the exact
-sum of its dated rows. Fin records that total but does not yet verify the sum.
+evidence, not a running total. FDM reports file totals separately from its dated
+rows. Fin records those values without assuming which rows each total covers.
 
 For pairing, reference and date do not always decide. bunq has no references: account, booking
 date and quantity pair all 332 rows, 22 of which share a key with another row, against 113 on

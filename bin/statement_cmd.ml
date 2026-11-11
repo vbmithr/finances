@@ -51,7 +51,7 @@ let totals database institution =
 let totals_cmd =
   command
     "totals"
-    "Compare source-stated totals with their linked records, as JSON."
+    "Show source-stated totals and compare their explicitly linked records, as JSON."
     Term.(const totals $ database $ institution_filter)
 ;;
 

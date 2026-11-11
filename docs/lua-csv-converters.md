@@ -186,18 +186,20 @@ statement row returns a records-format `statement` table rather than a record.
 the file's SHA-256 digest, which can be used in a file-specific statement ID.
 
 If `config.link_statements = yes`, Fin links every emitted record to every
-emitted statement. The record must not itself set `statements`. With no records,
-statement rows are not converted and no account or statement is emitted. This
-matches the existing converter's treatment of an empty FDM statement.
+emitted statement. The record must not itself set `statements`. Without this
+option, scripts can leave statements unlinked or select them per record. For a
+static account, statement rows are retained even if there are no records. A
+row-derived account cannot be selected for a statement-only file and its
+statement rows are not converted.
 
 FDM's converter treats purchases as outflows and refunds as inflows for both
 positive-spending and signed exports. It preserves adjustment signs. Its
 `Balance after` column remains in the source fields rather than being checked as
 a continuous balance, because some exports omit balance-changing activity.
 
-Fin stores FDM's stated total and links it to its records on import. Use
-`fin statement totals --institution fdm` to compare the total with the linked
-movements. The original source file is also retained.
+Fin stores FDM's spent and deposited totals exactly as stated, without guessing
+which records they cover. `fin statement totals --institution fdm` lists the
+claims with comparison unavailable. The original source file is also retained.
 
 ## Current limits
 
@@ -219,7 +221,7 @@ Bunq's account selection fit that split well.
 
 The API is still rough. `array()`, `yes` and `no` expose Lua 2.5
 representation details, and decimal strings and special helpers make
-arithmetic less natural. FDM's total needs a separate classification pass and a
-linking flag. Movements use records-format tables directly.
+arithmetic less natural. FDM's totals need a separate classification pass.
+Movements use records-format tables directly.
 A more cohesive file-level API remains worth exploring; this interface is
 experimental.

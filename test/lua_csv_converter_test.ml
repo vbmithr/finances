@@ -100,8 +100,8 @@ let fdm_account_naming () =
   let invalid_link =
     String.substr_replace_first
       (bundled "lua/fdm.lua")
-      ~pattern:"link_statements = yes"
-      ~with_:"link_statements = \"bad\""
+      ~pattern:"account_from_filename = yes"
+      ~with_:"account_from_filename = yes, link_statements = \"bad\""
   in
   Alcotest.(check bool)
     "rejects invalid statement-link option"

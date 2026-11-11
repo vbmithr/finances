@@ -239,41 +239,43 @@ let interpret_row
       ]
   in
   try
+    let register_account () =
+      let row_account =
+        match account_fn with
+        | None -> account
+        | Some fn ->
+          (match fn [ string_table normalized ] with
+           | [ value ] -> lua_table value
+           | _ -> failwith "account must return one table")
+      in
+      Option.iter account_label ~f:(fun label ->
+        V.Table.bind row_account ~key:(L.String "id") ~data:(L.String label));
+      let id = get_string row_account "id" in
+      let encoded = json (L.Table row_account) in
+      (match Hashtbl.find accounts id with
+       | None ->
+         if not (V.eq (get row_account "kind") L.Nil)
+         then failwith "account must not set kind";
+         let tagged =
+           V.Luahash.fold (fun key value acc -> (string key, value) :: acc) row_account []
+           |> V.Table.of_list
+         in
+         V.Table.bind tagged ~key:(L.String "kind") ~data:(L.String "account");
+         let decoded =
+           Records.account_of_line (json (L.Table tagged)) |> Or_error.ok_exn
+         in
+         Hashtbl.set accounts ~key:id ~data:(encoded, decoded)
+       | Some (previous, _) when String.equal previous encoded -> ()
+       | Some _ -> fail "conflicting accounts: %s" id);
+      id
+    in
     let row_account_id =
       if String.equal kind "record"
-      then (
-        let row_account =
-          match account_fn with
-          | None -> account
-          | Some fn ->
-            (match fn [ string_table normalized ] with
-             | [ value ] -> lua_table value
-             | _ -> failwith "account must return one table")
-        in
-        Option.iter account_label ~f:(fun label ->
-          V.Table.bind row_account ~key:(L.String "id") ~data:(L.String label));
-        let id = get_string row_account "id" in
-        let encoded = json (L.Table row_account) in
-        (match Hashtbl.find accounts id with
-         | None ->
-           if not (V.eq (get row_account "kind") L.Nil)
-           then failwith "account must not set kind";
-           let tagged =
-             V.Luahash.fold
-               (fun key value acc -> (string key, value) :: acc)
-               row_account
-               []
-             |> V.Table.of_list
-           in
-           V.Table.bind tagged ~key:(L.String "kind") ~data:(L.String "account");
-           let decoded =
-             Records.account_of_line (json (L.Table tagged)) |> Or_error.ok_exn
-           in
-           Hashtbl.set accounts ~key:id ~data:(encoded, decoded)
-         | Some (previous, _) when String.equal previous encoded -> ()
-         | Some _ -> fail "conflicting accounts: %s" id);
-        Some id)
-      else None
+      then Some (register_account ())
+      else (
+        if Hashtbl.is_empty accounts && Option.is_none account_fn
+        then ignore (register_account () : string);
+        None)
     in
     let returned = apply [ string_table normalized; string_table named; context ] in
     let result, balance =
@@ -463,7 +465,7 @@ let convert_with ?account_label ?path t ~name contents =
         | Statement _ -> assert false)
     in
     let statements =
-      if List.is_empty records
+      if List.is_empty records && Option.is_some account_fn
       then []
       else
         List.map statement_rows ~f:(fun row ->

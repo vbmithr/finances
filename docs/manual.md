@@ -638,8 +638,9 @@ fin statement companions --review
 `fin statement list` compares each bank statement's stated balances with the
 movements it lists. `fin statement totals` compares source-stated totals with
 the records they name. It reports the difference as movements minus the stated
-total; `reconciled` and `difference` are null if a linked observation or a
-record without a movement in the stated commodity prevents comparison.
+total; `reconciled` and `difference` are null when no rows are linked, or when
+a linked observation or a record without a movement in the stated commodity
+prevents comparison.
 `fin statement companions` lists the enrichment exports (the BoursoBank, Wise
 and Bunq CSV files) with their fields and match state; `--review` keeps the rows
 that still need attention. These commands accept `--institution` to show one bank. `fin statement match` recomputes the matches;
@@ -793,8 +794,10 @@ some FDM exports omit balance changes between rows. If you previously imported a
 FDM file whose signed amounts were inverted, back up your database, remove the
 affected account, and reimport it to correct its movements and journal. Account
 removal also removes its review decisions. FDM's spent and deposited totals are
-currently each linked to all records in the file, so their reported differences
-are not a comparison against only spending or only deposits.
+retained as stated by each file, but have no inferred transaction links, so their
+comparisons are unavailable. Previously imported totals retain their old links
+and sign until the affected account is removed and its files reimported; back up
+first, because account removal also removes its review decisions.
 
 Observations in a records file are paired with its counted records, and balances are stored:
 `fin statement balances` lists them as JSON. Source-stated totals are retained

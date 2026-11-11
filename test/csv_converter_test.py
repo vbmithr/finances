@@ -95,8 +95,8 @@ assert len(records) == 2 and len(statements) == 1
 assert records[0]["movements"][0]["quantity"] == "-11"
 assert records[1]["movements"][0]["quantity"] == "1.1"
 assert details(records[1])["exchange"]["target_quantity"] == "-1"
-assert statements[0]["total"]["quantity"] == "-9.9"
-assert all(statements[0]["id"] in r["statements"] for r in records)
+assert statements[0]["total"]["quantity"] == "9.9"
+assert all(not r.get("statements") for r in records)
 
 # BoursoBank: a repeated header name, comma decimals, and one balance per value date.
 bourso = write("bourso.csv", """Date Opération;Date Valeur;Libellé;Libellé Suggéré;Catégorie;Catégorie Parente;Solde;Commentaire;Numéro Compte;Libellé Compte;Solde;Pointage

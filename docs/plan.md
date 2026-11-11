@@ -227,8 +227,9 @@ configurable yet.
 - [x] Port Wise CSV observations to Lua, retaining CAMT matching and journal metadata.
 - [x] Support signed FDM exports and account deletion with linked statement totals;
   retain nonconsecutive FDM balance values as source fields.
-- [ ] Link FDM spending and deposit totals to the corresponding records rather
-  than every row; verify the provider's treatment of adjustments and refunds.
+- [x] Preserve FDM file totals without inferred transaction links or comparisons.
+- [ ] Investigate whether FDM documents the scope of its totals, including
+  adjustments and refunds, before linking them to transactions.
 - [x] Sketch Lua interpretation of CAMT and MT940 fields after OCaml parsing:
   [shared statement interpretation](lua-statement-interpretation.md).
 - [x] Test a Wise CAMT/CSV Lua reference and grouping prototype against current
@@ -252,7 +253,7 @@ configurable yet.
   the remaining institutions.
 - [x] Allow complete source/records reimports with matching source digest and
   event evidence, including reverted Revolut rows; reject partial overlaps.
-- [x] Preserve FDM's stated total and compare it with its linked transactions.
+- [x] Preserve source-stated totals and compare explicitly linked transactions.
 - [ ] Compare totals linked to observations after matching them to counted records.
 
 - [x] Allow a user-added institution to import supported OFX 2.x without an

@@ -142,16 +142,19 @@ let document ~institution (t : Records.t) =
       Option.bind s.total ~f:(fun amount ->
         List.find t.accounts ~f:(fun (a : Records.account) -> String.equal a.id s.account)
         |> Option.map ~f:(fun account ->
+          let events =
+            List.filter_map rows ~f:(fun (record, event) ->
+              Option.some_if (List.mem record.statements s.id ~equal:String.equal) event)
+          in
           { Document.source_account = account_identity ~institution account
           ; reference = s.id
           ; amount
           ; complete =
-              not
-                (List.exists observations ~f:(fun record ->
-                   List.mem record.statements s.id ~equal:String.equal))
-          ; events =
-              List.filter_map rows ~f:(fun (record, event) ->
-                Option.some_if (List.mem record.statements s.id ~equal:String.equal) event)
+              (not (List.is_empty events))
+              && not
+                   (List.exists observations ~f:(fun record ->
+                      List.mem record.statements s.id ~equal:String.equal))
+          ; events
           })))
   in
   { Document.empty with

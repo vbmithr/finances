@@ -8,8 +8,7 @@ config = {
   account = { id = "card", bank = "fdm", type = "prepaid-card", currency = "USD" },
   header = { "Type", "Merchant", "Category", "Date", "Local currency",
              "Local amount", "Exchange rate", "USD", "Balance after", "Note" },
-  account_from_filename = yes,
-  link_statements = yes
+  account_from_filename = yes
 }
 
 -- Exports can start mid-day and repeat a day, so a row is identified by what it
@@ -35,7 +34,6 @@ function convert(row, raw, context)
     local total = row["USD"]
     local kind = "total"
     if row["Type"] == "Total spent" then
-      total = negate(total)
       kind = "spent"
     elseif row["Type"] == "Total deposited" then
       kind = "deposited"

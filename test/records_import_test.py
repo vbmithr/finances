@@ -41,10 +41,10 @@ Total spent,,,,,,,20.90,,
         totals = json.loads(run("statement", "totals", "--institution", "fdm", "-d", database).stdout)
         assert len(totals) == 1, totals
         total = totals[0]
-        assert total["stated"] == "-20.9", total
-        assert total["movements"] == "-20.9", total
-        assert total["entries"] == 3 and total["difference"] == "0", total
-        assert total["reconciled"] is True, total
+        assert total["stated"] == "20.9", total
+        assert total["entries"] == 0, total
+        assert total["movements"] is None and total["difference"] is None, total
+        assert total["reconciled"] is None, total
         return database, journal
 
     # From the CSV, identical rows included.
@@ -61,7 +61,7 @@ Total spent,,,,,,,20.90,,
             assert db.execute("SELECT count(*) FROM sqlite_schema WHERE type='trigger' AND name=?",
                               (table + "_no_delete",)).fetchone()[0] == 1
     run("import", "fdm", statement, "-d", database, "--journal", journal)
-    assert json.loads(run("statement", "totals", "--institution", "fdm", "-d", database).stdout)[0]["reconciled"] is True
+    assert json.loads(run("statement", "totals", "--institution", "fdm", "-d", database).stdout)[0]["reconciled"] is None
     text = journal.read_text()
     postings = [line for line in text.splitlines()
                 if line.startswith(" ") and "assets:cards:fdm:1118" in line]
@@ -81,6 +81,7 @@ Purchase,Shop,Shopping,2025-01-03,,,,"-5.00",50.00,
 Adjustment,Correction,Other,2025-01-02,,,,"2.00",70.00,
 Deposit,Top up,Other,2025-01-01,,,,"10.00",30.00,
 Total spent,,,,,,,5.00,,
+Total deposited,,,,,,,10.00,,
 """)
     signed_records = root / "signed.jsonl"
     run("convert", "fdm", signed, "-o", signed_records)
@@ -93,15 +94,33 @@ Total spent,,,,,,,5.00,,
     run("init", "-d", signed_db)
     run("import", "fdm", signed, "-d", signed_db, "--journal", root / "signed.journal")
     assert len(json.loads(run("operation", "list", "--institution", "fdm", "--json", "-d", signed_db).stdout)) == 3
+    claims = json.loads(run("statement", "totals", "--institution", "fdm", "-d", signed_db).stdout)
+    assert len(claims) == 2, claims
+    assert {c["reference"].split("-")[0]: c["stated"] for c in claims} == {"spent": "5", "deposited": "10"}
+    assert all(c["entries"] == 0 and c["movements"] is None and c["reconciled"] is None for c in claims)
 
-    # A source discrepancy remains visible instead of rejecting its evidence.
+    # A statement with totals and no movements still retains its claims.
+    totals_only = root / "empty-card.csv"
+    totals_only.write_text("""Type,Merchant,Category,Date,Local currency,Local amount,Exchange rate,USD,Balance after,Note
+Total spent,,,,,,,0.00,,
+Total deposited,,,,,,,0.00,,
+""")
+    totals_only_db = root / "totals-only.sqlite3"
+    run("init", "-d", totals_only_db)
+    run("import", "fdm", totals_only, "-d", totals_only_db, "--journal", root / "totals-only.journal")
+    claims = json.loads(run("statement", "totals", "-d", totals_only_db).stdout)
+    assert len(claims) == 2 and all(c["stated"] == "0" for c in claims), claims
+    assert all(c["reconciled"] is None and c["entries"] == 0 for c in claims), claims
+    assert json.loads(run("operation", "list", "--json", "-d", totals_only_db).stdout) == []
+
+    # An unscoped reported total remains visible without inventing a comparison.
     mismatch = root / "mismatch.csv"
     mismatch.write_text(statement.read_text().replace("Total spent,,,,,,,20.90", "Total spent,,,,,,,20.91"))
     mismatch_db = root / "mismatch.sqlite3"
     run("init", "-d", mismatch_db)
     run("import", "fdm", mismatch, "-d", mismatch_db, "--journal", root / "mismatch.journal")
     mismatch_total = json.loads(run("statement", "totals", "-d", mismatch_db).stdout)[0]
-    assert mismatch_total["difference"] == "0.01" and mismatch_total["reconciled"] is False, mismatch_total
+    assert mismatch_total["stated"] == "20.91" and mismatch_total["difference"] is None, mismatch_total
 
     # Cards in one folder each get their own account, from their file names.
     cards = root / "cards"
@@ -133,6 +152,21 @@ Total spent,,,,,,,5.00,,
 
     # A different stated commodity cannot be compared to the USD rows.
     converted = records.parent.joinpath("records.jsonl").read_text().splitlines()
+    # A format that explicitly names the rows of a total still reconciles.
+    linked = [json.loads(line) for line in converted]
+    linked_claim = next(row for row in linked if row["kind"] == "statement")
+    linked_claim["total"]["quantity"] = "-20.9"
+    for row in linked:
+        if row["kind"] == "record":
+            row["statements"] = [linked_claim["id"]]
+    linked_path = root / "linked.jsonl"
+    linked_path.write_text("\n".join(map(json.dumps, linked)) + "\n")
+    linked_db = root / "linked.sqlite3"
+    run("init", "-d", linked_db)
+    run("import", "fdm", linked_path, "-d", linked_db, "--journal", root / "linked.journal")
+    comparison = json.loads(run("statement", "totals", "-d", linked_db).stdout)[0]
+    assert comparison["entries"] == 3 and comparison["reconciled"] is True, comparison
+    converted = list(map(json.dumps, linked))
     other_commodity = root / "other-commodity.jsonl"
     out = []
     for line in converted:

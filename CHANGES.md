@@ -8,6 +8,14 @@ short line of their own.
 
 ## Unreleased
 
+- FDM spent and deposited totals are retained as stated without assigning every
+  transaction to both totals. Comparisons are unavailable until the source
+  establishes which rows a total covers; unlinked totals from other converters
+  also no longer compare against zero. Statement-only FDM files retain their
+  totals. **Action required:** previously imported FDM totals keep their old
+  sign and links; back up, remove the affected account and reimport its files to
+  replace them. Account removal also removes its review decisions.
+
 - Import FDM signed purchases and adjustments with their intended direction and
   retain nonconsecutive balance values as source fields. **Action required:**
   back up, remove and reimport affected FDM accounts if their earlier movements
