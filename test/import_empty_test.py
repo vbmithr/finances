@@ -39,6 +39,10 @@ with tempfile.TemporaryDirectory() as directory:
         # The pre-port fixture supplies both Kraken headers after its Lua migration.
         if name == "kraken":
             layouts.append(json.loads((pathlib.Path(__file__).parent / "fixtures/kraken-converter.json").read_text()))
+        # Ethereum and Polygon likewise keep their pre-port layouts as fixtures.
+        if name in ("ethereum", "polygon"):
+            for n in (1, 2):
+                layouts.append(json.loads((pathlib.Path(__file__).parent / f"fixtures/{name}-{n}-converter.json").read_text()))
         headers = {tuple(p["header"]): p for layout in layouts for p in profiles(layout)}
         for profile in headers.values():
             statement = root / f"{name}.csv"

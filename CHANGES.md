@@ -8,6 +8,11 @@ short line of their own.
 
 ## Unreleased
 
+- Ethereum and Polygon explorer CSVs now use bundled Lua scripts, preserving the
+  transaction and token-transfer headers, wallet address detection, failed and
+  zero-value rows, and exact fees. Lua gains `lowercase` and `remove_text`. The
+  former JSON layouts moved to test fixtures. Saved definitions keep working.
+
 - Kraken spot ledger CSVs now use Lua, preserving both headers, asset mapping,
   filtered-row diagnostics, fee grouping and tested reimports. Lua converters
   may declare multiple exact headers and classify rows as skipped.

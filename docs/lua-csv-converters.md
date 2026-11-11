@@ -129,6 +129,8 @@ Lua numbers are floating point. Keep financial amounts as strings:
   prefixed hexadecimal references by removing hyphens and lowercasing; it also
   prefixes a bare hexadecimal reference when its description matches `label`
   case-insensitively. It rejects a malformed prefixed reference.
+- `lowercase(text)` lowercases a string; `remove_text(text, part)` removes every
+  occurrence of a nonempty `part`, such as thousands separators.
 - `sign(text)` returns `"positive"`, `"negative"`, `"zero"`, or `nil` if the
   dot-decimal input is invalid. `negate(text)` returns its exact negation.
 - `matches(text, pattern)` tests a Perl-style regular expression and

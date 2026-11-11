@@ -15,6 +15,19 @@ let column_keys header =
   keys
 ;;
 
+(* An expected column ending with [*] names any column starting with the rest, for a
+   name an export varies, such as a day's price. *)
+let column_fits expected found =
+  match String.chop_suffix expected ~suffix:"*" with
+  | Some prefix -> String.is_prefix found ~prefix
+  | None -> String.equal expected found
+;;
+
+let header_fits expected found =
+  List.length expected = List.length found
+  && List.for_all2_exn expected found ~f:column_fits
+;;
+
 type t =
   { source : string
   ; institution : string
@@ -162,7 +175,7 @@ let recognizes t contents =
     Or_error.try_with (fun () ->
       Csv.next (Csv_reader.channel ~separator:t.separator contents))
   with
-  | Ok header -> List.exists t.headers ~f:(List.equal String.equal header)
+  | Ok header -> List.exists t.headers ~f:(fun expected -> header_fits expected header)
   | Error _ -> false
 ;;
 
@@ -177,7 +190,7 @@ let classifier state =
   | _ -> failwith "classify must be a function"
 ;;
 
-let read_rows ~institution ~contents ~separator ~expected ~classify =
+let read_rows ~institution ~contents ~separator ~expected ~classify ~address =
   Csv_reader.check_utf8 ~name:institution contents;
   let lines = Csv.input_all (Csv_reader.channel ~separator contents) in
   let header, rows =
@@ -185,9 +198,31 @@ let read_rows ~institution ~contents ~separator ~expected ~classify =
     | [] -> failwith "the CSV has no header"
     | h :: rows -> h, rows
   in
-  if not (List.exists expected ~f:(List.equal String.equal header))
+  if not (List.exists expected ~f:(fun expected -> header_fits expected header))
   then failwith "CSV header does not match script";
   let keys = column_keys header in
+  (* The wallet's address is the one value of the address columns found on every row:
+     an explorer's export of an address lists what it sent and what it received. *)
+  let shared = ref None in
+  let note_addresses cells =
+    if not (List.is_empty address)
+    then (
+      let named = List.zip_exn keys cells in
+      let found =
+        List.filter_map address ~f:(fun column ->
+          match List.Assoc.find named column ~equal:String.equal with
+          | None -> fail "address column is not in the CSV: %s" column
+          | Some value ->
+            let value = String.lowercase (String.strip value) in
+            Option.some_if (not (String.is_empty value)) value)
+        |> Set.of_list (module String)
+      in
+      shared
+      := Some
+           (match !shared with
+            | None -> found
+            | Some previous -> Set.inter previous found))
+  in
   (* First classify the rows, then interpret transactions before statement
        claims. This lets the script describe a file total wherever it occurs. *)
   let skipped = ref 0 in
@@ -198,6 +233,7 @@ let read_rows ~institution ~contents ~separator ~expected ~classify =
       else if List.length cells <> List.length header
       then fail "row %d has the wrong number of columns" (i + 1)
       else (
+        note_addresses cells;
         let raw = List.zip_exn header cells in
         let named = List.zip_exn keys cells in
         let normalized =
@@ -220,7 +256,18 @@ let read_rows ~institution ~contents ~separator ~expected ~classify =
           None)
         else Some (i, cells, raw, named, normalized, kind)))
   in
-  rows, !skipped
+  let wallet =
+    match !shared with
+    | None -> None
+    | Some shared ->
+      (match Set.to_list shared with
+       | [ wallet ] -> Some wallet
+       | [] -> failwith "no address appears on every row: not one wallet's export"
+       | _ ->
+         failwith
+           "several addresses appear on every row, so the wallet's cannot be told apart")
+  in
+  rows, !skipped, wallet
 ;;
 
 let filtered_rows t contents =
@@ -229,8 +276,14 @@ let filtered_rows t contents =
   else
     Or_error.try_with (fun () ->
       let state, institution, _, _, _, _, expected, separator, _ = initialize t.source in
-      let _, skipped =
-        read_rows ~institution ~contents ~separator ~expected ~classify:(classifier state)
+      let _, skipped, _ =
+        read_rows
+          ~institution
+          ~contents
+          ~separator
+          ~expected
+          ~classify:(classifier state)
+          ~address:[]
       in
       skipped)
 ;;
@@ -245,6 +298,7 @@ let interpret_row
       ~observation
       ~link_statements
       ~sha256
+      ~wallet
       (i, cells, raw, named, normalized, kind)
   =
   let fields =
@@ -259,26 +313,27 @@ let interpret_row
   in
   let context =
     table
-      [ "row_hash", L.String ("row-sha256-" ^ hash)
-      ; "source_hash_prefix", L.String (String.prefix sha256 16)
-      ; "fields", fields
-      ; "account_id", L.String (Option.value account_label ~default:"card")
-      ; ( "row_hash_of"
-        , V.caml_func (function
-            | [ L.Table parts ] ->
-              let texts =
-                lua_list parts
-                |> List.map ~f:(function
-                  | L.String text -> text
-                  | _ -> failwith "row_hash_of expects strings")
-              in
-              let digest =
-                Digestif.SHA256.(
-                  digest_string (Json.encode (Jsont.list Jsont.string) texts) |> to_hex)
-              in
-              [ L.String ("row-sha256-" ^ digest) ]
-            | _ -> failwith "row_hash_of expects an array of strings") )
-      ]
+      (Option.to_list (Option.map wallet ~f:(fun wallet -> "address", L.String wallet))
+       @ [ "row_hash", L.String ("row-sha256-" ^ hash)
+         ; "source_hash_prefix", L.String (String.prefix sha256 16)
+         ; "fields", fields
+         ; "account_id", L.String (Option.value account_label ~default:"card")
+         ; ( "row_hash_of"
+           , V.caml_func (function
+               | [ L.Table parts ] ->
+                 let texts =
+                   lua_list parts
+                   |> List.map ~f:(function
+                     | L.String text -> text
+                     | _ -> failwith "row_hash_of expects strings")
+                 in
+                 let digest =
+                   Digestif.SHA256.(
+                     digest_string (Json.encode (Jsont.list Jsont.string) texts) |> to_hex)
+                 in
+                 [ L.String ("row-sha256-" ^ digest) ]
+               | _ -> failwith "row_hash_of expects an array of strings") )
+         ])
   in
   try
     let register_account () =
@@ -286,7 +341,7 @@ let interpret_row
         match account_fn with
         | None -> account
         | Some fn ->
-          (match fn [ string_table normalized ] with
+          (match fn [ string_table normalized; context ] with
            | [ value ] -> lua_table value
            | _ -> failwith "account must return one table")
       in
@@ -479,7 +534,14 @@ let convert_with ?account_label ?path t ~name contents =
       ]
       state;
     let sha256 = Digestif.SHA256.(digest_string contents |> to_hex) in
-    let rows, _ = read_rows ~institution ~contents ~separator ~expected ~classify in
+    let address =
+      match get config "address" with
+      | L.Nil -> []
+      | value -> lua_table value |> lua_list |> List.map ~f:string
+    in
+    let rows, _, wallet =
+      read_rows ~institution ~contents ~separator ~expected ~classify ~address
+    in
     let record_rows, statement_rows =
       List.partition_tf rows ~f:(fun (_, _, _, _, _, kind) -> String.equal kind "record")
     in
@@ -494,6 +556,7 @@ let convert_with ?account_label ?path t ~name contents =
         ~observation
         ~link_statements
         ~sha256
+        ~wallet
     in
     let records =
       List.map record_rows ~f:(fun row ->

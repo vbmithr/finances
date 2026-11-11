@@ -6,8 +6,4 @@ chain_id = 137
 
 [[statements]]
 format = "csv"
-definition = "csv/polygon-1.json"
-
-[[statements]]
-format = "csv"
-definition = "csv/polygon-2.json"
+script = "lua/polygon.lua"

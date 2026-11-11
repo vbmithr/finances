@@ -114,7 +114,7 @@ list of conditions, followed by the movements and optional fee to produce. Fin
 uses the **first** case whose conditions all hold. A case without `when` is a
 catch-all, so place it last.
 
-For example, [Ethereum’s transaction layout](../institutions/csv/ethereum-1.json)
+For example, [Ethereum’s transaction layout](../test/fixtures/ethereum-1-converter.json)
 uses different cases for failed, incoming and outgoing transactions. Each case
 interprets the relevant columns for that kind of row. `only` is separate: it filters rows out of
 the source altogether. `require` checks assumptions about remaining rows and

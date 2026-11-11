@@ -148,6 +148,17 @@ let negate = function
   | _ -> failwith "negate expects one string"
 ;;
 
+let lowercase = function
+  | [ L.String text ] -> [ L.String (String.lowercase text) ]
+  | _ -> failwith "lowercase expects one string"
+;;
+
+let remove_text = function
+  | [ L.String text; L.String part ] when not (String.is_empty part) ->
+    [ L.String (String.substr_replace_all text ~pattern:part ~with_:"") ]
+  | _ -> failwith "remove_text expects text and a nonempty part"
+;;
+
 let utc_datetime = function
   | [ L.String text ] ->
     if
@@ -278,6 +289,8 @@ let load source =
     ; "drop_prefix", V.caml_func drop_prefix
     ; "normalize_hex", V.caml_func normalize_hex
     ; "utc_datetime", V.caml_func utc_datetime
+    ; "lowercase", V.caml_func lowercase
+    ; "remove_text", V.caml_func remove_text
     ; "yes", L.Userdata (Userdata.Boolean true)
     ; "no", L.Userdata (Userdata.Boolean false)
     ]

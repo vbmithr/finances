@@ -227,8 +227,10 @@ configurable yet.
 - [x] Port Wise CSV observations to Lua, retaining CAMT matching and journal metadata.
 - [x] Port Kraken spot ledgers to Lua, retaining both headers, filtered-row
   diagnostics, asset mappings, fee groups and cross-version reimports.
-- [ ] Port Ethereum and Polygon CSV layouts to Lua, then remove the JSON CSV
-  configuration language after validating real exports and saved definitions.
+- [x] Port Ethereum and Polygon CSV layouts to Lua; their former JSON layouts
+  remain as test fixtures.
+- [ ] Remove the JSON CSV configuration language after validating real exports
+  and saved definitions.
 - [x] Delete one or more accounts as an atomic batch with a single preview and
   confirmation; retain the existing shared-evidence safeguards.
 - [x] Support signed FDM exports and account deletion with linked statement totals;
