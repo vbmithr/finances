@@ -334,6 +334,58 @@ let bourso_equivalence () =
         (Result.is_error (Lua_csv_converter.convert lua ~name:"bad" contents)))
 ;;
 
+let revolut_equivalence () =
+  let old =
+    Csv_converter.of_string (Stdio.In_channel.read_all "fixtures/revolut-converter.json")
+    |> ok
+  in
+  let lua =
+    Lua_csv_converter.create ~institution:"revolut" (bundled "lua/revolut.lua") |> ok
+  in
+  let compare name contents =
+    let expected = Csv_converter.convert old ~name contents |> ok |> Records.to_string in
+    let actual =
+      Lua_csv_converter.convert lua ~name contents |> ok |> Records.to_string
+    in
+    Alcotest.(check string) name expected actual
+  in
+  compare "fixture.csv" (Stdio.In_channel.read_all "fixtures/revolut.csv");
+  let header =
+    "Type,Product,Started Date,Completed \
+     Date,Description,Amount,Fee,Currency,State,Balance\n"
+  in
+  compare "empty.csv" header;
+  compare
+    "reverted.csv"
+    (header
+     ^ "Deposit,Current,2026-01-01 09:00:00,2026-01-01 \
+        09:00:01,In,150.00,0.00,EUR,COMPLETED,150.00\n"
+     ^ "Card Payment,Current,2026-01-02 09:00:00,2026-01-03 \
+        23:00:00,Shop,-10.00,1.00,EUR,COMPLETED,139.00\n"
+     ^ "Card Payment,Current,2026-01-04 09:00:00,,Undone,-5.00,0.00,EUR,REVERTED,\n");
+  compare
+    "precision.csv"
+    (header
+     ^ "Deposit,Current,2026-01-01 09:00:00,2026-01-01 \
+        09:00:01,In,12345678901234567890.123456789,0.000000001,USD,COMPLETED,12345678901234567890.123456788\n"
+    );
+  List.iter
+    [ "Card,Current,2026-01-01 09:00:00,2026-01-01 08:00:00,Shop,1,0,EUR,COMPLETED,1\n"
+    ; "Card,Current,2026-01-01 09:00:00,,Shop,x,0,EUR,REVERTED,\n"
+    ; "Card,Current,2026-01-01 09:00:00,,Shop,1,0,EUR,REVERTED,1\n"
+    ]
+    ~f:(fun row ->
+      let contents = header ^ row in
+      Alcotest.(check bool)
+        "old rejects invalid"
+        true
+        (Result.is_error (Csv_converter.convert old ~name:"bad" contents));
+      Alcotest.(check bool)
+        "Lua rejects invalid"
+        true
+        (Result.is_error (Lua_csv_converter.convert lua ~name:"bad" contents)))
+;;
+
 let other_institution () =
   let source = Stdio.In_channel.read_all "fixtures/lua-example-bank.lua" in
   let converter = Lua_csv_converter.create ~institution:"example-bank" source |> ok in
@@ -384,6 +436,7 @@ let () =
         ; Alcotest.test_case "FDM equivalence" `Quick fdm_equivalence
         ; Alcotest.test_case "Bunq equivalence" `Quick bunq_equivalence
         ; Alcotest.test_case "BoursoBank equivalence" `Quick bourso_equivalence
+        ; Alcotest.test_case "Revolut equivalence" `Quick revolut_equivalence
         ; Alcotest.test_case "another institution" `Quick other_institution
         ] )
     ]

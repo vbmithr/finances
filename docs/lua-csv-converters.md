@@ -6,7 +6,8 @@ records. The institution-specific header, account and interpretation belong in
 the script. The [CDC converter](../institutions/lua/cdc.lua) is a complete
 example; [FDM](../institutions/lua/fdm.lua) emits a file-level total, and
 [Bunq](../institutions/lua/bunq.lua) describes observations for several accounts;
-[BoursoBank](../institutions/lua/boursobank.lua) also emits day-end balances.
+[BoursoBank](../institutions/lua/boursobank.lua) also emits day-end balances,
+and [Revolut](../institutions/lua/revolut.lua) subtracts fees exactly.
 
 Refer to a script from an institution TOML file:
 
@@ -112,6 +113,10 @@ Lua numbers are floating point. Keep financial amounts as strings:
 
 - `decimal(text)` parses and normalizes an exact decimal with a dot;
   `decimal_comma(text)` does the same with a comma and rejects dots.
+- `subtract(left, right)` subtracts two exact dot-decimal strings.
+- `date_of_datetime(text)` takes a `YYYY-MM-DD HH:MM:SS` clock and returns its
+  calendar date, without assuming a timezone. The output date is validated as
+  part of the records document.
 - `sign(text)` returns `"positive"`, `"negative"`, `"zero"`, or `nil` if the
   dot-decimal input is invalid. `negate(text)` returns its exact negation.
 - `matches(text, pattern)` tests a Perl-style regular expression and
@@ -180,7 +185,7 @@ movements. The original source file is also retained.
 
 ## Current limits
 
-This is an experimental integration, currently used by CDC, FDM, Bunq and BoursoBank. It
+This is an experimental integration, currently used by CDC, FDM, Bunq, BoursoBank and Revolut. It
 supports one exact header per script, static or row-derived accounts, row-based
 records, balances, observations and statement claims. It does not yet support
 arbitrary file-wide checks, row skipping, general decimal arithmetic,

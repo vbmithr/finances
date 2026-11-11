@@ -82,6 +82,25 @@ let valid_iban = function
   | _ -> failwith "valid_iban expects one string"
 ;;
 
+let subtract = function
+  | [ L.String left; L.String right ] ->
+    [ L.String (Quantity.to_string Quantity.(quantity left - quantity right)) ]
+  | _ -> failwith "subtract expects two decimal strings"
+;;
+
+let date_of_datetime = function
+  | [ L.String text ] ->
+    if
+      not
+        (Re.execp
+           (Re.Perl.compile_pat
+              {|^[0-9]{4}-[0-9]{2}-[0-9]{2} [0-9]{2}:[0-9]{2}:[0-9]{2}$|})
+           text)
+    then fail "invalid date: %S" text;
+    [ L.String (String.prefix text 10) ]
+  | _ -> failwith "date_of_datetime expects one string"
+;;
+
 let negate = function
   | [ L.String text ] -> [ L.String (Quantity.to_string (Quantity.neg (quantity text))) ]
   | _ -> failwith "negate expects one string"
@@ -234,6 +253,8 @@ let initialize source =
           | [ L.String reason ] -> failwith reason
           | _ -> failwith "reject expects one string") )
     ; "negate", V.caml_func negate
+    ; "subtract", V.caml_func subtract
+    ; "date_of_datetime", V.caml_func date_of_datetime
     ; "utc_datetime", V.caml_func utc_datetime
     ; "yes", L.Userdata (Userdata.Boolean true)
     ; "no", L.Userdata (Userdata.Boolean false)

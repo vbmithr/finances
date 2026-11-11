@@ -74,8 +74,9 @@ provider observations before treating them as authoritative.
   `Instant`) and its text codec; calendar dates never imply a time or timezone.
 - Instants use `Ptime.t`, with Rel codecs preserving picoseconds as fixed-width UTC
   text. Date-only statement boundaries remain dates; original source clocks and
-  Wise identity encodings stay unchanged. Revolut start/completion clocks are
-  interpreted as UTC Ptime instants while preserving original payload bytes.
+  Wise identity encodings stay unchanged. Revolut records use the calendar date
+  of the completion clock, or the start clock for a reverted row; both original
+  clocks remain in the source fields.
   Wise CSV clocks assume UTC and retain source-local CAMT matching; OFX balance
   instants use the format's timezone defaults. Only raw source evidence and invalid
   DTUSER placeholders remain textual.
@@ -222,10 +223,13 @@ configurable yet.
 - [x] Decode Lua results as typed records and validate the assembled document.
 - [x] Port BoursoBank CSV observations to Lua, preserving OFX matching and
   day-end balances; support repeated headers and conflict columns.
+- [x] Port Revolut CSV to Lua, retaining completed and reverted rows and exact fees.
 - [ ] Extend the experimental Lua CSV host beyond these converters: add
   general exact decimal arithmetic, row-skipping diagnostics,
   remaining observation matching settings and execution limits before migrating
   the remaining institutions.
+- [ ] Revisit overlap detection for operation rows, including reverted Revolut rows
+  reimported from a different representation of an already imported file.
 - [x] Preserve FDM's stated total and compare it with its linked transactions.
 - [ ] Compare totals linked to observations after matching them to counted records.
 

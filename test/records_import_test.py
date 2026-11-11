@@ -7,7 +7,7 @@ import subprocess
 import sys
 import tempfile
 
-FIN, LEGACY_DEFINITION = sys.argv[1:3]
+FIN, LEGACY_DEFINITION, LEGACY_REVOLUT = sys.argv[1:4]
 
 with tempfile.TemporaryDirectory() as directory:
     root = pathlib.Path(directory)
@@ -113,6 +113,31 @@ Total,,,,,,20.90
     run("import", "fdm", observed, "-d", observed_db, "--journal", root / "observed.journal")
     comparison = json.loads(run("statement", "totals", "-d", observed_db).stdout)[0]
     assert comparison["entries"] == 2 and comparison["reconciled"] is None, comparison
+
+    # Existing Revolut records produced by the old definition reimport under Lua.
+    rev = root / "revolut.csv"
+    rev.write_text("""Type,Product,Started Date,Completed Date,Description,Amount,Fee,Currency,State,Balance
+Deposit,Current,2026-01-01 09:00:00,2026-01-01 09:00:01,In,150.00,0.00,EUR,COMPLETED,150.00
+Card Payment,Current,2026-01-02 09:00:00,2026-01-03 23:00:00,Shop,-10.00,1.00,EUR,COMPLETED,139.00
+Card Payment,Current,2026-01-04 09:00:00,,Undone,-5.00,0.00,EUR,REVERTED,
+""")
+    old_rev = root / "old-revolut.jsonl"
+    run("convert", "--definition", LEGACY_REVOLUT, rev, "-o", old_rev)
+    rev_db, rev_journal = root / "revolut.sqlite3", root / "revolut.journal"
+    run("init", "-d", rev_db)
+    run("import", "revolut", old_rev, "-d", rev_db, "--journal", rev_journal)
+    replay = run("import", "revolut", rev, "-d", rev_db, "--journal", rev_journal, check=False)
+    assert "overlap is ambiguous" in replay.stdout + replay.stderr, (replay.stdout, replay.stderr)
+    # Completed-only rows are bank movements and can be reimported across converters.
+    completed = root / "revolut-completed.csv"
+    completed.write_text("\n".join(rev.read_text().splitlines()[:-1]) + "\n")
+    old_completed = root / "old-revolut-completed.jsonl"
+    run("convert", "--definition", LEGACY_REVOLUT, completed, "-o", old_completed)
+    completed_db, completed_journal = root / "revolut-completed.sqlite3", root / "revolut-completed.journal"
+    run("init", "-d", completed_db)
+    run("import", "revolut", old_completed, "-d", completed_db, "--journal", completed_journal)
+    replay = run("import", "revolut", completed, "-d", completed_db, "--journal", completed_journal)
+    assert "inserted=0 existing=2" in replay.stdout, replay.stdout
 
     # A records file of another institution is not this one's, and a broken one says why.
     other = root / "other.jsonl"

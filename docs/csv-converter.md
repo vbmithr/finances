@@ -148,8 +148,8 @@ observation settings specify journal tags and fields to check for conflicts. See
 [BoursoBank's institution file](../institutions/boursobank.toml) for both
 statement sections.
 
-[Revolut](../institutions/csv/revolut.json) illustrates row filters, checks and
-fees. [Ethereum](../institutions/ethereum.toml) points to two CSV definitions:
+[Revolut](../institutions/lua/revolut.lua) now uses Lua to interpret
+completed and reverted rows, validate dates and calculate exact fees. [Ethereum](../institutions/ethereum.toml) points to two CSV definitions:
 one for transactions and one for token transfers. Those definitions also infer
 the wallet address from the export and report tokens by contract.
 

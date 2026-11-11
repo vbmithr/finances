@@ -8,6 +8,9 @@ short line of their own.
 
 ## Unreleased
 
+- Revolut CSV statements now use Lua, retaining reverted rows and exact fee
+  arithmetic. Existing operation-row overlap restrictions still apply.
+
 - Assemble and validate Lua converter output as typed records, without
   constructing and reparsing a complete JSON Lines document.
 

@@ -5,7 +5,7 @@ type = "bank"
 
 [[statements]]
 format = "csv"
-definition = "csv/revolut.json"
+script = "lua/revolut.lua"
 
 [rules."revolut-reported-card-payment"]
 pattern = '^Card Payment$'

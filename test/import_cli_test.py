@@ -1931,7 +1931,7 @@ class ImportOnboarding(unittest.TestCase):
         before = self.run_fin('institution', 'show', 'revolut').stdout
         self.assertIn('Records', before)
         self.assertIn('any field of the row, named as the source names it, with --field', before)
-        self.assertRegex(before, r'amount\s+Amount\n')
+        self.assertIn('CSV                      Lua converter', before)
         self.assertIn('Default rules (7):', before)
         self.assertIn('Imported data: none.', before)
         self.run_fin('import', 'revolut', self.csv)
@@ -3096,9 +3096,8 @@ class ImportOnboarding(unittest.TestCase):
         self.assertNotEqual(result.returncode, 0)
 
     def test_toml_definition_resolves_csv_and_saves_it(self):
-        profile = json.loads(self.run_fin('institution', 'definition', 'show', 'revolut').stdout)
         layout = self.root / 'layout.json'
-        layout.write_text(json.dumps(profile['records']['csv']))
+        layout.write_text(Path('fixtures/revolut-converter.json').read_text())
         definition = self.root / 'revolut.toml'
         definition.write_text('version = 1\ninstitution = "revolut"\ntype = "bank"\n'
                               '[[statements]]\nformat = "csv"\ndefinition = "layout.json"\n')

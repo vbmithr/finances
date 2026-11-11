@@ -387,6 +387,7 @@
  (alias runtest)
  (deps
   import_cli_test.py
+  fixtures/revolut-converter.json
   fixtures/revolut.csv
   fixtures/bank.ofx
   fixtures/bank.csv
@@ -577,13 +578,17 @@
 
 (rule
  (alias runtest)
- (deps records_import_test.py fixtures/fdm-converter.json)
+ (deps
+  records_import_test.py
+  fixtures/fdm-converter.json
+  fixtures/revolut-converter.json)
  (action
   (run
    python3
    %{dep:records_import_test.py}
    %{exe:../bin/main.exe}
-   %{dep:fixtures/fdm-converter.json})))
+   %{dep:fixtures/fdm-converter.json}
+   %{dep:fixtures/revolut-converter.json})))
 
 (test
  (name records_adapter_test)
@@ -609,6 +614,8 @@
   fixtures/fdm-converter.json
   fixtures/bunq-converter.json
   fixtures/boursobank-converter.json
+  fixtures/revolut-converter.json
+  fixtures/revolut.csv
   fixtures/bank.csv
   fixtures/bunq.csv
   fixtures/lua-example-bank.lua)

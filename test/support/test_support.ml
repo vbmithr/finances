@@ -27,9 +27,14 @@ let registry =
 (** A Revolut statement as a records file naming another account, for a second account of one
     currency: a records file can say which account it is, and a Revolut export cannot. *)
 let revolut_account ~account contents =
-  let definition = Option.value_exn (Builtin.csv_definition "revolut") in
+  let source =
+    List.Assoc.find_exn Bundled_definitions.csv "lua/revolut.lua" ~equal:String.equal
+  in
+  let definition =
+    Lua_csv_converter.create ~institution:"revolut" source |> Or_error.ok_exn
+  in
   let t =
-    Csv_converter.convert definition ~name:"revolut.csv" contents |> Or_error.ok_exn
+    Lua_csv_converter.convert definition ~name:"revolut.csv" contents |> Or_error.ok_exn
   in
   let id currency = account ^ "-" ^ currency in
   Records.to_string
