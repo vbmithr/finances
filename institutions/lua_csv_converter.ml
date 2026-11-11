@@ -101,6 +101,36 @@ let date_of_datetime = function
   | _ -> failwith "date_of_datetime expects one string"
 ;;
 
+let starts_with = function
+  | [ L.String text; L.String prefix ] ->
+    if String.is_prefix text ~prefix then [ L.Number 1. ] else [ L.Nil ]
+  | _ -> failwith "starts_with expects two strings"
+;;
+
+let day_first = function
+  | [ L.String text ] ->
+    (match String.split text ~on:'-' with
+     | [ day; month; year ] -> [ L.String (String.concat ~sep:"-" [ year; month; day ]) ]
+     | _ -> fail "invalid date: %S" text)
+  | _ -> failwith "day_first expects one string"
+;;
+
+let normalize_hex = function
+  | [ L.String reference
+    ; L.String description
+    ; L.String prefix
+    ; L.String label
+    ; L.Number length
+    ] ->
+    if (not (Float.is_integer length)) || Float.(length <= 0.) || Float.(length > 4096.)
+    then failwith "normalize_hex length must be a positive integer";
+    let config : Camt_profile.hex_normalization =
+      { prefix; description = label; length = Int.of_float length }
+    in
+    [ L.String (Camt_source.normalize_hex config ~description reference) ]
+  | _ -> failwith "normalize_hex expects reference, description, prefix, label and length"
+;;
+
 let negate = function
   | [ L.String text ] -> [ L.String (Quantity.to_string (Quantity.neg (quantity text))) ]
   | _ -> failwith "negate expects one string"
@@ -233,6 +263,7 @@ type t =
   ; header : string list
   ; separator : char
   ; tags : (string * string) list
+  ; journal_description : string option
   ; conflict_columns : string list
   }
 
@@ -255,6 +286,9 @@ let initialize source =
     ; "negate", V.caml_func negate
     ; "subtract", V.caml_func subtract
     ; "date_of_datetime", V.caml_func date_of_datetime
+    ; "day_first", V.caml_func day_first
+    ; "starts_with", V.caml_func starts_with
+    ; "normalize_hex", V.caml_func normalize_hex
     ; "utc_datetime", V.caml_func utc_datetime
     ; "yes", L.Userdata (Userdata.Boolean true)
     ; "no", L.Userdata (Userdata.Boolean false)
@@ -324,6 +358,18 @@ let create ~institution source =
     List.iter tags ~f:(fun (_, column) ->
       if not (List.mem header column ~equal:String.equal)
       then fail "journal tag column is not in header: %s" column);
+    let journal_description =
+      match get config "observation" with
+      | L.Table observation ->
+        (match get observation "journal_description" with
+         | L.Nil -> None
+         | L.String column -> Some column
+         | _ -> failwith "journal_description must be a column name")
+      | _ -> None
+    in
+    Option.iter journal_description ~f:(fun column ->
+      if not (List.mem header column ~equal:String.equal)
+      then fail "journal description column is not in header: %s" column);
     let conflict_columns =
       match get config "observation" with
       | L.Table observation ->
@@ -335,7 +381,15 @@ let create ~institution source =
     List.iter conflict_columns ~f:(fun column ->
       if not (List.mem header column ~equal:String.equal)
       then fail "conflict column is not in header: %s" column);
-    { source; institution; identity; header; separator; tags; conflict_columns })
+    { source
+    ; institution
+    ; identity
+    ; header
+    ; separator
+    ; tags
+    ; journal_description
+    ; conflict_columns
+    })
 ;;
 
 let of_string source =
@@ -650,3 +704,4 @@ let overlap t : Adapter.overlap =
 
 let tags t = t.tags
 let conflict_columns t = t.conflict_columns
+let journal_description t = t.journal_description

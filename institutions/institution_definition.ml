@@ -290,6 +290,7 @@ let sources (r : t) =
            ~convert:(Lua_csv_converter.convert definition))
         with
         tags = Lua_csv_converter.tags definition
+      ; journal_description = Lua_csv_converter.journal_description definition
       ; conflict_columns = Lua_csv_converter.conflict_columns definition
       })
   in

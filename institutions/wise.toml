@@ -16,7 +16,7 @@ operation_group = { "reference_prefix" = "BALANCE-", "linked_prefix" = "FEE-" }
 
 [[statements]]
 format = "csv"
-definition = "csv/wise.json"
+script = "lua/wise.lua"
 
 [rules."wise-id-fee"]
 pattern = '^FEE-'

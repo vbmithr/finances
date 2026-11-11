@@ -8,6 +8,10 @@ short line of their own.
 
 ## Unreleased
 
+- Wise CSV observations now use Lua, retaining CAMT matching and journal
+  descriptions. The Lua host supports day-first dates and parameterized
+  reference normalization.
+
 - Allow complete reimports of a source and its records conversion in either
   order when the source digest, complete event set and evidence agree.
   Operation proposals are still checked; partial overlaps are rejected.

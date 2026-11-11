@@ -224,6 +224,9 @@ configurable yet.
 - [x] Port BoursoBank CSV observations to Lua, preserving OFX matching and
   day-end balances; support repeated headers and conflict columns.
 - [x] Port Revolut CSV to Lua, retaining completed and reverted rows and exact fees.
+- [x] Port Wise CSV observations to Lua, retaining CAMT matching and journal metadata.
+- [ ] Evaluate Lua interpretation of institution-specific CAMT and MT940 fields
+  after OCaml parsing, including shared decisions across statement formats.
 - [ ] Extend the experimental Lua CSV host beyond these converters: add
   general exact decimal arithmetic, row-skipping diagnostics,
   remaining observation matching settings and execution limits before migrating

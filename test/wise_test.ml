@@ -327,6 +327,35 @@ let multi_bank () =
     rejected (import db ~institution:"boursobank" "wrong.xml" (xml ())))
 ;;
 
+let converted_reimport () =
+  let definition =
+    Csv_converter.of_string (In_channel.read_all "fixtures/wise-converter.json") |> ok
+  in
+  let converted =
+    Csv_converter.convert definition ~name:"wise.csv" (csv ()) |> ok |> Records.to_string
+  in
+  List.iter [ true; false ] ~f:(fun records_first ->
+    memory (fun db ->
+      accepted (import db "wise.xml" (xml ()));
+      let first, second =
+        if records_first then converted, csv () else csv (), converted
+      in
+      accepted (import db "first" first);
+      accepted (import db "second" second);
+      check
+        "both representations match"
+        6
+        (ok (Ledger.match_companions ~institution:"wise" db)).matched;
+      check "counted events are not duplicated" 3 (List.length (ok (Ledger.events db)));
+      ignore (ok (Ledger.project_bank db));
+      Alcotest.(check bool)
+        "merchant survives reimport"
+        true
+        (String.is_substring
+           (ok (Finances_hledger.export db))
+           ~substring:"wise-merchant: Synthetic shop")))
+;;
+
 let currencies () =
   memory (fun db ->
     accepted (import db "eur.xml" (xml ()));
@@ -576,6 +605,7 @@ let () =
           ; "unknown and provider-specific codes", reported_type_fallbacks
           ; "Ptime instants, raw text and stable identity", timestamp_precision
           ; "two banks, replay, conflict", multi_bank
+          ; "old records and Lua CSV reimport", converted_reimport
           ; "currency and fee conflicts", currencies
           ; "duplicate CSV claims", duplicate_rows
           ; "review enrichment and conflicting observations", review_enrichment

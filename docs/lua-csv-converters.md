@@ -7,7 +7,8 @@ the script. The [CDC converter](../institutions/lua/cdc.lua) is a complete
 example; [FDM](../institutions/lua/fdm.lua) emits a file-level total, and
 [Bunq](../institutions/lua/bunq.lua) describes observations for several accounts;
 [BoursoBank](../institutions/lua/boursobank.lua) also emits day-end balances,
-and [Revolut](../institutions/lua/revolut.lua) subtracts fees exactly.
+[Revolut](../institutions/lua/revolut.lua) subtracts fees exactly, and
+[Wise](../institutions/lua/wise.lua) enriches CAMT movements.
 
 Refer to a script from an institution TOML file:
 
@@ -117,6 +118,13 @@ Lua numbers are floating point. Keep financial amounts as strings:
 - `date_of_datetime(text)` takes a `YYYY-MM-DD HH:MM:SS` clock and returns its
   calendar date, without assuming a timezone. The output date is validated as
   part of the records document.
+- `day_first(text)` rearranges `DD-MM-YYYY` to `YYYY-MM-DD`; the records
+  validator checks the resulting date.
+- `starts_with(text, prefix)` tests a string prefix.
+- `normalize_hex(reference, description, prefix, label, length)` normalizes
+  prefixed hexadecimal references by removing hyphens and lowercasing; it also
+  prefixes a bare hexadecimal reference when its description matches `label`
+  case-insensitively. It rejects a malformed prefixed reference.
 - `sign(text)` returns `"positive"`, `"negative"`, `"zero"`, or `nil` if the
   dot-decimal input is invalid. `negate(text)` returns its exact negation.
 - `matches(text, pattern)` tests a Perl-style regular expression and
@@ -160,7 +168,9 @@ explicit account must agree with the selected account. Repeated identical
 balances are merged; conflicting balances are refused. BoursoBank uses this to
 capture its second `Solde` column as a day-end balance.
 
-For observation sources, `config.observation.conflict_columns` is an array of
+`config.observation.journal_description` may name a CSV field to use as the
+matched movement’s journal description. For observation sources,
+`config.observation.conflict_columns` is an array of
 CSV field names whose differences between matched exports require review.
 Original field names and values, including repeated names, remain in the record's
 source fields.
@@ -185,7 +195,7 @@ movements. The original source file is also retained.
 
 ## Current limits
 
-This is an experimental integration, currently used by CDC, FDM, Bunq, BoursoBank and Revolut. It
+This is an experimental integration, currently used by CDC, FDM, Bunq, BoursoBank, Revolut and Wise. It
 supports one exact header per script, static or row-derived accounts, row-based
 records, balances, observations and statement claims. It does not yet support
 arbitrary file-wide checks, row skipping, general decimal arithmetic,

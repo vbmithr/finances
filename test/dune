@@ -615,7 +615,9 @@
   fixtures/bunq-converter.json
   fixtures/boursobank-converter.json
   fixtures/revolut-converter.json
+  fixtures/wise-converter.json
   fixtures/revolut.csv
+  fixtures/wise.csv
   fixtures/bank.csv
   fixtures/bunq.csv
   fixtures/lua-example-bank.lua)

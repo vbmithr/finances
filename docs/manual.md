@@ -431,7 +431,7 @@ Lua observation settings, including journal tags, live in `config.observation`;
 the host supplies the selected account and source fields for records.
 An institution cannot mix JSON and Lua CSV converters yet. File-wide checks, row skipping, general decimal arithmetic and some observation
 matching settings are not yet supported. Lua numbers are floating point; use
-`decimal`, `decimal_comma`, `negate` and `sign` for exact quantities.
+`decimal`, `decimal_comma`, `subtract`, `negate` and `sign` for exact quantities.
 Only run scripts you trust: they can loop indefinitely.
 
 The institution name in the TOML and each CSV converter must match the selected
@@ -462,7 +462,7 @@ and profile version from the enclosing TOML definition. Legacy event identifiers
 default from the institution name, and the Bunq profile no longer requires CSV
 companion settings. Previously saved JSON profiles remain readable.
 
-The bundled Wise CSV layout names `Merchant` as its `journal_description`, rather than
+The bundled Wise Lua script names `Merchant` as its observation `journal_description`, rather than
 the constructed `Description` column. Fin chooses one effective description: the matched,
 nonempty `Merchant` value when CSV rows agree, otherwise the CAMT description. Original
 source descriptions and CSV fields remain available as evidence.

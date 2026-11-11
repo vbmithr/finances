@@ -386,6 +386,99 @@ let revolut_equivalence () =
         (Result.is_error (Lua_csv_converter.convert lua ~name:"bad" contents)))
 ;;
 
+let wise_equivalence () =
+  let old =
+    Csv_converter.of_string (Stdio.In_channel.read_all "fixtures/wise-converter.json")
+    |> ok
+  in
+  let source = bundled "lua/wise.lua" in
+  let lua = Lua_csv_converter.create ~institution:"wise" source |> ok in
+  Alcotest.(check (list (pair string string)))
+    "journal tags"
+    (Csv_converter.journal_tags old)
+    (Lua_csv_converter.tags lua);
+  Alcotest.(check (option string))
+    "journal description"
+    (Csv_converter.journal_description old)
+    (Lua_csv_converter.journal_description lua);
+  Alcotest.(check (list string))
+    "conflict columns"
+    (Csv_converter.conflict_columns old)
+    (Lua_csv_converter.conflict_columns lua);
+  let fixture = Stdio.In_channel.read_all "fixtures/wise.csv" in
+  let compare name contents =
+    let expected = Csv_converter.convert old ~name contents |> ok |> Records.to_string in
+    let actual =
+      Lua_csv_converter.convert lua ~name contents |> ok |> Records.to_string
+    in
+    Alcotest.(check string) name expected actual
+  in
+  compare "fixture.csv" fixture;
+  let lines = String.split_lines fixture in
+  let exchange =
+    String.split (List.nth_exn lines 1) ~on:','
+    |> List.mapi ~f:(fun i value ->
+      match i with
+      | 8 -> "EUR"
+      | 9 -> "USD"
+      | 10 -> "1.2345"
+      | 11 -> "Payer"
+      | 12 -> "Payee"
+      | 13 -> "BE68539007547034"
+      | 20 -> "12.34"
+      | _ -> value)
+    |> String.concat ~sep:","
+  in
+  let exchange_file =
+    String.concat ~sep:"\n" (List.hd_exn lines :: exchange :: List.drop lines 2) ^ "\n"
+  in
+  compare "exchange.csv" exchange_file;
+  compare
+    "negative-rate.csv"
+    (String.substr_replace_first exchange_file ~pattern:"1.2345" ~with_:"-1.2345");
+  compare "empty.csv" (List.hd_exn (String.split_lines fixture) ^ "\n");
+  compare
+    "different-currency.csv"
+    (String.substr_replace_all fixture ~pattern:",EUR," ~with_:",USD,");
+  let cashback = "BALANCE_CASHBACK-abcdef01-2345-6789-abcd-ef0123456789" in
+  let bare = "ABCDEF0123456789ABCDEF0123456789" in
+  let changed =
+    String.substr_replace_all fixture ~pattern:cashback ~with_:bare
+    |> String.substr_replace_all ~pattern:"Synthetic shop" ~with_:"cashback"
+  in
+  compare "bare-reference.csv" changed;
+  compare
+    "upper-reference.csv"
+    (String.substr_replace_all
+       fixture
+       ~pattern:cashback
+       ~with_:"BALANCE_CASHBACK-ABCDEF01-2345-6789-ABCD-EF0123456789");
+  let invalid =
+    String.substr_replace_first
+      fixture
+      ~pattern:cashback
+      ~with_:"BALANCE_CASHBACK-not-hex"
+  in
+  Alcotest.(check bool)
+    "legacy rejects invalid reference"
+    true
+    (Result.is_error (Csv_converter.convert old ~name:"bad" invalid));
+  Alcotest.(check bool)
+    "Lua rejects invalid reference"
+    true
+    (Result.is_error (Lua_csv_converter.convert lua ~name:"bad" invalid));
+  let invalid_description =
+    String.substr_replace_first
+      source
+      ~pattern:"journal_description = \"Merchant\""
+      ~with_:"journal_description = \"Missing\""
+  in
+  Alcotest.(check bool)
+    "reject unknown description column"
+    true
+    (Result.is_error (Lua_csv_converter.create ~institution:"wise" invalid_description))
+;;
+
 let other_institution () =
   let source = Stdio.In_channel.read_all "fixtures/lua-example-bank.lua" in
   let converter = Lua_csv_converter.create ~institution:"example-bank" source |> ok in
@@ -437,6 +530,7 @@ let () =
         ; Alcotest.test_case "Bunq equivalence" `Quick bunq_equivalence
         ; Alcotest.test_case "BoursoBank equivalence" `Quick bourso_equivalence
         ; Alcotest.test_case "Revolut equivalence" `Quick revolut_equivalence
+        ; Alcotest.test_case "Wise equivalence" `Quick wise_equivalence
         ; Alcotest.test_case "another institution" `Quick other_institution
         ] )
     ]

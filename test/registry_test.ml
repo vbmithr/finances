@@ -280,7 +280,10 @@ let statement_profile_metadata () =
           |> String.substr_replace_all
                ~pattern:"\"observation\": true"
                ~with_:"\"observation\": false"
-          |> String.substr_replace_all ~pattern:"= \"Counterparty\"" ~with_:"= \"Name\"")
+          |> String.substr_replace_all ~pattern:"= \"Counterparty\"" ~with_:"= \"Name\""
+          |> String.substr_replace_all
+               ~pattern:"journal_description = \"Merchant\""
+               ~with_:"journal_description = \"Description\"")
       in
       let changed = ok (Institution_toml.decode text ~load:changed_load) in
       Alcotest.(check bool)

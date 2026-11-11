@@ -1939,7 +1939,7 @@ class ImportOnboarding(unittest.TestCase):
         self.assertIn('Imported data: 4 movements', after)
         self.assertRegex(after, r'\n\s+3\s+transfer\n')
         wise = self.run_fin('institution', 'show', 'wise').stdout
-        self.assertIn('Columns fin does not read:', wise)
+        self.assertIn('Lua converter', wise)
         self.assertIn('Transaction Details Type', wise)
         self.assertNotEqual(self.run_fin('institution', 'show', 'nosuchbank', check=False).returncode, 0)
 
@@ -3117,7 +3117,7 @@ class ImportOnboarding(unittest.TestCase):
         records['institution'] = 'samplebank'
         records['aliases'] = ['sample']
         records['camt']['institution'] = 'samplebank'
-        records['csv']['institution'] = 'samplebank'
+        records['lua_csv'][0] = records['lua_csv'][0].replace('institution = \"wise\"', 'institution = \"samplebank\"').replace('bank = \"wise\"', 'bank = \"samplebank\"')
         del records['stored_formats']
         definition = self.root / 'samplebank.json'
         definition.write_text(json.dumps(profile))
@@ -3270,7 +3270,7 @@ class ImportOnboarding(unittest.TestCase):
 
     def test_wise_definition_uses_merchant_as_companion_description(self):
         definition = json.loads(self.run_fin('institution', 'definition', 'show', 'wise').stdout)
-        self.assertEqual(definition['records']['csv']['journal_description'], 'Merchant')
+        self.assertIn('journal_description = \"Merchant\"', definition['records']['lua_csv'][0])
 
     def test_wise_enrichment_shows_merchant_and_matches_different_descriptions(self):
         self.run_fin('import', 'wise', 'fixtures/wise.xml', 'fixtures/wise.csv')
