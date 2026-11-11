@@ -44,6 +44,7 @@
   conf-zstd
   uutf
   xmlm
+  angstrom
   re
   digestif
   (csv

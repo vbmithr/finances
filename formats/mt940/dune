@@ -4,6 +4,6 @@
  (wrapped false)
  (flags
   (:standard -open Finances_core))
- (libraries finances.core base iso4217 jsont re digestif)
+ (libraries finances.core base iso4217 jsont digestif angstrom)
  (preprocess
   (pps ppx_let)))

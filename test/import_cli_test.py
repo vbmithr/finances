@@ -3057,6 +3057,7 @@ class ImportOnboarding(unittest.TestCase):
         old['records']['mt940'].update({
             'aliases': [], 'format': 'bunq_mt940', 'companion_format': 'bunq_csv',
             'matching_policy': 'bunq-csv-v1', 'metadata_prefix': 'bunq',
+            'entry_pattern': r'^([0-9]{6})([0-9]{4})([CD])([0-9]+,[0-9]*)(N[A-Z]{3})NONREF$',
             'header': ['Date', 'Interest Date', 'Amount', 'Account', 'Counterparty', 'Name', 'Description'],
             'columns': {'booked_on': 'Date', 'value_on': 'Interest Date', 'amount': 'Amount',
                         'account_id': 'Account', 'counterparty': 'Counterparty',
@@ -3069,6 +3070,11 @@ class ImportOnboarding(unittest.TestCase):
         definition.write_text(json.dumps(cleaned))
         self.run_fin('institution', 'definition', 'set', 'bunq', definition, '--yes')
         self.assertIn('unchanged=1', self.run_fin('import', 'bunq', 'fixtures/bunq.mt940').stdout)
+        old['records']['mt940']['entry_pattern'] = r'^custom$'
+        definition.write_text(json.dumps(old))
+        rejected = self.run_fin('institution', 'definition', 'set', 'bunq', definition, '--yes', check=False)
+        self.assertNotEqual(rejected.returncode, 0)
+        self.assertIn('custom MT940 entry patterns', rejected.stderr)
 
     def test_toml_lua_converter_is_snapshotted_and_source_changes_are_blocked(self):
         profile = json.loads(self.run_fin('institution', 'definition', 'show', 'cdc').stdout)

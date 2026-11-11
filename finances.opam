@@ -29,6 +29,7 @@ depends: [
   "conf-zstd"
   "uutf"
   "xmlm"
+  "angstrom"
   "re"
   "digestif"
   "csv" {>= "2.4"}

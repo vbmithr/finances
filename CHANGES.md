@@ -8,6 +8,13 @@ short line of their own.
 
 ## Unreleased
 
+- Parse MT940 fields with a shared Angstrom grammar and keep Bunq-specific
+  interpretation and validation separate. Existing Bunq imports retain their
+  identities, balance checks and CSV matching. The Bunq entry pattern is now
+  checked from parsed fields instead of configured as a regular expression.
+  **Action required:** replace custom MT940 entry patterns with a supported
+  converter; the previously bundled Bunq pattern remains accepted.
+
 - Institution definitions can use one Lua script for CSV conversion and CAMT
   entry interpretation. CAMT scripts replace the profile's reference and grouping
   settings. Script source is saved with the definition and protected

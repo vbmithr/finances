@@ -233,8 +233,11 @@ configurable yet.
   including reference-field choice and Wise identity equivalence.
 - [x] Snapshot CAMT Lua scripts in definitions, protect changes after import, and
   omit redundant reference and grouping settings when a script is used.
-- [ ] Investigate MT940 inputs and persistence of interpreted CAMT grouping in
-  the legacy transaction payload codec.
+- [x] Separate generic Angstrom MT940 field parsing from Bunq interpretation;
+  document its supported grammar and limitations, and replace the Bunq entry
+  regex with checks on parsed fields.
+- [ ] Investigate persistence of interpreted CAMT grouping in the legacy
+  transaction payload codec and decide whether Bunq still needs MT940.
 - [ ] Extend the experimental Lua CSV host beyond these converters: add
   general exact decimal arithmetic, row-skipping diagnostics,
   remaining observation matching settings and execution limits before migrating

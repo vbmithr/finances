@@ -10,7 +10,6 @@ type t =
   ; remittance_marker : string
   ; name_marker : string
   ; counterparty_marker : string
-  ; entry_pattern : string
   }
 
 (* Older installed definitions contain these CSV companion fields. Accept them
@@ -33,7 +32,7 @@ let codec =
          remittance_marker
          name_marker
          counterparty_marker
-         entry_pattern
+         legacy_entry_pattern
          _header
          _columns
          _metadata_prefix
@@ -51,9 +50,13 @@ let codec =
          ]
          ~f:(fun v ->
            ignore (Validation.text "MT940 profile field" v |> Json.or_error : string));
-       let compiled = Re.Perl.compile_pat entry_pattern in
-       if Re.group_count compiled < 6
-       then failwith "MT940 entry pattern requires five capture groups";
+       Option.iter legacy_entry_pattern ~f:(fun pattern ->
+         if
+           not
+             (String.equal
+                pattern
+                "^([0-9]{6})([0-9]{4})([CD])([0-9]+,[0-9]*)(N[A-Z]{3})NONREF$")
+         then failwith "custom MT940 entry patterns are no longer supported");
        { institution
        ; name
        ; kind
@@ -63,7 +66,6 @@ let codec =
        ; remittance_marker
        ; name_marker
        ; counterparty_marker
-       ; entry_pattern
        })
   |> Jsont.Object.mem "version" (Json.version 1) ~enc:(fun _ -> ())
   |> Jsont.Object.mem "institution" Jsont.string ~enc:(fun p -> p.institution)
@@ -80,7 +82,7 @@ let codec =
   |> Jsont.Object.mem "name_marker" Jsont.string ~enc:(fun p -> p.name_marker)
   |> Jsont.Object.mem "counterparty_marker" Jsont.string ~enc:(fun p ->
     p.counterparty_marker)
-  |> Jsont.Object.mem "entry_pattern" Jsont.string ~enc:(fun p -> p.entry_pattern)
+  |> Jsont.Object.opt_mem "entry_pattern" Jsont.string ~enc:(fun _ -> None)
   |> Jsont.Object.opt_mem "header" Jsont.json ~enc:(fun _ -> None)
   |> Jsont.Object.opt_mem "columns" Jsont.json ~enc:(fun _ -> None)
   |> Jsont.Object.opt_mem "metadata_prefix" Jsont.json ~enc:(fun _ -> None)

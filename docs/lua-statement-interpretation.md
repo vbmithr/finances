@@ -90,12 +90,11 @@ could identify the counterparty, name and remittance from the transaction text.
 The script should see the original text as well as any fields the parser can
 extract without institution-specific assumptions.
 
-Bunq's current MT940 profile supplies markers and an entry pattern. Today the
-MT940 reader uses those while parsing, so making Lua responsible for their
-interpretation would require separating the generic `:61:`/`:86:` structure
-from the Bunq-specific extraction first. Merely calling Lua after the existing
-profile has made all those decisions would add a callback without removing the
-institution-specific configuration.
+The generic MT940 reader now parses `:61:` independently of Bunq's profile;
+the Bunq interpreter checks the parsed entry and uses profile markers to extract
+`:86:` details. An MT940 experiment could give Lua those parsed fields and the
+original memo, then compare its output with the current interpreter. The host
+would still need to enforce the statement and identity invariants.
 
 MT940 entries have no stable source ID in this workflow. Fin currently assigns a
 position per booking date and account. The interpretation step must preserve

@@ -48,6 +48,16 @@ let rejected report =
 
 let parser () =
   let document = ok (Bunq_mt940.parse (mt ())) in
+  let original_records = In_channel.read_all "fixtures/bunq-mt940-records.jsonl" in
+  let current_records =
+    Mt940_converter.convert bunq_profile ~name:"bunq.mt940" (mt ())
+    |> ok
+    |> Records.to_string
+  in
+  Alcotest.(check string)
+    "records match pre-refactor converter"
+    original_records
+    current_records;
   check "four movements including two identical" 4 (List.length document.transactions);
   check
     "four identities"
@@ -60,7 +70,22 @@ let parser () =
   Alcotest.(check string) "interest date" "2026-01-03" (Date.to_string last.value_on);
   Alcotest.(check string) "multiline memo" "First line Second line" last.description;
   error (Bunq_mt940.parse (replace (mt ()) "EUR175,00" "EUR176,00"));
-  error (Bunq_mt940.parse (replace (mt ()) "NMSCNONREF" "NMSCTRANSACTIONID"));
+  error (Bunq_mt940.parse (replace (mt ()) ":62F:C260131EUR" ":62F:C260131USD"));
+  error
+    (Bunq_mt940.parse
+       (replace (mt ()) ":86:/NAME/Synthetic shop/REMI/Purchase" ":99:unpaired"));
+  List.iter
+    [ "260102D10,NMSCNONREF"
+    ; "2601020102RD10,NMSCNONREF"
+    ; "2601020102DK10,NMSCNONREF"
+    ; "2601020102D10,FMSCNONREF"
+    ; "2601020102D10,NM1CNONREF"
+    ; "2601020102D10,NMSCTRANSACTIONID"
+    ; "2601020102D10,NMSCNONREF//BANKREF"
+    ; "2601020102D10,NMSCNONREF\nextra"
+    ]
+    ~f:(fun unsupported ->
+      error (Bunq_mt940.parse (replace (mt ()) "2601020102D10,NMSCNONREF" unsupported)));
   error (Bunq_mt940.parse (replace (mt ()) "2601030104" "2601031231"));
   error (Bunq_mt940.parse (mt () ^ "extra"))
 ;;
