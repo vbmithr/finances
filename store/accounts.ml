@@ -880,6 +880,8 @@ let delete_account ?(dry_run = false) db (mapping : Bank_account_mapping.t) =
         ; "movements"
         ; "import_documents"
         ; "statements"
+        ; "statement_totals"
+        ; "statement_total_events"
         ; "stated_balances"
         ; "day_inventories"
         ; "bank_import_attempts"

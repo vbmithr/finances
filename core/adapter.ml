@@ -6,7 +6,10 @@ type overlap =
       across documents; a partial or corrected day is refused for review. *)
 
 (** User-supplied import hints. *)
-type context = { account_label : string option }
+type context =
+  { account_label : string option
+  ; path : string option (** The source file being imported, when there is one. *)
+  }
 
 (** A unit an institution defines for itself, such as Kraken's fee credits: not a market
     ticker, so its definition says which asset it is. *)

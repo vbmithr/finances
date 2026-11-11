@@ -19,6 +19,12 @@ SELECT
   + (SELECT count(*) FROM statements s, account a
      WHERE s.document_id IN documents
        AND (s.institution <> a.institution OR s.source_account <> a.source_account))
+  + (SELECT count(*) FROM statement_totals t, account a
+     WHERE t.document_id IN documents
+       AND (t.institution <> a.institution OR t.source_account <> a.source_account))
+  + (SELECT count(*) FROM statement_total_events l JOIN statement_totals t ON t.id = l.total_id
+     WHERE (l.event_id IN events AND t.document_id NOT IN documents)
+        OR (t.document_id IN documents AND l.event_id NOT IN events))
   + (SELECT count(*) FROM day_inventories d, account a
      WHERE d.document_id IN documents
        AND (d.institution <> a.institution OR d.source_account <> a.source_account))

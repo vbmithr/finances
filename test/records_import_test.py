@@ -8,7 +8,7 @@ import sqlite3
 import sys
 import tempfile
 
-FIN, LEGACY_DEFINITION, LEGACY_REVOLUT = sys.argv[1:4]
+FIN, LEGACY_REVOLUT = sys.argv[1:3]
 
 with tempfile.TemporaryDirectory() as directory:
     root = pathlib.Path(directory)
@@ -22,12 +22,13 @@ with tempfile.TemporaryDirectory() as directory:
         assert not check or done.returncode == 0, (args, done.stderr)
         return done
 
-    statement = root / "statement.csv"
-    statement.write_text("""Merchant,Category,Date,Local currency,Local amount,Exchange rate,USD
-Shop,Shopping,2025-01-02,EUR,10.00,1.1,11.00
-Shop,Shopping,2025-01-02,EUR,10.00,1.1,11.00
-Refund,Shopping,2025-01-03,EUR,-1.00,1.1,-1.10
-Total,,,,,,20.90
+    # An FDM export is one card, named by its file.
+    statement = root / "1118.csv"
+    statement.write_text("""Type,Merchant,Category,Date,Local currency,Local amount,Exchange rate,USD,Balance after,Note
+Purchase,Shop,Shopping,2025-01-02,EUR,10.00,1.1,11.00,,
+Purchase,Shop,Shopping,2025-01-02,EUR,10.00,1.1,11.00,,
+Refund,Refund,Shopping,2025-01-03,EUR,-1.00,1.1,-1.10,,
+Total spent,,,,,,,20.90,,
 """)
 
     def imported(name, source):
@@ -48,9 +49,22 @@ Total,,,,,,20.90
 
     # From the CSV, identical rows included.
     database, journal = imported("csv", statement)
+    # Account deletion must remove statement totals and their event links, then
+    # restore immutability so the same evidence can be imported again.
+    account = json.loads(run("account", "list", "--json", "-d", database).stdout)[0]
+    run("account", "delete", account["id"], "--yes", "-d", database)
+    with sqlite3.connect(database) as db:
+        assert db.execute("SELECT count(*) FROM statement_totals").fetchone()[0] == 0
+        assert db.execute("SELECT count(*) FROM statement_total_events").fetchone()[0] == 0
+        assert db.execute("PRAGMA foreign_key_check").fetchall() == []
+        for table in ("statement_totals", "statement_total_events"):
+            assert db.execute("SELECT count(*) FROM sqlite_schema WHERE type='trigger' AND name=?",
+                              (table + "_no_delete",)).fetchone()[0] == 1
+    run("import", "fdm", statement, "-d", database, "--journal", journal)
+    assert json.loads(run("statement", "totals", "--institution", "fdm", "-d", database).stdout)[0]["reconciled"] is True
     text = journal.read_text()
     postings = [line for line in text.splitlines()
-                if line.startswith(" ") and "assets:cards:fdm:card" in line]
+                if line.startswith(" ") and "assets:cards:fdm:1118" in line]
     assert len(postings) == 3, text
     assert "USD" in text, text
     listed = run("operation", "list", "--institution", "fdm", "-d", database).stdout
@@ -59,21 +73,56 @@ Total,,,,,,20.90
     assert "Kind: Records" in shown, shown
     assert "fdm" in run("status", "-d", database).stdout
 
+    # Current FDM exports report purchases with negative USD amounts. Their
+    # balance-after column may not form a complete consecutive balance chain.
+    signed = root / "signed.csv"
+    signed.write_text("""Type,Merchant,Category,Date,Local currency,Local amount,Exchange rate,USD,Balance after,Note
+Purchase,Shop,Shopping,2025-01-03,,,,"-5.00",50.00,
+Adjustment,Correction,Other,2025-01-02,,,,"2.00",70.00,
+Deposit,Top up,Other,2025-01-01,,,,"10.00",30.00,
+Total spent,,,,,,,5.00,,
+""")
+    signed_records = root / "signed.jsonl"
+    run("convert", "fdm", signed, "-o", signed_records)
+    signed_rows = [json.loads(line) for line in signed_records.read_text().splitlines()]
+    movements = [row for row in signed_rows if row["kind"] == "record"]
+    assert [r["movements"][0]["quantity"] for r in movements] == ["-5", "2", "10"]
+    assert all("balance_after" not in r["details"] for r in movements)
+    assert all(any(k == "Balance after" and v for k, v in r["details"]["fields"]) for r in movements)
+    signed_db = root / "signed.sqlite3"
+    run("init", "-d", signed_db)
+    run("import", "fdm", signed, "-d", signed_db, "--journal", root / "signed.journal")
+    assert len(json.loads(run("operation", "list", "--institution", "fdm", "--json", "-d", signed_db).stdout)) == 3
+
     # A source discrepancy remains visible instead of rejecting its evidence.
     mismatch = root / "mismatch.csv"
-    mismatch.write_text(statement.read_text().replace("Total,,,,,,20.90", "Total,,,,,,20.91"))
+    mismatch.write_text(statement.read_text().replace("Total spent,,,,,,,20.90", "Total spent,,,,,,,20.91"))
     mismatch_db = root / "mismatch.sqlite3"
     run("init", "-d", mismatch_db)
     run("import", "fdm", mismatch, "-d", mismatch_db, "--journal", root / "mismatch.journal")
     mismatch_total = json.loads(run("statement", "totals", "-d", mismatch_db).stdout)[0]
     assert mismatch_total["difference"] == "0.01" and mismatch_total["reconciled"] is False, mismatch_total
 
-    # Evidence imported through the old JSON converter matches the new Lua CSV.
-    legacy = root / "legacy.jsonl"
-    run("convert", "--definition", LEGACY_DEFINITION, statement, "-o", legacy)
-    migrated, migrated_journal = imported("legacy", legacy)
-    replay = run("import", "fdm", statement, "-d", migrated, "--journal", migrated_journal)
-    assert "inserted=0 existing=3" in replay.stdout, replay.stdout
+    # Cards in one folder each get their own account, from their file names.
+    cards = root / "cards"
+    cards.mkdir()
+    for name in ("1118", "2233"):
+        # Each card's file differs: identical files are one statement.
+        (cards / f"{name}.csv").write_text(statement.read_text().replace("Shop", f"Shop {name}"))
+    cards_db, cards_journal = root / "cards.sqlite3", root / "cards.journal"
+    run("init", "-d", cards_db)
+    batch = run("import", "fdm", cards, "-d", cards_db, "--journal", cards_journal)
+    assert "imported=2" in batch.stdout, batch.stdout
+    cards_text = cards_journal.read_text()
+    for name in ("1118", "2233"):
+        assert len([line for line in cards_text.splitlines()
+                    if line.startswith(" ") and f"assets:cards:fdm:{name}" in line]) == 3, cards_text
+    assert "assets:cards:fdm:card" not in cards_text, cards_text
+    # An explicit ID overrides the file name.
+    named_db, named_journal = root / "named.sqlite3", root / "named.journal"
+    run("init", "-d", named_db)
+    run("import", "fdm", statement, "--account-id", "9999", "-d", named_db, "--journal", named_journal)
+    assert "assets:cards:fdm:9999" in named_journal.read_text()
 
     # A records file gives the same journal, plain or compressed.
     for name in ("records.jsonl", "records.jsonl.zst"):

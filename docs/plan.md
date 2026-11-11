@@ -225,6 +225,10 @@ configurable yet.
   day-end balances; support repeated headers and conflict columns.
 - [x] Port Revolut CSV to Lua, retaining completed and reverted rows and exact fees.
 - [x] Port Wise CSV observations to Lua, retaining CAMT matching and journal metadata.
+- [x] Support signed FDM exports and account deletion with linked statement totals;
+  retain nonconsecutive FDM balance values as source fields.
+- [ ] Link FDM spending and deposit totals to the corresponding records rather
+  than every row; verify the provider's treatment of adjustments and refunds.
 - [x] Sketch Lua interpretation of CAMT and MT940 fields after OCaml parsing:
   [shared statement interpretation](lua-statement-interpretation.md).
 - [x] Test a Wise CAMT/CSV Lua reference and grouping prototype against current
@@ -677,6 +681,10 @@ position observations, derive positions from fills, or calculate funding.
   rows need no `fin operation resolve`; then the deBridge orders (ETH on Ethereum, USDC on Polygon)
   as exchanges across two accounts, and the fdm top-ups once fdm exports its deposits (asked
   upstream; until then the USDC payments stay undecided and the card's balance lacks them).
+- [x] Name each FDM card's account from its file name (`account_from_filename`), so batch
+  imports of several cards need no `--account-id`. Tested for a two-card batch, an explicit
+  ID and `fin convert`. Only Lua scripts opting into file-derived account names
+  accept `--account-id`; Revolut rejects it.
 - [ ] Connect persisted operations to general reviewed source links and portable
   non-primary movement decisions; bank reviews use the primary movement.
 - [ ] Import fills, funding and other necessary events, derive positions, and

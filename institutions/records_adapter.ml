@@ -455,7 +455,12 @@ let companion ~tags ~journal_description ~conflict_columns format : Companion.t 
 type source =
   { format : string
   ; recognizes : filename:string -> string -> bool
-  ; convert : name:string -> string -> Records.t Or_error.t
+  ; convert :
+      ?account_label:string
+      -> ?path:string
+      -> name:string
+      -> string
+      -> Records.t Or_error.t
   ; tags : (string * string) list
   ; journal_description : string option
   ; conflict_columns : string list
@@ -467,7 +472,7 @@ type source =
 let statement_source format ~recognizes ~convert =
   { format
   ; recognizes
-  ; convert
+  ; convert = (fun ?account_label:_ ?path:_ ~name contents -> convert ~name contents)
   ; tags = []
   ; journal_description = None
   ; conflict_columns = []
@@ -480,7 +485,9 @@ let of_definition format definition =
   { format
   ; recognizes =
       (fun ~filename:_ contents -> Csv_converter.recognizes definition contents)
-  ; convert = Csv_converter.convert definition
+  ; convert =
+      (fun ?account_label:_ ?path:_ ~name contents ->
+        Csv_converter.convert definition ~name contents)
   ; refusal = Csv_converter.header_difference definition
   ; tags = Csv_converter.journal_tags definition
   ; journal_description = Csv_converter.journal_description definition
@@ -500,6 +507,7 @@ let make
       ?(stored_formats = [])
       ?(tickers = false)
       ?(own_symbols = [])
+      ?(takes_account_label = false)
       ~institution
       ~overlap
       sources
@@ -518,7 +526,7 @@ let make
       (records :: List.map sources ~f:(fun source -> source.format)) @ stored_formats
     ;;
 
-    let takes_account_label = false
+    let takes_account_label = takes_account_label
     let reports_tickers = tickers
     let own_symbols = own_symbols
 
@@ -530,13 +538,19 @@ let make
           Option.some_if (source.recognizes ~filename contents) source.format)
     ;;
 
-    let parse ~context:_ ~format contents =
+    let parse ~(context : Adapter.context) ~format contents =
       let open Or_error.Let_syntax in
       let%bind sections =
         match List.find sources ~f:(fun source -> String.equal source.format format) with
         | None -> Records.of_string contents
         | Some source ->
-          let%bind t = source.convert ~name:"import" contents in
+          let%bind t =
+            source.convert
+              ?account_label:context.account_label
+              ?path:context.path
+              ~name:"import"
+              contents
+          in
           Records.merge_all [ t ]
       in
       let%map documents = List.map sections ~f:(document ~institution) |> Or_error.all in

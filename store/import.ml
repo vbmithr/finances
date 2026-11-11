@@ -1084,7 +1084,7 @@ let import_bank_file ?account_label db ~institution ~path ~contents =
              ~format
              ~path
              ~contents
-             ~context:{ account_label }
+             ~context:{ account_label; path = Some path }
          with
          | Ok report -> Ok report
          | Error e -> fail ~format Rejected (Error.to_string_hum e))

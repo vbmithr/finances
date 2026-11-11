@@ -257,7 +257,8 @@ let profile_adapter () =
     (Some "simple_csv")
     (A.probe ~filename:"export.csv" csv);
   let doc =
-    Or_error.ok_exn (A.parse ~context:{ account_label = None } ~format:"simple_csv" csv)
+    Or_error.ok_exn
+      (A.parse ~context:{ account_label = None; path = None } ~format:"simple_csv" csv)
   in
   Alcotest.(check int) "one event produced" 1 (List.length doc.events);
   let registry = Or_error.ok_exn (Registry.create [ adapter ]) in

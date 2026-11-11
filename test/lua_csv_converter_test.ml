@@ -95,11 +95,7 @@ let compare_converters () =
        (Lua_csv_converter.create ~institution:"other" (bundled "lua/cdc.lua")))
 ;;
 
-let fdm_equivalence () =
-  let old =
-    Csv_converter.of_string (Stdio.In_channel.read_all "fixtures/fdm-converter.json")
-    |> ok
-  in
+let fdm_account_naming () =
   let lua = Lua_csv_converter.create ~institution:"fdm" (bundled "lua/fdm.lua") |> ok in
   let invalid_link =
     String.substr_replace_first
@@ -111,66 +107,31 @@ let fdm_equivalence () =
     "rejects invalid statement-link option"
     true
     (Result.is_error (Lua_csv_converter.create ~institution:"fdm" invalid_link));
-  let header = "Merchant,Category,Date,Local currency,Local amount,Exchange rate,USD\n" in
-  let valid name contents =
-    let old = Csv_converter.convert old ~name contents |> ok in
-    let actual = Lua_csv_converter.convert lua ~name contents |> ok in
-    Alcotest.(check string) name (Records.to_string old) (Records.to_string actual)
+  let contents =
+    "Type,Merchant,Category,Date,Local currency,Local amount,Exchange rate,USD,Balance \
+     after,Note\n\
+     Purchase,Shop,Shopping,2025-01-02,EUR,10.00,1.1,11.00,,\n"
   in
-  valid
-    "sample"
-    (header
-     ^ "Shop,Shopping,2025-01-02,EUR,10.00,1.1,11.00\n\
-        Shop,Shopping,2025-01-03,EUR,-1.00,1.1,-1.10\n\
-        Total,,,,,,9.90\n");
-  valid
-    "total first and repeated dates"
-    (header
-     ^ "Total,,,,,,20\n\
-       \ Shop ,Shopping,2025-01-02,EUR,10,1,10\n\
-       \ Shop ,Shopping,2025-01-02,EUR,10,1,10\n");
-  valid
-    "no total or currency"
-    (header ^ "Shop,Shopping,2025-01-02,,,,0.000000000000000000001\n");
-  let generated =
-    List.concat_map [ "1.234567890123456789"; "-2.5"; "0" ] ~f:(fun amount ->
-      List.concat_map [ ""; "EUR" ] ~f:(fun currency ->
-        List.concat_map [ ""; "0"; "-1"; "1.23456789" ] ~f:(fun rate ->
-          List.map [ ""; "5"; "-0.5" ] ~f:(fun local ->
-            Printf.sprintf
-              "Merchant,Category,2025-01-02,%s,%s,%s,%s\n"
-              currency
-              local
-              rate
-              amount))))
-  in
-  valid "decimal and exchange combinations" (header ^ String.concat generated);
-  valid "header only" header;
-  valid "total only" (header ^ "Total,,,,,,not-a-number\n");
-  valid
-    "total mismatch is kept as stated"
-    (header ^ "Shop,Shopping,2025-01-02,EUR,10,1,10\nTotal,,,,,,11\n");
-  let invalid =
-    [ header ^ "Shop,Shopping,2025-01-02,EUR,10,1,bad\n"
-    ; header ^ "Shop,Shopping,not-a-date,EUR,10,1,10\n"
-    ; header ^ "Shop,Shopping,2025-01-02,EUR,10,bad,10\n"
-    ; header ^ "Shop,Shopping,2025-01-02,EUR,10,1,10\nTotal,,,,,,10\nTotal,,,,,,10\n"
-    ]
-  in
-  List.iteri invalid ~f:(fun i contents ->
-    let old =
-      Csv_converter.convert old ~name:"invalid.csv" contents
-      |> Or_error.bind ~f:(fun d -> Records.of_string (Records.to_string d))
+  let account ?account_label ?path () =
+    let records =
+      Lua_csv_converter.convert_with ?account_label ?path lua ~name:"import" contents
+      |> ok
+      |> Records.to_string
     in
-    let actual = Lua_csv_converter.convert lua ~name:"invalid.csv" contents in
-    Alcotest.(check bool)
-      (Printf.sprintf "old rejects invalid %d" i)
-      true
-      (Result.is_error old);
-    Alcotest.(check bool)
-      (Printf.sprintf "Lua rejects invalid %d" i)
-      true
-      (Result.is_error actual))
+    List.find_map [ "1118"; "2233"; "card" ] ~f:(fun id ->
+      Option.some_if
+        (String.is_substring records ~substring:(Printf.sprintf "\"id\":\"%s\"" id))
+        id)
+  in
+  let check name expected actual =
+    Alcotest.(check (option string)) name (Some expected) actual
+  in
+  check "card without a file" "card" (account ());
+  check "named by its file" "1118" (account ~path:"statements/fdm/1118.csv" ());
+  check
+    "an explicit label wins"
+    "2233"
+    (account ~account_label:"2233" ~path:"statements/fdm/1118.csv" ())
 ;;
 
 let bunq_equivalence () =
@@ -526,7 +487,7 @@ let () =
     "Lua CSV"
     [ ( "converter"
       , [ Alcotest.test_case "CDC equivalence" `Quick compare_converters
-        ; Alcotest.test_case "FDM equivalence" `Quick fdm_equivalence
+        ; Alcotest.test_case "FDM account naming" `Quick fdm_account_naming
         ; Alcotest.test_case "Bunq equivalence" `Quick bunq_equivalence
         ; Alcotest.test_case "BoursoBank equivalence" `Quick bourso_equivalence
         ; Alcotest.test_case "Revolut equivalence" `Quick revolut_equivalence

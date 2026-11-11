@@ -28,6 +28,10 @@ DELETE FROM reversal_changes WHERE original IN (SELECT id FROM deleted_events)
 DELETE FROM statement_events WHERE event_id IN (SELECT id FROM deleted_events)
   OR statement_id IN
     (SELECT id FROM statements WHERE document_id IN (SELECT id FROM deleted_documents));
+DELETE FROM statement_total_events WHERE event_id IN (SELECT id FROM deleted_events)
+  OR total_id IN
+    (SELECT id FROM statement_totals WHERE document_id IN (SELECT id FROM deleted_documents));
+DELETE FROM statement_totals WHERE document_id IN (SELECT id FROM deleted_documents);
 DELETE FROM statements WHERE document_id IN (SELECT id FROM deleted_documents);
 DELETE FROM stated_balances WHERE document_id IN (SELECT id FROM deleted_documents);
 DELETE FROM import_document_events WHERE event_id IN (SELECT id FROM deleted_events);

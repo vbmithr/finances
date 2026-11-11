@@ -775,6 +775,27 @@ fin import fdm ~/statements/fdm
 fin import fdm records.jsonl.zst
 ```
 
+FDM exports one card per file, and each card gets its own account named after the file:
+`~/statements/fdm/1118.csv` is imported into `assets:cards:fdm:1118`. Name the files after
+the last four digits of the cards and a batch import, such as `fin import --all`, needs
+nothing more. `--account-id ID` overrides the file name for the files it imports:
+
+```sh
+fin import fdm ~/statements/fdm
+fin import fdm statement.csv --account-id 2233
+```
+
+`fin convert` names the account the same way. FDM purchase rows are treated as
+outflows whether the export states their amounts as positive or negative; refund
+rows are inflows, and adjustment signs are preserved. Fin retains `Balance after`
+in the original source fields, but does not validate it as a consecutive balance:
+some FDM exports omit balance changes between rows. If you previously imported an
+FDM file whose signed amounts were inverted, back up your database, remove the
+affected account, and reimport it to correct its movements and journal. Account
+removal also removes its review decisions. FDM's spent and deposited totals are
+currently each linked to all records in the file, so their reported differences
+are not a comparison against only spending or only deposits.
+
 Observations in a records file are paired with its counted records, and balances are stored:
 `fin statement balances` lists them as JSON. Source-stated totals are retained
 and compared with linked records by `fin statement totals`. A statement without

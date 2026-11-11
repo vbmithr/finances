@@ -24,6 +24,7 @@ type t =
   ; tags : (string * string) list
   ; journal_description : string option
   ; conflict_columns : string list
+  ; takes_account_label : bool
   }
 
 let initialize source =
@@ -62,6 +63,12 @@ let create ~institution source =
      | L.Nil, L.Nil -> failwith "provide config.account or an account function"
      | L.Table _, L.Function _ -> failwith "use config.account or account, not both"
      | _ -> failwith "invalid account configuration");
+    let takes_account_label =
+      match get config "account_from_filename" with
+      | L.Nil | L.Userdata (Userdata.Boolean false) -> false
+      | L.Userdata (Userdata.Boolean true) -> true
+      | _ -> failwith "account_from_filename must be yes or no"
+    in
     (match get config "link_statements" with
      | L.Nil | L.Userdata (Userdata.Boolean _) -> ()
      | _ -> failwith "link_statements must be yes or no");
@@ -122,6 +129,7 @@ let create ~institution source =
     ; tags
     ; journal_description
     ; conflict_columns
+    ; takes_account_label
     })
 ;;
 
@@ -190,6 +198,7 @@ let interpret_row
       ~balances
       ~account_fn
       ~account
+      ~account_label
       ~apply
       ~observation
       ~link_statements
@@ -211,6 +220,22 @@ let interpret_row
       [ "row_hash", L.String ("row-sha256-" ^ hash)
       ; "source_hash_prefix", L.String (String.prefix sha256 16)
       ; "fields", fields
+      ; "account_id", L.String (Option.value account_label ~default:"card")
+      ; ( "row_hash_of"
+        , V.caml_func (function
+            | [ L.Table parts ] ->
+              let texts =
+                lua_list parts
+                |> List.map ~f:(function
+                  | L.String text -> text
+                  | _ -> failwith "row_hash_of expects strings")
+              in
+              let digest =
+                Digestif.SHA256.(
+                  digest_string (Json.encode (Jsont.list Jsont.string) texts) |> to_hex)
+              in
+              [ L.String ("row-sha256-" ^ digest) ]
+            | _ -> failwith "row_hash_of expects an array of strings") )
       ]
   in
   try
@@ -225,6 +250,8 @@ let interpret_row
              | [ value ] -> lua_table value
              | _ -> failwith "account must return one table")
         in
+        Option.iter account_label ~f:(fun label ->
+          V.Table.bind row_account ~key:(L.String "id") ~data:(L.String label));
         let id = get_string row_account "id" in
         let encoded = json (L.Table row_account) in
         (match Hashtbl.find accounts id with
@@ -310,7 +337,7 @@ let interpret_row
   | exn -> fail "row %d: %s" (i + 1) (Exn.to_string exn)
 ;;
 
-let convert t ~name contents =
+let convert_with ?account_label ?path t ~name contents =
   Or_error.try_with (fun () ->
     let ( state
         , institution
@@ -325,6 +352,16 @@ let convert t ~name contents =
       initialize t.source
     in
     let config = I.getglobal state (L.String "config") |> lua_table in
+    let account_label =
+      match account_label, get config "account_from_filename", path with
+      | Some _, _, _ -> account_label
+      | None, L.Userdata (Userdata.Boolean true), Some path ->
+        (* A statement named after its account, such as FDM's 1118.csv. *)
+        let stem = Stdlib.Filename.(remove_extension (basename path)) in
+        Option.some_if (not (String.is_empty stem)) stem
+      | None, (L.Nil | L.Userdata (Userdata.Boolean _)), _ -> None
+      | None, _, _ -> failwith "account_from_filename must be yes or no"
+    in
     let link_statements =
       match get config "link_statements" with
       | L.Nil | L.Userdata (Userdata.Boolean false) -> false
@@ -360,9 +397,46 @@ let convert t ~name contents =
         [ L.String (Printf.sprintf "%s%s/%d" prefix date position) ]
       | _ -> failwith "inventory ID expects an account and date"
     in
+    (* Rows are identified by what they state, so an export that starts mid-day
+       keeps the identity of rows another export already carried. Repeated
+       identical rows are numbered in file order. *)
+    let occurrences = Hashtbl.create (module String) in
+    let by_content prefix = function
+      | [ L.String account; L.String date; L.Table parts ] ->
+        let length =
+          match V.Table.find parts ~key:(L.String "n") with
+          | L.Nil ->
+            (* Lua 2.5 builds a table in a constructor as an array; one grown
+               by assignment may not carry the marker. *)
+            (match V.Table.find parts ~key:array_key with
+             | L.Nil -> 0
+             | _ -> List.length (lua_list parts))
+          | L.Number n -> Int.of_float n
+          | _ -> failwith "content_id expects an array of strings"
+        in
+        let texts =
+          List.init length ~f:(fun i ->
+            match V.Table.find parts ~key:(L.Number (Float.of_int (i + 1))) with
+            | L.String text -> text
+            | _ -> failwith "content_id expects strings")
+        in
+        let digest =
+          Digestif.SHA256.(
+            digest_string
+              (Json.encode (Jsont.list Jsont.string) (account :: date :: texts))
+            |> to_hex)
+        in
+        let key = prefix ^ account ^ "\000" ^ digest in
+        let position = 1 + Option.value (Hashtbl.find occurrences key) ~default:0 in
+        Hashtbl.set occurrences ~key ~data:position;
+        [ L.String (Printf.sprintf "%s%s/%d" prefix date position) ]
+      | _ -> failwith "content_id expects an account, a date and an array of strings"
+    in
     I.register_globals
       [ "inventory_id", V.caml_func (inventory "")
       ; "observation_id", V.caml_func (inventory "observation/")
+      ; "content_id", V.caml_func (by_content "")
+      ; "observation_content_id", V.caml_func (by_content "observation/")
       ]
       state;
     let sha256 = Digestif.SHA256.(digest_string contents |> to_hex) in
@@ -376,6 +450,7 @@ let convert t ~name contents =
         ~balances
         ~account_fn
         ~account
+        ~account_label
         ~apply
         ~observation
         ~link_statements
@@ -429,7 +504,9 @@ let convert t ~name contents =
     Records.validate_document document |> Or_error.ok_exn)
 ;;
 
+let convert t ~name contents = convert_with ~path:name t ~name contents
 let source t = t.source
+let takes_account_label t = t.takes_account_label
 
 let overlap t : Adapter.overlap =
   if String.equal t.identity "source" then Source_ids else Day_inventory

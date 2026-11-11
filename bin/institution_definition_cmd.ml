@@ -72,7 +72,10 @@ let check_institution_definition path sample account_id =
     in
     let%bind document =
       A.parse
-        ~context:{ account_label = Some (Option.value account_id ~default:"preview") }
+        ~context:
+          { account_label = Some (Option.value account_id ~default:"preview")
+          ; path = None
+          }
         ~format
         contents
     in

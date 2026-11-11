@@ -84,10 +84,10 @@ assert details(reward)["valuations"][1] == {
 assert exchange["id"].startswith("row-sha256-") and kind(lines, "header")[0]["identity"] == "source"
 
 # FDM: amounts are spending, a refund is negative, and the undated row is a total.
-fdm = write("fdm.csv", """Merchant,Category,Date,Local currency,Local amount,Exchange rate,USD
-Shop,Shopping,2025-01-02,EUR,10.00,1.1,11.00
-Shop,Shopping,2025-01-03,EUR,-1.00,1.1,-1.10
-Total,,,,,,9.90
+FDM_HEADER = "Type,Merchant,Category,Date,Local currency,Local amount,Exchange rate,USD,Balance after,Note\n"
+fdm = write("fdm.csv", FDM_HEADER + """Purchase,Shop,Shopping,2025-01-02,EUR,10.00,1.1,11.00,,
+Refund,Shop,Shopping,2025-01-03,EUR,-1.00,1.1,-1.10,,
+Total spent,,,,,,,9.90,,
 """)
 lines = convert("fdm", fdm)
 records, statements = kind(lines, "record"), kind(lines, "statement")
@@ -121,9 +121,8 @@ done = convert("cdc", twice, check=False)
 assert done.returncode != 0 and "repeated id" in " ".join(done.stderr.split()), done.stderr
 assert done.stdout == "", done.stdout
 # With inventory identity they are two rows, by position.
-assert len(kind(convert("fdm", write("fdm-twice.csv", """Merchant,Category,Date,Local currency,Local amount,Exchange rate,USD
-Shop,Shopping,2025-01-02,EUR,10.00,1.1,11.00
-Shop,Shopping,2025-01-02,EUR,10.00,1.1,11.00
+assert len(kind(convert("fdm", write("fdm-twice.csv", FDM_HEADER + """Purchase,Shop,Shopping,2025-01-02,EUR,10.00,1.1,11.00,,
+Purchase,Shop,Shopping,2025-01-02,EUR,10.00,1.1,11.00,,
 """)), "record")) == 2
 
 # bunq: a narrow no-break space groups digits.
@@ -242,6 +241,6 @@ strangers = write("export-strangers.csv", header
     + f"0xa,1,1,2026-07-29 10:00:00,{me},{them},,0,1,0,0.01,0,0.1,,,Transfer\n"
     + f"0xb,1,1,2026-07-29 10:00:01,{spam},{fake},,0,1,0,0.01,0,0.1,,,Transfer\n")
 done = convert("polygon", strangers, check=False)
-assert done.returncode != 0 and "no address appears on every row" in done.stderr, done.stderr
+assert done.returncode != 0 and "no address appears on every row" in " ".join(done.stderr.split()), done.stderr
 
 print("Verified CSV converters")

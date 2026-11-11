@@ -190,6 +190,11 @@ emitted statement. The record must not itself set `statements`. With no records,
 statement rows are not converted and no account or statement is emitted. This
 matches the existing converter's treatment of an empty FDM statement.
 
+FDM's converter treats purchases as outflows and refunds as inflows for both
+positive-spending and signed exports. It preserves adjustment signs. Its
+`Balance after` column remains in the source fields rather than being checked as
+a continuous balance, because some exports omit balance-changing activity.
+
 Fin stores FDM's stated total and links it to its records on import. Use
 `fin statement totals --institution fdm` to compare the total with the linked
 movements. The original source file is also retained.

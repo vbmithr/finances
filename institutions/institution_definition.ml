@@ -310,6 +310,9 @@ let sources (r : t) =
         tags = Lua_csv_converter.tags definition
       ; journal_description = Lua_csv_converter.journal_description definition
       ; conflict_columns = Lua_csv_converter.conflict_columns definition
+      ; convert =
+          (fun ?account_label ?path ~name contents ->
+            Lua_csv_converter.convert_with ?account_label ?path definition ~name contents)
       })
   in
   Option.to_list statement @ layouts @ scripts
@@ -327,6 +330,11 @@ let overlap (r : t) : Adapter.overlap =
       ~f:Lua_csv_converter.overlap
 ;;
 
+(* Only scripts that opt into file-derived account names accept a label. *)
+let takes_account_label (r : t) =
+  List.exists r.lua_csv ~f:Lua_csv_converter.takes_account_label
+;;
+
 let adapter t =
   let r = t in
   Records_adapter.make
@@ -334,6 +342,7 @@ let adapter t =
     ~stored_formats:r.stored_formats
     ~tickers:(Institution_type.equal t.typ Crypto_exchange)
     ~own_symbols:r.own_symbols
+    ~takes_account_label:(takes_account_label r)
     ~institution:r.institution
     ~overlap:(overlap r)
     (sources r)

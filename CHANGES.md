@@ -8,6 +8,20 @@ short line of their own.
 
 ## Unreleased
 
+- Import FDM signed purchases and adjustments with their intended direction and
+  retain nonconsecutive balance values as source fields. **Action required:**
+  back up, remove and reimport affected FDM accounts if their earlier movements
+  were imported with inverted signs; account removal also removes reviews.
+- Account deletion now removes linked statement totals and verifies that totals
+  shared with other accounts are not affected. `--account-id` is restricted to
+  Lua converters that opt into file-derived account names.
+
+- FDM statements are imported into an account named after the file, so `1118.csv` goes to
+  `assets:cards:fdm:1118` and a batch of card exports needs no options. `--account-id ID`
+  still overrides the name. A Lua converter opts in with `account_from_filename = yes`.
+  **Action required:** FDM files previously went to `assets:cards:fdm:card`; rename
+  files after their cards, or pass `--account-id card`, and rebuild the database.
+
 - Parse MT940 fields with a shared Angstrom grammar and keep Bunq-specific
   interpretation and validation separate. Existing Bunq imports retain their
   identities, balance checks and CSV matching. The Bunq entry pattern is now

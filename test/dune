@@ -586,16 +586,12 @@
 
 (rule
  (alias runtest)
- (deps
-  records_import_test.py
-  fixtures/fdm-converter.json
-  fixtures/revolut-converter.json)
+ (deps records_import_test.py fixtures/revolut-converter.json)
  (action
   (run
    python3
    %{dep:records_import_test.py}
    %{exe:../bin/main.exe}
-   %{dep:fixtures/fdm-converter.json}
    %{dep:fixtures/revolut-converter.json})))
 
 (test
@@ -619,7 +615,6 @@
  (modules lua_csv_converter_test)
  (deps
   fixtures/cdc-converter.json
-  fixtures/fdm-converter.json
   fixtures/bunq-converter.json
   fixtures/boursobank-converter.json
   fixtures/revolut-converter.json

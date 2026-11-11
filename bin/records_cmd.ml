@@ -50,7 +50,7 @@ let of_sources (sources : Records_adapter.source list) =
             count
             (if count = 1 then "" else "s")
             name;
-        source.convert ~name contents)
+        source.convert ~path:name ~name contents)
   , refused )
 ;;
 
