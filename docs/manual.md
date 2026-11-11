@@ -272,9 +272,12 @@ are scanned recursively (including inside ZIP archives), each recognized file is
 imported in sorted order with the usual per-file and summary outcome lines, and the
 journal is published. `fin db sources --institution cdc --json` includes the
 original fields and source event IDs. The complete CSV is archived in the database.
-Reimporting the identical file is reported as unchanged, but a different file
-containing already imported rows or a file containing identical rows is rejected
-as ambiguous. Review those exports before importing them. A file with only the
+Reimporting the identical file is reported as unchanged. Fin also accepts a
+complete records conversion of a single archived source (or the original source
+after its records conversion) when the records file names exactly that one source
+and its source digest, complete event set, and stored evidence agree. Other files containing already imported operation rows, and
+files containing indistinguishable identical rows, are rejected as ambiguous.
+Review those exports before importing them. A file with only the
 header is a valid statement of no activity: it imports with `inserted=0`. A reimport that
 finds a stored
 operation differing from the importer's interpretation (movement roles,

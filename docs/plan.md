@@ -228,8 +228,8 @@ configurable yet.
   general exact decimal arithmetic, row-skipping diagnostics,
   remaining observation matching settings and execution limits before migrating
   the remaining institutions.
-- [ ] Revisit overlap detection for operation rows, including reverted Revolut rows
-  reimported from a different representation of an already imported file.
+- [x] Allow complete source/records reimports with matching source digest and
+  event evidence, including reverted Revolut rows; reject partial overlaps.
 - [x] Preserve FDM's stated total and compare it with its linked transactions.
 - [ ] Compare totals linked to observations after matching them to counted records.
 

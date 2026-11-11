@@ -4,6 +4,7 @@ import os
 import pathlib
 import json
 import subprocess
+import sqlite3
 import sys
 import tempfile
 
@@ -126,8 +127,59 @@ Card Payment,Current,2026-01-04 09:00:00,,Undone,-5.00,0.00,EUR,REVERTED,
     rev_db, rev_journal = root / "revolut.sqlite3", root / "revolut.journal"
     run("init", "-d", rev_db)
     run("import", "revolut", old_rev, "-d", rev_db, "--journal", rev_journal)
-    replay = run("import", "revolut", rev, "-d", rev_db, "--journal", rev_journal, check=False)
-    assert "overlap is ambiguous" in replay.stdout + replay.stderr, (replay.stdout, replay.stderr)
+    replay = run("import", "revolut", rev, "-d", rev_db, "--journal", rev_journal)
+    assert "inserted=0 existing=3" in replay.stdout, replay.stdout
+    reverse_db, reverse_journal = root / "revolut-reverse.sqlite3", root / "revolut-reverse.journal"
+    run("init", "-d", reverse_db)
+    run("import", "revolut", rev, "-d", reverse_db, "--journal", reverse_journal)
+    replay = run("import", "revolut", old_rev, "-d", reverse_db, "--journal", reverse_journal)
+    assert "inserted=0 existing=3" in replay.stdout, replay.stdout
+
+    # A changed stored operation proposal still makes a complete replay fail.
+    damaged_db, damaged_journal = root / "revolut-damaged.sqlite3", root / "revolut-damaged.journal"
+    run("init", "-d", damaged_db)
+    run("import", "revolut", rev, "-d", damaged_db, "--journal", damaged_journal)
+    with sqlite3.connect(damaged_db) as db:
+        db.execute("UPDATE operations SET occurred='2020-01-01' WHERE source_event_id IS NOT NULL")
+    rejected = run("import", "revolut", old_rev, "-d", damaged_db, "--journal", damaged_journal, check=False)
+    assert "stored operation" in rejected.stdout + rejected.stderr, (rejected.stdout, rejected.stderr)
+
+    # A claimed source hash cannot make a partial or altered records file a replay.
+    old_lines = [json.loads(line) for line in old_rev.read_text().splitlines()]
+    partial = root / "revolut-partial.jsonl"
+    dropped = False
+    subset = []
+    for row in old_lines:
+        row = dict(row)
+        if row["kind"] == "record" and not dropped:
+            dropped = True
+            continue
+        if row["kind"] == "end":
+            row["records"] -= 1
+        subset.append(row)
+    partial.write_text("\n".join(map(json.dumps, subset)) + "\n")
+    rejected = run("import", "revolut", partial, "-d", reverse_db, "--journal", reverse_journal, check=False)
+    assert "overlap is ambiguous" in rejected.stdout + rejected.stderr, (rejected.stdout, rejected.stderr)
+    altered = root / "revolut-altered.jsonl"
+    changed_rows = [json.loads(line) for line in old_rev.read_text().splitlines()]
+    reverted = next(row for row in changed_rows if row["kind"] == "record" and not row["movements"])
+    reverted["details"]["reported"]["quantity"] = "-6"
+    altered.write_text("\n".join(map(json.dumps, changed_rows)) + "\n")
+    rejected = run("import", "revolut", altered, "-d", reverse_db, "--journal", reverse_journal, check=False)
+    assert "overlap is ambiguous" in rejected.stdout + rejected.stderr, (rejected.stdout, rejected.stderr)
+    wrong_source = root / "revolut-wrong-source.jsonl"
+    changed_rows = [json.loads(line) for line in old_rev.read_text().splitlines()]
+    next(row for row in changed_rows if row["kind"] == "source")["sha256"] = "0" * 64
+    wrong_source.write_text("\n".join(map(json.dumps, changed_rows)) + "\n")
+    rejected = run("import", "revolut", wrong_source, "-d", reverse_db, "--journal", reverse_journal, check=False)
+    assert "overlap is ambiguous" in rejected.stdout + rejected.stderr, (rejected.stdout, rejected.stderr)
+    # A shortened raw CSV is also not a replay of the archived records file.
+    partial_csv = root / "revolut-partial.csv"
+    rev_lines = rev.read_text().splitlines()
+    partial_csv.write_text("\n".join([rev_lines[0], *rev_lines[2:]]) + "\n")
+    rejected = run("import", "revolut", partial_csv, "-d", rev_db, "--journal", rev_journal, check=False)
+    assert "overlap is ambiguous" in rejected.stdout + rejected.stderr, (rejected.stdout, rejected.stderr)
+
     # Completed-only rows are bank movements and can be reimported across converters.
     completed = root / "revolut-completed.csv"
     completed.write_text("\n".join(rev.read_text().splitlines()[:-1]) + "\n")
@@ -138,6 +190,26 @@ Card Payment,Current,2026-01-04 09:00:00,,Undone,-5.00,0.00,EUR,REVERTED,
     run("import", "revolut", old_completed, "-d", completed_db, "--journal", completed_journal)
     replay = run("import", "revolut", completed, "-d", completed_db, "--journal", completed_journal)
     assert "inserted=0 existing=2" in replay.stdout, replay.stdout
+
+    # Source-hash identities also work when the complete source is converted.
+    cdc = root / "cdc.csv"
+    cdc.write_text("""Timestamp (UTC),Transaction Description,Currency,Amount,To Currency,To Amount,Native Currency,Native Amount,Native Amount (in USD),Transaction Kind,Transaction Hash
+2025-06-09 17:56:16,Reward,CRO,1,,,EUR,0.10,0.12,crypto_deposit,
+""")
+    cdc_records = root / "cdc.jsonl"
+    run("convert", "cdc", cdc, "-o", cdc_records)
+    cdc_db, cdc_journal = root / "cdc.sqlite3", root / "cdc.journal"
+    run("init", "-d", cdc_db)
+    run("import", "cdc", cdc, "-d", cdc_db, "--journal", cdc_journal)
+    replay = run("import", "cdc", cdc_records, "-d", cdc_db, "--journal", cdc_journal)
+    assert "inserted=0 existing=1" in replay.stdout, replay.stdout
+    cdc_damaged, cdc_damaged_journal = root / "cdc-damaged.sqlite3", root / "cdc-damaged.journal"
+    run("init", "-d", cdc_damaged)
+    run("import", "cdc", cdc, "-d", cdc_damaged, "--journal", cdc_damaged_journal)
+    with sqlite3.connect(cdc_damaged) as db:
+        db.execute("UPDATE operation_movements SET quantity='999'")
+    rejected = run("import", "cdc", cdc_records, "-d", cdc_damaged, "--journal", cdc_damaged_journal, check=False)
+    assert "stored operation" in rejected.stdout + rejected.stderr, (rejected.stdout, rejected.stderr)
 
     # A records file of another institution is not this one's, and a broken one says why.
     other = root / "other.jsonl"

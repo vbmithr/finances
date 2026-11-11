@@ -8,8 +8,12 @@ short line of their own.
 
 ## Unreleased
 
+- Allow complete reimports of a source and its records conversion in either
+  order when the source digest, complete event set and evidence agree.
+  Operation proposals are still checked; partial overlaps are rejected.
+
 - Revolut CSV statements now use Lua, retaining reverted rows and exact fee
-  arithmetic. Existing operation-row overlap restrictions still apply.
+  arithmetic. Other operation-row overlap restrictions still apply.
 
 - Assemble and validate Lua converter output as typed records, without
   constructing and reparsing a complete JSON Lines document.

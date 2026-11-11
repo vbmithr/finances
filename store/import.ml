@@ -809,6 +809,96 @@ let bind_document_context db ~document_id context =
     db_result (Db.exec db.conn (insert document_id context))
 ;;
 
+(* A records file can name its original source, but that name alone is not
+   proof of a replay. Compare it to archived source bytes, and require every
+   source event to be exactly the same as in one already accepted document. *)
+type representation =
+  | Source_file of string
+  | Records_file of string option
+
+let representation ~institution contents =
+  if Records.is_records_of ~institution contents
+  then (
+    let source =
+      match Records.of_string contents with
+      | Ok [ section ] ->
+        (match section.sources with
+         | [ source ] -> Some source.sha256
+         | _ -> None)
+      | _ -> None
+    in
+    Records_file source)
+  else Source_file Digestif.SHA256.(digest_string contents |> to_hex)
+;;
+
+let same_source a b =
+  match a, b with
+  | Source_file digest, Records_file (Some stated)
+  | Records_file (Some stated), Source_file digest -> String.equal digest stated
+  | _ -> false
+;;
+
+let complete_representation_replay db ~institution ~document_id ~contents events =
+  let* existing =
+    traverse
+      (fun (event : Source_event.t) ->
+         let* found =
+           db_result
+             (Db.first
+                db.conn
+                (find_source event.venue event.account event.kind event.source_id))
+         in
+         let occurred_at, occurred_on =
+           match event.occurred with
+           | Temporal.Instant at -> Some at, None
+           | Temporal.Date day -> None, Some (Date.to_string day)
+         in
+         Ok
+           (Option.bind found ~f:(fun stored ->
+              Option.some_if
+                (Option.equal Ptime.equal occurred_at stored.occurred_at
+                 && Option.equal String.equal occurred_on stored.occurred_on
+                 && String.equal event.payload stored.payload)
+                stored.id)))
+      events
+  in
+  match Option.all existing with
+  | None | Some [] -> Ok false
+  | Some ids ->
+    let ids = List.sort ids ~compare:Int64.compare in
+    if List.contains_dup ids ~compare:Int64.compare
+    then Ok false
+    else (
+      let candidates =
+        Rel_sql.Stmt.(
+          func
+            "SELECT d.id,d.contents FROM import_documents d JOIN import_document_events \
+             e ON e.document_id=d.id WHERE e.event_id=? AND d.institution=? AND d.id<>?"
+            (int64 @-> text @-> int64 @-> ret Row.(t2 (int64 "id") (blob "contents"))))
+      in
+      let event_ids =
+        Rel_sql.Stmt.(
+          func
+            "SELECT event_id FROM import_document_events WHERE document_id=? ORDER BY \
+             event_id"
+            (int64 @-> ret Row.(t1 (int64 "event_id"))))
+      in
+      let* candidates =
+        collect db (candidates (List.hd_exn ids) institution document_id)
+      in
+      let incoming = representation ~institution contents in
+      let rec find = function
+        | [] -> Ok false
+        | (id, archived) :: rest ->
+          if not (same_source incoming (representation ~institution archived))
+          then find rest
+          else
+            let* linked = collect db (event_ids id) in
+            if List.equal Int64.equal ids linked then Ok true else find rest
+      in
+      find candidates)
+;;
+
 let import_document
       db
       (module A : Adapter.S)
@@ -836,24 +926,40 @@ let import_document
       then Ok ()
       else Or_error.errorf "the %s adapter produced an event it does not own" institution
     in
-    (* A new document of operation rows must not partially overlap stored
-       sources: content-hashed row identities make partial overlap ambiguous. *)
+    (* An operation overlap is allowed only for a complete alternate
+       representation of the same source. Normal ingestion still checks the
+       stored operation proposal before accepting the document. *)
     let* () =
       if Option.value accepted ~default:false
       then Ok ()
-      else
-        List.filter all_events ~f:(fun (e : Source_event.t) ->
-          Registry.is_operation_kind db.registry e.kind)
-        |> List.fold_result ~init:() ~f:(fun () (e : Source_event.t) ->
-          let* existing =
-            db_result
-              (Db.first db.conn (find_source e.venue e.account e.kind e.source_id))
+      else (
+        let operations =
+          List.filter all_events ~f:(fun (e : Source_event.t) ->
+            Registry.is_operation_kind db.registry e.kind)
+        in
+        let* overlaps =
+          traverse
+            (fun (e : Source_event.t) ->
+               db_result
+                 (Db.first db.conn (find_source e.venue e.account e.kind e.source_id)))
+            operations
+        in
+        if List.for_all overlaps ~f:Option.is_none
+        then Ok ()
+        else
+          let* replay =
+            complete_representation_replay
+              db
+              ~institution
+              ~document_id
+              ~contents
+              all_events
           in
-          match existing with
-          | Some _ ->
+          if replay
+          then Ok ()
+          else
             Or_error.error_string
-              "a source row already exists in another document; overlap is ambiguous"
-          | None -> Ok ())
+              "a source row already exists in another document; overlap is ambiguous")
     in
     let* () =
       if List.is_empty document.context

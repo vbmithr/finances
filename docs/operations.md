@@ -135,7 +135,9 @@ from a price difference. Unknown kinds remain reviewable and unposted.
 
 CDC imports retain the original file and source fields, with provider-scoped
 symbols and unassigned accounts. Replay of an identical document checks its
-stored proposals; ambiguous overlapping documents and identical rows are
+stored proposals. A complete records conversion and its exact original source
+can be reimported in either order when the records file names exactly one source
+and its digest and the complete event evidence agree. Partial overlaps and identical rows remain ambiguous and are
 rejected. Two-movement exchanges can be resolved, confirmed and projected with
 commodity-specific trading postings. Resolved single-movement operations can be
 linked as transfers to a bank or another wallet when their quantities and
