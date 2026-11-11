@@ -459,8 +459,9 @@ dune exec fin -- import boursobank personal/boursobank/inbox \
   --journal personal/bank.journal
 ~~~
 
-An account and its exclusive imported records can be removed with
-`fin account delete ACCOUNT_ID` (shown by `fin account list`); use `--dry-run` to preview it.
+Accounts and their exclusive imported records can be removed together with
+`fin account delete ACCOUNT_ID OTHER_ACCOUNT_ID` (IDs are shown by
+`fin account list`); use `--dry-run` to preview them. The batch is atomic.
 Shared documents and relationships with other accounts prevent deletion. See
 [account deletion](docs/manual.md#delete-an-account) for details.
 

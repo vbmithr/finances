@@ -8,6 +8,10 @@ short line of their own.
 
 ## Unreleased
 
+- `fin account delete` accepts one or more account IDs, previews them together
+  and removes them atomically after one confirmation. Shared-evidence checks
+  still apply to each account.
+
 - FDM spent and deposited totals are retained as stated without assigning every
   transaction to both totals. Comparisons are unavailable until the source
   establishes which rows a total covers; unlinked totals from other converters

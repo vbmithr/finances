@@ -88,3 +88,11 @@ val delete_account
   -> t
   -> Bank_account_mapping.t
   -> account_deletion Or_error.t
+
+(** Delete a nonempty batch atomically, refusing duplicate accounts and the
+    same shared evidence as [delete_account]. Results follow input order. *)
+val delete_accounts
+  :  ?dry_run:bool
+  -> t
+  -> Bank_account_mapping.t list
+  -> account_deletion list Or_error.t

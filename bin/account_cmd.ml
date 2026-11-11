@@ -195,42 +195,55 @@ let accounts_history database =
     Ok ())
 ;;
 
-let accounts_delete database account_id dry_run yes =
+let accounts_delete database account_ids dry_run yes =
   with_database database (fun db ->
-    let%bind accounts = Transfers.bank_account_info db in
-    let matches =
-      List.filter accounts ~f:(fun (a : Transfers.bank_account_info) ->
-        String.equal (Bank_account_mapping.id a.mapping) account_id)
+    let%bind () =
+      if List.contains_dup account_ids ~compare:String.compare
+      then Or_error.error_string "an account ID was selected more than once"
+      else Ok ()
     in
-    let%bind account =
-      match matches with
-      | [ account ] -> Ok account
-      | [] -> Or_error.error_string "no matching account ID; see fin account list"
-      | _ -> Or_error.error_string "account ID collision; deletion is refused"
+    let%bind available = Transfers.bank_account_info db in
+    let%bind accounts =
+      List.map account_ids ~f:(fun account_id ->
+        match
+          List.filter available ~f:(fun (a : Transfers.bank_account_info) ->
+            String.equal (Bank_account_mapping.id a.mapping) account_id)
+        with
+        | [ account ] -> Ok account
+        | [] ->
+          Or_error.errorf "no matching account ID %s; see fin account list" account_id
+        | _ ->
+          Or_error.errorf "account ID %s is ambiguous; deletion is refused" account_id)
+      |> Or_error.all
     in
-    let%bind preview = Accounts.delete_account ~dry_run:true db account.mapping in
-    printf
-      "Account: %s / %s (%s), ID %s\nTransactions: %d\nSource documents: %d\n"
-      account.mapping.institution
-      account.mapping.account_id
-      account.mapping.account_type
-      account_id
-      preview.transactions
-      preview.documents;
+    let mappings = List.map accounts ~f:(fun account -> account.Transfers.mapping) in
+    let%bind previews = Accounts.delete_accounts ~dry_run:true db mappings in
+    List.iter2_exn accounts previews ~f:(fun account preview ->
+      printf
+        "Account: %s / %s (%s), ID %s\nTransactions: %d\nSource documents: %d\n"
+        account.mapping.institution
+        account.mapping.account_id
+        account.mapping.account_type
+        (Bank_account_mapping.id account.mapping)
+        preview.Accounts.transactions
+        preview.documents);
     if dry_run
     then (
       print_endline "Dry run: nothing deleted.";
       Ok ())
     else (
-      let%bind confirmed =
-        confirm ~yes ~destructive:true "Delete this account and its records?"
+      let question =
+        if List.length accounts = 1
+        then "Delete this account and its records?"
+        else "Delete these accounts and their records?"
       in
+      let%bind confirmed = confirm ~yes ~destructive:true question in
       if not confirmed
       then (
         print_endline "Nothing deleted.";
         Ok ())
       else (
-        let%bind _ = Accounts.delete_account db account.mapping in
+        let%bind _ = Accounts.delete_accounts db mappings in
         let journal =
           Stdlib.Filename.concat (Stdlib.Filename.dirname database) "bank.journal"
         in
@@ -243,7 +256,10 @@ let accounts_delete database account_id dry_run yes =
                  ~tag:"account deleted; failed to refresh the generated journal"
           else Ok ()
         in
-        print_endline "Account and its records deleted.";
+        print_endline
+          (if List.length accounts = 1
+           then "Account and its records deleted."
+           else "Accounts and their records deleted.");
         Ok ())))
 ;;
 
@@ -390,14 +406,15 @@ let cmd =
         Term.(const accounts_edit $ database)
     ; command
         "delete"
-        "Delete one account and its transactions after showing what will be removed."
+        "Delete accounts and their transactions atomically after showing what will be \
+         removed."
         Term.(
           const accounts_delete
           $ database
           $ Arg.(
-              required
-              & pos 0 (some string) None
-              & info [] ~docv:"ID" ~doc:"Account ID shown by fin account list.")
+              non_empty
+              & pos_all string []
+              & info [] ~docv:"ID" ~doc:"Account IDs shown by fin account list.")
           $ Arg.(
               value
               & flag

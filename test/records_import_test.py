@@ -137,6 +137,37 @@ Total deposited,,,,,,,0.00,,
         assert len([line for line in cards_text.splitlines()
                     if line.startswith(" ") and f"assets:cards:fdm:{name}" in line]) == 3, cards_text
     assert "assets:cards:fdm:card" not in cards_text, cards_text
+    # Multiple accounts are previewed together and deleted in one transaction.
+    card_accounts = json.loads(run("account", "list", "--json", "-d", cards_db).stdout)
+    ids = {a["account_id"]: a["id"] for a in card_accounts if a["institution"] == "fdm"}
+    assert set(ids) == {"1118", "2233"}, ids
+    one, two = ids["1118"], ids["2233"]
+    assert run("account", "delete", "-d", cards_db, check=False).returncode != 0
+    preview = run("account", "delete", one, two, "--dry-run", "-d", cards_db)
+    assert "Dry run: nothing deleted" in preview.stdout and preview.stdout.count("Transactions: 3") == 2
+    for invalid in ((one, "unknown"), (one, one)):
+        assert run("account", "delete", *invalid, "--yes", "-d", cards_db, check=False).returncode != 0
+        assert len(json.loads(run("operation", "list", "--institution", "fdm", "--json", "-d", cards_db).stdout)) == 6
+    # An unexpected failure after the first deletion must roll back the batch.
+    with sqlite3.connect(cards_db) as db:
+        db.execute("""CREATE TRIGGER test_block_second BEFORE DELETE ON source_events
+                      WHEN OLD.venue = 'fdm' AND OLD.account LIKE '%2233%'
+                      BEGIN SELECT RAISE(ABORT, 'test failure'); END""")
+    failed = run("account", "delete", one, two, "--yes", "-d", cards_db, check=False)
+    assert failed.returncode != 0, failed.stdout
+    assert len(json.loads(run("operation", "list", "--institution", "fdm", "--json", "-d", cards_db).stdout)) == 6
+    with sqlite3.connect(cards_db) as db:
+        assert db.execute("PRAGMA foreign_key_check").fetchall() == []
+        assert db.execute("SELECT count(*) FROM statement_totals").fetchone()[0] == 2
+        db.execute("DROP TRIGGER test_block_second")
+    done = run("account", "delete", one, two, "--yes", "-d", cards_db)
+    assert "Accounts and their records deleted" in done.stdout
+    assert json.loads(run("operation", "list", "--institution", "fdm", "--json", "-d", cards_db).stdout) == []
+    with sqlite3.connect(cards_db) as db:
+        assert db.execute("PRAGMA foreign_key_check").fetchall() == []
+        assert db.execute("SELECT count(*) FROM statement_totals").fetchone()[0] == 0
+    run("import", "fdm", cards, "-d", cards_db, "--journal", cards_journal)
+    assert len(json.loads(run("operation", "list", "--institution", "fdm", "--json", "-d", cards_db).stdout)) == 6
     # An explicit ID overrides the file name.
     named_db, named_journal = root / "named.sqlite3", root / "named.journal"
     run("init", "-d", named_db)

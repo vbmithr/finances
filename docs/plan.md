@@ -225,6 +225,8 @@ configurable yet.
   day-end balances; support repeated headers and conflict columns.
 - [x] Port Revolut CSV to Lua, retaining completed and reverted rows and exact fees.
 - [x] Port Wise CSV observations to Lua, retaining CAMT matching and journal metadata.
+- [x] Delete one or more accounts as an atomic batch with a single preview and
+  confirmation; retain the existing shared-evidence safeguards.
 - [x] Support signed FDM exports and account deletion with linked statement totals;
   retain nonconsecutive FDM balance values as source fields.
 - [x] Preserve FDM file totals without inferred transaction links or comparisons.

@@ -921,3 +921,26 @@ let delete_account ?(dry_run = false) db (mapping : Bank_account_mapping.t) =
       let* () = List.fold_result triggers ~init:() ~f:(fun () sql -> exec sql) in
       Ok { transactions; documents }))
 ;;
+
+(* All previews and deletions share one outer transaction. Individual deletions
+   use savepoints, so an error on any account rolls back the entire batch. *)
+let delete_accounts ?(dry_run = false) db mappings =
+  let keys =
+    List.map mappings ~f:(fun (mapping : Bank_account_mapping.t) ->
+      mapping.institution, Bank_account_mapping.source_account mapping)
+  in
+  if List.is_empty mappings
+  then Or_error.error_string "provide at least one account"
+  else if List.contains_dup keys ~compare:[%compare: string * string]
+  then Or_error.error_string "an account was selected more than once"
+  else
+    transaction db (fun db ->
+      let apply ~dry_run =
+        List.fold_result mappings ~init:[] ~f:(fun reports mapping ->
+          let* report = delete_account ~dry_run db mapping in
+          Ok (report :: reports))
+        |> Result.map ~f:List.rev
+      in
+      let* previews = apply ~dry_run:true in
+      if dry_run then Ok previews else apply ~dry_run:false)
+;;

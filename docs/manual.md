@@ -820,26 +820,27 @@ as `records.jsonl: line 4: occurred: invalid date or instant: "2025-02-31"`, and
 with status 124. The command needs no database and stores nothing; fin cannot import
 records files yet.
 
-## Delete an account
+## Delete accounts
 
-`fin account list` shows a short ID alongside each account. Use that ID to
-inspect what deletion will remove, then delete it (replace `ACCOUNT_ID` below
-with the value shown):
+`fin account list` shows a short ID alongside each account. Pass one or more IDs
+to preview and delete the corresponding accounts:
 
 ```sh
-fin account delete ACCOUNT_ID --dry-run
-fin account delete ACCOUNT_ID
+fin account delete ACCOUNT_ID OTHER_ACCOUNT_ID --dry-run
+fin account delete ACCOUNT_ID OTHER_ACCOUNT_ID
 ```
 
-Deletion removes the account's transactions, projected entries, classifications,
+Deletion removes each account's transactions, projected entries, classifications,
 settings, exclusive source documents and their import history. Statement files
-outside fin remain untouched. The command asks for confirmation; scripts can use
-`--yes`. The ID is derived from the provider and source account identity, so it
-is stable across runs and reimports of the same identity. Fin refuses deletion if
-two accounts have the same short ID. Deletion is atomic and refuses shared documents, companion
-references, transfer decisions and settlement references from another account.
-The default generated `bank.journal`, if present, is refreshed; regenerate any
-custom journal separately. Make a backup first if the removed records may be needed.
+outside fin remain untouched. The command previews every account and asks once;
+scripts can use `--yes`. IDs are derived from provider and source account
+identities, so they are stable across reimports. Fin rejects duplicate, unknown or
+ambiguous IDs. The batch is atomic: if any account fails validation or deletion,
+none of the selected accounts is removed. Shared documents, companion references,
+transfer decisions and settlement references from another account still prevent
+deletion, including when both accounts are selected. The default generated
+`bank.journal`, if present, is refreshed after deletion; regenerate any custom
+journal separately. Make a backup first if the removed records may be needed.
 
 ## Account settings and snapshots
 
