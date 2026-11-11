@@ -48,8 +48,10 @@ type statement =
 
 type t = statement list
 
-(** Parse terminated statements. Field 86 after an entry is optional; unknown
-    fields and unassociated field 86 values remain in [fields]. *)
-val parse : string -> t Or_error.t
+(** Parse terminated statements and simple SWIFT text blocks. Field 86 after an
+    entry is optional; unknown fields and unassociated field 86 values remain in
+    [fields]. With [allow_unterminated], an EOF statement with a closing balance
+    is accepted; this does not prove the export is complete. *)
+val parse : ?allow_unterminated:bool -> string -> t Or_error.t
 
 val signed : direction -> Quantity.t -> Quantity.t

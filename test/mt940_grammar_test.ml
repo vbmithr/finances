@@ -165,6 +165,76 @@ let generic_fields () =
   Alcotest.(check int) "CRLF accepted" 1 (List.length (ok (Mt940_grammar.parse crlf)))
 ;;
 
+(* Synthetic values, following the field shapes in the published Citi, RBS,
+   and RBC export guides linked from docs/mt940-grammar.md. *)
+let bank_export_shapes () =
+  let citi =
+    "{1:F01EXAMPLE}{2:O940EXAMPLE}{4:\n"
+    ^ ":20:EXAMPLE\n:25:123456789\n:28C:42/1\n:60F:C260101DKK1000,00\n"
+    ^ ":61:2601020102DK12,34NTRFNONREF//BANK123\n/BAI/195/DETAIL\n"
+    ^ ":86:/NAME/Example\n/REMI/Payment\n:62F:C260131DKK987,66\n"
+    ^ ":64:C260131DKK987,66\n:65:C260201DKK987,66\n-\n}\n"
+  in
+  let citi_statement = List.hd_exn (ok (Mt940_grammar.parse citi)) in
+  let citi_entry = List.hd_exn citi_statement.entries in
+  Alcotest.(check (option char)) "Citi funds code" (Some 'K') citi_entry.funds_code;
+  Alcotest.(check (option string))
+    "Citi bank reference"
+    (Some "BANK123")
+    citi_entry.bank_reference;
+  Alcotest.(check (option string))
+    "Citi supplementary text"
+    (Some "/BAI/195/DETAIL")
+    citi_entry.supplementary;
+  Alcotest.(check bool)
+    "Citi available balance retained"
+    true
+    (List.exists citi_statement.fields ~f:(fun field -> String.equal field.tag "65"));
+  let citi_compact = String.substr_replace_first citi ~pattern:"-\n}\n" ~with_:"-}\n" in
+  Alcotest.(check int)
+    "compact SWIFT trailer"
+    1
+    (List.length (ok (Mt940_grammar.parse citi_compact)));
+  Alcotest.(check int)
+    "concatenated SWIFT blocks"
+    2
+    (List.length (ok (Mt940_grammar.parse (citi ^ citi_compact))));
+  error
+    (Mt940_grammar.parse
+       (String.substr_replace_first citi ~pattern:"-\n}\n" ~with_:"-\n"));
+  error (Mt940_grammar.parse (standard ^ "}\n"));
+  let rbs =
+    ":20:REFERENCE 01\n:25:01234567\n:28C:2/1\n:60F:C260101GBP50,00\n"
+    ^ ":61:2601020102C10,25NMSCPAYMENT REF//BANK987\n:86:Transfer\nFrom customer\n"
+    ^ ":62F:C260131GBP60,25\n:64:C260131GBP60,25\n"
+  in
+  error (Mt940_grammar.parse rbs);
+  let rbs_statement =
+    List.hd_exn (ok (Mt940_grammar.parse ~allow_unterminated:true rbs))
+  in
+  let rbs_entry = List.hd_exn rbs_statement.entries in
+  Alcotest.(check string) "RBS reference" "PAYMENT REF" rbs_entry.reference;
+  Alcotest.(check (option string))
+    "RBS multiline memo"
+    (Some "Transfer\nFrom customer")
+    rbs_entry.memo;
+  error
+    (Mt940_grammar.parse
+       ~allow_unterminated:true
+       (String.substr_replace_first rbs ~pattern:":62F:C260131GBP60,25\n" ~with_:""));
+  let rbc =
+    ":20:RBC-EXAMPLE\n:25:123456\n:28C:1/1\n:60F:C260101EUR100,00\n"
+    ^ ":61:260102D5,25NMSCREF1//BANK1\n"
+    ^ ":61:260103D10,00S100REF2//BANK2\n:86:Payment details\n"
+    ^ ":62F:C260131EUR84,75\n-\n"
+  in
+  let rbc_statement = List.hd_exn (ok (Mt940_grammar.parse rbc)) in
+  let first = List.hd_exn rbc_statement.entries in
+  Alcotest.(check (option (pair int int))) "RBC optional entry date" None first.entry_on;
+  Alcotest.(check (option string)) "RBC optional memo" None first.memo;
+  Alcotest.(check int) "RBC entries" 2 (List.length rbc_statement.entries)
+;;
+
 let () =
   Alcotest.run
     "MT940 grammar"
@@ -178,6 +248,7 @@ let () =
           ; "memos stop at fields", memos_do_not_swallow_fields
           ; "rejections", rejections
           ; "generic optional fields", generic_fields
+          ; "published bank export shapes", bank_export_shapes
           ]
           ~f:(fun (name, f) -> Alcotest.test_case name `Quick f) )
     ]

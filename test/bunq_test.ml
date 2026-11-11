@@ -87,7 +87,8 @@ let parser () =
     ~f:(fun unsupported ->
       error (Bunq_mt940.parse (replace (mt ()) "2601020102D10,NMSCNONREF" unsupported)));
   error (Bunq_mt940.parse (replace (mt ()) "2601030104" "2601031231"));
-  error (Bunq_mt940.parse (mt () ^ "extra"))
+  error (Bunq_mt940.parse (mt () ^ "extra"));
+  error (Bunq_mt940.parse (replace (mt ()) "\n-\n" "\n"))
 ;;
 
 let workflow () =

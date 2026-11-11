@@ -10,9 +10,15 @@ individual banks also publish their own usage conventions, for example
 ## Supported syntax
 
 The generic reader accepts UTF-8 text, LF or CRLF lines, and one or more
-statements terminated by a line containing `-`. Lines before the first field
-are treated as a preamble. A field begins with `:TAG:` at the start of a line;
-subsequent lines are its continuation until the next field or terminator.
+statements terminated by a line containing `-`. A simple SWIFT block starting
+with `{4:` may close with `-}` or with `-` followed by `}`. Lines before the
+first field are treated as a preamble. The library's optional
+`allow_unterminated` argument accepts a final statement at end of input if it
+has a closing balance; a closing balance alone cannot prove that an export is
+complete. The Bunq importer does not enable this option.
+
+A field begins with `:TAG:` at the start of a line; subsequent lines are its
+continuation until the next field or terminator.
 Tags use uppercase letters and digits. Fields, including unknown fields and
 unassociated `:86:` fields, retain their text and order. A `:86:` immediately
 after a `:61:` supplies its optional memo.
@@ -48,8 +54,8 @@ reversal credit and reversal debit remain distinct directions.
 
 This is a statement-export reader, not a complete parser for SWIFT envelopes,
 MT942, arbitrary network blocks, multiple interleaved messages, or every bank's
-extensions. The initial preamble can contain a bank header or a simple SWIFT
-header, but full envelope validation and trailers are not implemented.
+extensions. Basic text-block delimiters are recognized, but the reader does not
+validate SWIFT headers, routing, checksums or arbitrary trailer blocks.
 
 ## Bunq
 
@@ -68,3 +74,20 @@ These restrictions are Bunq import behavior, not general MT940 grammar. Other
 banks would need an explicit interpretation and validation layer before their
 statements could be imported. The generic reader by itself does not convert a
 statement into Fin records or CAMT.
+
+## Published examples checked
+
+Tests use synthetic values in field layouts based on published examples from
+[Citi](https://www.citibank.pl/poland/files/SWIFT_MT940_Export_User_Guide_EN.pdf),
+[RBS](https://www.rbs.co.uk/content/dam/rbs_co_uk/Business_and_Content/PDFs/Export-file-layout-guide-SWIFT-format.pdf)
+and [RBC](https://www.rbcroyalbank.com/rbcexpress/rbc-express-sps-import-export.pdf).
+They cover SWIFT block delimiters, multiline supplementary and memo fields,
+optional booking dates and memos, funds codes and available-balance fields.
+RBS illustrates a text export without a terminator; it requires the explicit
+`allow_unterminated` option. These checks exercise the parser only and do not
+establish import support for these banks.
+
+A published [BRI example](https://developers.bri.co.id/id/docs/prosedur-rekonsiliasi-2)
+uses amounts without a decimal comma. The reader currently requires the comma,
+so that bank-specific variant is not supported. More examples are needed before
+claiming broad MT940 coverage.

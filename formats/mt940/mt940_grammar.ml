@@ -228,7 +228,7 @@ let statement (fields : field list) =
   }
 ;;
 
-let parse text =
+let parse ?(allow_unterminated = false) text =
   Or_error.try_with (fun () ->
     if not (Stdlib.String.is_valid_utf_8 text) then failwith "MT940 input is not UTF-8";
     let lines = parse_field lines_parser "lines" text in
@@ -238,32 +238,68 @@ let parse text =
       | Some (tag, parts) ->
         { tag; text = String.concat ~sep:"\n" (List.rev parts) } :: fields
     in
-    let rec collect messages fields current started = function
+    let rec collect messages fields current started envelope awaiting_trailer = function
       | [] ->
-        if started then failwith "missing MT940 terminator";
+        if awaiting_trailer || envelope then failwith "missing SWIFT block trailer";
+        let messages =
+          if started
+          then (
+            if not allow_unterminated then failwith "missing MT940 terminator";
+            let last = statement (finish_field current fields) in
+            if Option.is_none last.closing
+            then failwith "unterminated MT940 statement has no closing balance";
+            last :: messages)
+          else messages
+        in
         if List.is_empty messages then failwith "MT940 input has no statement";
         List.rev messages
       | line :: rest ->
         let line = Option.value (String.chop_suffix line ~suffix:"\r") ~default:line in
-        if String.equal line "-"
+        if awaiting_trailer
+        then
+          if String.is_empty (String.strip line)
+          then collect messages fields current started envelope true rest
+          else if String.equal line "}"
+          then collect messages fields current started false false rest
+          else failwith "missing SWIFT block trailer"
+        else if String.equal line "-" || String.equal line "-}"
         then (
           if not started then failwith "unexpected MT940 terminator";
+          if String.equal line "-}" && not envelope
+          then failwith "unexpected SWIFT block trailer";
           let fields = finish_field current fields in
-          collect (statement fields :: messages) [] None false rest)
+          let awaiting = envelope && String.equal line "-" in
+          collect (statement fields :: messages) [] None false awaiting awaiting rest)
         else if String.is_prefix line ~prefix:":"
         then (
           let field = parse_field tag_parser "tag" line in
           let fields = finish_field current fields in
-          collect messages fields (Some (field.tag, [ field.text ])) true rest)
+          collect
+            messages
+            fields
+            (Some (field.tag, [ field.text ]))
+            true
+            envelope
+            false
+            rest)
         else (
           match current with
           | Some (tag, parts) ->
-            collect messages fields (Some (tag, line :: parts)) started rest
+            collect
+              messages
+              fields
+              (Some (tag, line :: parts))
+              started
+              envelope
+              false
+              rest
+          | None when (not started) && String.is_substring line ~substring:"{4:" ->
+            collect messages fields None false true false rest
           | None
             when (not started)
                  && (List.is_empty messages || String.is_empty (String.strip line)) ->
-            collect messages fields None false rest
+            collect messages fields None false envelope false rest
           | None -> failwith "unexpected content after MT940 terminator")
     in
-    collect [] [] None false lines)
+    collect [] [] None false false false lines)
 ;;

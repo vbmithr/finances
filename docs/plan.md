@@ -240,6 +240,10 @@ configurable yet.
 - [x] Separate generic Angstrom MT940 field parsing from Bunq interpretation;
   document its supported grammar and limitations, and replace the Bunq entry
   regex with checks on parsed fields.
+- [x] Exercise MT940 parsing with synthetic examples based on published Citi,
+  RBS and RBC layouts; support simple SWIFT framing and opt-in EOF endings.
+- [ ] Evaluate bank-specific number formats and additional framing against real
+  exports before claiming broader MT940 import support.
 - [ ] Investigate persistence of interpreted CAMT grouping in the legacy
   transaction payload codec and decide whether Bunq still needs MT940.
 - [ ] Extend the experimental Lua CSV host beyond these converters: add

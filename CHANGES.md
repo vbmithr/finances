@@ -22,6 +22,10 @@ short line of their own.
   **Action required:** FDM files previously went to `assets:cards:fdm:card`; rename
   files after their cards, or pass `--account-id card`, and rebuild the database.
 
+- The MT940 grammar reader accepts simple SWIFT block trailers and, when
+  explicitly requested, a final unterminated statement with a closing balance.
+  Bunq imports continue to require a terminator.
+
 - Parse MT940 fields with a shared Angstrom grammar and keep Bunq-specific
   interpretation and validation separate. Existing Bunq imports retain their
   identities, balance checks and CSV matching. The Bunq entry pattern is now
