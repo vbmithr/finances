@@ -19,12 +19,13 @@ type t =
   { source : string
   ; institution : string
   ; identity : string
-  ; header : string list
+  ; headers : string list list
   ; separator : char
   ; tags : (string * string) list
   ; journal_description : string option
   ; conflict_columns : string list
   ; takes_account_label : bool
+  ; has_classifier : bool
   }
 
 let initialize source =
@@ -39,7 +40,13 @@ let initialize source =
     | L.Nil -> V.Table.create 0
     | value -> lua_table value
   in
-  let expected = get config "header" |> lua_table |> lua_list |> List.map ~f:string in
+  let header value = lua_table value |> lua_list |> List.map ~f:string in
+  let expected =
+    match get config "header", get config "headers" with
+    | L.Table one, L.Nil -> [ header (L.Table one) ]
+    | L.Nil, L.Table many -> lua_list many |> List.map ~f:header
+    | _ -> failwith "provide exactly one of header or headers"
+  in
   let separator =
     match get config "separator" with
     | L.Nil -> ','
@@ -56,7 +63,7 @@ let initialize source =
 
 let create ~institution source =
   Or_error.try_with (fun () ->
-    let state, declared, identity, _, _, _, header, separator, _ = initialize source in
+    let state, declared, identity, _, _, _, headers, separator, _ = initialize source in
     let config = I.getglobal state (L.String "config") |> lua_table in
     (match get config "account", I.getglobal state (L.String "account") with
      | L.Nil, L.Function _ | L.Table _, L.Nil -> ()
@@ -72,15 +79,19 @@ let create ~institution source =
     (match get config "link_statements" with
      | L.Nil | L.Userdata (Userdata.Boolean _) -> ()
      | _ -> failwith "link_statements must be yes or no");
-    (match I.getglobal state (L.String "classify") with
-     | L.Nil | L.Function _ -> ()
-     | _ -> failwith "classify must be a function");
+    let has_classifier =
+      match I.getglobal state (L.String "classify") with
+      | L.Nil -> false
+      | L.Function _ -> true
+      | _ -> failwith "classify must be a function"
+    in
     if not (String.equal institution declared)
     then fail "Lua converter belongs to institution %s, expected %s" declared institution;
     if not (List.mem [ "source"; "inventory" ] identity ~equal:String.equal)
     then fail "unknown identity: %s" identity;
-    if List.is_empty header then failwith "Lua converters require a nonempty header";
-    ignore (column_keys header : string list);
+    if List.is_empty headers || List.exists headers ~f:List.is_empty
+    then failwith "Lua converters require nonempty headers";
+    List.iter headers ~f:(fun header -> ignore (column_keys header : string list));
     if not (V.eq (get config "journal_tags") L.Nil)
     then failwith "move journal_tags into config.observation";
     let tags =
@@ -96,7 +107,9 @@ let create ~institution source =
       | _ -> failwith "observation must be a table"
     in
     List.iter tags ~f:(fun (_, column) ->
-      if not (List.mem header column ~equal:String.equal)
+      if
+        List.exists headers ~f:(fun header ->
+          not (List.mem header column ~equal:String.equal))
       then fail "journal tag column is not in header: %s" column);
     let journal_description =
       match get config "observation" with
@@ -108,7 +121,9 @@ let create ~institution source =
       | _ -> None
     in
     Option.iter journal_description ~f:(fun column ->
-      if not (List.mem header column ~equal:String.equal)
+      if
+        List.exists headers ~f:(fun header ->
+          not (List.mem header column ~equal:String.equal))
       then fail "journal description column is not in header: %s" column);
     let conflict_columns =
       match get config "observation" with
@@ -119,17 +134,20 @@ let create ~institution source =
       | _ -> []
     in
     List.iter conflict_columns ~f:(fun column ->
-      if not (List.mem header column ~equal:String.equal)
+      if
+        List.exists headers ~f:(fun header ->
+          not (List.mem header column ~equal:String.equal))
       then fail "conflict column is not in header: %s" column);
     { source
     ; institution
     ; identity
-    ; header
+    ; headers
     ; separator
     ; tags
     ; journal_description
     ; conflict_columns
     ; takes_account_label
+    ; has_classifier
     })
 ;;
 
@@ -144,13 +162,20 @@ let recognizes t contents =
     Or_error.try_with (fun () ->
       Csv.next (Csv_reader.channel ~separator:t.separator contents))
   with
-  | Ok header -> List.equal String.equal header t.header
+  | Ok header -> List.exists t.headers ~f:(List.equal String.equal header)
   | Error _ -> false
 ;;
 
 type interpreted =
   | Record of Records.record
   | Statement of Records.statement
+
+let classifier state =
+  match I.getglobal state (L.String "classify") with
+  | L.Nil -> None
+  | L.Function (_, fn) -> Some fn
+  | _ -> failwith "classify must be a function"
+;;
 
 let read_rows ~institution ~contents ~separator ~expected ~classify =
   Csv_reader.check_utf8 ~name:institution contents;
@@ -160,11 +185,12 @@ let read_rows ~institution ~contents ~separator ~expected ~classify =
     | [] -> failwith "the CSV has no header"
     | h :: rows -> h, rows
   in
-  if not (List.equal String.equal header expected)
+  if not (List.exists expected ~f:(List.equal String.equal header))
   then failwith "CSV header does not match script";
   let keys = column_keys header in
   (* First classify the rows, then interpret transactions before statement
        claims. This lets the script describe a file total wherever it occurs. *)
+  let skipped = ref 0 in
   let rows =
     List.filter_mapi rows ~f:(fun i cells ->
       if List.for_all cells ~f:(fun cell -> String.is_empty (String.strip cell))
@@ -183,14 +209,30 @@ let read_rows ~institution ~contents ~separator ~expected ~classify =
           | Some fn ->
             (try
                match fn [ string_table normalized ] with
-               | [ L.String (("record" | "statement") as kind) ] -> kind
-               | _ -> failwith "classify must return record or statement"
+               | [ L.String (("record" | "statement" | "skip") as kind) ] -> kind
+               | _ -> failwith "classify must return record, statement or skip"
              with
              | exn -> fail "row %d: %s" (i + 1) (Exn.to_string exn))
         in
-        Some (i, cells, raw, named, normalized, kind)))
+        if String.equal kind "skip"
+        then (
+          Int.incr skipped;
+          None)
+        else Some (i, cells, raw, named, normalized, kind)))
   in
-  rows
+  rows, !skipped
+;;
+
+let filtered_rows t contents =
+  if not t.has_classifier
+  then Ok 0
+  else
+    Or_error.try_with (fun () ->
+      let state, institution, _, _, _, _, expected, separator, _ = initialize t.source in
+      let _, skipped =
+        read_rows ~institution ~contents ~separator ~expected ~classify:(classifier state)
+      in
+      skipped)
 ;;
 
 let interpret_row
@@ -370,12 +412,7 @@ let convert_with ?account_label ?path t ~name contents =
       | L.Userdata (Userdata.Boolean true) -> true
       | _ -> failwith "link_statements must be yes or no"
     in
-    let classify =
-      match I.getglobal state (L.String "classify") with
-      | L.Nil -> None
-      | L.Function (_, fn) -> Some fn
-      | _ -> failwith "classify must be a function"
-    in
+    let classify = classifier state in
     let account_fn =
       match I.getglobal state (L.String "account") with
       | L.Nil -> None
@@ -442,7 +479,7 @@ let convert_with ?account_label ?path t ~name contents =
       ]
       state;
     let sha256 = Digestif.SHA256.(digest_string contents |> to_hex) in
-    let rows = read_rows ~institution ~contents ~separator ~expected ~classify in
+    let rows, _ = read_rows ~institution ~contents ~separator ~expected ~classify in
     let record_rows, statement_rows =
       List.partition_tf rows ~f:(fun (_, _, _, _, _, kind) -> String.equal kind "record")
     in

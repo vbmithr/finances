@@ -225,6 +225,10 @@ configurable yet.
   day-end balances; support repeated headers and conflict columns.
 - [x] Port Revolut CSV to Lua, retaining completed and reverted rows and exact fees.
 - [x] Port Wise CSV observations to Lua, retaining CAMT matching and journal metadata.
+- [x] Port Kraken spot ledgers to Lua, retaining both headers, filtered-row
+  diagnostics, asset mappings, fee groups and cross-version reimports.
+- [ ] Port Ethereum and Polygon CSV layouts to Lua, then remove the JSON CSV
+  configuration language after validating real exports and saved definitions.
 - [x] Delete one or more accounts as an atomic batch with a single preview and
   confirmation; retain the existing shared-evidence safeguards.
 - [x] Support signed FDM exports and account deletion with linked statement totals;
@@ -250,8 +254,8 @@ configurable yet.
 - [ ] Investigate persistence of interpreted CAMT grouping in the legacy
   transaction payload codec and decide whether Bunq still needs MT940.
 - [ ] Extend the experimental Lua CSV host beyond these converters: add
-  general exact decimal arithmetic, row-skipping diagnostics,
-  remaining observation matching settings and execution limits before migrating
+  general exact decimal arithmetic, remaining observation matching settings
+  and execution limits before migrating
   the remaining institutions.
 - [x] Allow complete source/records reimports with matching source digest and
   event evidence, including reverted Revolut rows; reject partial overlaps.

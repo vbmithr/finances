@@ -8,7 +8,8 @@ example; [FDM](../institutions/lua/fdm.lua) emits a file-level total, and
 [Bunq](../institutions/lua/bunq.lua) describes observations for several accounts;
 [BoursoBank](../institutions/lua/boursobank.lua) also emits day-end balances,
 [Revolut](../institutions/lua/revolut.lua) subtracts fees exactly, and
-[Wise](../institutions/lua/wise.lua) enriches CAMT movements.
+[Wise](../institutions/lua/wise.lua) enriches CAMT movements, and
+[Kraken](../institutions/lua/kraken.lua) accepts two ledger layouts.
 
 Refer to a script from an institution TOML file:
 
@@ -81,9 +82,11 @@ not assign a spending category.
 The global `config` table declares:
 
 - `institution`: the institution name; it must match the TOML definition.
-- `header`: the exact CSV header as a Lua array. Repeated names use the first
-  occurrence by name; later occurrences use `#2`, `#3` and so on in `row`
-  and `raw`. Ambiguous generated names are refused.
+- `header`: the exact CSV header as a Lua array. Alternatively, `headers` is
+  an array of exact headers for multiple versions of an export. Specify exactly
+  one of these. Repeated names use the first occurrence by name; later
+  occurrences use `#2`, `#3` and so on in `row` and `raw`. Ambiguous generated
+  names are refused.
 - `separator`: an optional single character; the default is a comma.
 - `identity`: `source` or `inventory`, as described in the records format.
 - `converter` and `version`: strings identifying the converter in the output.
@@ -138,7 +141,7 @@ Lua numbers are floating point. Keep financial amounts as strings:
 arrays. `yes` and `no` are host-provided booleans for records fields. They are
 userdata values: do not use `no` as a Lua conditional, because Lua treats it as
 truthy. Lua's `nil` omits an object field. Returning `nil` instead of a record
-is currently rejected; row skipping is not yet supported.
+is rejected; use `classify(row)` to skip a source row deliberately.
 
 ## Observations and accounts
 
@@ -178,10 +181,14 @@ source fields.
 
 ## Statement totals
 
-A script can optionally define `classify(row)`, returning `"record"` or
-`"statement"`. Fin classifies all nonempty rows first, calls `convert` for the
-record rows in their original order, then calls it for the statement rows. A
-statement row returns a records-format `statement` table rather than a record.
+A script can optionally define `classify(row)`, returning `"record"`,
+`"statement"`, or `"skip"`. Fin classifies all nonempty rows first, calls
+`convert` for the record rows in their original order, then calls it for the
+statement rows. A skipped row is not interpreted or included in the records;
+`fin convert` reports the number skipped. It runs classification in a separate
+fresh Lua state to count skipped rows, then converts with another fresh state;
+classification should be deterministic. Kraken skips rows without `txid`.
+A statement row returns a records-format `statement` table rather than a record.
 `context.source_hash_prefix` contains the first 16 hexadecimal characters of
 the file's SHA-256 digest, which can be used in a file-specific statement ID.
 
@@ -203,13 +210,13 @@ claims with comparison unavailable. The original source file is also retained.
 
 ## Current limits
 
-This is an experimental integration, currently used by CDC, FDM, Bunq, BoursoBank, Revolut and Wise. It
-supports one exact header per script, static or row-derived accounts, row-based
-records, balances, observations and statement claims. It does not yet support
-arbitrary file-wide checks, row skipping, general decimal arithmetic,
-or the full range of observation matching settings.
+This is an experimental integration, currently used by CDC, FDM, Bunq,
+BoursoBank, Revolut, Wise and Kraken. It supports multiple exact headers,
+static or row-derived accounts, deliberate row skipping, records, balances,
+observations and statement claims. It does not yet support arbitrary file-wide
+checks, general decimal arithmetic, or all observation matching settings.
 An institution cannot combine JSON and Lua CSV converters in one definition yet.
-The Lua program is run once per file and its state persists across rows. Only run
+During conversion the Lua state persists across rows within one file. Only run
 scripts you trust: the host does not expose the standard Lua IO library, but it
 does not limit execution time or memory.
 

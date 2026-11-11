@@ -540,6 +540,7 @@
  (alias runtest)
  (deps
   import_empty_test.py
+  fixtures/kraken-converter.json
   (glob_files ../institutions/*.toml)
   (glob_files ../institutions/csv/*.json))
  (action
@@ -553,6 +554,7 @@
  (alias runtest)
  (deps
   csv_checks_test.py
+  ../institutions/lua/kraken.lua
   fixtures/boursobank-converter.json
   fixtures/wise.csv
   fixtures/bunq.csv
@@ -586,7 +588,10 @@
 
 (rule
  (alias runtest)
- (deps records_import_test.py fixtures/revolut-converter.json)
+ (deps
+  records_import_test.py
+  fixtures/revolut-converter.json
+  fixtures/kraken-converter.json)
  (action
   (run
    python3
@@ -615,6 +620,7 @@
  (modules lua_csv_converter_test)
  (deps
   fixtures/cdc-converter.json
+  fixtures/kraken-converter.json
   fixtures/bunq-converter.json
   fixtures/boursobank-converter.json
   fixtures/revolut-converter.json

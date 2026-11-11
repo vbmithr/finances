@@ -36,6 +36,9 @@ with tempfile.TemporaryDirectory() as directory:
         toml = tomllib.loads(definition.read_text())
         layouts = [json.loads((INSTITUTIONS / s["definition"]).read_text())
                    for s in toml["statements"] if s["format"] == "csv" and "definition" in s]
+        # The pre-port fixture supplies both Kraken headers after its Lua migration.
+        if name == "kraken":
+            layouts.append(json.loads((pathlib.Path(__file__).parent / "fixtures/kraken-converter.json").read_text()))
         headers = {tuple(p["header"]): p for layout in layouts for p in profiles(layout)}
         for profile in headers.values():
             statement = root / f"{name}.csv"

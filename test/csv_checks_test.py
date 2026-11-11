@@ -251,6 +251,10 @@ new_file = text(new_header, [kraken_new(
 result = run(old_file, "kraken")
 assert result.returncode == 0, result.stderr
 assert "left out 1 row" in " ".join(result.stderr.split()), result.stderr
+standalone = run(old_file, "--definition", str(INSTITUTIONS / "lua/kraken.lua"))
+assert standalone.returncode == 0, standalone.stderr
+assert "left out 1 row" in " ".join(standalone.stderr.split()), standalone.stderr
+assert standalone.stdout == result.stdout
 lines = [json.loads(line) for line in result.stdout.splitlines()]
 records = {l["id"]: l for l in lines if l["kind"] == "record"}
 assert sorted(records) == ["L1", "L2", "L3", "L4"]

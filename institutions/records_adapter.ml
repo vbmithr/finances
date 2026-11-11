@@ -503,6 +503,27 @@ let of_definition format definition =
   }
 ;;
 
+let of_lua format definition =
+  { (statement_source
+       format
+       ~recognizes:(fun ~filename:_ contents ->
+         Lua_csv_converter.recognizes definition contents)
+       ~convert:(Lua_csv_converter.convert definition))
+    with
+    left_out =
+      (fun contents ->
+        Lua_csv_converter.filtered_rows definition contents
+        |> Result.ok
+        |> Option.value ~default:0)
+  ; tags = Lua_csv_converter.tags definition
+  ; journal_description = Lua_csv_converter.journal_description definition
+  ; conflict_columns = Lua_csv_converter.conflict_columns definition
+  ; convert =
+      (fun ?account_label ?path ~name contents ->
+        Lua_csv_converter.convert_with ?account_label ?path definition ~name contents)
+  }
+;;
+
 (* An institution whose files reach fin as records, directly or through a converter. *)
 (* [stored_formats] are format names rows already in a database were stored under. *)
 let make

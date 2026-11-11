@@ -8,6 +8,10 @@ short line of their own.
 
 ## Unreleased
 
+- Kraken spot ledger CSVs now use Lua, preserving both headers, asset mapping,
+  filtered-row diagnostics, fee grouping and tested reimports. Lua converters
+  may declare multiple exact headers and classify rows as skipped.
+
 - `fin account delete` accepts one or more account IDs, previews them together
   and removes them atomically after one confirmation. Shared-evidence checks
   still apply to each account.

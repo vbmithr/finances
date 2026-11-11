@@ -46,7 +46,7 @@ let of_sources (sources : Records_adapter.source list) =
         if count > 0
         then
           Stdio.eprintf
-            "left out %d row%s of %s that this layout's `only` does not cover\n"
+            "left out %d row%s of %s according to the converter\n"
             count
             (if count = 1 then "" else "s")
             name;
@@ -132,13 +132,7 @@ let convert_statements definition arguments output =
           |> Result.map_error ~f:(fun error ->
             Error.of_string (file ^ ": " ^ Error.to_string_hum error))
         in
-        let source =
-          Records_adapter.statement_source
-            "csv"
-            ~recognizes:(fun ~filename:_ contents ->
-              Lua_csv_converter.recognizes definition contents)
-            ~convert:(Lua_csv_converter.convert definition)
-        in
+        let source = Records_adapter.of_lua "csv" definition in
         of_sources [ source ], paths)
       else (
         let%map definition =

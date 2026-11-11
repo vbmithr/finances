@@ -229,6 +229,45 @@ Total deposited,,,,,,,0.00,,
     comparison = json.loads(run("statement", "totals", "-d", observed_db).stdout)[0]
     assert comparison["entries"] == 2 and comparison["reconciled"] is None, comparison
 
+    # Both import orders preserve Kraken identities across JSON and Lua.
+    kraken = root / "kraken.csv"
+    kraken.write_text("""txid,refid,time,type,subtype,aclass,asset,amount,fee,balance
+,F1,2020-01-02 10:00:00,deposit,,currency,ZEUR,100.00,0.00,
+L1,F1,2020-01-02 10:05:00,deposit,,currency,ZEUR,100.00,0.00,100.00
+L2,T1,2020-01-03 09:00:00,trade,,currency,ZEUR,-50.00,1.00,49.00
+L3,T1,2020-01-03 09:00:00,trade,,currency,XXBT,0.01,0,0.01
+L4,T1,2020-01-03 09:00:00,trade,,currency,KFEE,-2,0,8
+""")
+    old_kraken = root / "kraken-old.jsonl"
+    old_definition = pathlib.Path(__file__).parent / "fixtures/kraken-converter.json"
+    run("convert", "--definition", old_definition, kraken, "-o", old_kraken)
+    lua_output = root / "kraken-lua.jsonl"
+    converted = run("convert", "kraken", kraken, "-o", lua_output)
+    assert "left out 1 row" in converted.stderr, converted.stderr
+    assert old_kraken.read_text() == lua_output.read_text()
+    newer_kraken = root / "kraken-new.csv"
+    newer_kraken.write_text("""txid,refid,time,type,subtype,aclass,subclass,asset,wallet,amount,fee,balance,amountusd,feeusd,balanceusd,feecurrency
+L5,W1,2025-06-01 09:00:00,withdrawal,,currency,,EUR,spot,-10.00,0.00,39.00,-11,0,40,EUR
+""")
+    old_newer = root / "kraken-new-old.jsonl"
+    run("convert", "--definition", old_definition, newer_kraken, "-o", old_newer)
+    new_newer = root / "kraken-new-lua.jsonl"
+    run("convert", "kraken", newer_kraken, "-o", new_newer)
+    assert old_newer.read_text() == new_newer.read_text()
+    for variant, source, old_records, count in (
+            ("first-header", kraken, old_kraken, 4),
+            ("second-header", newer_kraken, old_newer, 1)):
+        for order, first, second in (("old-first", old_records, source),
+                                     ("lua-first", source, old_records)):
+            name = f"{variant}-{order}"
+            kraken_db, kraken_journal = root / f"{name}.sqlite3", root / f"{name}.journal"
+            run("init", "-d", kraken_db)
+            run("import", "kraken", first, "-d", kraken_db, "--journal", kraken_journal)
+            journal_before = kraken_journal.read_text()
+            replay = run("import", "kraken", second, "-d", kraken_db, "--journal", kraken_journal)
+            assert f"inserted=0 existing={count}" in replay.stdout, replay.stdout
+            assert kraken_journal.read_text() == journal_before
+
     # Existing Revolut records produced by the old definition reimport under Lua.
     rev = root / "revolut.csv"
     rev.write_text("""Type,Product,Started Date,Completed Date,Description,Amount,Fee,Currency,State,Balance

@@ -6,4 +6,4 @@ own_symbols = [{ "symbol" = "FEE", "asset" = "KFEE", "name" = "Kraken fee credit
 
 [[statements]]
 format = "csv"
-definition = "csv/kraken.json"
+script = "lua/kraken.lua"

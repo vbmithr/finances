@@ -95,6 +95,110 @@ let compare_converters () =
        (Lua_csv_converter.create ~institution:"other" (bundled "lua/cdc.lua")))
 ;;
 
+let kraken_equivalence () =
+  let old =
+    Csv_converter.of_string (Stdio.In_channel.read_all "fixtures/kraken-converter.json")
+    |> ok
+  in
+  let lua =
+    Lua_csv_converter.create ~institution:"kraken" (bundled "lua/kraken.lua") |> ok
+  in
+  let old_header = "txid,refid,time,type,subtype,aclass,asset,amount,fee,balance\n" in
+  let old_rows =
+    ",F1,2020-01-02 10:00:00,deposit,,currency,ZEUR,100.00,0.00,\n"
+    ^ "L1,F1,2020-01-02 10:05:00,deposit,,currency,ZEUR,100.00,0.00,100.00\n"
+    ^ "L2,T1,2020-01-03 09:00:00,trade,,currency,ZEUR,-50.00,1.00,49.00\n"
+    ^ "L3,T1,2020-01-03 09:00:00,trade,,currency,XXBT,0.01,0,0.01\n"
+    ^ "L4,T1,2020-01-03 09:00:00,trade,,currency,KFEE,-2,0,8\n"
+  in
+  let new_header =
+    "txid,refid,time,type,subtype,aclass,subclass,asset,wallet,amount,fee,balance,amountusd,feeusd,balanceusd,feecurrency\n"
+  in
+  let new_rows =
+    "L5,W1,2025-06-01 \
+     09:00:00,withdrawal,,currency,,EUR,spot,-10.00,0.00,39.00,-11,0,40,EUR\n"
+  in
+  let compare contents =
+    let expected = Csv_converter.convert old ~name:"ledger.csv" contents |> ok in
+    let actual = Lua_csv_converter.convert lua ~name:"ledger.csv" contents |> ok in
+    Alcotest.(check string)
+      "Kraken records match JSON"
+      (Records.to_string expected)
+      (Records.to_string actual)
+  in
+  compare (old_header ^ old_rows);
+  compare (new_header ^ new_rows);
+  (* Exercise the complete alias table and preserve unknown symbols. *)
+  let codes =
+    [ "ZEUR"
+    ; "ZUSD"
+    ; "ZGBP"
+    ; "ZCAD"
+    ; "ZAUD"
+    ; "ZJPY"
+    ; "XXBT"
+    ; "XBT"
+    ; "XETH"
+    ; "XZEC"
+    ; "XXLM"
+    ; "XXRP"
+    ; "XLTC"
+    ; "XXMR"
+    ; "XETC"
+    ; "XREP"
+    ; "XMLN"
+    ; "XDAO"
+    ; "KFEE"
+    ; "CHF"
+    ; "UNKNOWN"
+    ]
+  in
+  let alias_rows =
+    List.mapi codes ~f:(fun i code ->
+      Printf.sprintf "A%d,R,2020-01-01 00:00:00,deposit,,currency,%s,1,0,\n" i code)
+    |> String.concat
+  in
+  compare (old_header ^ alias_rows);
+  compare (old_header ^ ",,2020-01-01 00:00:00,ignored,,future,ZEUR,broken,broken,\n");
+  Alcotest.(check int)
+    "filtered row counted"
+    1
+    (Lua_csv_converter.filtered_rows lua (old_header ^ old_rows) |> ok);
+  List.iter
+    [ old_header ^ old_rows; new_header ^ new_rows ]
+    ~f:(fun contents ->
+      Alcotest.(check bool)
+        "both headers recognized"
+        true
+        (Lua_csv_converter.recognizes lua contents));
+  List.iter
+    [ String.substr_replace_all
+        (old_header ^ old_rows)
+        ~pattern:"currency,KFEE"
+        ~with_:"future,KFEE"
+    ; String.substr_replace_all
+        (old_header ^ old_rows)
+        ~pattern:"trade,,currency,KFEE"
+        ~with_:"staking,,currency,KFEE"
+    ; String.substr_replace_all
+        (old_header ^ old_rows)
+        ~pattern:"-50.00,1.00"
+        ~with_:"-50.00,-1.00"
+    ]
+    ~f:(fun contents ->
+      Alcotest.(check bool)
+        "JSON rejects invalid row"
+        true
+        (Result.is_error
+           (Result.bind
+              (Csv_converter.convert old ~name:"ledger.csv" contents)
+              ~f:Records.validate_document));
+      Alcotest.(check bool)
+        "Lua rejects invalid row"
+        true
+        (Result.is_error (Lua_csv_converter.convert lua ~name:"ledger.csv" contents)))
+;;
+
 let fdm_account_naming () =
   let lua = Lua_csv_converter.create ~institution:"fdm" (bundled "lua/fdm.lua") |> ok in
   let invalid_link =
@@ -487,6 +591,7 @@ let () =
     "Lua CSV"
     [ ( "converter"
       , [ Alcotest.test_case "CDC equivalence" `Quick compare_converters
+        ; Alcotest.test_case "Kraken equivalence" `Quick kraken_equivalence
         ; Alcotest.test_case "FDM account naming" `Quick fdm_account_naming
         ; Alcotest.test_case "Bunq equivalence" `Quick bunq_equivalence
         ; Alcotest.test_case "BoursoBank equivalence" `Quick bourso_equivalence
