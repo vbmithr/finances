@@ -171,8 +171,8 @@ let check_institution_definition path sample account_id =
 let institution_definition_check_cmd =
   command
     "check"
-    "Validate a TOML or JSON institution definition and preview a sample statement. CSV \
-     paths in TOML are relative to its directory."
+    "Validate a TOML or JSON institution definition and preview a sample statement. \
+     Referenced paths in TOML are relative to its directory."
     Term.(
       const check_institution_definition
       $ Arg.(required & pos 0 (some string) None & info [] ~docv:"DEFINITION.toml")
@@ -313,8 +313,8 @@ let set_institution_definition database name path yes =
 let institution_definition_set_cmd =
   command
     "set"
-    "Attach a TOML or JSON import definition to an existing institution. CSV paths in \
-     TOML are relative to its directory."
+    "Attach a TOML or JSON import definition to an existing institution. Referenced \
+     paths in TOML are relative to its directory."
     Term.(
       const set_institution_definition
       $ database

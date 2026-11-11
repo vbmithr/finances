@@ -387,6 +387,7 @@
  (alias runtest)
  (deps
   import_cli_test.py
+  fixtures/wise-shared-prototype.lua
   fixtures/revolut-converter.json
   fixtures/revolut.csv
   fixtures/bank.ofx

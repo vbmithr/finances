@@ -7,6 +7,33 @@ type account =
   ; currency : Iso4217.t
   }
 
+type grouping =
+  | Profile_group
+  | Interpreted_group of (string * bool) option
+
+type parsed_entry =
+  { proprietary_code : string option
+  ; account_servicer_reference : string option
+  ; description : string
+  ; booked_at : string
+  ; value_on : Date.t option
+  ; amount : Quantity.t
+  ; currency : Iso4217.t
+  ; credit : bool
+  }
+
+type statement_context =
+  { id : string
+  ; account : account
+  ; period_start : string
+  ; period_end : string
+  }
+
+type interpretation =
+  { reference : string
+  ; group : (string * bool) option
+  }
+
 type transaction =
   { account : account
   ; reference : string
@@ -19,6 +46,7 @@ type transaction =
   ; description : string
   ; source_id : string
   ; payload : string
+  ; grouping : grouping
   }
 
 type statement =
@@ -53,25 +81,13 @@ let account_of_identity (profile : Camt_profile.t) identity currency =
   | _ -> failwith "invalid CAMT balance account"
 ;;
 
-let valid_hex ~length text =
-  String.length text = length
-  && String.for_all text ~f:(function
-    | '0' .. '9' | 'a' .. 'f' | 'A' .. 'F' -> true
-    | _ -> false)
-;;
-
 let normalize_hex (config : Camt_profile.hex_normalization) ~description reference =
-  match String.chop_prefix reference ~prefix:config.prefix with
-  | Some id ->
-    let id = String.filter id ~f:(fun c -> not (Char.equal c '-')) in
-    if not (valid_hex ~length:config.length id)
-    then failwith "invalid normalized reference";
-    config.prefix ^ String.lowercase id
-  | None
-    when valid_hex ~length:config.length reference
-         && String.Caseless.equal (String.strip description) config.description ->
-    config.prefix ^ String.lowercase reference
-  | None -> reference
+  Reference_normalization.normalize_hex
+    ~prefix:config.prefix
+    ~label:config.description
+    ~length:config.length
+    ~description
+    reference
 ;;
 
 let normalize_reference (profile : Camt_profile.t) ~description reference =
@@ -105,6 +121,8 @@ let make_transaction
       ~amount
       ~credit
       ~description
+      ?(grouping = Profile_group)
+      ()
   =
   if (credit && Quantity.(amount < zero)) || ((not credit) && Quantity.(amount > zero))
   then failwith "CAMT amount sign disagrees with direction";
@@ -131,6 +149,7 @@ let make_transaction
     ; description
     ; source_id
     ; payload = ""
+    ; grouping
     }
   in
   { tx with payload = Json.encode (Lazy.force codec) tx }
@@ -162,7 +181,8 @@ let make_codec (profile : Camt_profile.t) =
                 ~value_on
                 ~amount
                 ~credit
-                ~description))
+                ~description
+                ()))
        |> Jsont.Object.mem "format" (Json.tag profile.payload_tag) ~enc:(fun _ -> ())
        |> Jsont.Object.mem "account" Jsont.string ~enc:(fun (t : transaction) ->
          account_identity t.account)
@@ -182,9 +202,18 @@ let make_codec (profile : Camt_profile.t) =
 type engine =
   { profile : Camt_profile.t
   ; codec : transaction Jsont.t Lazy.t
+  ; interpret_entry : (parsed_entry -> statement_context -> interpretation) option
   }
 
-let create profile = { profile; codec = make_codec profile }
+let create ?interpret_entry (profile : Camt_profile.t) =
+  let codec_profile =
+    if Option.is_some interpret_entry
+    then { profile with reference_normalization = Preserve }
+    else profile
+  in
+  { profile; codec = make_codec codec_profile; interpret_entry }
+;;
+
 let jsont engine = Lazy.force engine.codec
 
 let direction = function
@@ -246,8 +275,10 @@ let parse_statement engine node =
     }
   in
   let statement_id = required_value "statement ID" view.id in
-  let period_start = timestamp (required_datetime "period start" view.period_start)
-  and period_end = timestamp (required_datetime "period end" view.period_end) in
+  let period_start_source = required_datetime "period start" view.period_start
+  and period_end_source = required_datetime "period end" view.period_end in
+  let period_start = timestamp period_start_source
+  and period_end = timestamp period_end_source in
   if Ptime.compare period_start period_end > 0
   then failwith "reversed CAMT statement interval";
   List.iter view.balances ~f:(fun (balance : Camt.balance) ->
@@ -269,7 +300,7 @@ let parse_statement engine node =
   let opening, opening_at = balance "OPBD"
   and closing, closing_at = balance "CLBD" in
   let transactions =
-    List.map view.entries ~f:(fun (entry : Camt.entry) ->
+    List.mapi view.entries ~f:(fun index (entry : Camt.entry) ->
       let nested_status =
         match Camt.children ~namespace "Sts" entry.tree with
         | [ status ] ->
@@ -292,21 +323,64 @@ let parse_statement engine node =
             Date.of_string (String.prefix date 10))
       in
       let credit = direction entry.direction in
+      let description = required_value "description" entry.additional_info in
+      let amount = signed_amount currency entry.amount credit in
+      let reference, grouping, transaction_profile =
+        match engine.interpret_entry with
+        | None ->
+          let reference =
+            required_value
+              "transaction reference"
+              (match profile.reference_field with
+               | Camt_profile.Proprietary_code -> entry.proprietary_code
+               | Account_servicer_reference -> entry.account_servicer_reference)
+          in
+          reference, Profile_group, profile
+        | Some interpret ->
+          let parsed =
+            { proprietary_code = entry.proprietary_code
+            ; account_servicer_reference = entry.account_servicer_reference
+            ; description
+            ; booked_at
+            ; value_on
+            ; amount
+            ; currency
+            ; credit
+            }
+          in
+          let statement =
+            { id = statement_id
+            ; account
+            ; period_start = period_start_source
+            ; period_end = period_end_source
+            }
+          in
+          let result =
+            try interpret parsed statement with
+            | exn ->
+              Printf.failwithf
+                "statement %s entry %d: %s"
+                statement_id
+                (index + 1)
+                (Exn.to_string exn)
+                ()
+          in
+          ( result.reference
+          , Interpreted_group result.group
+          , { profile with reference_normalization = Preserve } )
+      in
       make_transaction
-        profile
+        transaction_profile
         engine.codec
         account
-        ~reference:
-          (required_value
-             "transaction reference"
-             (match profile.reference_field with
-              | Camt_profile.Proprietary_code -> entry.proprietary_code
-              | Account_servicer_reference -> entry.account_servicer_reference))
+        ~reference
         ~booked_at
         ~value_on
-        ~amount:(signed_amount currency entry.amount credit)
+        ~amount
         ~credit
-        ~description:(required_value "description" entry.additional_info))
+        ~description
+        ~grouping
+        ())
   in
   if
     List.contains_dup

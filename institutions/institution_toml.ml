@@ -97,11 +97,12 @@ let decode ~load text =
       | Array (values, _) -> "[" ^ String.concat ~sep:"," (List.map values ~f:json) ^ "]"
       | Table (fields, _) -> object_ (List.map fields ~f:(fun ((k, _), v) -> k, v))
       | _ -> failwith "unsupported TOML value in institution definition"
-    and object_ fields =
+    and object_ fields = object_raw (List.map fields ~f:(fun (k, v) -> k, json v))
+    and object_raw fields =
       "{"
       ^ String.concat
           ~sep:","
-          (List.map fields ~f:(fun (k, v) -> json_string k ^ ":" ^ json v))
+          (List.map fields ~f:(fun (k, v) -> json_string k ^ ":" ^ v))
       ^ "}"
     in
     let field fields key = List.Assoc.find fields key ~equal:String.equal in
@@ -121,7 +122,8 @@ let decode ~load text =
     in
     let csv = ref []
     and lua_csv = ref []
-    and statement = ref None in
+    and statement = ref None
+    and camt_script = ref None in
     List.iter parsed.statements ~f:(fun { format; settings } ->
       match format with
       | "csv" ->
@@ -148,7 +150,15 @@ let decode ~load text =
         then failwith "only one non-CSV statement format is supported";
         if String.equal format "ofx"
         then check_fields settings []
+        else if String.equal format "camt"
+        then check_fields settings [ "profile"; "script" ]
         else check_fields settings [ "profile" ];
+        if String.equal format "camt"
+        then
+          Option.iter (field settings "script") ~f:(fun value ->
+            let contents = load (string value) |> Or_error.ok_exn in
+            ignore (Lua_camt_interpreter.create contents |> Or_error.ok_exn : _ -> _ -> _);
+            camt_script := Some contents);
         statement
         := Some
              ( format
@@ -186,7 +196,20 @@ let decode ~load text =
                  let profile =
                    add_default profile "payload_tag" (parsed.institution ^ payload_suffix)
                  in
-                 object_ profile) )
+                 if String.equal format "camt" && Option.is_some !camt_script
+                 then (
+                   List.iter
+                     [ "reference_field"; "reference_normalization"; "operation_group" ]
+                     ~f:(fun name ->
+                       if Option.is_some (field profile name)
+                       then fail "CAMT profile %s cannot be used with a script" name);
+                   (* The legacy profile codec requires these fields, but Lua owns
+                      interpretation and the values are never used for conversion. *)
+                   object_raw
+                     (("reference_field", json_string "proprietary-code")
+                      :: ("reference_normalization", "null")
+                      :: List.map profile ~f:(fun (key, value) -> key, json value)))
+                 else object_ profile) )
       | _ -> fail "unknown statement format: %s" format);
     let rules =
       List.map parsed.rules ~f:(fun (name, value) ->
@@ -211,6 +234,8 @@ let decode ~load text =
       @ Option.to_list
           (Option.map parsed.own_symbols ~f:(fun value -> "own_symbols", json value))
       @ Option.to_list !statement
+      @ Option.to_list
+          (Option.map !camt_script ~f:(fun source -> "camt_script", json_string source))
       @ (if List.is_empty !csv
          then []
          else [ "csv", "[" ^ String.concat ~sep:"," !csv ^ "]" ])

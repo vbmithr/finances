@@ -434,6 +434,15 @@ matching settings are not yet supported. Lua numbers are floating point; use
 `decimal`, `decimal_comma`, `subtract`, `negate` and `sign` for exact quantities.
 Only run scripts you trust: they can loop indefinitely.
 
+A CAMT statement section may also specify `script = "mybank.lua"`. Its
+`interpret_camt` function receives parsed entries and chooses their reference and
+group; the same file can also implement the CSV converter. When using a script,
+omit the profile's `reference_field`,
+`reference_normalization` and `operation_group` settings; the script supplies
+those decisions. See
+[Lua interpretation for structured statements](lua-statement-interpretation.md)
+for the callback and its fields. The bundled Wise CAMT profile remains unchanged.
+
 The institution name in the TOML and each CSV converter must match the selected
 institution. `set` previews the rules to add and asks for confirmation; `--yes`
 accepts the preview in scripts. Existing rules with the same names are retained,

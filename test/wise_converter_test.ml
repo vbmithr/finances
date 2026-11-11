@@ -189,6 +189,185 @@ let empty_statement () =
   Alcotest.(check int) "the source is still named" 1 (List.length t.sources)
 ;;
 
+let shared_lua_prototype () =
+  let source = read "wise-shared-prototype.lua" in
+  let interpret = Lua_camt_interpreter.create source |> Or_error.ok_exn in
+  let original = Option.value_exn (Builtin.camt_profile "wise") in
+  let prototype = original in
+  let compare name contents =
+    let baseline = Camt_converter.convert original ~name contents |> Or_error.ok_exn in
+    let actual =
+      Camt_converter.convert ~interpret_entry:interpret prototype ~name contents
+      |> Or_error.ok_exn
+    in
+    Alcotest.(check string) name (Records.to_string baseline) (Records.to_string actual)
+  in
+  compare "wise.xml" (read "wise.xml");
+  compare "groups.xml" (statement conversion ~closing:"89.00");
+  let xml = read "wise.xml" in
+  compare
+    "prefixed.xml"
+    (String.substr_replace_all
+       xml
+       ~pattern:"abcdef0123456789abcdef0123456789"
+       ~with_:"BALANCE_CASHBACK-ABCDEF01-2345-6789-ABCD-EF0123456789");
+  compare
+    "precise.xml"
+    (String.substr_replace_all
+       xml
+       ~pattern:"2025-01-02T00:00:00.123456+01:00"
+       ~with_:"2025-01-02T00:00:00.123456789123+01:00");
+  let bad =
+    String.substr_replace_all
+      xml
+      ~pattern:"abcdef0123456789abcdef0123456789"
+      ~with_:"BALANCE_CASHBACK-not-hex"
+  in
+  Alcotest.(check bool)
+    "legacy rejects malformed reference"
+    true
+    (Result.is_error (Camt_converter.convert original ~name:"bad" bad));
+  Alcotest.(check bool)
+    "Lua rejects malformed reference"
+    true
+    (Result.is_error
+       (Camt_converter.convert ~interpret_entry:interpret prototype ~name:"bad" bad));
+  let failing =
+    String.substr_replace_first
+      source
+      ~pattern:
+        "local reference = wise_reference(entry.proprietary_code, entry.description)"
+      ~with_:"reject(\"prototype failed\")"
+  in
+  let failing_interpret = Lua_camt_interpreter.create failing |> Or_error.ok_exn in
+  Alcotest.(check bool)
+    "script failure is returned"
+    true
+    (Result.is_error
+       (Camt_converter.convert
+          ~interpret_entry:failing_interpret
+          prototype
+          ~name:"bad"
+          xml));
+  let bad_group =
+    String.substr_replace_first
+      source
+      ~pattern:"local key = drop_prefix(reference, \"FEE-\")"
+      ~with_:"reject(\"group failed\")"
+  in
+  let failing_group = Lua_camt_interpreter.create bad_group |> Or_error.ok_exn in
+  Alcotest.(check bool)
+    "group script failure is returned"
+    true
+    (Result.is_error
+       (Camt_converter.convert ~interpret_entry:failing_group prototype ~name:"bad" xml));
+  (* CAMT-only scripts need no CSV config, and can choose either raw reference. *)
+  let standalone =
+    "function interpret_camt(entry, statement)\n"
+    ^ "  if statement.id ~= \"statement-a\" or statement.currency ~= \"EUR\" then \
+       reject(\"bad statement\") end\n"
+    ^ "  if entry.amount == nil or entry.booked_at == nil then reject(\"bad entry\") end\n"
+    ^ "  return { reference = entry.account_servicer_reference }\nend\n"
+  in
+  let standalone = Lua_camt_interpreter.create standalone |> Or_error.ok_exn in
+  let with_alternate =
+    String.substr_replace_all
+      xml
+      ~pattern:"<Ntry>"
+      ~with_:"<Ntry><AcctSvcrRef>ALTERNATE</AcctSvcrRef>"
+  in
+  let chosen =
+    Camt_converter.convert
+      ~interpret_entry:standalone
+      prototype
+      ~name:"alt"
+      with_alternate
+    |> Or_error.ok_exn
+  in
+  Alcotest.(check bool)
+    "script chooses account-servicer reference"
+    true
+    (List.for_all chosen.records ~f:(fun record ->
+       String.is_prefix record.id ~prefix:"ALTERNATE/"));
+  let only_alternate =
+    [ "<BkTxCd><Prtry><Cd>CARD-1</Cd></Prtry></BkTxCd>"
+    ; "<BkTxCd><Prtry><Cd>abcdef0123456789abcdef0123456789</Cd></Prtry></BkTxCd>"
+    ]
+    |> List.fold ~init:with_alternate ~f:(fun text pattern ->
+      String.substr_replace_all text ~pattern ~with_:"")
+  in
+  Alcotest.(check bool)
+    "legacy profile requires proprietary code"
+    true
+    (Result.is_error (Camt_converter.convert original ~name:"alt" only_alternate));
+  Alcotest.(check bool)
+    "script can use the only available reference"
+    true
+    (Result.is_ok
+       (Camt_converter.convert
+          ~interpret_entry:standalone
+          original
+          ~name:"alt"
+          only_alternate));
+  (* Interpreted references are not normalized again when source payloads decode. *)
+  let literal =
+    Lua_camt_interpreter.create
+      "function interpret_camt(entry, statement) return { reference = \
+       \"BALANCE_CASHBACK-nothex\" } end"
+    |> Or_error.ok_exn
+  in
+  let engine = Camt_source.create ~interpret_entry:literal original in
+  let document = Camt_source.parse engine xml |> Or_error.ok_exn in
+  let transaction = List.hd_exn (List.hd_exn document.statements).transactions in
+  let decoded =
+    Json.decode (Camt_source.jsont engine) transaction.payload |> Or_error.ok_exn
+  in
+  Alcotest.(check string)
+    "interpreted reference survives payload decode"
+    transaction.source_id
+    decoded.source_id;
+  let typo =
+    Lua_camt_interpreter.create
+      "function interpret_camt(entry, statement) return { reference = \
+       entry.proprietary_code, gruop = \"x\" } end"
+    |> Or_error.ok_exn
+  in
+  let typo_result =
+    Camt_converter.convert ~interpret_entry:typo original ~name:"bad" xml
+  in
+  (match typo_result with
+   | Ok _ -> Alcotest.fail "unknown interpretation field accepted"
+   | Error error ->
+     Alcotest.(check bool)
+       "error identifies entry and unknown field"
+       true
+       (String.is_substring (Error.to_string_hum error) ~substring:"entry 1"
+        && String.is_substring (Error.to_string_hum error) ~substring:"gruop"));
+  let no_group =
+    Lua_camt_interpreter.create
+      "function interpret_camt(entry, statement) return { reference = \
+       entry.proprietary_code, supporting = yes } end"
+    |> Or_error.ok_exn
+  in
+  Alcotest.(check bool)
+    "supporting requires a group"
+    true
+    (Result.is_error
+       (Camt_converter.convert ~interpret_entry:no_group original ~name:"bad" xml));
+  let csv_proto =
+    Lua_csv_converter.create ~institution:"wise" source |> Or_error.ok_exn
+  in
+  let csv_old = wise_convert ~name:"wise.csv" (read "wise.csv") |> Or_error.ok_exn in
+  let csv_new =
+    Lua_csv_converter.convert csv_proto ~name:"wise.csv" (read "wise.csv")
+    |> Or_error.ok_exn
+  in
+  Alcotest.(check string)
+    "CSV unchanged with shared function"
+    (Records.to_string csv_old)
+    (Records.to_string csv_new)
+;;
+
 let other_input () =
   Alcotest.(check bool)
     "not Wise"
@@ -206,6 +385,7 @@ let () =
         ; Alcotest.test_case "Wise's references group" `Quick groups
         ; Alcotest.test_case "IDs are stable" `Quick ids_do_not_depend_on_the_download
         ; Alcotest.test_case "an empty statement converts" `Quick empty_statement
+        ; Alcotest.test_case "shared Lua CAMT prototype" `Quick shared_lua_prototype
         ; Alcotest.test_case "other input is refused" `Quick other_input
         ] )
     ]

@@ -3095,6 +3095,46 @@ class ImportOnboarding(unittest.TestCase):
         result = self.run_fin('institution', 'definition', 'set', 'samplelua', definition, '--yes', check=False)
         self.assertNotEqual(result.returncode, 0)
 
+    def test_shared_lua_camt_definition_is_saved_and_protected(self):
+        source = Path('fixtures/wise-shared-prototype.lua').read_text()
+        script = self.root / 'shared.lua'
+        script.write_text(source)
+        definition = self.root / 'wise.toml'
+        definition.write_text(
+            'version = 1\ninstitution = "wise"\ntype = "bank"\n'
+            '[[statements]]\nformat = "camt"\nscript = "shared.lua"\n'
+            '[statements.profile]\n'
+            'namespace = "urn:iso:std:iso:20022:tech:xsd:camt.053.001.10"\n'
+            'servicer_contains = "wise"\naccount_type_prefix = "balance-"\n'
+            '[[statements]]\nformat = "csv"\nscript = "shared.lua"\n')
+        for key, value in [('reference_field', '"proprietary-code"'),
+                           ('reference_normalization', '{}'), ('operation_group', '{}')]:
+            conflicting = self.root / 'conflicting.toml'
+            conflicting.write_text(definition.read_text().replace(
+                '[[statements]]\nformat = "csv"', f'{key} = {value}\n[[statements]]\nformat = "csv"'))
+            result = self.run_fin('institution', 'definition', 'check', conflicting, check=False)
+            self.assertNotEqual(result.returncode, 0)
+            self.assertIn('cannot be used with a script', ' '.join(result.stderr.split()))
+        preview = self.run_fin('institution', 'definition', 'check', definition, 'fixtures/wise.xml')
+        self.assertIn('3 transactions', preview.stdout)
+        self.run_fin('institution', 'definition', 'set', 'wise', definition, '--yes')
+        saved = json.loads(self.run_fin('institution', 'definition', 'show', 'wise').stdout)['records']
+        self.assertEqual(saved['camt_script'], source)
+        self.assertEqual(saved['lua_csv'][0], source)
+        script.unlink()
+        self.run_fin('import', 'wise', 'fixtures/wise.xml', 'fixtures/wise.csv')
+        self.assertEqual(len(json.loads(self.run_fin('operation', 'list', '--json').stdout)), 3)
+        script.write_text(source)
+        other = self.root / 'changed.lua'
+        other.write_text(source + '\n-- changed CAMT interpretation\n')
+        definition.write_text(definition.read_text().replace(
+            'format = "camt"\nscript = "shared.lua"',
+            'format = "camt"\nscript = "changed.lua"'))
+        result = self.run_fin('institution', 'definition', 'set', 'wise', definition, '--yes', check=False)
+        self.assertNotEqual(result.returncode, 0)
+        saved_after = json.loads(self.run_fin('institution', 'definition', 'show', 'wise').stdout)['records']
+        self.assertEqual(saved_after['camt_script'], source)
+
     def test_toml_definition_resolves_csv_and_saves_it(self):
         layout = self.root / 'layout.json'
         layout.write_text(Path('fixtures/revolut-converter.json').read_text())

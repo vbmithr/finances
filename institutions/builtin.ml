@@ -37,7 +37,7 @@ let records_of = definition
 let camt_profile name =
   Option.bind (records_of name) ~f:(fun r ->
     match r.statement with
-    | Some (Camt p) -> Some p
+    | Some (Camt (p, _)) -> Some p
     | _ -> None)
 ;;
 

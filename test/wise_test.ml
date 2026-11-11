@@ -356,6 +356,38 @@ let converted_reimport () =
            ~substring:"wise-merchant: Synthetic shop")))
 ;;
 
+let shared_lua_camt_prototype () =
+  let source = In_channel.read_all "fixtures/wise-shared-prototype.lua" in
+  let interpret = Lua_camt_interpreter.create source |> ok in
+  let profile = Option.value_exn (Builtin.camt_profile "wise") in
+  let records =
+    Camt_converter.convert ~interpret_entry:interpret profile ~name:"wise.xml" (xml ())
+    |> ok
+    |> Records.to_string
+  in
+  List.iter [ true; false ] ~f:(fun camt_first ->
+    memory (fun db ->
+      let first, second = if camt_first then records, csv () else csv (), records in
+      accepted (import db "first" first);
+      accepted (import db "second" second);
+      check
+        "prototype observations matched"
+        3
+        (ok (Ledger.match_companions ~institution:"wise" db)).matched;
+      check "prototype counted events" 3 (List.length (ok (Ledger.events db)));
+      ignore (ok (Ledger.project_bank db));
+      Alcotest.(check bool)
+        "prototype preserves journal metadata"
+        true
+        (String.is_substring
+           (ok (Finances_hledger.export db))
+           ~substring:"wise-merchant: Synthetic shop");
+      let replay = import db "wise.xml" (xml ()) in
+      accepted replay;
+      check "legacy CAMT rows reimport" 3 replay.existing;
+      check "no duplicate events" 3 (List.length (ok (Ledger.events db)))))
+;;
+
 let currencies () =
   memory (fun db ->
     accepted (import db "eur.xml" (xml ()));
@@ -606,6 +638,7 @@ let () =
           ; "Ptime instants, raw text and stable identity", timestamp_precision
           ; "two banks, replay, conflict", multi_bank
           ; "old records and Lua CSV reimport", converted_reimport
+          ; "shared Lua CAMT prototype", shared_lua_camt_prototype
           ; "currency and fee conflicts", currencies
           ; "duplicate CSV claims", duplicate_rows
           ; "review enrichment and conflicting observations", review_enrichment

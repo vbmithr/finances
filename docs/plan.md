@@ -225,8 +225,16 @@ configurable yet.
   day-end balances; support repeated headers and conflict columns.
 - [x] Port Revolut CSV to Lua, retaining completed and reverted rows and exact fees.
 - [x] Port Wise CSV observations to Lua, retaining CAMT matching and journal metadata.
-- [ ] Evaluate Lua interpretation of institution-specific CAMT and MT940 fields
-  after OCaml parsing, including shared decisions across statement formats.
+- [x] Sketch Lua interpretation of CAMT and MT940 fields after OCaml parsing:
+  [shared statement interpretation](lua-statement-interpretation.md).
+- [x] Test a Wise CAMT/CSV Lua reference and grouping prototype against current
+  records, matching and reimports without switching the bundled definition.
+- [x] Test a format-independent Lua runtime and CAMT entry/statement callback,
+  including reference-field choice and Wise identity equivalence.
+- [x] Snapshot CAMT Lua scripts in definitions, protect changes after import, and
+  omit redundant reference and grouping settings when a script is used.
+- [ ] Investigate MT940 inputs and persistence of interpreted CAMT grouping in
+  the legacy transaction payload codec.
 - [ ] Extend the experimental Lua CSV host beyond these converters: add
   general exact decimal arithmetic, row-skipping diagnostics,
   remaining observation matching settings and execution limits before migrating

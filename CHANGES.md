@@ -8,6 +8,11 @@ short line of their own.
 
 ## Unreleased
 
+- Institution definitions can use one Lua script for CSV conversion and CAMT
+  entry interpretation. CAMT scripts replace the profile's reference and grouping
+  settings. Script source is saved with the definition and protected
+  against changes after import. Bundled Wise CAMT behavior is unchanged.
+
 - Wise CSV observations now use Lua, retaining CAMT matching and journal
   descriptions. The Lua host supports day-first dates and parameterized
   reference normalization.

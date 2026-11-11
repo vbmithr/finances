@@ -51,8 +51,12 @@ let camt_account (account : Camt_source.account) : Records.account =
    a payment and its refund, and by both sides of a conversion. *)
 let camt_record profile statement_id (tx : Camt_source.transaction) =
   let open Or_error.Let_syntax in
+  let group =
+    match tx.grouping with
+    | Camt_source.Profile_group -> Camt_profile.operation_group_key profile tx.reference
+    | Interpreted_group group -> group
+  in
   let%map occurred = Records.temporal_of_string tx.booked_at_source in
-  let group = Camt_profile.operation_group_key profile tx.reference in
   ({ id =
        String.concat
          ~sep:"/"
@@ -104,10 +108,10 @@ let camt_balances (statement : Camt_source.statement) =
   ]
 ;;
 
-let of_camt (profile : Camt_profile.t) contents =
+let of_camt ?interpret_entry (profile : Camt_profile.t) contents =
   let open Or_error.Let_syntax in
   let%bind (document : Camt_source.t) =
-    Camt_source.parse (Camt_source.create profile) contents
+    Camt_source.parse (Camt_source.create ?interpret_entry profile) contents
   in
   let%map records =
     List.concat_map document.statements ~f:(fun statement ->
@@ -129,9 +133,11 @@ let recognizes contents =
   String.is_substring (String.prefix contents 4096) ~substring:"camt.053"
 ;;
 
-let convert (profile : Camt_profile.t) ~name contents =
+let convert ?interpret_entry (profile : Camt_profile.t) ~name contents =
   let open Or_error.Let_syntax in
-  let%map accounts, statements, balances, records = of_camt profile contents in
+  let%map accounts, statements, balances, records =
+    of_camt ?interpret_entry profile contents
+  in
   ({ institution = profile.institution
    ; identity = Source
    ; converter = Some { name = "fin camt"; version = Some "1" }

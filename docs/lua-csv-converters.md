@@ -120,7 +120,8 @@ Lua numbers are floating point. Keep financial amounts as strings:
   part of the records document.
 - `day_first(text)` rearranges `DD-MM-YYYY` to `YYYY-MM-DD`; the records
   validator checks the resulting date.
-- `starts_with(text, prefix)` tests a string prefix.
+- `starts_with(text, prefix)` tests a string prefix; `drop_prefix(text, prefix)`
+  returns the remaining text, or `nil` if the prefix does not match.
 - `normalize_hex(reference, description, prefix, label, length)` normalizes
   prefixed hexadecimal references by removing hyphens and lowercasing; it also
   prefixes a bare hexadecimal reference when its description matches `label`

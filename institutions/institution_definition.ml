@@ -2,7 +2,7 @@ open Base
 open Institution_type
 
 type statement =
-  | Camt of Camt_profile.t
+  | Camt of Camt_profile.t * string option
   | Mt940 of Mt940_profile.t
   | Ofx
 
@@ -118,6 +118,7 @@ let records_codec =
         institution
          aliases
          camt
+         camt_script
          mt940
          ofx
          csv
@@ -129,12 +130,17 @@ let records_codec =
        ->
        let statement =
          match camt, mt940, ofx with
-         | Some profile, None, None -> Some (Camt profile)
+         | Some profile, None, None ->
+           Option.iter camt_script ~f:(fun source ->
+             ignore (Lua_camt_interpreter.create source |> Json.or_error : _ -> _ -> _));
+           Some (Camt (profile, camt_script))
          | None, Some profile, None -> Some (Mt940 profile)
          | None, None, Some true -> Some Ofx
          | None, None, (None | Some false) -> None
          | _ -> failwith "a definition has one statement format"
        in
+       if Option.is_some camt_script && Option.is_none camt
+       then failwith "a CAMT script requires a CAMT profile";
        let csv = Option.value csv ~default:[] in
        let lua_csv =
          List.map lua_csv ~f:(fun source ->
@@ -171,7 +177,11 @@ let records_codec =
        ~enc:(fun (r : t) -> r.aliases)
   |> Jsont.Object.opt_mem "camt" Camt_profile.codec ~enc:(fun (r : t) ->
     match r.statement with
-    | Some (Camt p) -> Some p
+    | Some (Camt (p, _)) -> Some p
+    | _ -> None)
+  |> Jsont.Object.opt_mem "camt_script" Jsont.string ~enc:(fun (r : t) ->
+    match r.statement with
+    | Some (Camt (_, script)) -> script
     | _ -> None)
   |> Jsont.Object.opt_mem "mt940" Mt940_profile.codec ~enc:(fun (r : t) ->
     match r.statement with
@@ -251,11 +261,19 @@ let institution t = t.institution
 let sources (r : t) =
   let statement =
     Option.map r.statement ~f:(function
-      | Camt profile ->
+      | Camt (profile, script) ->
+        let convert ~name contents =
+          match script with
+          | None -> Camt_converter.convert profile ~name contents
+          | Some source ->
+            let open Or_error.Let_syntax in
+            let%bind interpret_entry = Lua_camt_interpreter.create source in
+            Camt_converter.convert ~interpret_entry profile ~name contents
+        in
         Records_adapter.statement_source
           "camt"
           ~recognizes:(fun ~filename:_ contents -> Camt_converter.recognizes contents)
-          ~convert:(Camt_converter.convert profile)
+          ~convert
       | Mt940 profile ->
         Records_adapter.statement_source
           "mt940"
@@ -417,7 +435,8 @@ let describe t =
   let r = t in
   let statement =
     match r.statement with
-    | Some (Camt _) -> [ "statement", "CAMT.053" ]
+    | Some (Camt (_, None)) -> [ "statement", "CAMT.053" ]
+    | Some (Camt (_, Some _)) -> [ "statement", "CAMT.053 with Lua interpretation" ]
     | Some (Mt940 _) -> [ "statement", "MT940" ]
     | Some Ofx -> [ "statement", "OFX" ]
     | None -> []
