@@ -227,10 +227,15 @@ configurable yet.
 - [x] Port Wise CSV observations to Lua, retaining CAMT matching and journal metadata.
 - [x] Port Kraken spot ledgers to Lua, retaining both headers, filtered-row
   diagnostics, asset mappings, fee groups and cross-version reimports.
-- [x] Port Ethereum and Polygon CSV layouts to Lua; their former JSON layouts
-  remain as test fixtures.
+- [x] Port Ethereum and Polygon CSV layouts to Lua; remove their former JSON
+  layouts with the JSON CSV configuration language.
 - [x] Remove the JSON CSV configuration language; CSV definitions use Lua scripts.
   Saved JSON CSV definitions must be replaced before further imports.
+- [x] Check the available real Wise, Bunq and Revolut CSV exports against their
+  Lua records (2026-11-12): all 727 rows have the stated dates and exact
+  movement amounts. Wise and Revolut's stated row balances also match. No
+  interpretation mismatch was found in these files; check other providers
+  against their own exports as they become available.
 - [x] Delete one or more accounts as an atomic batch with a single preview and
   confirmation; retain the existing shared-evidence safeguards.
 - [x] Support signed FDM exports and account deletion with linked statement totals;

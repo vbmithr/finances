@@ -8,6 +8,10 @@ short line of their own.
 
 ## Unreleased
 
+- Correct the plan's obsolete JSON fixture claim and record a source-based
+  check of 727 real Wise, Bunq and Revolut CSV rows. No converter behavior
+  changed.
+
 - CSV conversion and institution definitions now use Lua scripts only; JSON CSV
   layouts are removed. `fin convert --definition` accepts a Lua script.
   **Action required:** replace saved JSON CSV definitions with Lua scripts before
