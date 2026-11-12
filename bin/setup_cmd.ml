@@ -206,7 +206,8 @@ let welcome () =
      \032 fin init                Set up your database\n\
      \032 fin institution list    List institutions\n\
      \032 fin institution add     Add an institution for CSV imports\n\
-     \032 fin import --help       Learn how to import statements\n\n\
+     \032 fin import --help       Learn how to import statements\n\
+     \032 fin import-all --help   Import folders for all institutions\n\n\
      Explore your finances:\n\
      \032 fin status              See import coverage and review progress\n\
      \032 fin account list        See your accounts\n\

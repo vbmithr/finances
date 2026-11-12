@@ -112,7 +112,10 @@ provider observations before treating them as authoritative.
   in a batch and selects only the movement fields needed for export. On 3,392
   movements, warm journal export measured about 84 ms, down from about 187 ms.
   Companion export loads matched rows and aggregate review counts directly.
-- Statement ingestion is `fin import BANK PATH...` or a configured generic CSV.
+- The README introduces Fin; detailed workflows are in the manual and the
+  bank import and development reference.
+- Statement ingestion is `fin import BANK PATH...` or a configured generic CSV;
+  `fin import-all DIRECTORY` imports one folder per institution.
   `fin backup` saves one
   consistent SQLite snapshot; `fin restore BACKUP` validates and restores it,
   with overwrite confirmation and automatic removal of stale generated files.

@@ -1,0 +1,1057 @@
+# Bank import and development reference
+
+This reference preserves the former README. Some examples describe earlier
+workflows; use the [manual](manual.md) for current commands and behavior.
+
+Personal finance kernel in OCaml, using Jane Street Base, decimal, Ptime, Bos, and SQLite
+through Rel. SQLite is the source of truth.
+
+To start keeping your books, follow [Personal accounting with fin and
+hledger](personal-accounting.md). The [user manual](manual.md) covers
+individual commands and storage.
+
+Where the project stands and what comes next: [docs/plan.md](plan.md). What
+changed: [CHANGES.md](../CHANGES.md).
+
+## Current scope
+
+- Immutable source payloads with venue, account, event kind, source ID, either an
+  event timestamp or a calendar date, and database-generated retrieval time.
+- Idempotent ingestion: identical retries return the existing ID; conflicting
+  timestamps or payloads return an error. Payloads are preserved byte for byte.
+- Accounting entries with typed dates and exact, independently balanced commodity
+  amounts. Entries link to their source evidence and a stable projection key.
+- Atomic persistence of entries and postings, foreign keys, and versioned schema
+  initialization. Unknown schema versions are rejected.
+- A linear perpetual instrument and position observation model. Unrealized P&L is
+  calculated in the quote commodity using signed quantity and contract multiplier.
+- A small CLI for database initialization and importing source evidence.
+- OFX 2.x XML bank imports covering all statement blocks and accounts, with exact
+  amounts, original document archives, and duplicate detection across exports.
+- Bank movement accounting entries with atomic, repeatable projection and explicit
+  reviewed categories or transfer counter-accounts.
+- Deterministic hledger journal export through the separate OCaml hledger binding.
+- Recursive inbox import with content detection, per-file import history, and
+  atomic journal publication.
+- Persisted bank account names with audited updates to verified generated entries.
+- BoursoBank CSV enrichment with conservative OFX matching and a review report for
+  unmatched, ambiguous, or conflicting observations.
+- Wise CAMT, Bunq MT940 and Revolut CSV imports with exact accounting, companion
+  matching where available, and explicit fee handling for Revolut.
+- Audited confirm/reject transfer review with one confirmed counterpart per movement.
+
+The kernel does not yet fetch Paradex data, derive positions from fills, persist
+position observations, calculate funding, automatically categorize transactions, or
+infer opening balances. Those operations can be added around the core APIs.
+
+## CLI and XDG storage
+
+See what fin reads from CDC App CSV rows without importing them with
+`fin convert cdc wallet.csv`. Use `fin import cdc wallet.csv`
+to store source evidence and proposals through the same import pipeline as banks;
+`fin db sources --institution cdc`
+shows imported source IDs. Proposed legs are not reconciled; resolved and
+explicitly confirmed two-movement exchanges can be posted. See the
+[manual](manual.md#importing-statements) for limitations.
+
+Start with the [user manual](manual.md) for setup, bank imports, account
+configuration, review and hledger queries.
+
+The executable is `fin`; the OCaml libraries and Arch package remain named
+`finances`. No database argument is needed for normal use:
+
+```sh
+fin
+fin init
+fin status
+fin paths
+fin account list
+fin operation list
+fin statement list --institution bunq
+fin transfer candidates
+```
+
+Running `fin` without arguments shows a welcome and useful first steps, exits
+successfully, and creates no files. `fin init` creates the database and prints its
+location and guidance for choosing or adding an institution and importing. It is the
+only command that creates a database; the others fail with "fin is not
+initialized" until it has run. It is safe to repeat and preserves existing data and
+account settings. Use `fin init --database FILE` to initialize a different database.
+No account questionnaire is needed: accounts appear from imported statements.
+The lower-level `fin db init` remains available for quiet database initialization.
+
+`fin status` summarizes observed account date ranges, imported movements,
+unclassified movements, unreviewed transfer candidate pairs and the latest inbox
+attempt. It creates no database when none exists. Date ranges are observations,
+not proof of complete coverage; financial reports come from the exported hledger
+journal. `account list`, `operation review` and
+`transfer candidates` display readable text by default. Add `--json` to those
+commands or `status` for scripts; the existing inspection JSON shapes are retained.
+`institution history` also displays readable file import attempts by default, with
+`--json` for scripts. Other history and provider reconciliation commands emit JSON.
+
+The [XDG Base Directory specification](https://specifications.freedesktop.org/basedir/latest/)
+provides the base paths. Defaults are:
+
+| Purpose | Default | Override |
+| --- | --- | --- |
+| Database | `~/.local/share/fin/fin.sqlite3` | `$XDG_DATA_HOME/fin/fin.sqlite3` |
+
+Empty or relative XDG data values are ignored. `fin paths` prints only the data
+directory and database path. There is no configuration directory or implicit
+account JSON file. SQLite is the sole store for account settings. First use
+creates database parent directories with mode 0700 where needed; existing
+permissions are retained. Account exports are optional private snapshots written
+atomically with mode 0600 to a path you choose.
+
+```sh
+fin account list
+fin account edit
+```
+
+`--database` (or `-d`) is an option on commands that access SQLite. Input files and
+inbox directories are positional; the old positional database argument is removed.
+Use `dune exec fin -- ...` when running from the checkout. Journals default to
+`bank.journal` beside the selected database when importing. Original statement inboxes
+are ordinary user-chosen directories, independent of the database location.
+
+Bank import accepts ZIP exports directly, including Wise CAMT.053 downloads. It
+reads members in memory with Zipc, preserves per-member import history and replay
+checks, and applies the configured size limit to the archive and its expanded
+contents. See the [manual](manual.md) for limits and supported compression.
+
+## Install an Arch Linux test package
+
+For the quickest development loop, run the checkout directly without installing:
+
+```sh
+make run ARGS='operation list' OPAM_SWITCH=5.5.0
+```
+
+This uses Dune's incremental development build and your usual Fin database and
+configuration. Pass any Fin arguments through `ARGS`; commands that write data
+still affect that database. For a separate disposable database, initialize one and
+pass `--database PATH` to the relevant commands.
+
+For a pacman-managed development installation, use:
+
+```sh
+make install-fast OPAM_SWITCH=5.5.0
+```
+
+`install-fast` builds an Arch package using a persistent release build cache,
+skips the regression suite, and runs `sudo pacman -U`. Its first build is cold;
+later builds reuse unchanged work. Use `make package-fast` to build without
+installing. These development packages have the same package version and name as
+regular local builds, so pacman treats them as reinstalls. Run `make test` before
+relying on a change; use `make install` for the clean, tested package workflow.
+The release cache is under `_build/arch-fast/` and can be removed with the rest of
+Dune's build artifacts.
+
+Build the current checkout using a prepared opam switch, and install it:
+
+```sh
+make install OPAM_SWITCH=5.5.0
+fin --version
+fin account list
+fin statement list --institution bunq
+```
+
+`make install` builds the package as `make package` does, then installs it with
+`sudo pacman -U`, which asks for your password and confirmation. `make package`
+only builds it: it generates `dist/arch/PKGBUILD` from
+`packaging/arch/PKGBUILD.in`, fills in the version, architecture and SHA-256 digest,
+and builds `dist/arch/finances-VERSION-PKGREL-x86_64.pkg.tar.zst`. To produce only the concrete recipe and its matching native
+payload archive (without running the package build):
+
+```sh
+make pkgbuild OPAM_SWITCH=5.5.0
+```
+
+Run make from the project root. Omit `OPAM_SWITCH` to use the active switch.
+`make help` lists targets, including `build`, `test` and `fmt`. Override
+`ARCH_OUTPUT` or `SCRATCH_ROOT` to change output or disk-backed scratch locations.
+The underlying commands remain `python packaging/arch/build.py --switch 5.5.0`
+and that command with `--prepare-only`, respectively. Add `--fast` for the
+incremental development build (also accepted with `--prepare-only`). The generated PKGBUILD uses
+the generated binary archive, so copying the template alone is insufficient.
+
+The normal helper compiles and tests a native release executable, stages only the binary,
+public docs, license and generated man pages, then invokes makepkg. Its working
+files use disk-backed cache storage and are removed afterward. `dist/arch/` holds
+the package, a checksummed binary payload and a concrete PKGBUILD for repackaging.
+This is a local experimental binary package, not an AUR source-build recipe.
+It requires makepkg/fakeroot, Python, zstd and the prepared opam build dependencies.
+The installed executable requires only glibc, GMP (used through Zarith/decimal),
+and SQLite; opam and OCaml are not needed at runtime. The hledger CLI is optional
+for querying rendered journals. No personal records or configuration enter the package.
+`packaging/arch/build.py` never runs sudo or installs anything; the two install
+targets do, after building.
+
+The CLI provides `init`, `import`, `status`, `paths`, `backup` and `restore`,
+with grouped commands under `db`, `account`, `bank`, `transfers`, and `journal`:
+
+```sh
+fin db init
+fin import bunq personal/bunq/inbox
+fin transfer candidates
+fin journal export
+```
+
+## Setup
+
+Use an opam switch with OCaml 5.1 or later and SQLite development headers
+(SQLite 3.38.5 or later). Fin currently needs Rel commit
+`135d8f6246e17ccc4700029c503ca96e341cd3bf`, which adds static SQLite extension
+support and is not yet published upstream. Pin a checkout containing that commit
+before installing the dependencies. `conf-sqlite3` is required so Rel builds its
+SQLite backend. Institution TOML uses the pinned `nox-toml` development codec;
+its dependencies currently require the opam overlay below.
+The OCaml `hledger` binding is also pinned to upstream commit
+`cad809fa47876142cfdf361bde2a2e506ebdadad` of
+[ocaml-hledger](https://github.com/vbmithr/ocaml-hledger). This opam package is
+distinct from the hledger command-line program, which is used to query journals.
+
+From this directory, in your chosen switch:
+
+```sh
+mkdir -p "$HOME/.cache/codex/scratch/finances"
+export TMPDIR="$HOME/.cache/codex/scratch/finances"
+git submodule update --init --recursive
+opam repository add nox-toml-overlay git+https://tangled.org/gazagnaire.org/opam-overlay.git
+# Replace this path with the absolute path of your Rel checkout.
+REL_REPOSITORY=/absolute/path/to/rel
+opam pin add --no-action rel \
+  "git+file://${REL_REPOSITORY}#135d8f6246e17ccc4700029c503ca96e341cd3bf"
+opam pin add --no-action hledger \
+  'git+https://github.com/vbmithr/ocaml-hledger.git#cad809fa47876142cfdf361bde2a2e506ebdadad'
+opam install . --deps-only --with-test
+opam exec -- dune build
+opam exec -- dune runtest
+```
+
+The test suite also needs Python 3 on Unix for terminal-driven CLI checks.
+
+Dependencies are installed per opam switch. After changing switches, rerun
+`opam install . --deps-only --with-test` in this directory. This also installs the
+the project's other pinned dependencies; pin Rel first as shown above. If Dune reports a missing library
+such as `csv`, check that installation and execution use the same switch:
+
+```sh
+opam switch show
+opam install --switch=5.5.0 . --deps-only --with-test
+opam exec --switch=5.5.0 -- dune exec fin -- statement list --institution bunq
+```
+
+Replace `5.5.0` with your chosen switch. To use plain `dune` commands in your shell,
+select that switch and refresh the shell environment with `eval "$(opam env)"`.
+
+Tests require `TMPDIR` and remove their temporary databases. Formatting uses
+ocamlformat 0.29.0 with the Jane Street profile:
+
+```sh
+opam install ocamlformat.0.29.0
+opam exec -- dune fmt
+```
+
+Enable the version-controlled pre-commit formatting check in each checkout:
+
+```sh
+git config --local core.hooksPath .githooks
+```
+
+The hook checks staged project OCaml sources; vendored sources follow the same
+exclusion as Dune's formatting rules.
+
+The hook checks staged project OCaml sources with ocamlformat using the repository's
+configuration. It never rewrites files. If it blocks a commit, run `opam exec --
+dune fmt`, stage the formatted files, and retry. Opam and the pinned ocamlformat
+version must be installed. The hook is enabled in this checkout.
+
+
+## CLI
+
+```sh
+dune exec fin -- db init
+dune exec fin -- db ingest examples/source-event.json \
+  --venue paradex --account main --kind transfer --id example-deposit-1 \
+  --at-ms 1792886400000
+dune exec fin -- db events
+```
+
+The example is a synthetic source record, not a Paradex API response. `ingest`
+stores its input as opaque evidence; it does not create postings or positions.
+Running the same import again prints `existing` and the original internal ID.
+Changing the payload under the same source identity is an error, including changes
+to whitespace. `events` prints metadata as JSON without printing source payloads.
+
+## Bank imports
+
+```sh
+dune exec fin -- import boursobank /path/to/statements
+```
+
+Import statements with `fin import BANK PATH...`, replacing the old
+`fin bank sync` command. `BANK` names a built-in institution (`boursobank`,
+`bunq`, `revolut` or `wise`) or one added with `fin institution add NAME`.
+Runtime institution definitions can also describe supported CSV, OFX/CSV and
+CAMT/CSV profiles; see `fin institution definition --help` and the manual.
+User-added institutions support generic OFX 2.x, records-based CSV definitions,
+and CSV companions for OFX; see the [manual](manual.md#configure-a-csv-companion).
+The institution's adapter recognizes each file's format; a file another bank recognizes is rejected
+with the institution to use instead. Keep this identifier consistent across
+imports. Each file's outcome lists inserted and existing movements; all accounts
+in a file are imported.
+
+Original document bytes are archived in `import_documents` with a SHA-256 digest.
+Each transaction becomes a dated source event identified by institution, bank
+account, and FITID. `import_document_events` links transactions to every document
+that contains them. An identical file reuses its archive; overlapping files reuse
+transactions and preserve their separate statement observations. The complete
+import is atomic: conflicting transaction evidence rolls back new events and the
+new document together. No accounting entries are generated automatically.
+
+`Ofx_source.parse` supplies typed statements, exact amounts, booking dates, optional
+names/memos, and separately identified available and ledger balance observations.
+Balance observations expose `as_of : Ptime.t`, parsed through `Ofx.instant`. OFX's omitted
+clock and timezone default to midnight and GMT; explicit numeric offsets are
+honored. The invalid BoursoBank `DTUSER` placeholder remains raw evidence under
+`user_date_source`, rather than being treated as a validated date or instant.
+Its scope is OFX 2.x XML bank messages; OFX 1.x SGML, credit-card and investment
+message sets, and transaction corrections are rejected explicitly.
+
+The supplied BoursoBank OFX and CSV contained the same 21 dated amounts across two
+accounts. The CSV also supplied categories, suggested descriptions, and value
+dates. OFX `DTUSER` was an invalid calendar date in every transaction, so the
+parser keeps it as opaque metadata. It is omitted from the canonical transaction
+payload used for replay; its original value remains in the archived document.
+Formatting whitespace is normalized in transaction payloads, while other changes
+to a transaction's canonical XML cause a conflict. CSV enrichment is described below.
+
+`Source_event.occurred` uses the shared `Temporal.t`: `Instant of Ptime.t`
+or `Date of Date.t`.
+The `events` command prints an RFC 3339 `occurred_at` for instants, or
+`occurred_at: null` and a populated `occurred_on` for date-only OFX records.
+Wise records retain an instant and project using the local booking date.
+The current build uses schema 44. Fresh files initialize it atomically; other
+schema versions are rejected without changes. There are no automatic migrations.
+Export decisions before upgrading, then reimport the original statements and
+restore the decisions file.
+Follow the [schema rebuild recipe](manual.md#rebuilding-after-a-schema-change)
+before upgrading, while the old executable can still read its database.
+Banks have no tables of their own: statements, companion observations, daily
+inventories and import contexts share generic tables keyed by institution and
+format.
+Tables are described in `store/db_schema.ml` and `store/sql/schema.sql`. See
+[Persistence and replay](architecture.md#persistence-and-replay) for details.
+The bank test fixture is synthetic; personal exports are not test fixtures.
+
+## From bank export to a queryable journal
+
+The following workflow stores the source data and accounting entries in SQLite,
+then generates a journal. `personal/` is ignored by Git and holds durable local
+financial data, not scratch files.
+
+```sh
+mkdir -p personal
+dune exec fin -- init
+dune exec fin -- import boursobank /path/to/statements
+dune exec fin -- journal project
+dune exec fin -- journal export > personal/bank.journal
+hledger --no-conf -f personal/bank.journal check --strict
+```
+
+`journal project` reads the stored canonical source events; it does not need the OFX
+file again. It creates one balanced entry per bank transaction, with the signed
+amount posted to the bank account and its opposite to `equity:unclassified`.
+Reimporting or projecting again creates no duplicate entries. A projection conflict
+or invalid source event rolls back the complete projection batch.
+
+Default bank ledger names are
+`assets:bank:INSTITUTION:BANK_ID:ACCOUNT_TYPE:ACCOUNT_ID`. New generic prepaid
+and credit card accounts instead default to `assets:cards:PROVIDER:ACCOUNT` and
+`liabilities:cards:PROVIDER:ACCOUNT`. Components containing
+characters such as masking asterisks are encoded as `x-` followed by their UTF-8
+bytes in hexadecimal. Literal components starting with `x-` are also encoded,
+preventing collisions. Original identifiers remain in SQLite. Names and memos are
+used in descriptions; control characters become spaces and literal semicolons and
+pipes within source fields use their fullwidth equivalents to avoid changing
+journal syntax. Source text remains intact in the database archive.
+
+Journal entries contain a `source-event-id` tag and projection key for tracing back
+to SQLite. Accounts and commodities are declared, and commodity precision retains
+every stored decimal digit. The export is stable across repeated runs. Regenerate
+it after changing the database; journal edits do not flow back into SQLite.
+
+Useful [hledger queries](https://hledger.org/hledger.html):
+
+```sh
+# All bank transactions, with descriptions and running movement totals
+hledger --no-conf -f personal/bank.journal register assets:bank
+
+# Monthly net movements, grouped by account
+hledger --no-conf -f personal/bank.journal balance assets:bank -M --tree
+
+# Monthly money leaving or entering bank accounts
+hledger --no-conf -f personal/bank.journal balance assets:bank 'amt:<0' -M --tree
+hledger --no-conf -f personal/bank.journal balance assets:bank 'amt:>0' -M --tree
+
+# Search descriptions; replace TEXT with a merchant or other search expression
+hledger --no-conf -f personal/bank.journal register assets:bank 'desc:TEXT'
+```
+
+These reports describe the imported period's movements. They are not current
+balances without verified opening balances, and outflows/inflows include transfers
+and other unclassified movements. No expense or income category is guessed. The
+observed export supplies available balances, which are not used as ledger opening
+balances. Reviewed categorization and explicit transfer reconciliation are available below.
+
+The core `finances` library remains independent of hledger. The
+`finances.hledger` adapter and CLI use the pinned OCaml binding to render the
+journal; the external hledger CLI validates and queries that output.
+
+## Folder workflow
+
+See [the bank workflow design](bank-workflow.md) for the complete plan and
+milestones. The first milestone is available:
+
+~~~sh
+mkdir -p personal/{boursobank,wise,bunq,revolut}/inbox personal/reviews personal/reports
+# Copy bank exports into personal/boursobank/inbox, then run after copying has completed.
+dune exec fin -- init
+dune exec fin -- import boursobank personal/boursobank/inbox \
+  --journal personal/bank.journal
+dune exec fin -- institution history --limit 100
+~~~
+
+Import traverses regular files recursively in path order and detects OFX content
+even when an export has a different extension. It ignores symbolic links, hidden
+paths, and names ending in .part, .tmp, or ~. Readable rejected and unsupported
+files are archived in SQLite with append-only attempt history. A bad file does not
+prevent unrelated files from importing. The default per-file limit is 64 MiB;
+--max-file-mib accepts 1–1024. Repeated or overlapping exports reuse existing
+evidence and entries. Input files are never modified or moved.
+
+The summary distinguishes imported documents, unchanged documents, rejected inputs,
+unsupported formats, unreadable files, and ignored paths. The observed BoursoBank
+CSV layout, Wise 23-column CSV and Bunq seven-column CSV are companion observations.
+Revolut ten-column CSV supplies primary movements. Other account or card CSV
+layouts use records converter definitions; see the [manual](manual.md#configure-another-csv). Excel and QIF are unsupported. Companion CSV observations never create a second
+transaction stream; Revolut CSV is its own primary movement source.
+
+Successful files commit independently. Import generates a journal from successfully
+imported data even if some files need review, and returns a nonzero exit for
+rejected or unreadable inputs. Unsupported companions are visible in the summary
+without failing import. The CSV summary separately counts matched, unmatched,
+ambiguous, and conflicting observations; review items do not prevent valid OFX
+entries from being exported. Import history is readable text, newest attempt
+first; use `fin institution history --json` for the original JSON layout. It lists file
+import attempts, rather than individual bank movements. Use `--limit N` to choose
+how many recent attempts to display (100 by default).
+
+To give bank accounts readable ledger names:
+
+~~~sh
+dune exec fin -- account edit
+dune exec fin -- import boursobank personal/boursobank/inbox \
+  --journal personal/bank.journal
+~~~
+
+Accounts and their exclusive imported records can be removed together with
+`fin account delete ACCOUNT_ID OTHER_ACCOUNT_ID` (IDs are shown by
+`fin account list`); use `--dry-run` to preview them. The batch is atomic.
+Shared documents and relationships with other accounts prevent deletion. See
+[account deletion](manual.md#delete-an-account) for details.
+
+The version 1 account snapshot manages ledger names, IBANs and card settlement links
+as described below. Source identifiers remain immutable. Names must stay below `assets:` or
+`liabilities:`, and renames verify existing projections before changing postings.
+Keep the database and journal outside the inbox. Import rejects
+paths that would ingest its own outputs or overwrite a control file, and skips
+hard links to its control files. Journal publication uses an atomic rename after
+all accounting work succeeds; account,
+projection, or output failures leave the old journal intact. Previously accepted
+source files remain in SQLite for retry. The staging directory is TMPDIR (or the
+journal directory when unset) and must share the journal's filesystem.
+
+## Manage bank accounts
+
+SQLite is authoritative for account names, registered IBANs, and card settlement
+relationships. Configure accounts already discovered from imported statements:
+
+```sh
+fin account list
+fin account edit
+fin account history
+```
+
+Use `fin account link-card CARD-ID CHECKING-ID` to link a credit card and its
+settlement account. For BoursoBank, `fin settlement review` also suggests
+unambiguous settlements and can guide you through that setup. The command
+previews and confirms the posting; `fin settlement undo`
+reverses the decision. See the [manual](manual.md#reviewing-transactions-and-transfers)
+for the prerequisites and limitations.
+
+Try `fin settlement review --tui` for the experimental full-screen review.
+
+`list` displays source identifiers, ledger account, IBAN and its provenance,
+currency, movement count, first/last imported movement dates, and settlement links.
+These dates describe observed records, not proof of complete statement coverage.
+IBAN provenance is `imported`, `registered`, `missing`, or `not_applicable` for a
+credit-card account. Add `--json` for machine-readable output.
+
+An exported settings snapshot has a version and an accounts array. This
+example is illustrative; keep the source identifiers from your actual export:
+
+```json
+{
+  "version": 1,
+  "accounts": [
+    {
+      "institution": "example-bank",
+      "bank_id": "EXAMPLE",
+      "account_id": "current",
+      "account_type": "CHECKING",
+      "ledger_account": "assets:bank:daily",
+      "iban": "FR1420041010050500013M02606",
+      "settlement_account": null
+    }
+  ]
+}
+```
+
+The four source identity fields are immutable selectors; changing them does not
+rename or merge a source account. `ledger_account` changes its display/accounting
+name after verifying existing projections. `iban` supplies an account identifier
+missing from exports; spaces and case are normalized, then the country code,
+that country's length and BBAN structure from the SWIFT IBAN Registry, and the
+MOD 97-10 check digits are validated (ISO 13616-1).
+An IBAN already present as a source identifier cannot be replaced or cleared.
+IBAN registration does not change movement IDs or historical source evidence.
+
+For a credit card, leave `iban` null and set `settlement_account` to the associated
+bank account's reference: an object with `institution`, `bank_id`, `account_id`,
+and `account_type`. Settlement targets must be known non-card accounts in the same
+currency. This is an informational relationship: it does not copy the parent's IBAN
+onto the card, create postings, or infer deferred-debit settlement transfers.
+
+Omitted accounts and optional properties keep their current settings. In a version 1
+snapshot, `iban: null` clears a manually registered IBAN and
+`settlement_account: null` removes a link. Clearing and updates are audited.
+`--dry-run` returns the planned changes and counts without persisting data or audit
+rows. A failure anywhere rolls back all account edits and posting renames together.
+Identity edits that contradict confirmed transfers are rejected for review first.
+
+Snapshots are optional, explicit export/import files. There is no default file,
+XDG config directory or automatic loading during import. `account edit` and
+`account iban` update SQLite only. `fin backup` saves a consistent SQLite
+snapshot, including settings, evidence and review decisions. `fin restore BACKUP`
+restores the full database from a backup folder or SQLite file; replacing existing
+state requires confirmation or `--yes`. Restoration validates the source and
+discards stale generated journal and edit-draft files after success. Exported
+settings snapshots are user files and are kept by both restore and delete.
+Import every referenced source account before restoring a multi-bank snapshot.
+
+
+## List imported operations
+
+Use `fin operation list` to see imported operations, including their accounting
+classification: one row per operation, so a bank movement and a CDC
+exchange each take one row and a multi-movement operation shows its movements
+together. Use `fin operation show ID` for the individual movements and source
+events. Terminal output uses
+`$PAGER` (default `less -FRX`); redirected and JSON output is not paged.
+Filter by movement type or accounting decision with, for example,
+`fin operation list --type interest` or `fin operation list --decision settlement`.
+Inspect automatic and reviewed rules with `fin rule list`; evidence rules can
+also record card references and withdrawal reversals at import. See the
+[manual](manual.md#automatic-rules-at-import).
+
+Use `fin operation type list` to see available movement types, then run
+`fin operation type set TYPE OPERATION-ID...` to record manual overrides atomically. The imported type
+remains available, and `fin operation type reset OPERATION-ID` removes the override.
+Types are derived from the type rules and recomputed whenever a rule, an institution
+definition or a matched companion file changes, without changing accounting
+decisions.
+Filter by `--account ID`, `--institution NAME`, inclusive `--from` and `--to`
+dates, `--search TEXT`, or `--limit COUNT`; sort with `--order-by currency,amount`
+and `--asc` / `--desc`, and add `--json` for scripts. See the
+[manual](manual.md#list-operations) for examples. Use `fin ledger balance expenses -Y` to run an hledger report against a fresh
+journal; hledger is installed separately. See the [manual](manual.md#exporting-and-querying-accounting) for more examples.
+
+## Review and categorize bank movements
+
+Use `fin operation status` (or `--json`) for category and movement-type counts,
+transaction decision counts and the
+percentage classified. Confirmed transfers, settlements and reversals count as
+classified; categorized income and expenses are shown separately.
+
+Use `fin operation category queue` for a keyboard-driven queue of unclassified movements.
+Assign with displayed shortcuts, search, or browse categories level by level;
+matching unclassified descriptions in the queue are assigned together by default.
+Skip, undo, and add categories without leaving the queue; `q` saves the staged
+changes and Ctrl-C discards them. See the
+[manual](manual.md#reviewing-transactions-and-transfers) for controls.
+
+List movements that still use `equity:unclassified`:
+
+```sh
+fin operation review --json > personal/reports/bank-review.json
+fin operation review --all
+```
+
+Use `fin cat init` to choose suggested starter categories, `fin cat add
+expenses:food` to add your own, and `fin cat list` (or `--json`) to see your
+personal catalog, including unused categories.
+
+Save everything you decided before rebuilding:
+
+```sh
+fin backup ~/fin-backups                  # a database copy and a decisions file
+fin decisions export ~/fin-decisions.json # or only the decisions file
+fin decisions restore ~/fin-decisions.json # after importing again; shows changes, asks [Y/n]
+```
+
+The file holds account settings, categories, rules, assignments, settlements, reversals, exchanges
+and transfers, with personal source identities, so store it privately. Restoring applies it all or
+nothing, and requires matching source evidence. See the
+[manual](manual.md#what-a-decisions-file-holds) for what it holds.
+Use `fin rule from-category OPERATION-ID NAME --contains TEXT` to preview a reusable
+review-mode rule from a categorized example; fin asks before saving it.
+
+Transfer candidates are shown by descending score and exclude movements already
+assigned an income or expense category. Reset a category to `equity:unclassified` before reviewing it as a
+transfer.
+
+Use `fin operation category set expenses:food OPERATION-ID...`, with a category from your catalog, to assign or change categories;
+all provided transactions are updated atomically. Use `equity:unclassified`
+to return them to review.
+
+To categorize a filtered transaction list, pipe its JSON output into `set`:
+
+```sh
+fin operation list --type withdrawal --decision unclassified --json |
+  fin operation category set expenses:cash-withdrawals -
+```
+
+Without `--decision unclassified`, this also replaces existing categories.
+
+Use `fin operation list` to find an event ID, then run
+`fin operation categoryegory review EVENT_ID` to choose or change its category, select matching
+movements (including previously categorized ones) or search descriptions across institutions, then confirm the
+proposed batch in a terminal. Ranked approximate matches appear alongside exact matches. Toggle rows with
+numbers and ranges, including across searches.
+After reviewing a transaction, `fin operation categoryegory similar EVENT_ID` previews
+unclassified movements across institutions with matching normalized effective
+descriptions, and flags conflicting
+reviewed categories. It does not apply decisions. See the
+[classification design](classification.md) for its current limits.
+
+Use the reported `event_id` values to write a JSON decision file, for example
+`personal/reviews/categories.json`. The ID below is illustrative; select the actual
+movement from the review output:
+
+```json
+[
+  {"event_id": 1, "account": "expenses:groceries", "reason": "Reviewed receipt"}
+]
+```
+
+Apply the entire batch atomically, then regenerate the accounting projection and
+journal:
+
+```sh
+fin operation categoryegory apply personal/reviews/categories.json
+fin journal project
+fin journal export > personal/bank.journal
+fin operation categoryegory history
+hledger -f personal/bank.journal --strict check
+hledger -f personal/bank.journal balance expenses --monthly
+```
+
+Decisions explicitly assign the movement's counter-account to `expenses:...` or
+`income:...`. Set it to `equity:unclassified` with a reason to return a movement to
+review. Refunds can use the same expense account as the original purchase. Amount
+signs are preserved; classification does not infer or reverse them.
+
+SQLite retains the current account and reason plus append-only change history.
+Repeated identical decisions are harmless. Decisions survive import, reimports and
+account renames, and can precede first projection. Existing generated entries are
+verified before updating only their counter-account; dates, bank postings, amounts
+and source evidence remain intact. An invalid or conflicting decision rejects the
+whole batch. Each generated journal includes the latest decision ID and reason as
+tags. `transaction category apply` changes SQLite; regenerate the journal to publish it.
+
+Saved rules also support explicit preview and batch classification:
+`fin rule add cafes 'coffee|café' expenses:food`, then `fin rule preview cafes`
+and `fin rule apply cafes`. Rules can also match effective movement types and
+propose type overrides, categories or linked-card settlements; see the
+[manual](manual.md#transaction-rules). Rules never run automatically
+on import. Use `fin rule preview cafes --force` and `fin rule apply cafes --force`
+to replace existing categories on matching movements. Bank CSV categories remain suggestions; split allocations are future work. Explicit
+owned-account transfer review is available below. Do not classify transfers as income or spending
+merely to remove them from the review queue.
+
+## Bank statement folders
+
+Use the same bank-prefixed layout for every institution:
+
+| Bank | Statement folder | Import support |
+| --- | --- | --- |
+| BoursoBank | `personal/boursobank/inbox/` | OFX movements, optional CSV enrichment |
+| Wise | `personal/wise/inbox/` | CAMT.053 XML movements, optional CSV enrichment |
+| Bunq | `personal/bunq/inbox/` | MT940 movements, optional seven-column CSV companion |
+| Revolut | `personal/revolut/inbox/` | Completed Current-account CSV |
+
+Keep the shared database, journal, configuration, and reports outside these inboxes.
+Pass the institution explicitly when importing. All `personal/` contents are
+ignored by Git. Existing import history retains the paths used at import time;
+moving an inbox does not change source identities or create new movements.
+
+## Wise and multiple banks
+
+Wise CAMT.053.001.10 XML supplies movements, full booking timestamps, account
+currency, and opening/closing booked balances. The matching 23-column Wise CSV is
+optional enrichment. Keep a separate inbox per institution and import both into the
+same database and journal:
+
+```sh
+fin import boursobank personal/boursobank/inbox \
+  --journal personal/bank.journal
+fin import wise personal/wise/inbox \
+  --journal personal/bank.journal
+fin statement list --institution wise
+hledger -f personal/bank.journal --strict check
+hledger -f personal/bank.journal register assets:bank:wise
+```
+
+Each import regenerates the journal from all stored bank entries. Default account
+names include institution, bank, account type, and account ID; Wise balance account
+types include currency. Existing account mappings also work for Wise. Wise exports
+name `wise` as the bank, like every other import. CSV and XML may arrive in either order.
+
+Wise references can repeat for reversals. Identity therefore includes the
+normalized proprietary transaction reference, full UTC nanosecond booking instant,
+and debit/credit direction, scoped by institution and balance account. Cashback
+UUID formatting is normalized. Amount is evidence, so a changed amount for an
+existing identity rejects the whole import. Indistinguishable duplicate movements
+within a statement are rejected rather than collapsed. Original bytes remain archived.
+
+The parser requires booked entries and exact reconciliation of opening balance
+plus signed movements with closing balance. `statement list` independently computes
+that difference from stored statement/event links and lists CSV matching states.
+Statement balances are observations; the journal contains movements without
+inferred opening-balance entries.
+
+Wise CSV exposes its booking clock as `booked_at : Ptime.t`, assuming UTC because
+the CSV supplies no offset. Its original fields remain unchanged. Matching still
+uses the CAMT source-local clock, not equality with the CAMT UTC instant: the
+matching key retains local-clock semantics and truncates only to milliseconds.
+Companion inspection displays the assumed-UTC clock as canonical RFC 3339.
+
+A matched Wise CSV `Merchant` supplies the effective transaction description when
+nonempty and consistent; otherwise Fin uses the primary CAMT description. Original
+source fields, including CSV `Description`, remain available as evidence.
+
+Wise CSV matching requires reference, local millisecond booking clock, exact signed
+amount, and currency to agree uniquely in both directions within a document. CSV
+has no timezone or reliable balance-account identity, so ambiguity remains visible.
+Fees and FX metadata disagreements across exports are audited as conflicts.
+Uncontested matches add `wise-merchant`, `wise-payment-reference`,
+`wise-reported-fees`, and `companion-row-ids` journal tags where available. Fees remain
+metadata: no extra fee posting or currency conversion is inferred. The supplied
+samples cover EUR with zero fees; synthetic tests cover fee metadata and currency
+isolation, but real FX and nonzero-fee exports need further validation.
+
+## Bunq statements
+
+Put Bunq's MT940 export (including exports with no filename extension) and its
+optional seven-column CSV into `personal/bunq/inbox/`:
+
+```sh
+fin import bunq personal/bunq/inbox \
+  --journal personal/bank.journal
+fin statement list --institution bunq
+```
+
+The MT940 reader supports the observed Bunq layout: a BUNQ header, account/currency,
+`:28:` statement sequence, final opening/closing balances, paired `:61:`/`:86:`
+entries with `NONREF`, and IBAN/name/remittance metadata. It reads exact comma
+decimals, handles multiline descriptions, preserves booking and interest dates,
+and rejects unsupported fields, date ranges, currencies or unbalanced statements.
+Amounts never pass through floating point. Interest dates become journal secondary
+dates. `statement list` independently reconciles persisted statement/event links.
+
+Bunq supplies no movement IDs in these exports. Identity uses normalized account,
+currency, booking/interest dates, signed amount, counterparty, name and description,
+plus an occurrence number for identical movements. Identical repeated movements
+are preserved. An immutable inventory of each imported account/day prevents
+changed evidence, corrected amounts or partial-day overlaps from silently creating
+or collapsing movements. Exact overlapping day inventories are reusable; a changed
+inventory rejects the whole statement for review. Export complete days when
+extending the history. Resolving a changed day is a future correction workflow.
+
+The companion CSV has `Date`, `Interest Date`, `Amount`, `Account`, `Counterparty`,
+`Name`, and `Description` columns. It supports Bunq's comma decimals and grouped
+thousands. It carries no currency, so it never creates events or supplies guessed
+currency: rows wait for matching MT940 evidence. Exact normalized fields and
+per-document occurrence counts must agree; partial duplicate groups or competing
+currencies remain ambiguous. Raw rows and matching history are retained, and
+uncontested matches add CSV provenance and counterparty tags to the journal.
+Bunq uses the same persisted account mappings and reviewed categories as other banks.
+
+## Revolut CSV import
+
+Place the ten-column Revolut CSV export in `personal/revolut/inbox/`:
+
+```sh
+fin import revolut personal/revolut/inbox --journal personal/bank.journal
+```
+
+A person has one personal Revolut account, so no label is needed: its balances, one file per
+currency, appear as `assets:bank:revolut:revolut:current-EUR:personal` and so on. Completed `Current` transactions
+are imported. Reverted ones, which Revolut lists with no completion date and no
+balance because they never moved money, are skipped; the stored document keeps them.
+Pending transactions or other products reject the file for review.
+
+The adapter validates exact decimal fields and each consecutive running balance
+per currency against **Amount − Fee**. The first opening balance is not independently
+reported, so this validates the running balance sequence without asserting an
+external opening balance. Source booking dates use completion dates; the CSV's
+clocks are interpreted as UTC and exposed as `Ptime.t` in `started_at` and
+`completed_at`. Original clock text stays unchanged in payloads and source-ID
+encoding.
+
+Each bank posting uses the net movement, the counter-posting uses the opposite
+principal amount, and a nonzero fee creates a separate `expenses:bank-fees` posting.
+These three postings balance exactly. This fee policy applies to Revolut's observed
+CSV form; Wise fees remain metadata pending evidence for their own accounting.
+Identity uses account, currency, clocks, type, description, amount and fee plus an
+occurrence ordinal. Running balances stay document observations. As with Bunq,
+immutable account/day inventories reject changed or partial-day overlapping exports
+rather than guessing identities. Exact reimports and overlapping complete days
+reuse movements, including identical repeated payments.
+
+## Review transfers between your accounts
+
+For a failed ATM withdrawal followed by its full refund, use
+`fin reversal candidates`, then `fin reversal review ORIGINAL-ID REVERSAL-ID`.
+See the [manual](manual.md#reviewing-transactions-and-transfers) for the
+clearing account and undo workflow.
+
+List candidate pairs with both movements, fees, dates, currencies and descriptions:
+
+```sh
+fin transfer candidates --json > personal/reports/transfer-candidates.json
+fin transfer candidates --all
+```
+
+Candidates require distinct source accounts, equal opposite principal amounts in
+the same currency, and booking dates within seven calendar days. Multiple candidates
+remain visible; uniqueness is only an amount/date observation. Confirm only after
+checking that both accounts belong to you and that the movements describe the same
+transfer. Imported records or a familiar counterparty name alone do not prove that.
+
+Run `fin transfer review` to inspect candidates and stage confirmations or
+rejections. Use `a` to stage all supported pairs and go directly to the final
+batch preview; other candidates remain for later review. Alternatively, write explicit decisions to a private JSON file, using actual event IDs from the
+candidate report. These IDs are illustrative:
+
+```json
+[
+  {"first_event_id": 1, "second_event_id": 2,
+   "decision": "confirm", "reason": "Checked both owned accounts and reference"}
+]
+```
+
+```sh
+fin transfer review personal/reviews/transfers.json
+fin journal project
+fin journal export > personal/bank.journal
+fin transfer history
+hledger -f personal/bank.journal --strict check
+hledger -f personal/bank.journal register assets:bank
+```
+
+A confirmed pair exports as one transaction with direct postings to both bank
+accounts and separate fee postings. The journal records both source event IDs and
+the review reason. When booking dates differ, the transaction uses the earlier
+date and the later leg has an hledger posting date. Date-filtered reports reflect
+the two bank dates without a separate in-transit asset, so the books can appear
+temporarily unbalanced between them. Fin retains both source movements and its
+internal per-movement projections for review and undo.
+
+Each movement can belong to only one confirmed pair. A substantive expense/income
+category must first be reset to `equity:unclassified`; confirmation never overwrites
+it silently. Confirmed legs cannot be categorized until their transfer is rejected.
+Use `fin transfer undo FIRST-EVENT-ID SECOND-EVENT-ID` to undo a confirmation,
+or `"decision": "reject"` in a JSON batch to hide a proposed pair. Undo
+restores each leg's unclassified counter-account and retains the full audit history.
+Identical decisions are idempotent, and batches commit atomically after verifying
+existing projections. Account remapping, import and reimports preserve decisions.
+Default candidate output hides reviewed pairs and movements already confirmed
+elsewhere; `--all` includes them for inspection. FX, splits and delayed transfers
+outside the seven-day window need a future explicit policy.
+
+## Transfer evidence and assignment preview
+
+```sh
+fin transfer candidates --all --json > personal/reports/transfer-evidence.json
+fin transfer candidates --all
+```
+
+Structured counterparty IBAN evidence currently comes from Bunq. It is compared
+with imported account IBANs and registered identities. A counterparty IBAN belonging
+to another known account, or differing from the proposed counterpart's IBAN, rules
+out that pair. Such contradictions are excluded from default candidates, retained
+with reasons under `--all`, and block confirmation. With `--all`, JSON lists
+excluded pairs separately. Missing identity data is unknown evidence, not a contradiction.
+
+The versioned `transfer-evidence-v1` score is an explainable heuristic, not a
+calibrated probability or percentage. Its additive points are:
+
+| Evidence | Points |
+| --- | ---: |
+| Exact opposite principal and currency | 30 |
+| Same booking day | 35 |
+| One day apart | 20 |
+| Two or more days apart | max(0, 16 − 3 × days) |
+| Matching structured counterparty/account IBAN | 80 |
+| No competing compatible counterpart | 10 |
+| Explicit mention of the other bank | 8 |
+| Shared explicit reference token in descriptions | 50 |
+
+Same-day booking has strong weight; an IBAN contradiction always takes precedence.
+No ownership is inferred from a name. Candidate generation still requires exact
+principal/currency and the seven-day booking window. Estimates are conditional on
+the imported records, available identities and this policy; missing records can
+change the conclusion.
+
+The preview solves maximum-weight one-to-one matching for each connected candidate
+component, allowing movements to remain unmatched. `supported` means the edge is
+in every highest-scoring assignment; `alternative` means equally good assignments
+can choose different counterparts; `not_preferred` has a lower best possible total.
+`exclusion_margin` is how much the best total falls if a pair is forbidden, and
+`inclusion_penalty` is the loss if the pair is required. Equal optima remain
+ambiguous, without tie-breaking by row order. Components larger than 18 movements
+are explicitly `not_evaluated` and yield no proposed confirmations.
+
+Supported pairs score `high` when score ≥65 and exclusion margin ≥15, with same-day,
+IBAN or shared-reference support; other supported pairs are `medium`. Alternatives
+and unevaluated pairs remain `ambiguous`. The proposed pairs are a preview requiring
+review, never automatic confirmations. Use the existing `transfer review` workflow
+after checking identities and evidence.
+
+## Optional CSV enrichment
+
+OFX is sufficient to import transactions. For BoursoBank's fuller data, put both
+OFX and CSV exports for the same accounts and period in the inbox. Either may
+arrive first; repeat import when more evidence arrives. The current reader supports
+the observed UTF-8 semicolon CSV layout, including quoted/multiline fields and an
+optional BOM. The two columns named Solde are interpreted by their fixed positions:
+column 7 is the exact French-decimal movement amount, and column 11 is a separate
+reported balance using dot decimals. A different layout is not guessed.
+
+CSV rows are immutable observations keyed by archived document and logical data
+row number. They preserve value dates, original and suggested descriptions, bank
+categories and parent categories, comments, account labels, reported balances, and
+raw pointage. The exact input file stays archived. No CSV row creates a source
+movement or posting.
+
+Automatic linking requires an exact institution, source account ID, booking date,
+amount, and whitespace-normalized original description match to OFX. It does not
+use suggested labels as identity. Multiple OFX candidates, multiple rows claiming
+one movement within one CSV document, or conflicting nonempty metadata across
+exports require review. Account masks are not guessed or stripped. Currency comes
+from the matched OFX movement; CSV does not supply a currency or perform FX
+conversion. CSV-only observations wait for OFX.
+
+~~~sh
+# Recompute automatically during import, or explicitly after other imports:
+dune exec fin -- statement match
+# Inspect all observations or just those still needing review:
+dune exec fin -- statement companions --institution boursobank
+dune exec fin -- statement companions --institution boursobank --review
+~~~
+
+Matching states and their changes are saved in SQLite. Overlapping CSV files can
+observe the same movement without creating it again. Later OFX evidence can make
+an earlier automatic match ambiguous; the rematch is audited, and uncertain
+metadata is removed from the generated journal. This is a review report, not yet a
+manual match-approval interface.
+
+For uncontested matches, the journal includes CSV value dates as secondary dates,
+bank category/parent-category/suggested-description tags, and CSV row IDs. Commas,
+colons, semicolons, and control characters in source labels are rendered safely;
+original text remains in SQLite. These tags are source suggestions, not accepted
+expense or income classifications. Core accounting postings and booking dates are
+unchanged, and CSV pointage does not mark entries cleared.
+
+~~~sh
+# Transactions with uniquely matched bank category metadata:
+hledger --no-conf -f personal/bank.journal register assets:bank tag:bank-category
+# Secondary dates use CSV value dates where available:
+hledger --no-conf -f personal/bank.journal register assets:bank --date2
+~~~
+
+The journal header reports matched-event and review-row counts. Entries without a
+matched CSV value date retain no secondary date; hledger falls back to the booking
+date for those entries. Do not treat a partial match as complete value-date coverage.
+
+
+## Library
+
+```ocaml
+open Base
+open Finances
+
+let collateral_transfer =
+  let open Or_error.Let_syntax in
+  let amount = Quantity.of_string "1000.00000001" in
+  let%bind incoming =
+    Accounting.posting ~account:"assets:paradex:collateral" ~commodity:"USDC" amount
+  in
+  let%bind outgoing =
+    Accounting.posting ~account:"assets:wallet" ~commodity:"USDC"
+      (Quantity.neg amount)
+  in
+  Accounting.entry ~date:(Date.of_string "2026-10-25")
+    ~description:"Collateral transfer" [ incoming; outgoing ]
+```
+
+`Store.with_open` scopes the connection, initializes the current schema, and
+returns `Or_error.t`. `Store.ingest` returns `Inserted id` or `Existing id`.
+`Store.record_entry db ~event_id ~key entry` atomically persists a balanced entry
+and all its postings. The key identifies one accounting projection of one source
+event, for example `collateral:v1`. The same entry can be replayed without creating
+duplicates; a different entry under that key is rejected.
+
+Amounts use `Quantity.t`, an alias of `Decimal.t` from the `decimal` library,
+and are stored as canonical plain decimal strings through `Quantity.to_string`
+in SQLite `TEXT` columns. `Quantity` delegates arithmetic to decimal with local
+operand-sized contexts and traps inexact results, preserving exact sums and
+products independently of `Decimal.Context.default`. Dates use `Ptime.date`
+through the small ISO/calendar-day helpers in `Date`. Instants use `Ptime.t`,
+including Wise booking times, statement boundaries and audit timestamps. Rel
+codecs encode instants as fixed-width UTC RFC 3339 text with 12 fractional digits;
+SQLite can compare, sort and index it chronologically without date functions.
+`Temporal.t` distinguishes calendar dates from instants for both event occurrences
+and statement metadata; `Temporal.to_string` and `of_string_exn` share their codec.
+Original bank timestamp text stays in source evidence; Wise also retains its raw
+booking lexeme for local-time CSV matching. Base supplies general
+utilities, and Bos handles high-level filesystem operations. Core, Core_unix,
+Bigdecimal and `ppx_jane` are not dependencies. Do monetary arithmetic in OCaml:
+SQLite numeric casts and `SUM` on these strings would lose exactness.
+Account names are nonempty colon-separated tokens, and commodities are nonempty
+tokens; tokens allow letters, digits, underscores, and hyphens.
+
+## Design
+
+See [the architecture notes](architecture.md) for storage ownership,
+invariants, and the bank workflow milestones. The
+[bank adapter interface proposal](bank-adapters.md) describes a common module
+signature, registry and shared import model for future external bank adapters.
+
+## License
+
+[ISC](../LICENSE.md).

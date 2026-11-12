@@ -278,7 +278,6 @@ let cmd =
     ~man:
       [ `S Manpage.s_synopsis
       ; `P "$(b,fin import) [$(i,OPTION)]… $(i,INSTITUTION) $(i,PATH)…"
-      ; `P "$(b,fin import) --all [$(i,OPTION)]… $(i,DIRECTORY)"
       ; `S Manpage.s_description
       ; `P
           "Import an institution's files or directories by naming it, for example \
@@ -288,26 +287,14 @@ let cmd =
       ; `P
           "Movement CSV institutions (bundled: cdc) use the same command and the same \
            import pipeline as every other venue: $(b,fin import cdc FILE-OR-DIRECTORY) \
-           stores source evidence and proposed operations, and $(b,--inspect) reads a \
-           CSV without a database. Review wallets, commodities and kinds afterwards with \
-           $(b,fin db sources) and $(b,fin operation list)."
-      ; `P
-          "With $(b,--all), import a directory holding one folder per institution, each \
-           named after the institution or an alias, for example $(b,fin import --all \
-           ~/statements) with $(i,~/statements/wise) and $(i,~/statements/bourso)."
+           stores source evidence and proposed operations, and $(b,fin convert cdc FILE) \
+           reads a CSV without a database. Review wallets, commodities and kinds \
+           afterwards with $(b,fin db sources) and $(b,fin operation list)."
       ]
     "import"
     "Import a bank's statement files, apply mappings, and publish a bank journal."
     Term.(
-      const (fun database first paths journal max_mib account_id all ->
-        if all
-        then
-          if not (List.is_empty paths)
-          then Or_error.error_string "--all takes one directory"
-          else if Option.is_some account_id
-          then Or_error.error_string "--account-id names one import, not --all"
-          else import_all database first journal max_mib
-        else import_source database first paths journal max_mib account_id)
+      const import_source
       $ database
       $ Arg.(
           required
@@ -348,15 +335,38 @@ let cmd =
       $ Arg.(
           value
           & opt (some string) None
-          & info [ "account-id" ] ~doc:"Account label for an adapter that requires one.")
+          & info [ "account-id" ] ~doc:"Account label for an adapter that requires one."))
+;;
+
+let all_cmd =
+  command
+    ~man:
+      [ `S Manpage.s_description
+      ; `P
+          "Import a directory holding one folder per institution, each named after the \
+           institution or an alias, for example $(b,fin import-all ~/statements) with \
+           $(i,~/statements/wise) and $(i,~/statements/bourso). All names are checked \
+           before importing; unknown folders or files directly in the directory stop the \
+           import."
+      ]
+    "import-all"
+    "Import a directory containing one folder per institution."
+    Term.(
+      const import_all
+      $ database
+      $ Arg.(required & pos 0 (some string) None & info [] ~docv:"DIRECTORY")
       $ Arg.(
           value
-          & flag
+          & opt (some string) None
           & info
-              [ "all" ]
+              [ "journal" ]
+              ~doc:"Output path (default bank.journal beside the database).")
+      $ Arg.(
+          value
+          & opt int 64
+          & info
+              [ "max-file-mib" ]
               ~doc:
-                "Import every folder of the directory given as SOURCE, each named after \
-                 an institution or an alias, as if by fin import NAME FOLDER. Any other \
-                 folder, or a file directly in the directory, stops the import before it \
-                 starts."))
+                "Per-file read limit in MiB (1-1024, default 64). For ZIPs, also limits \
+                 the total expanded size; at most 1024 members per archive."))
 ;;

@@ -8,6 +8,13 @@ short line of their own.
 
 ## Unreleased
 
+- Shorten the README to introduce Fin and move its detailed examples and
+  development reference to `docs/bank-import-reference.md`.
+
+- `fin import-all DIRECTORY` replaces `fin import --all DIRECTORY` for
+  importing institution folders. **Action required:** update scripts and aliases
+  that use the removed flag.
+
 - Operation movements now receive an account from their source record.
   Wallet records use `assets:wallet:PROVIDER:ACCOUNT`, exchange records use
   `assets:exchange:PROVIDER:ACCOUNT`, and other operation records use an

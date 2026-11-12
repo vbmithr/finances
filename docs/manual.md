@@ -34,7 +34,7 @@ commands. For example, `fin cat list` lists the catalog, and
 From a development checkout, `make run ARGS='tx list'` runs the current code
 through Dune without installing. It uses the normal Fin database unless you pass
 `--database PATH`. On Arch, `make install-fast` builds an incremental development
-package and installs it with pacman; it skips tests. See the [README](../README.md)
+package and installs it with pacman; it skips tests. See the [development reference](bank-import-reference.md#install-an-arch-linux-test-package)
 for the clean, tested package workflow.
 
 Start with:
@@ -184,11 +184,11 @@ another schema. After installing the new version:
 
 ```sh
 fin init
-fin import --all ~/Statements
+fin import-all ~/Statements
 fin decisions restore ~/fin-decisions.json
 ```
 
-`--all` imports each folder of `~/Statements` named after an institution or an alias (see
+`fin import-all` imports each folder of `~/Statements` named after an institution or an alias (see
 [Importing statements](#importing-statements)); `fin import NAME FOLDER` imports one. Replace
 these paths with your own. User-added institutions and their records definitions must be added again.
 
@@ -229,7 +229,7 @@ keep one folder per institution, each named after the institution or an alias
 once:
 
 ```sh
-fin import --all ~/Statements
+fin import-all ~/Statements
 ```
 
 Each folder is imported as `fin import NAME FOLDER` would, in name order, with a summary per
@@ -661,7 +661,7 @@ than once because each attempt is recorded. Use `fin institution history --limit
 the ten latest attempts, or `fin institution history --json` for machine-readable output.
 Use `fin operation list` to browse individual movements instead.
 
-See [Bank import and review reference](../README.md#folder-workflow) for
+See [Bank import and review reference](bank-import-reference.md#folder-workflow) for
 additional detail, or use `fin import --help` for current options.
 
 
@@ -729,7 +729,7 @@ fin import fdm records.jsonl.zst
 
 FDM exports one card per file, and each card gets its own account named after the file:
 `~/statements/fdm/1118.csv` is imported into `assets:cards:fdm:1118`. Name the files after
-the last four digits of the cards and a batch import, such as `fin import --all`, needs
+the last four digits of the cards and a batch import, such as `fin import-all`, needs
 nothing more. `--account-id ID` overrides the file name for the files it imports:
 
 ```sh
@@ -826,7 +826,7 @@ account.
 configuration, and later imports use only what is saved in the database. In the file, omitted
 accounts and settings are kept and an explicit `null` clears an optional setting. IBANs inferred
 from primary records cannot be overridden or cleared. See the
-[account settings reference](../README.md#manage-bank-accounts) for the fields.
+[account settings reference](bank-import-reference.md#manage-bank-accounts) for the fields.
 
 ## Reviewing transactions and transfers
 
@@ -1197,7 +1197,7 @@ in the audit history, and hides that pair from default candidates. You can
 then classify either movement separately. Regenerate the journal afterward.
 
 After preparing review JSON using the examples in the
-[README](../README.md), apply it with:
+[bank import reference](bank-import-reference.md#review-and-categorize-bank-movements), apply it with:
 
 ```sh
 fin operation category apply categories.json
@@ -1802,6 +1802,7 @@ above; no automatic migration runs.
 | --- | --- |
 | `fin init` | Create the database, with first-import guidance |
 | `fin import INSTITUTION PATH...` | Import statement files and publish the journal |
+| `fin import-all DIRECTORY` | Import each institution folder and publish the journal |
 | `fin status` | Import coverage and outstanding review work |
 | `fin paths` | Resolved storage paths |
 | `fin account --help` | Account listing, config and history |

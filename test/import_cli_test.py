@@ -2949,20 +2949,21 @@ class ImportOnboarding(unittest.TestCase):
 
         # Every name is checked before anything is imported.
         (directory / 'misc').mkdir()
-        refused = self.run_fin('import', '--all', directory, check=False)
+        refused = self.run_fin('import-all', directory, check=False)
         self.assertIn('not institutions or aliases', refused.stderr)
         self.assertIn('misc', refused.stderr)
         self.assertEqual(operations(), [])
         (directory / 'misc').rmdir()
         (directory / 'notes.txt').write_text('loose')
-        refused = self.run_fin('import', '--all', directory, check=False)
+        refused = self.run_fin('import-all', directory, check=False)
         self.assertIn('belong to no institution: notes.txt', refused.stderr)
         self.assertEqual(operations(), [])
         (directory / 'notes.txt').unlink()
-        self.assertIn('takes one directory', self.run_fin('import', '--all', directory, directory, check=False).stderr)
-        self.assertIn('not --all', self.run_fin('import', '--all', directory, '--account-id', 'x', check=False).stderr)
+        self.assertNotEqual(self.run_fin('import-all', directory, directory, check=False).returncode, 0)
+        self.assertNotEqual(self.run_fin('import-all', directory, '--account-id', 'x', check=False).returncode, 0)
+        self.assertNotEqual(self.run_fin('import', '--all', directory, check=False).returncode, 0)
 
-        output = self.run_fin('import', '--all', directory).stdout
+        output = self.run_fin('import-all', directory).stdout
         self.assertLess(output.index('== bourso'), output.index('== wise'))
         separate = self.root / 'separate.sqlite3'
         self.run_fin('init', '--database', separate)
@@ -2970,7 +2971,7 @@ class ImportOnboarding(unittest.TestCase):
         self.run_fin('import', 'wise', directory / 'wise', '--database', separate)
         shape = lambda rows: sorted((r['occurred'], r['description'], r['amount']) for r in rows)
         self.assertEqual(shape(operations()), shape(operations('--database', separate)))
-        self.assertIn('unchanged=', self.run_fin('import', '--all', directory).stdout)
+        self.assertIn('unchanged=', self.run_fin('import-all', directory).stdout)
 
     def test_interactive_card_settlement(self):
         ofx = self.root / 'settlement.ofx'

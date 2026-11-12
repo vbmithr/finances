@@ -430,7 +430,7 @@ expand to another account or an earlier month using the same process.
 ## Further reading
 
 - [fin user manual](manual.md): command, storage and recovery reference.
-- [Account and review JSON reference](../README.md#manage-bank-accounts).
+- [Account and review JSON reference](bank-import-reference.md#manage-bank-accounts).
 - [hledger quick start](https://hledger.org/5-minute-quick-start.html).
 - [hledger manual](https://hledger.org/hledger.html): report periods, account types,
   journal includes and balance assertions.

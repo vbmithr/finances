@@ -8,10 +8,10 @@ executable, build_script = sys.argv[1:]
 groups = runpy.run_path(build_script)['MANPAGE_COMMANDS']
 help_text = subprocess.run([executable, '--help=plain'], check=True, capture_output=True, text=True).stdout
 section = help_text.split('COMMANDS\n', 1)[1].split('COMMON OPTIONS\n', 1)[0]
-commands = set(re.findall(r'^       ([a-z]+)(?=\s)', section, flags=re.MULTILINE))
+commands = set(re.findall(r'^       ([a-z-]+)(?=\s)', section, flags=re.MULTILINE))
 assert set(groups) == commands | {None}, (set(groups), commands)
 welcome = subprocess.run([executable], check=True, capture_output=True, text=True).stdout
-welcome_commands = set(re.findall(r'^\s+fin ([a-z]+)(?=\s|$)', welcome, flags=re.MULTILINE))
+welcome_commands = set(re.findall(r'^\s+fin ([a-z-]+)(?=\s|$)', welcome, flags=re.MULTILINE))
 assert commands <= welcome_commands, f'missing from fin welcome: {commands - welcome_commands}'
 for group in groups:
     args = [executable] + ([group] if group else []) + ['--help=groff']

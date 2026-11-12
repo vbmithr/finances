@@ -85,6 +85,7 @@ let () =
           ; Decisions_cmd.decisions_cmd
           ; Account_cmd.cmd
           ; Import_cmd.cmd
+          ; Import_cmd.all_cmd
           ; Records_cmd.convert_cmd
           ; Category_cmd.cmd
           ; Institution_cmd.cmd
