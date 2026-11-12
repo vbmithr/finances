@@ -1298,11 +1298,13 @@ fin operation list --asc
 fin operation list --order-by currency,amount --asc
 fin operation list --order-by institution,date --desc
 fin operation list --institution cdc
+fin operation list --institution ethereum --institution polygon
 fin operation list --json
 ```
 
 Dates are inclusive booking dates. Use `--account ID` for one account or
-`--institution NAME` for a provider; `--search` matches the operation description
+`--institution NAME` for a provider; repeat `--institution` to include any of
+the named providers. Other filters narrow the combined results. `--search` matches the operation description
 using ASCII case-insensitive comparison. `--type`, `--decision` and
 `--category` select an operation when any of its movements matches, so a
 CDC exchange is listed under either of its movement types. `--type`

@@ -954,7 +954,7 @@ type operation_type_filter =
 
 type operation_filter =
   { only_account : (string * string) option
-  ; only_institution : string option
+  ; only_institutions : string list
   ; only_type : operation_type_filter option
   ; only_decision : review_classification option
   ; only_counter_account : string option
@@ -967,7 +967,7 @@ type operation_filter =
 
 let no_operation_filter =
   { only_account = None
-  ; only_institution = None
+  ; only_institutions = []
   ; only_type = None
   ; only_decision = None
   ; only_counter_account = None
@@ -1006,7 +1006,9 @@ let operation_filter_values (filter : operation_filter) =
     [ Option.map filter.only_account ~f:(fun (institution, _) ->
         text "account_institution" institution)
     ; Option.map filter.only_account ~f:(fun (_, source) -> text "account_source" source)
-    ; Option.map filter.only_institution ~f:(text "institution")
+    ; Option.some_if
+        (not (List.is_empty filter.only_institutions))
+        ("institutions", Json.encode (Jsont.list Jsont.string) filter.only_institutions)
     ; Option.map filter.only_type ~f:(function
         | Untyped -> text "movement_type" "-"
         | Typed kind -> text "movement_type" (Movement_type.to_string kind))

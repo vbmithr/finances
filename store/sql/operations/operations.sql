@@ -23,9 +23,13 @@ WHERE v.canonical = v.id
                     GROUP BY 1
                     HAVING min(r.ignored) = 1))
   -- The remaining filters hold when any movement of the group passes.
-  AND (?1 ->> '$.institution' IS NULL OR v.institution = ?1 ->> '$.institution'
-    OR v.id IN (SELECT canonical FROM group_reviews
-                WHERE institution = ?1 ->> '$.institution'))
+  AND (?1 -> '$.institutions' IS NULL
+    OR v.institution IN (SELECT value FROM json_each(?1, '$.institutions'))
+    OR v.id IN (SELECT coalesce(g.canonical, s.operation_id)
+                FROM operation_sources s
+                JOIN source_events e ON e.id = s.event_id
+                LEFT JOIN grouped_operations g ON g.member = s.operation_id
+                WHERE e.venue IN (SELECT value FROM json_each(?1, '$.institutions'))))
   AND (?1 ->> '$.account_institution' IS NULL
     OR v.id IN (SELECT canonical FROM group_reviews
                 WHERE institution = ?1 ->> '$.account_institution'

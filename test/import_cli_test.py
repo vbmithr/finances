@@ -337,6 +337,10 @@ class ImportOnboarding(unittest.TestCase):
         self.assertIn('transfer_changes=1', self.run_fin('transfer', 'link', bank_op, wallet_op, '--yes').stdout)
         grouped = json.loads(self.run_fin('operation', 'list', '--json').stdout)
         self.assertEqual(len(grouped), 1)
+        for institutions in [('cdc',), ('revolut',), ('cdc', 'revolut'), ('cdc', 'cdc')]:
+            options = [part for name in institutions for part in ('--institution', name)]
+            filtered = json.loads(self.run_fin('operation', 'list', *options, '--json').stdout)
+            self.assertEqual([r['operation_id'] for r in filtered], [grouped[0]['operation_id']])
         self.assertEqual(len(grouped[0]['movements']), 2)
         self.assertEqual(grouped[0]['decision'], 'transfer')
         self.assertEqual(json.loads(self.run_fin('operation', 'status', '--json').stdout)['transfers'], 1)
@@ -1105,6 +1109,19 @@ class ImportOnboarding(unittest.TestCase):
         self.run_fin('import', 'cdc', cdc)
         rows = json.loads(self.run_fin('operation', 'list', '--json').stdout)
         self.assertEqual(len(rows), 7)
+        combined = json.loads(self.run_fin('operation', 'list', '--institution', 'cdc',
+                                           '--institution', 'revolut', '--json').stdout)
+        self.assertEqual({r['operation_id'] for r in combined}, {r['operation_id'] for r in rows})
+        limited = json.loads(self.run_fin('operation', 'list', '--institution', 'cdc',
+                                          '--institution', 'revolut', '--limit', '1', '--json').stdout)
+        self.assertEqual([r['operation_id'] for r in limited], [combined[0]['operation_id']])
+        narrowed = json.loads(self.run_fin('operation', 'list', '--institution', 'cdc',
+                                           '--institution', 'revolut', '--search', 'Exchange',
+                                           '--json').stdout)
+        self.assertEqual([r['description'] for r in narrowed], ['Exchange'])
+        missing = json.loads(self.run_fin('operation', 'list', '--institution', 'missing',
+                                          '--institution', 'cdc', '--json').stdout)
+        self.assertEqual(len(missing), 2)
         exchange = next(r for r in rows if r['institution'] == 'cdc' and r['description'] == 'Exchange')
         self.assertEqual(sorted(m['role'] for m in exchange['movements']), ['from', 'to'])
         self.assertEqual(sorted(m['quantity'] for m in exchange['movements']), ['-2', '0.2'])

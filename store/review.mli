@@ -192,7 +192,7 @@ type operation_type_filter =
     institution and source account. *)
 type operation_filter =
   { only_account : (string * string) option
-  ; only_institution : string option
+  ; only_institutions : string list
   ; only_type : operation_type_filter option
   ; only_decision : review_classification option
   ; only_counter_account : string option

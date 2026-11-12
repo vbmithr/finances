@@ -115,7 +115,7 @@ let list_transactions
         db
         ~filter:
           { only_account
-          ; only_institution = institution
+          ; only_institutions = institution
           ; only_type = movement_type
           ; only_decision = classification
           ; only_counter_account = counter_account
@@ -202,8 +202,12 @@ let transaction_list_cmd =
           & info [ "account" ] ~docv:"ID" ~doc:"Only this ID from fin account list.")
       $ Arg.(
           value
-          & opt (some string) None
-          & info [ "institution" ] ~docv:"NAME" ~doc:"Only operations from this provider.")
+          & opt_all string []
+          & info
+              [ "institution" ]
+              ~docv:"NAME"
+              ~doc:
+                "Only operations from these providers; repeat to include more than one.")
       $ Arg.(
           value
           & opt (some string) None

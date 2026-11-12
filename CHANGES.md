@@ -8,6 +8,10 @@ short line of their own.
 
 ## Unreleased
 
+- `fin operation list` accepts repeated `--institution NAME` options and
+  includes operations from any of the named institutions.
+- Correct the schema baseline test to expect version 44.
+
 - Shorten the README to introduce Fin and move its detailed examples and
   development reference to `docs/bank-import-reference.md`.
 

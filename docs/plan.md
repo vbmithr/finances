@@ -114,6 +114,8 @@ provider observations before treating them as authoritative.
   Companion export loads matched rows and aggregate review counts directly.
 - The README introduces Fin; detailed workflows are in the manual and the
   bank import and development reference.
+- `fin operation list` accepts repeated institution filters, matching any
+  named institution while combining them with the other filters.
 - Statement ingestion is `fin import BANK PATH...` or a configured generic CSV;
   `fin import-all DIRECTORY` imports one folder per institution.
   `fin backup` saves one
