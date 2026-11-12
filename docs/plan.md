@@ -67,7 +67,7 @@ provider observations before treating them as authoritative.
   companion), Bunq (MT940, CSV companion) and Revolut (CSV). All use bundled
   profiles and shared import components; none has a dedicated bank module.
   User-added institutions can import OFX or configure a generic CSV layout.
-- Storage is schema 33: generic tables for every bank, plus each movement stored
+- Storage is schema 44: generic tables for every bank, plus each movement stored
   normalized at import, so reads are SQL queries instead of payload decoding. No
   migrations; older databases are refused unchanged.
 - Event occurrences and statement boundaries share `Temporal.t` (`Date` or
@@ -120,7 +120,7 @@ provider observations before treating them as authoritative.
   man-page checks. Selected import changes have also been compared by
   rebuilding a personal database and diffing reports and source payloads.
 - Issue #1 is implemented locally and awaits publication.
-- The installed Arch package is `finances 0.1.0-23`; the tree uses schema 33.
+- The installed Arch package is `finances 0.1.0-23`; the tree uses schema 44.
 
 ### Personal data
 
@@ -694,9 +694,9 @@ position observations, derive positions from fills, or calculate funding.
   reported symbol once, for all its movements (schema 40); `ethereum` and `polygon` read explorer
   exports, every token reported by its contract. `fin asset adopt` maps contracts from a token
   list, `fin asset ignore-unmapped` ignores the rest, and `fin op list` hides operations whose
-  movements are all ignored (`--ignored` shows them). Next: operation
-  movements take their account from the record's account, as bank movements do, so a wallet's
-  rows need no `fin operation resolve`; then the deBridge orders (ETH on Ethereum, USDC on Polygon)
+  movements are all ignored (`--ignored` shows them). Done 2026-11-12 (schema 44):
+  operation movements take their account from the record's account, so wallet
+  rows need no `fin operation resolve`. Next: the deBridge orders (ETH on Ethereum, USDC on Polygon)
   as exchanges across two accounts, and the fdm top-ups once fdm exports its deposits (asked
   upstream; until then the USDC payments stay undecided and the card's balance lacks them).
 - [x] Name each FDM card's account from its file name (`account_from_filename`), so batch

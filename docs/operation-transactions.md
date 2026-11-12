@@ -179,8 +179,9 @@ the group, so the group's type and description are those of a `BALANCE-n` row.
 ### Inferred grouping: the candidate finder
 
 Candidates are movements of any operation with resolved account and commodity and
-no explanation yet, replacing the query over the bank `movements` table. A CDC
-movement becomes eligible after `fin operation resolve`.
+no explanation yet, replacing the query over the bank `movements` table. Imported
+operation movements receive their source account; a user may override that
+account with `fin operation resolve`.
 
 The evidence extends `Transfer_ranking`, and an exact maximum-weight matching still
 decides which candidates are supported. Its weights and date window are hand-set

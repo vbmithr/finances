@@ -251,7 +251,7 @@ let operation_resolve database operation_id role account =
 let operation_resolve_cmd =
   command
     "resolve"
-    "Assign an account to a proposed movement. Its commodity comes from fin asset map."
+    "Override a proposed movement's account. Its commodity comes from fin asset map."
     Term.(
       const operation_resolve
       $ database

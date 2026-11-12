@@ -227,12 +227,45 @@ let decode (event : Source_event.t) =
      | descriptions -> descriptions)
 ;;
 
-let operation_rows (event : Source_event.t) =
+let account_component value =
+  if
+    Result.is_ok (Validation.token "account component" value)
+    && not (String.is_prefix value ~prefix:"x-")
+  then value
+  else
+    "x-"
+    ^ (String.to_list value
+       |> List.map ~f:(fun c -> Printf.sprintf "%02x" (Char.to_int c))
+       |> String.concat)
+;;
+
+let operation_account ~tickers (event : Source_event.t) (account : Records.account) =
+  let bank = bank_id ~institution:event.venue account in
+  let typ = account_type account in
+  let kind =
+    if String.equal typ "wallet" then "wallet" else if tickers then "exchange" else "bank"
+  in
+  let parts =
+    if
+      String.equal bank event.venue
+      && (String.equal typ "wallet" || (tickers && String.equal typ "current"))
+    then [ "assets"; kind; event.venue; account.id ]
+    else [ "assets"; kind; event.venue; bank; typ; account.id ]
+  in
+  String.concat ~sep:":" (List.map parts ~f:account_component)
+;;
+
+let operation_rows ~tickers (event : Source_event.t) =
   let open Or_error.Let_syntax in
-  let%bind _, (record : Records.record) = Records.row_of_string event.payload in
+  let%bind account, (record : Records.record) = Records.row_of_string event.payload in
+  let account = operation_account ~tickers event account in
   let%bind legs =
     List.map record.movements ~f:(fun (m : Records.movement) ->
-      Operation_import.leg ~role:m.role ~commodity:m.commodity ~quantity:m.quantity)
+      Operation_import.leg
+        ~account:(Some account)
+        ~role:m.role
+        ~commodity:m.commodity
+        ~quantity:m.quantity)
     |> Or_error.all
   in
   let%map row = Operation_import.row ~source:event ~legs in
@@ -525,7 +558,7 @@ let make
     let kinds = [ movement_kind ]
     let operation_kinds = [ operation_kind ]
     let decode = decode
-    let operation_rows = operation_rows
+    let operation_rows = operation_rows ~tickers
 
     let formats =
       (records :: List.map sources ~f:(fun source -> source.format)) @ stored_formats

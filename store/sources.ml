@@ -547,6 +547,7 @@ let derive_operation_event db ~event_id (event : Source_event.t) =
            in
            Operation.movement
              ~identity
+             ?account:leg.account
              ~commodity:leg.commodity
              ~quantity:leg.quantity
              ~evidence
@@ -601,18 +602,22 @@ let verify_stored_operation_event db ~event_id (event : Source_event.t) =
           db
           (Rel_sql.Stmt.(
              func
-               "SELECT m.id,m.role,m.commodity,m.quantity FROM operation_movements m \
-                WHERE m.operation_id=? ORDER BY m.id"
+               "SELECT m.id,m.role,m.account,m.commodity,m.quantity FROM \
+                operation_movements m WHERE m.operation_id=? ORDER BY m.id"
                (int64
                 @-> ret
                       Row.(
-                        t4 (int64 "id") (text "role") (text "commodity") (text "quantity"))
-               ))
+                        t5
+                          (int64 "id")
+                          (text "role")
+                          (option Rel.Type.text "account")
+                          (text "commodity")
+                          (text "quantity"))))
              operation_id)
       in
       let* stored =
         traverse
-          (fun (id, role, commodity, quantity) ->
+          (fun (id, role, account, commodity, quantity) ->
              let* commodity = Json.decode Commodity.codec commodity in
              let* quantity = Or_error.try_with (fun () -> Quantity.of_string quantity) in
              let* sources =
@@ -625,7 +630,7 @@ let verify_stored_operation_event db ~event_id (event : Source_event.t) =
                       (int64 @-> ret Row.(t1 (int64 "event_id"))))
                     id)
              in
-             Ok (role, commodity, quantity, sources))
+             Ok (role, account, commodity, quantity, sources))
           stored
       in
       let* expected =
@@ -636,14 +641,15 @@ let verify_stored_operation_event db ~event_id (event : Source_event.t) =
                  m.identity
                  ~error:(Error.of_string "derived movement lacks an identity")
              in
-             Ok (identity.role, m.commodity, m.quantity, [ event_id ]))
+             Ok (identity.role, m.account, m.commodity, m.quantity, [ event_id ]))
           derived.movements
       in
       let normalize =
-        List.sort ~compare:(fun (a, _, _, _) (b, _, _, _) -> String.compare a b)
+        List.sort ~compare:(fun (a, _, _, _, _) (b, _, _, _, _) -> String.compare a b)
       in
-      let equal (r1, c1, q1, s1) (r2, c2, q2, s2) =
+      let equal (r1, a1, c1, q1, s1) (r2, a2, c2, q2, s2) =
         String.equal r1 r2
+        && Option.equal String.equal a1 a2
         && Commodity.equal c1 c2
         && Quantity.equal q1 q2
         && List.equal Int64.equal s1 s2

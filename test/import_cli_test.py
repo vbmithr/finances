@@ -231,6 +231,9 @@ class ImportOnboarding(unittest.TestCase):
         self.assertTrue(any('2025-06-09T17:56:17' in str(row['occurred']) for row in listed))
         exchange_row = next(row for row in listed if row['description'] == 'Exchange')
         op = exchange_row['operation_id']
+        self.assertEqual(
+            {m['role']: m['account'] for m in exchange_row['movements']},
+            {'from': 'assets:exchange:cdc:app', 'to': 'assets:exchange:cdc:app'})
         assets = {(a['provider'], a['symbol']): a['decision'] for a in json.loads(self.run_fin('asset', 'list', '--json').stdout)}
         # An exchange's ticker counts as the asset it names until mapped.
         self.assertEqual(assets[('cdc', 'CRO')], 'assumed')
@@ -385,6 +388,13 @@ class ImportOnboarding(unittest.TestCase):
             + ''.join(f'0x{i},1,1,2026-07-29 11:00:0{i},{spam if c == spam else them},{me},5,N/A,{c},Token,T\n'
                       for i, c in enumerate([usdc, bridged, dai, spam])))
         self.run_fin('import', 'polygon', export)
+        wallet_rows = json.loads(self.run_fin('operation', 'list', '--institution', 'polygon', '--json').stdout)
+        self.assertEqual(len(wallet_rows), 4)
+        self.assertEqual(
+            {movement['account'] for row in wallet_rows for movement in row['movements']},
+            {'assets:wallet:polygon:' + me})
+        self.assertIn('unchanged=1', self.run_fin('import', 'polygon', export).stdout)
+        self.assertEqual(self.saved('assignments')['resolutions'], [])
         self.run_fin('asset', 'ignore', 'polygon', dai, '--yes')
         listed = self.root / 'list.json'
         listed.write_text(json.dumps({
@@ -1100,7 +1110,8 @@ class ImportOnboarding(unittest.TestCase):
         self.assertEqual(sorted(m['quantity'] for m in exchange['movements']), ['-2', '0.2'])
         self.assertIsNone(exchange['event_id'])
         self.assertIsNone(exchange['account_id'])
-        self.assertEqual([m['account'] for m in exchange['movements']], [None, None])
+        self.assertEqual([m['account'] for m in exchange['movements']],
+                         ['assets:exchange:cdc:app', 'assets:exchange:cdc:app'])
         self.assertEqual(len(exchange['movement_rows']), 0)
         table = self.run_fin('operation', 'list').stdout
         self.assertIn('AMOUNTS', table)
@@ -1110,7 +1121,7 @@ class ImportOnboarding(unittest.TestCase):
         start = lines[0].index('INSTITUTION')
         row = next(line for line in lines if '→' in line)
         self.assertEqual(row[start:start + 3], 'cdc')
-        self.assertIn('unresolved', table)
+        self.assertIn('unreviewed', table)
         self.assertIn('ID', table)
         reward = next(r for r in rows if r['description'] == 'Reward')
         self.assertEqual(reward['amount'], '1.23456789')
@@ -1150,7 +1161,7 @@ class ImportOnboarding(unittest.TestCase):
                             if e['venue'] == 'cdc')
         shown = self.run_fin('operation', 'show', crypto_event).stdout
         self.assertIn('This source event has no bank movement', shown)
-        self.assertIn('account not assigned in operation', shown)
+        self.assertIn('assets:exchange:cdc:app', shown)
 
     def test_operation_show_uses_operation_id(self):
         db = self.root / 'data/fin/fin.sqlite3'

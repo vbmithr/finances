@@ -629,4 +629,4 @@ CREATE TABLE "movement_type_changes" (
 ) STRICT;
 CREATE TRIGGER "movement_type_changes_no_update" BEFORE UPDATE ON "movement_type_changes" BEGIN SELECT RAISE(ABORT, 'movement type history is append-only'); END;
 CREATE TRIGGER "movement_type_changes_no_delete" BEFORE DELETE ON "movement_type_changes" BEGIN SELECT RAISE(ABORT, 'movement type history is append-only'); END;
-PRAGMA user_version = 43;
+PRAGMA user_version = 44;

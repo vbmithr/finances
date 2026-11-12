@@ -2,6 +2,7 @@ open Base
 
 type leg =
   { role : string
+  ; account : string option
   ; commodity : Commodity.t
   ; quantity : Quantity.t
   }
@@ -11,11 +12,11 @@ type row =
   ; legs : leg list
   }
 
-let leg ~role ~commodity ~quantity =
+let leg ~account ~role ~commodity ~quantity =
   let open Or_error.Let_syntax in
   let%bind role = Validation.token "movement role" role in
   let%map quantity = Or_error.try_with (fun () -> Quantity.finite_exn quantity) in
-  { role; commodity; quantity }
+  { role; account; commodity; quantity }
 ;;
 
 let row ~source ~legs =

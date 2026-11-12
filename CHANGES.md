@@ -8,6 +8,15 @@ short line of their own.
 
 ## Unreleased
 
+- Operation movements now receive an account from their source record.
+  Wallet records use `assets:wallet:PROVIDER:ACCOUNT`, exchange records use
+  `assets:exchange:PROVIDER:ACCOUNT`, and other operation records use an
+  `assets:bank` account. Source bank and type are included when needed to
+  distinguish accounts; `fin operation resolve` overrides these
+  defaults. Reimports verify the imported account as part of the proposal.
+  **Action required:** back up decisions and rebuild the database for schema 44
+  to populate accounts on existing operation movements.
+
 - Correct the plan's obsolete JSON fixture claim and record a source-based
   check of 727 real Wise, Bunq and Revolut CSV rows. No converter behavior
   changed.

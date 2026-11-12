@@ -130,11 +130,11 @@ An operation can remain incomplete even when a provider row is syntactically
 valid. Reconcile movements against independently reported account/commodity
 balances and statement periods, including opening balances, before claiming
 completeness. Overlapping exports need source-aware duplicate handling. Do not
-sum unassigned wallet movements as if they came from one account or infer a fee
+sum movements from different wallets as if they came from one account or infer a fee
 from a price difference. Unknown kinds remain reviewable and unposted.
 
 CDC imports retain the original file and source fields, with provider-scoped
-symbols and unassigned accounts. Replay of an identical document checks its
+symbols and source-derived exchange accounts. Replay of an identical document checks its
 stored proposals. A complete records conversion and its exact original source
 can be reimported in either order when the records file names exactly one source
 and its digest and the complete event evidence agree. Partial overlaps and identical rows remain ambiguous and are

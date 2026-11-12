@@ -281,15 +281,23 @@ Review those exports before importing them. A file with only the
 header is a valid statement of no activity: it imports with `inserted=0`. A reimport that
 finds a stored
 operation differing from the importer's interpretation (movement roles,
-commodities, quantities or source links) is refused without changing the stored
+accounts, commodities, quantities or source links) is refused without changing the stored
 decisions.
 
-Imported legs are proposals, with unresolved account and commodity identities;
-unknown rows may have no proposed legs. Only explicitly resolved and confirmed
-two-movement exchanges can currently be projected to hledger; other imported
+Imported legs are proposals. Their accounts come from the record's account:
+wallets use `assets:wallet:PROVIDER:ACCOUNT`, exchanges use
+`assets:exchange:PROVIDER:ACCOUNT`, and other operation records use an
+`assets:bank` account. When a source's bank or account type differs from the
+provider's usual shape, both are included to keep accounts distinct. A user
+can override a movement's account with
+`fin operation resolve`. Commodity identities may still need review;
+unknown rows may have no proposed legs. Only confirmed two-movement exchanges
+with known account and commodity identities can currently be projected to hledger; other imported
 operations are not posted and no opening balances are established. Transaction
 decision exports do not contain the original CSV evidence: use a full database
 backup or keep the original exports. Treat backups and JSON output as private.
+Schema 44 requires rebuilding an older database from its source files and
+restoring a saved decisions export to populate these accounts.
 
 A crypto exchange or a block explorer reports symbols fin does not trust by name: a
 ticker scoped to the exchange, or a token's contract scoped to its network. Say once
@@ -332,9 +340,9 @@ source fields. Map a token contract only once you have checked it, such as on it
 issuer's site: anyone can name a token USDC. `fin asset unmap` removes a mapping;
 neither changes while confirmed transfers or exchanges rely on it.
 
-For a recognized two-movement exchange, inspect its roles with
-`fin operation show ID`, then assign an account to each movement. For example, using
-the roles `from` and `to`:
+For a recognized two-movement exchange, inspect its roles and source-derived
+accounts with `fin operation show ID`. Override an account if the source's
+default does not describe where you hold the asset. For example:
 
 ```sh
 fin operation resolve 123 from assets:exchange:eur
