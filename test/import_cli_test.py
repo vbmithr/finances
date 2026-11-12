@@ -337,6 +337,10 @@ class ImportOnboarding(unittest.TestCase):
         self.assertIn('transfer_changes=1', self.run_fin('transfer', 'link', bank_op, wallet_op, '--yes').stdout)
         grouped = json.loads(self.run_fin('operation', 'list', '--json').stdout)
         self.assertEqual(len(grouped), 1)
+        details = self.run_fin('operation', 'list', '--details').stdout
+        self.assertEqual(details.count(', source #'), 2)
+        self.assertIn('Description: To wallet', details)
+        self.assertIn('Transaction Description: Deposit', details)
         for institutions in [('cdc',), ('revolut',), ('cdc', 'revolut'), ('cdc', 'cdc')]:
             options = [part for name in institutions for part in ('--institution', name)]
             filtered = json.loads(self.run_fin('operation', 'list', *options, '--json').stdout)
@@ -399,6 +403,15 @@ class ImportOnboarding(unittest.TestCase):
             {'assets:wallet:polygon:' + me})
         self.assertIn('unchanged=1', self.run_fin('import', 'polygon', export).stdout)
         self.assertEqual(self.saved('assignments')['resolutions'], [])
+        detailed = self.run_fin('operation', 'list', '--institution', 'polygon',
+                                '--details', '--limit', '1').stdout
+        self.assertEqual(detailed.count('\nOperation #'), 1)
+        self.assertIn('Transaction Hash: 0x3', detailed)
+        self.assertIn('TokenSymbol: T', detailed)
+        self.assertIn('From: ' + spam, detailed)
+        self.assertIn('To: ' + me, detailed)
+        self.assertNotEqual(self.run_fin('operation', 'list', '--details', '--json',
+                                         check=False).returncode, 0)
         self.run_fin('asset', 'ignore', 'polygon', dai, '--yes')
         listed = self.root / 'list.json'
         listed.write_text(json.dumps({

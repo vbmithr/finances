@@ -228,6 +228,18 @@ val operations
   -> t
   -> operation_review list Or_error.t
 
+(** Source fields for selected operation groups, in operation and source order. *)
+type operation_source_field =
+  { operation_id : int64
+  ; event_id : int64
+  ; venue : string
+  ; occurred : string
+  ; name : string option
+  ; value : string option
+  }
+
+val operation_source_fields : t -> int64 list -> operation_source_field list Or_error.t
+
 val resolve_operation_movement
   :  t
   -> operation_id:int64

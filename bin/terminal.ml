@@ -292,6 +292,27 @@ let operations ?(out = stdout) rows =
          ]))
 ;;
 
+let operation_source_fields ?(out = stdout) fields =
+  let previous = ref None in
+  List.iter fields ~f:(fun (field : Review.operation_source_field) ->
+    let identity = field.operation_id, field.event_id in
+    if not (Poly.equal !previous (Some identity))
+    then (
+      Out_channel.output_string
+        out
+        (Printf.sprintf
+           "\nOperation #%Ld, source #%Ld  %s  %s\n"
+           field.operation_id
+           field.event_id
+           (text field.venue)
+           (text field.occurred));
+      previous := Some identity);
+    match field.name, field.value with
+    | Some name, Some value when not (String.is_empty (String.strip value)) ->
+      Out_channel.output_string out (Printf.sprintf "  %s: %s\n" (text name) (text value))
+    | _ -> ())
+;;
+
 (* What leaves, then what arrives. *)
 let transfer_sides (c : Transfers.transfer_candidate) =
   let first = c.first_event_id, c.first, c.first_transaction

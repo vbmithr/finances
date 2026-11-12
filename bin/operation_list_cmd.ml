@@ -78,6 +78,7 @@ let list_transactions
       order
       json_output
       include_ignored
+      details
   =
   let%bind sort_columns = parse_transaction_sort order_by in
   let%bind from_date = parse_list_date "--from" from_date in
@@ -93,6 +94,13 @@ let list_transactions
       Or_error.error_string "--from must not be after --to"
     | _, _, Some n when n <= 0 -> Or_error.error_string "--limit must be positive"
     | _ -> Ok ()
+  in
+  let%bind () =
+    if details && json_output
+    then
+      Or_error.error_string
+        "--details is for text output and cannot be combined with --json"
+    else Ok ()
   in
   with_database database (fun db ->
     let%bind accounts = Transfers.bank_account_ids db in
@@ -157,10 +165,20 @@ let list_transactions
         { Report_json.account_id; operation; movement_rows })
       |> Or_error.combine_errors
     in
+    let%bind source_fields =
+      if details
+      then
+        Review.operation_source_fields
+          db
+          (List.map operations ~f:(fun o -> o.operation_id))
+      else Ok []
+    in
     let print_rows ?out () =
       if json_output
       then Report_json.print (Jsont.list Report_json.operation_row) rows
-      else Terminal.operations ?out rows
+      else (
+        Terminal.operations ?out rows;
+        Terminal.operation_source_fields ?out source_fields)
     in
     if json_output
     then (
@@ -294,5 +312,13 @@ let transaction_list_cmd =
               [ "ignored" ]
               ~doc:
                 "Also list operations whose movements are all ignored, such as spam \
-                 tokens; fin asset ignore ignores them."))
+                 tokens; fin asset ignore ignores them.")
+      $ Arg.(
+          value
+          & flag
+          & info
+              [ "details" ]
+              ~doc:
+                "Show each selected operation's source time and nonempty source fields \
+                 after the table. Text output only; cannot be combined with --json."))
 ;;

@@ -8,6 +8,13 @@ short line of their own.
 
 ## Unreleased
 
+- Document an investigation of richer EVM data sources and the dledger
+  transaction pipeline, including CoW order evidence and its limits.
+
+- `fin operation list --details` shows source timestamps and nonempty source
+  fields after the table, making transaction hashes and other evidence easier
+  to inspect. This option is for text output and cannot be used with `--json`.
+
 - `fin operation list` accepts repeated `--institution NAME` options and
   includes operations from any of the named institutions.
 - Correct the schema baseline test to expect version 44.

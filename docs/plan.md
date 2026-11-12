@@ -116,6 +116,9 @@ provider observations before treating them as authoritative.
   bank import and development reference.
 - `fin operation list` accepts repeated institution filters, matching any
   named institution while combining them with the other filters.
+- `fin operation list --details` shows the selected operations' source times
+  and fields, so shared transaction hashes can be inspected without inferring
+  links between separate records.
 - Statement ingestion is `fin import BANK PATH...` or a configured generic CSV;
   `fin import-all DIRECTORY` imports one folder per institution.
   `fin backup` saves one
@@ -701,8 +704,14 @@ position observations, derive positions from fills, or calculate funding.
   list, `fin asset ignore-unmapped` ignores the rest, and `fin op list` hides operations whose
   movements are all ignored (`--ignored` shows them). Done 2026-11-12 (schema 44):
   operation movements take their account from the record's account, so wallet
-  rows need no `fin operation resolve`. Next: the deBridge orders (ETH on Ethereum, USDC on Polygon)
-  as exchanges across two accounts, and the fdm top-ups once fdm exports its deposits (asked
+  rows need no `fin operation resolve`. Next: examine the Ethereum orders and
+  Polygon USDC receipts the user recalls involving CoW Swap. Their pairing and
+  provider are not established by timing alone; surface their source evidence
+  before treating them as exchanges across accounts. An [EVM data source
+  investigation](evm-data-sources.md) compares the local dledger pipeline,
+  EVM API data and CoW order evidence; test one known order before selecting
+  an adapter. Then address the fdm top-ups
+  once fdm exports its deposits (asked
   upstream; until then the USDC payments stay undecided and the card's balance lacks them).
 - [x] Name each FDM card's account from its file name (`account_from_filename`), so batch
   imports of several cards need no `--account-id`. Tested for a two-card batch, an explicit

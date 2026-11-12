@@ -1299,8 +1299,15 @@ fin operation list --order-by currency,amount --asc
 fin operation list --order-by institution,date --desc
 fin operation list --institution cdc
 fin operation list --institution ethereum --institution polygon
+fin operation list --institution ethereum --institution polygon --details --limit 10
 fin operation list --json
 ```
+
+`--details` appends each selected operation's source time and nonempty source
+fields, such as transaction hashes, addresses and reported fees. Fields are
+shown as the source stated them; matching hashes can identify rows from the same
+transaction, but timestamps alone do not establish a link between chains.
+This option is for text output and cannot be combined with `--json`.
 
 Dates are inclusive booking dates. Use `--account ID` for one account or
 `--institution NAME` for a provider; repeat `--institution` to include any of

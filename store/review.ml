@@ -664,6 +664,38 @@ let json_object members =
   ^ "}"
 ;;
 
+type operation_source_field =
+  { operation_id : int64
+  ; event_id : int64
+  ; venue : string
+  ; occurred : string
+  ; name : string option
+  ; value : string option
+  }
+
+let operation_source_fields db operation_ids =
+  if List.is_empty operation_ids
+  then Ok []
+  else
+    collect
+      db
+      (Rel_sql.Stmt.(
+         func
+           Sql.operation_source_details
+           (text
+            @-> ret
+                  Row.(
+                    unit (fun operation_id event_id venue occurred name value ->
+                      { operation_id; event_id; venue; occurred; name; value })
+                    * int64 "operation_id"
+                    * int64 "event_id"
+                    * text "venue"
+                    * text "occurred"
+                    * option Rel.Type.text "name"
+                    * option Rel.Type.text "value")))
+         (json_ids operation_ids))
+;;
+
 let decision_of_string = function
   | "reversal" -> Reversal
   | "transfer" -> Transfer
