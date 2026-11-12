@@ -391,8 +391,7 @@ a primary CSV. Earlier files remain imported if a later file fails.
 
 An institution definition is a versioned TOML file that describes an institution,
 its statement formats and its default rules. Each `[[statements]]` section names a
-format; a CSV section references a converter JSON file or an experimental Lua
-2.5 script, relative to the TOML file. For example:
+format; a CSV section references a Lua 2.5 script, relative to the TOML file. For example:
 
 ```toml
 version = 1
@@ -401,7 +400,7 @@ type = "bank"
 
 [[statements]]
 format = "csv"
-definition = "mybank-csv.json"
+script = "mybank.lua"
 
 [rules.mybank-card]
 pattern = '^CARD '
@@ -421,8 +420,7 @@ fin institution list
 fin import mybank ~/Statements/mybank
 ```
 
-To use a Lua converter, replace the `definition` line with
-`script = "mybank.lua"`. The script declares its institution, CSV header,
+The script declares its institution, CSV header,
 account and converter metadata, and returns records from each row; see the
 [Lua converter guide](lua-csv-converters.md) for the contract and bundled
 examples. The Lua integration is experimental: it supports static or row-derived
@@ -661,77 +659,22 @@ additional detail, or use `fin import --help` for current options.
 
 ### Configure another CSV
 
-For a EUR account named `main` and a file with columns `Date`, `Description`
-and `Amount`, save this converter as `mybank-csv.json`:
-
-```json
-{
-  "format": "fin-csv-converter",
-  "version": 1,
-  "institution": "mybank",
-  "institution_type": "bank",
-  "header": [
-    "Date",
-    "Description",
-    "Amount"
-  ],
-  "account": {
-    "id": "main",
-    "type": "current",
-    "currency": {
-      "code": "EUR"
-    }
-  },
-  "occurred": {
-    "column": "Date",
-    "layout": "iso-date"
-  },
-  "cases": [
-    {
-      "movements": [
-        {
-          "role": "primary",
-          "quantity": {
-            "column": "Amount"
-          },
-          "commodity": {
-            "code": "EUR"
-          }
-        }
-      ]
-    }
-  ],
-  "descriptions": [
-    "Description"
-  ]
-}
-```
-
-Create `mybank.toml` alongside it:
-
-```toml
-version = 1
-institution = "mybank"
-type = "bank"
-
-[[statements]]
-format = "csv"
-definition = "mybank-csv.json"
-```
-
-This assumes signed amounts and one account. Adapt the layout to the actual
-statement; see the [CSV definition reference](records-format.md#csv-definitions).
-Then check and attach it before importing:
+Use a Lua converter for an institution's CSV export. The script declares its
+header, account, row interpretation and source evidence. See the
+[Lua CSV converter guide](lua-csv-converters.md) and a bundled script such as
+[`revolut.lua`](../institutions/lua/revolut.lua). Reference it from the
+institution TOML file with `script = "mybank.lua"`, then check and attach the
+definition before importing.
 
 ```sh
-fin institution add mybank
 fin institution definition check mybank.toml statement.csv
+fin institution add mybank
 fin institution definition set mybank mybank.toml
 fin import mybank statement.csv
 ```
 
-The old interactive generic CSV importer and `kind: csv` institution definitions
-are no longer supported.
+JSON CSV layouts are no longer accepted. Replace any saved JSON CSV definition
+with a Lua script before importing further files.
 
 ### Print a statement as records
 
@@ -747,11 +690,9 @@ fin convert wise ~/statements/wise -o wise.jsonl.zst
 `-o` writes a file and prints a summary, and a name ending in `.zst` compresses it with
 zstd. Fin reads plain and compressed files alike, and concatenated files too.
 
-A CSV definition can be a [JSON layout](records-format.md#csv-definitions) or an
-experimental Lua script:
+A CSV definition is a Lua script:
 
 ```sh
-fin convert --definition mine.json statement.csv
 fin convert --definition mine.lua statement.csv
 ```
 

@@ -484,25 +484,6 @@ let statement_source format ~recognizes ~convert =
   }
 ;;
 
-let of_definition format definition =
-  { format
-  ; recognizes =
-      (fun ~filename:_ contents -> Csv_converter.recognizes definition contents)
-  ; convert =
-      (fun ?account_label:_ ?path:_ ~name contents ->
-        Csv_converter.convert definition ~name contents)
-  ; refusal = Csv_converter.header_difference definition
-  ; tags = Csv_converter.journal_tags definition
-  ; journal_description = Csv_converter.journal_description definition
-  ; conflict_columns = Csv_converter.conflict_columns definition
-  ; left_out =
-      (fun contents ->
-        Csv_converter.filtered_rows definition contents
-        |> Result.ok
-        |> Option.value ~default:0)
-  }
-;;
-
 let of_lua format definition =
   { (statement_source
        format

@@ -15,7 +15,7 @@ There are two kinds of converter, with the same output and the same checks:
   FILE` runs the built-in converter, then imports its records. `fin convert wise FILE`
   prints those records without importing them.
 - **A CSV definition.** A CSV-only institution needs no code, only a file saying which column
-  means what: `fin convert --definition mine.json FILE`, see [below](#csv-definitions).
+  means what: `fin convert --definition mine.lua FILE`, see [Lua CSV converters](lua-csv-converters.md).
 - **Your own.** For anything else, write a program in any language, needing no fin code, and
   import what it prints: `fin import records.jsonl`.
 
@@ -234,92 +234,11 @@ For pairing, reference and date do not always decide. bunq has no references: ac
 date and quantity pair all 332 rows, 22 of which share a key with another row, against 113 on
 the value date. Fin will need the descriptions or the source order for those.
 
-## CSV definitions
+## CSV converters
 
-A definition configures Fin's generic converter for one CSV layout. For a guided
-example and the conversion workflow, see [CSV converter definitions](csv-converter.md).
-Bundled definitions live in [`institutions/csv`](../institutions/csv) and are
-referenced by the institution TOML files. Fin refuses unknown members and columns
-not in the header. `fin convert` reports differences when a file's header nearly
-fits a layout.
-
-```json
-{
-  "format": "fin-csv-converter",
-  "version": 1,
-  "institution": "mine",
-  "institution_type": "bank",
-  "header": ["When", "What", "Currency", "Text"],
-  "account": { "id": "main-{Currency}", "currency": { "fiat": "Currency" } },
-  "occurred": { "column": "When", "layout": "day-first" },
-  "cases": [
-    {
-      "movements": [
-        { "role": "primary", "quantity": { "column": "What" }, "commodity": { "fiat": "Currency" } }
-      ]
-    }
-  ],
-  "descriptions": ["Text"]
-}
-```
-
-| Member | Meaning |
-|---|---|
-| `institution_type` | `bank`, `crypto-exchange` or `wallet`; network details belong to the institution definition |
-| `header`, `headers` | The exact header, or `headers` listing each one the source has used, such as old and new exports; a file with another one is not this layout. Every column the layout uses must be in all of them |
-| `values` | `[{"column": "asset", "map": {"ZEUR": "EUR"}}]`: codes translated wherever the column is read, so that two eras' codes are one account. `fields` keeps what the file states |
-| `separator`, `decimal` | Default `,` and `dot`; spaces that group digits are ignored. Under `comma`, a dot in a number is refused |
-| `observation` | The rows describe rows stated elsewhere |
-| `only` | Conditions a row must meet to be part of this source at all; `fin convert` says how many it left out |
-| `require` | Conditions every remaining row must meet, or the file is refused. Each may add `when`, conditions that say which rows it applies to |
-| `account` | `id` and `type`, where `{Column}` is that row's value, and `bank`, `number`, `currency`. Records with one `number` and different types are one real account, as a multi-currency balance is, sharing its IBAN |
-| `id` | `{"columns": [...]}` or `{"row_hash": true}`; absent means `inventory` identity |
-| `occurred`, `value_on` | `column`, `fallback`, `layout` (`iso-date`, `iso-datetime`, `day-first`), and `utc` |
-| `cases` | The first whose `when` conditions hold gives `movements` and `fee` |
-| `reported` | `quantity` and `symbol` columns for a row no case takes |
-| `total` | `when` conditions of a row stating what the others add up to, with its `quantity` and `commodity` |
-| `group` | `column` whose value joins rows that are one activity, `when` it applies, and `supporting_when` for rows that only support the group, such as a fee |
-| `balance_after`, `balances` | Running balance column, and `balance` lines to state from each row. A `balances` entry may name its own `decimal` |
-| `conflict_columns` | Columns two exports of one row must agree on; others, such as a note, may differ |
-| `journal_tags`, `journal_description` | Tag name to column, and the column that replaces the description, in the journal entry of a paired row |
-| `descriptions`, `type`, `counterparty_name`, `counterparty_iban`, `references`, `exchange`, `valuations` | Columns for those members of `details`; the first filled `counterparty_name` wins |
-
-A condition names a `column` and one test: `in` (one of these values), `sign` (`positive`, `negative`,
-`not-positive`, `not-negative`), `filled`, `matches` (a regular expression), `not_before` (not earlier
-than another column, comparing text, so for ISO dates) or `prefix_of` (the start of another column).
-A check that relates source columns belongs in `require`, because a record does not hold those columns.
-
-What a record states is checked by the format, for every source. Only what relates a source's columns
-to each other is left to a definition, because those columns are not in the record.
-
-- A column name repeated in the header is `Solde#2` for the second one.
-- A header entry ending with `*` names any column starting with the rest, for a name that
-  changes with every export, such as Etherscan's `CurrentValue @ $2243.29/Eth`.
-- A quantity is `column`, with optional `negate`, `minus` and `plus` (other columns).
-- A commodity is `{"fiat": column}`, `{"code": "USD"}` (an ISO code is fiat, anything else an
-  asset, so `{"code": "ETH"}` for a network's own coin), or `{"reported": column, "provider": name}`,
-  which may add `"fiat_codes": ["EUR"]`: those values are currencies, so a row in one of them is a
-  bank movement in that account's currency. They are listed because a crypto ticker can also be an
-  ISO code. `"name": column` says which column names the reported symbol, stated in `details.names`:
-  a token contract is opaque, while a ticker is its own name. A reported symbol that is an ISO code
-  but not listed is still counted as that currency
-  until `fin asset map` says otherwise; it stays an operation. A definition never says which symbol is which asset: a token is
-  reported by its contract, scoped to its network, and `fin asset map` says what it is.
-- `thousands` names a character that groups digits, such as Etherscan's `1,000.5`.
-- `address` lists the columns holding a wallet's address, such as `["From", "To"]`: in an
-  explorer's export of one address it is the one value found on every row. `{@address}` in the
-  account `id` is that address, and the condition `"address": true` holds when the column is it,
-  which tells what the wallet sent from what it received. A file where no address, or more than
-  one, is on every row is refused.
-- An institution may reference multiple CSV definitions, for example an explorer's
-  transactions and token transfers. Its TOML definition gives `chain_id`, the
-  EVM chain it reads as token lists name chains (1 is Ethereum, 137 Polygon), so that
-  `fin asset adopt` can match its contracts. `own_symbols` lists the units an institution
-  defines for itself, which are not market tickers, as `symbol`, the `asset` it is and its
-  `name`, such as Kraken's `FEE`, its fee credits.
-- A clock with no stated offset gives a date, unless `utc` says the column is in UTC.
-
-Every column stays in `fields`, as stated.
+CSV statements are converted by Lua scripts. See the
+[Lua CSV converter guide](lua-csv-converters.md) for the script interface and
+examples. JSON CSV layouts are no longer supported.
 
 ## From CAMT
 

@@ -125,21 +125,12 @@ let convert_statements definition arguments output =
     match definition, arguments with
     | Some file, paths ->
       let%bind text = read_file file in
-      if String.is_suffix file ~suffix:".lua"
-      then (
-        let%map definition =
-          Lua_csv_converter.of_string text
-          |> Result.map_error ~f:(fun error ->
-            Error.of_string (file ^ ": " ^ Error.to_string_hum error))
-        in
-        let source = Records_adapter.of_lua "csv" definition in
-        of_sources [ source ], paths)
-      else (
-        let%map definition =
-          Result.map_error (Csv_converter.of_string text) ~f:(fun error ->
-            Error.of_string (file ^ ": " ^ Error.to_string_hum error))
-        in
-        of_sources [ Records_adapter.of_definition "csv" definition ], paths)
+      let%map definition =
+        Lua_csv_converter.of_string text
+        |> Result.map_error ~f:(fun error ->
+          Error.of_string (file ^ ": " ^ Error.to_string_hum error))
+      in
+      of_sources [ Records_adapter.of_lua "csv" definition ], paths
     | None, institution :: paths ->
       let converters = converters () in
       (match
@@ -204,9 +195,7 @@ let convert_cmd =
            does not recognize, such as Wise's MT940 files, is reported on standard error \
            and skipped. A corrupt or encrypted member, a nested archive, a statement \
            that fails to parse, or finding no statement at all stops the command."
-      ; `P
-          "$(b,--definition) names a CSV converter: a JSON layout or an experimental Lua \
-           2.5 script."
+      ; `P "$(b,--definition) names a CSV converter: a Lua 2.5 script."
       ; `P
           "With $(b,--output), writes the file instead and prints a summary. A name \
            ending in $(b,.zst) compresses it with zstd. Everything that reads records \
@@ -220,8 +209,7 @@ let convert_cmd =
           & info
               [ "definition" ]
               ~docv:"FILE"
-              ~doc:
-                "Use a CSV JSON layout or Lua script, instead of naming an institution.")
+              ~doc:"Use a Lua CSV script, instead of naming an institution.")
       $ Arg.(non_empty & pos_all string [] & info [] ~docv:"INSTITUTION PATH")
       $ Arg.(
           value

@@ -329,10 +329,15 @@ let multi_bank () =
 
 let converted_reimport () =
   let definition =
-    Csv_converter.of_string (In_channel.read_all "fixtures/wise-converter.json") |> ok
+    Lua_csv_converter.create
+      ~institution:"wise"
+      (List.Assoc.find_exn Bundled_definitions.csv "lua/wise.lua" ~equal:String.equal)
+    |> ok
   in
   let converted =
-    Csv_converter.convert definition ~name:"wise.csv" (csv ()) |> ok |> Records.to_string
+    Lua_csv_converter.convert definition ~name:"wise.csv" (csv ())
+    |> ok
+    |> Records.to_string
   in
   List.iter [ true; false ] ~f:(fun records_first ->
     memory (fun db ->

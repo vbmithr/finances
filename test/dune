@@ -395,7 +395,6 @@
  (deps
   import_cli_test.py
   fixtures/wise-shared-prototype.lua
-  fixtures/revolut-converter.json
   fixtures/revolut.csv
   fixtures/bank.ofx
   fixtures/bank.csv
@@ -540,9 +539,8 @@
  (alias runtest)
  (deps
   import_empty_test.py
-  fixtures/kraken-converter.json
   (glob_files ../institutions/*.toml)
-  (glob_files ../institutions/csv/*.json))
+  (glob_files ../institutions/lua/*.lua))
  (action
   (run
    python3
@@ -555,11 +553,10 @@
  (deps
   csv_checks_test.py
   ../institutions/lua/kraken.lua
-  fixtures/boursobank-converter.json
   fixtures/wise.csv
   fixtures/bunq.csv
   (glob_files ../institutions/*.toml)
-  (glob_files ../institutions/csv/*.json))
+  (glob_files ../institutions/lua/*.lua))
  (action
   (run
    python3
@@ -590,14 +587,9 @@
  (alias runtest)
  (deps
   records_import_test.py
-  fixtures/revolut-converter.json
-  fixtures/kraken-converter.json)
+  (glob_files ../institutions/lua/*.lua))
  (action
-  (run
-   python3
-   %{dep:records_import_test.py}
-   %{exe:../bin/main.exe}
-   %{dep:fixtures/revolut-converter.json})))
+  (run python3 %{dep:records_import_test.py} %{exe:../bin/main.exe})))
 
 (test
  (name records_adapter_test)
@@ -619,17 +611,12 @@
  (name lua_csv_converter_test)
  (modules lua_csv_converter_test)
  (deps
-  fixtures/cdc-converter.json
-  fixtures/kraken-converter.json
-  fixtures/bunq-converter.json
-  fixtures/boursobank-converter.json
-  fixtures/revolut-converter.json
-  fixtures/wise-converter.json
   fixtures/revolut.csv
   fixtures/wise.csv
   fixtures/bank.csv
   fixtures/bunq.csv
-  fixtures/lua-example-bank.lua)
+  fixtures/lua-example-bank.lua
+  (glob_files ../institutions/lua/*.lua))
  (flags
   (:standard -open Finances_core -open Finances_institutions))
  (libraries finances.core finances.institutions base stdio alcotest))

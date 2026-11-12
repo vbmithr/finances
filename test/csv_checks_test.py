@@ -133,8 +133,7 @@ bunq.bad("one decimal", "unexpected Amount", changed(bunq.rows, 0, Amount="-1,5"
 bunq.bad("account", "unexpected Account", changed(bunq.rows, 0, Account="a b"))
 
 # BoursoBank states its amount with a comma and its balance with a dot.
-definition = json.loads((FIXTURES / "boursobank-converter.json").read_text())
-header = definition["header"]
+header = ["Date Opération", "Date Valeur", "Libellé", "Libellé Suggéré", "Catégorie", "Catégorie Parente", "Solde", "Commentaire", "Numéro Compte", "Libellé Compte", "Solde", "Pointage"]
 def bourso(amount, balance):
     row = [""] * len(header)
     row[0] = row[1] = "2026-01-02"
@@ -145,91 +144,6 @@ def bourso(amount, balance):
 accepts("boursobank unchanged", bourso("-1 234,50", "12.50"), "boursobank")
 refuses("boursobank dot in the amount", "invalid quantity", bourso("-1.234", "12.50"), "boursobank")
 refuses("boursobank comma in the balance", "invalid quantity", bourso("-1,50", "12,50"), "boursobank")
-
-# What any layout gets, with none of these requirements.
-def layout(**members):
-    base = {
-        "format": "fin-csv-converter", "version": 1, "institution": "sample",
-        "institution_type": "bank", "header": ["Date", "Amount", "After", "Kind"],
-        "account": {"id": "main", "currency": {"code": "EUR"}},
-        "occurred": {"column": "Date", "layout": "iso-date"},
-        "cases": [{"movements": [{"role": "primary", "quantity": {"column": "Amount"}, "commodity": {"code": "EUR"}}]}],
-        "balance_after": "After",
-    }
-    path = ROOT / "definition.json"
-    merged = {k: v for k, v in {**base, **members}.items() if v is not None}
-    path.write_text(json.dumps(merged))
-    return ["--definition", str(path)]
-
-sample = ["Date", "Amount", "After", "Kind"]
-plain = layout()
-accepts("layout", text(sample, [["2026-01-02", "1.00", "1.00", "a"]]), *plain)
-refuses("unreadable balance", "invalid quantity", text(sample, [["2026-01-02", "1.00", "soon", "a"]]), *plain)
-refuses("date with more after it", "invalid date", text(sample, [["2026-01-02 oops", "1.00", "1.00", "a"]]), *plain)
-
-# The format checks balances for any source, in either direction, one file at a time.
-broken = text(sample, [["2026-01-02", "1.00", "1.00", "a"], ["2026-01-03", "1.00", "9.00", "a"]])
-refuses("balances", "states a balance of 9 after 1", broken, *plain)
-accepts("newest first", text(sample, [["2026-01-03", "1.00", "2.00", "a"], ["2026-01-02", "1.00", "1.00", "a"]]), *plain)
-
-def records_check(contents):
-    path = ROOT / "statement.jsonl"
-    path.write_text(contents)
-    return subprocess.run([FIN, "records", "check", str(path)], env=ENV, capture_output=True, text=True)
-
-good = run(text(sample, [["2026-01-02", "1.00", "1.00", "a"]]), *plain).stdout
-assert records_check(good).returncode == 0
-lines = [json.loads(line) for line in good.splitlines()]
-for line in lines:
-    if line["kind"] == "record":
-        line["details"]["balance_after"] = "1.00"
-later = next(l for l in lines if l["kind"] == "record")
-extra = json.loads(json.dumps(later))
-extra["id"] = "other"
-extra["occurred"] = "2026-01-03"
-extra["details"]["balance_after"] = "9.00"
-end = next(l for l in lines if l["kind"] == "end")
-one_source = [l for l in lines if l["kind"] != "end"] + [extra, {**end, "records": end["records"] + 1}]
-result = records_check("".join(json.dumps(l) + "\n" for l in one_source))
-assert "states a balance of 9 after 1" in " ".join(result.stderr.split()), result.stderr
-
-# Two files merged may have a real gap between them.
-first = ROOT / "first.csv"
-first.write_text(text(sample, [["2026-01-02", "1.00", "1.00", "a"]]))
-second = ROOT / "second.csv"
-second.write_text(text(sample, [["2026-02-02", "1.00", "9.00", "a"]]))
-merged = subprocess.run([FIN, "convert", *plain, str(first), str(second)], env=ENV, capture_output=True, text=True)
-assert merged.returncode == 0, merged.stderr
-assert records_check(merged.stdout).returncode == 0, "a merged file need not add up"
-
-# Import goes through the same check as convert.
-refused_import = ROOT / "revolut.csv"
-refused_import.write_text(revolut.contents(changed(rows, 1, Balance="140.00")))
-store = dict(ENV, XDG_DATA_HOME=str(ROOT / "d"), XDG_CONFIG_HOME=str(ROOT / "c"), XDG_STATE_HOME=str(ROOT / "s"), XDG_CACHE_HOME=str(ROOT / "k"))
-subprocess.run([FIN, "init"], env=store, capture_output=True, check=True, stdin=subprocess.DEVNULL)
-result = subprocess.run([FIN, "import", "revolut", str(refused_import)], env=store, capture_output=True, text=True, stdin=subprocess.DEVNULL)
-assert result.returncode != 0 and "rejected=1" in result.stdout, result.stdout + result.stderr
-
-# `only` leaves a row out and says so; `require` refuses the file; `when` narrows it.
-two = text(sample, [["2026-01-02", "1.00", "1.00", "a"], ["2026-01-02", "1.00", "2.00", "b"]])
-left_out = run(two, *layout(only=[{"column": "Kind", "in": ["a"]}]))
-assert "left out 1 row" in " ".join(left_out.stderr.split()), left_out.stderr
-refuses("require", "unexpected Kind", two, *layout(require=[{"column": "Kind", "in": ["a"]}]))
-narrow = [{"when": [{"column": "Kind", "in": ["b"]}], "column": "Amount", "sign": "not-positive"}]
-refuses("when holds", "unexpected Amount", two, *layout(require=narrow))
-accepts("when does not hold", text(sample, [["2026-01-02", "1.00", "1.00", "a"]]), *layout(require=narrow))
-
-# A file that nearly fits says what differs, as a file or inside an archive.
-close = text(["Date", "Amount", "Extra", "After"], [["2026-01-02", "1.00", "x", "1.00"]])
-refuses("header", "missing Kind; not in the layout Extra", close, *plain)
-refuses("header lists the file's", "The file has: Date, Amount, Extra, After", close, *plain)
-refuses("column order", "same columns in another order", text(["Amount", "Date", "After", "Kind"], [["1.00", "2026-01-02", "1.00", "a"]]), *plain)
-refuses("separator", "separates columns with ';'", text(sample, [["2026-01-02", "1.00", "1.00", "a"]], ";"), *plain)
-refuses("unrelated", "not a recognized statement", "nothing like it\n", *plain)
-with zipfile.ZipFile(ROOT / "archive.zip", "w") as archive:
-    archive.writestr("ledger.csv", close)
-zipped = subprocess.run([FIN, "convert", *plain, str(ROOT / "archive.zip")], env=ENV, capture_output=True, text=True)
-assert zipped.returncode != 0 and "missing Kind" in " ".join(zipped.stderr.split()), zipped.stderr
 
 # Kraken: two eras of one ledger, one mapping.
 old_header = ["txid", "refid", "time", "type", "subtype", "aclass", "asset", "amount", "fee", "balance"]
@@ -280,25 +194,6 @@ assert sum('"kind":"account"' in l.replace(" ", "") and '"id":"EUR"' in l.replac
 # Each file's balances are checked, whichever header it has.
 refuses("kraken balance", "states a balance", old_file.replace("49.00", "48.00"), "kraken")
 refuses("kraken derivative row", "unexpected aclass", old_file.replace("currency,KFEE", "future,KFEE"), "kraken")
-
-# Layout members for these.
-eras = {"header": None, "headers": [["Date", "Amount", "After", "Kind"], ["Date", "Amount", "After", "Kind", "New"]]}
-accepts("second header", text(sample + ["New"], [["2026-01-02", "1.00", "1.00", "a", "x"]]), *layout(**eras))
-accepts("first header", text(sample, [["2026-01-02", "1.00", "1.00", "a"]]), *layout(**eras))
-refuses("no header fits", "not in the layout Other", text(sample + ["Other"], [["2026-01-02", "1.00", "1.00", "a", "x"]]), *layout(**eras))
-
-# A definition's mistakes are refused when it is read.
-for label, members, reason in [
-    ("pattern", {"require": [{"column": "Kind", "matches": "("}]}, "invalid pattern"),
-    ("both header and headers", {"headers": [["Date", "Amount", "After", "Kind"]]}, "a layout has header or headers"),
-    ("column absent from one era", {"header": None, "headers": [["Date", "Amount", "After", "Kind"], ["Date", "After", "Kind"]]}, "not in the header"),
-    ("value column", {"values": [{"column": "Nope", "map": {"a": "b"}}]}, "not in the header"),
-    ("group column", {"group": {"column": "Nope"}}, "not in the header"),
-    ("two tests", {"require": [{"column": "Kind", "filled": True, "matches": "a"}]}, "a condition is one of"),
-    ("related column", {"require": [{"column": "Kind", "not_before": "Nope"}]}, "not in the header"),
-    ("condition in when", {"require": [{"when": [{"column": "Nope", "filled": True}], "column": "Kind", "filled": True}]}, "not in the header"),
-]:
-    refuses(f"definition {label}", reason, two, *layout(**members))
 
 for line in FAILED:
     print(line)

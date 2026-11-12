@@ -212,12 +212,12 @@ claims with comparison unavailable. The original source file is also retained.
 
 ## Current limits
 
-This is an experimental integration, currently used by CDC, FDM, Bunq,
+This integration is used by CDC, FDM, Bunq,
 BoursoBank, Revolut, Wise and Kraken. It supports multiple exact headers,
 static or row-derived accounts, deliberate row skipping, records, balances,
 observations and statement claims. It does not yet support arbitrary file-wide
 checks, general decimal arithmetic, or all observation matching settings.
-An institution cannot combine JSON and Lua CSV converters in one definition yet.
+CSV definitions use Lua scripts.
 During conversion the Lua state persists across rows within one file. Only run
 scripts you trust: the host does not expose the standard Lua IO library, but it
 does not limit execution time or memory.
@@ -233,4 +233,4 @@ representation details, and decimal strings and special helpers make
 arithmetic less natural. FDM's totals need a separate classification pass.
 Movements use records-format tables directly.
 A more cohesive file-level API remains worth exploring; this interface is
-experimental.
+supported.

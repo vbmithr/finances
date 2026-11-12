@@ -11,15 +11,12 @@ import tomllib
 FIN, INSTITUTIONS = sys.argv[1], pathlib.Path(sys.argv[2])
 
 
-def profiles(value):
-    """Every CSV layout a definition declares, once for each header it accepts."""
-    if isinstance(value, dict):
-        if isinstance(value.get("header"), list) and value["header"]:
-            yield value
-        for header in value.get("headers", []) if isinstance(value.get("headers"), list) else []:
-            yield {**value, "header": header}
-        for child in value.values():
-            yield from profiles(child)
+def script_headers(source):
+    import re
+    for body in re.findall(r'\bheaders?\s*=\s*\{([^{}]*)\}', source, re.S):
+        header = re.findall(r'"([^"\n]+)"', body)
+        if header:
+            yield header
 
 
 with tempfile.TemporaryDirectory() as directory:
@@ -34,19 +31,14 @@ with tempfile.TemporaryDirectory() as directory:
         name = definition.stem
         # A statement format's settings can name the CSV's header too.
         toml = tomllib.loads(definition.read_text())
-        layouts = [json.loads((INSTITUTIONS / s["definition"]).read_text())
-                   for s in toml["statements"] if s["format"] == "csv" and "definition" in s]
-        # The pre-port fixture supplies both Kraken headers after its Lua migration.
-        if name == "kraken":
-            layouts.append(json.loads((pathlib.Path(__file__).parent / "fixtures/kraken-converter.json").read_text()))
-        # Ethereum and Polygon likewise keep their pre-port layouts as fixtures.
-        if name in ("ethereum", "polygon"):
-            for n in (1, 2):
-                layouts.append(json.loads((pathlib.Path(__file__).parent / f"fixtures/{name}-{n}-converter.json").read_text()))
-        headers = {tuple(p["header"]): p for layout in layouts for p in profiles(layout)}
-        for profile in headers.values():
+        headers = {}
+        for statement in toml["statements"]:
+            if statement["format"] == "csv" and "script" in statement:
+                for header in script_headers((INSTITUTIONS / statement["script"]).read_text()):
+                    headers[tuple(header)] = header
+        for header in headers.values():
             statement = root / f"{name}.csv"
-            statement.write_text(profile.get("separator", ",").join(profile["header"]) + "\n")
+            statement.write_text((";" if name == "boursobank" else ",").join(header) + "\n")
             database = root / f"{name}.sqlite3"
             subprocess.run([FIN, "init", "-d", str(database)], env=env, check=True,
                            capture_output=True)

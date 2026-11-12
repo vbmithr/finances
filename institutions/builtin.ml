@@ -48,8 +48,6 @@ let mt940_profile name =
     | _ -> None)
 ;;
 
-let csv_definition name = Option.bind (records_of name) ~f:(fun r -> List.hd r.csv)
-
 let adapters : (module Adapter.S) list =
   List.map definitions ~f:Institution_definition.adapter
 ;;

@@ -8,6 +8,11 @@ short line of their own.
 
 ## Unreleased
 
+- CSV conversion and institution definitions now use Lua scripts only; JSON CSV
+  layouts are removed. `fin convert --definition` accepts a Lua script.
+  **Action required:** replace saved JSON CSV definitions with Lua scripts before
+  importing more statements. Existing source evidence and review decisions remain.
+
 - Ethereum and Polygon explorer CSVs now use bundled Lua scripts, preserving the
   transaction and token-transfer headers, wallet address detection, failed and
   zero-value rows, and exact fees. Lua gains `lowercase` and `remove_text`. The

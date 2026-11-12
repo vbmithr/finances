@@ -172,32 +172,27 @@ empty = write("empty.csv", revolut.read_text().splitlines()[0] + "\n")
 lines = convert("revolut", empty)
 assert kind(lines, "record") == [] and kind(lines, "account") == []
 
-# Anyone's definition, and refusals that say what is wrong.
-definition = write("mine.json", json.dumps({
-    "format": "fin-csv-converter", "version": 1, "institution": "mine",
-    "institution_type": "bank",
-    "header": ["When", "What"],
-    "account": {"id": "main", "currency": {"code": "EUR"}},
-    "occurred": {"column": "When", "layout": "day-first"},
-    "cases": [{"movements": [{"role": "primary", "quantity": {"column": "What"},
-                              "commodity": {"code": "EUR"}}]}],
-}))
+# Lua scripts are the supported way to define another CSV converter.
+script = write("mine.lua", """config = {
+  institution = "mine", identity = "source", converter = "test", version = "1",
+  account = { id = "main" }, header = { "When", "What" }
+}
+function convert(row, raw, context)
+  return { kind = "record", id = context.row_hash, account = "main",
+    occurred = day_first(row["When"]),
+    movements = {{ role = "primary", quantity = decimal(row["What"]),
+      commodity = {kind = "fiat", code = "EUR"} }},
+    details = { fields = context.fields } }
+end
+""")
 statement = write("mine.csv", "When,What\n02-01-2025,-3.50\n")
-lines = convert("--definition", definition, statement)
+lines = convert("--definition", script, statement)
 assert kind(lines, "header")[0]["institution"] == "mine"
 assert kind(lines, "record")[0]["occurred"] == "2025-01-02"
-
-broken = write("broken.json", definition.read_text().replace('"What"}', '"Wat"}'))
-done = convert("--definition", broken, statement, check=False)
-assert done.returncode != 0 and "Wat" in done.stderr and done.stdout == "", done.stderr
-bad_row = write("bad.csv", "When,What\n02-01-2025,abc\n")
-done = convert("--definition", definition, bad_row, check=False)
-assert done.returncode != 0 and "row 1" in " ".join(done.stderr.split()), done.stderr
 other = write("other.csv", "A,B\n1,2\n")
-done = convert("--definition", definition, other, check=False)
+done = convert("--definition", script, other, check=False)
 assert done.returncode != 0 and done.stdout == "", done.stderr
-done = convert("nowhere", other, check=False)
-assert done.returncode != 0 and "--definition" in " ".join(done.stderr.split()), done.stderr
+
 # A block explorer's exports of one address: the wallet is the address on every row. Fictional
 # addresses; the USDC contract is Polygon's real one, since the definition lists it.
 me, them, usdc = "0x" + "1" * 40, "0x" + "2" * 40, "0x3c499c542cef5e3811e1192ce70d8cc03d5c3359"

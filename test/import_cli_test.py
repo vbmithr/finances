@@ -42,25 +42,10 @@ class ImportOnboarding(unittest.TestCase):
     def import_revolut_account(self, path, account, *args):
         """A second Revolut account, as a records file naming it: a converted statement can say
         which account it is, and a Revolut export cannot."""
-        definition = self.root / f'revolut-{account}.json'
-        definition.write_text(json.dumps({
-            'format': 'fin-csv-converter', 'version': 1, 'institution': 'revolut',
-            'institution_type': 'bank',
-            'header': ['Type', 'Product', 'Started Date', 'Completed Date', 'Description',
-                       'Amount', 'Fee', 'Currency', 'State', 'Balance'],
-            'account': {'id': account, 'bank': 'revolut', 'type': f'current-{account}',
-                        'currency': {'fiat': 'Currency'}},
-            'occurred': {'column': 'Completed Date', 'fallback': 'Started Date',
-                         'layout': 'iso-datetime'},
-            'cases': [{'when': [{'column': 'State', 'in': ['COMPLETED']}],
-                       'movements': [{'role': 'primary',
-                                      'quantity': {'column': 'Amount', 'minus': 'Fee'},
-                                      'commodity': {'fiat': 'Currency'}}],
-                       'fee': {'column': 'Fee'}}],
-            'reported': {'quantity': 'Amount', 'symbol': 'Currency'},
-            'descriptions': ['Description'],
-            'balance_after': 'Balance',
-        }))
+        definition = self.root / f'revolut-{account}.lua'
+        source = Path('../institutions/lua/revolut.lua').read_text()
+        source = source.replace('"current-" .. row["Currency"]', f'"{account}"')
+        definition.write_text(source)
         records = self.root / f'revolut-{account}-{Path(path).stem}.jsonl'
         self.run_fin('convert', '--definition', definition, path, '-o', records)
         return self.run_fin('import', 'revolut', records, *args)
@@ -3019,36 +3004,10 @@ class ImportOnboarding(unittest.TestCase):
 
 
 
-    def test_records_csv_definition_import_and_legacy_rejection(self):
-        sample = self.root / 'custom.csv'
-        sample.write_text('Date,Description,Amount\n2025-01-01,Shop,-12.50\n')
-        layout = {'format': 'fin-csv-converter', 'version': 1, 'institution': 'mybank',
-                  'institution_type': 'bank', 'header': ['Date', 'Description', 'Amount'],
-                  'account': {'id': 'main', 'type': 'current', 'currency': {'code': 'EUR'}},
-                  'occurred': {'column': 'Date', 'layout': 'iso-date'},
-                  'cases': [{'movements': [{'role': 'primary', 'quantity': {'column': 'Amount'},
-                                             'commodity': {'code': 'EUR'}}]}],
-                  'descriptions': ['Description']}
+    def test_json_csv_definition_is_rejected(self):
         definition = self.root / 'definition.json'
         definition.write_text(json.dumps({'version': 1, 'kind': 'records', 'type': 'bank',
-                                          'records': {'institution': 'mybank', 'csv': layout}}))
-        self.assertNotEqual(self.run_fin('import', sample, check=False).returncode, 0)
-        self.assertIn('1 transactions', self.run_fin('institution', 'definition', 'check', definition, sample).stdout)
-        self.run_fin('institution', 'add', 'mybank')
-        self.run_fin('institution', 'definition', 'set', 'mybank', definition, '--yes')
-        self.assertIn('inserted=1', self.run_fin('import', 'mybank', sample).stdout)
-        self.assertIn('unchanged=1', self.run_fin('import', 'mybank', sample).stdout)
-        rows = json.loads(self.run_fin('operation', 'list', '--institution', 'mybank', '--json').stdout)
-        self.assertEqual([(r['description'], r['amount']) for r in rows], [('Shop', '-12.5')])
-        updated = json.loads(definition.read_text())
-        updated['rules'] = [{'name': 'shop', 'pattern': '^Shop$', 'action': 'type', 'target': 'card'}]
-        definition.write_text(json.dumps(updated))
-        self.run_fin('institution', 'definition', 'set', 'mybank', definition, '--yes')
-        self.assertTrue(any(r['name'] == 'shop' for r in json.loads(self.run_fin('rule', 'list', '--json').stdout)))
-        updated['records']['csv']['account']['id'] = 'other'
-        definition.write_text(json.dumps(updated))
-        self.assertNotEqual(self.run_fin('institution', 'definition', 'set', 'mybank', definition, '--yes', check=False).returncode, 0)
-        definition.write_text(json.dumps({'version': 1, 'kind': 'csv', 'csv': {}}))
+                                          'records': {'institution': 'mybank', 'csv': {}}}))
         self.assertNotEqual(self.run_fin('institution', 'definition', 'check', definition, check=False).returncode, 0)
 
     def test_old_bunq_profile_remains_usable_after_cleanup(self):
@@ -3142,20 +3101,24 @@ class ImportOnboarding(unittest.TestCase):
         self.assertEqual(saved_after['camt_script'], source)
 
     def test_toml_definition_resolves_csv_and_saves_it(self):
-        layout = self.root / 'layout.json'
-        layout.write_text(Path('fixtures/revolut-converter.json').read_text())
+        script = self.root / 'layout.lua'
+        script.write_text(Path('../institutions/lua/revolut.lua').read_text())
         definition = self.root / 'revolut.toml'
         definition.write_text('version = 1\ninstitution = "revolut"\ntype = "bank"\n'
-                              '[[statements]]\nformat = "csv"\ndefinition = "layout.json"\n')
+                              '[[statements]]\nformat = "csv"\nscript = "layout.lua"\n')
         self.assertIn('Definition is valid', self.run_fin('institution', 'definition', 'check', definition).stdout)
         self.run_fin('institution', 'definition', 'set', 'revolut', definition, '--yes')
-        layout.unlink()
+        script.unlink()
         definition.unlink()
         self.run_fin('import', 'revolut', self.csv)
         self.assertTrue(json.loads(self.run_fin('operation', 'list', '--json').stdout))
         definition.write_text('version = 1\ninstitution = "revolut"\n'
-                              '[[statements]]\nformat = "csv"\ndefinition = "missing.json"\n')
+                              '[[statements]]\nformat = "csv"\nscript = "missing.lua"\n')
         self.assertNotEqual(self.run_fin('institution', 'definition', 'check', definition, check=False).returncode, 0)
+        definition.write_text('version = 1\ninstitution = "revolut"\n'
+                              '[[statements]]\nformat = "csv"\ndefinition = "old.json"\n')
+        result = self.run_fin('institution', 'definition', 'check', definition, check=False)
+        self.assertIn('no longer supported', result.stderr)
 
     def test_runtime_institution_definition_and_sample_preview(self):
         profile = json.loads(self.run_fin('institution', 'definition', 'show', 'wise').stdout)

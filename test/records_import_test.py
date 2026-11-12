@@ -8,7 +8,7 @@ import sqlite3
 import sys
 import tempfile
 
-FIN, LEGACY_REVOLUT = sys.argv[1:3]
+FIN = sys.argv[1]
 
 with tempfile.TemporaryDirectory() as directory:
     root = pathlib.Path(directory)
@@ -229,7 +229,7 @@ Total deposited,,,,,,,0.00,,
     comparison = json.loads(run("statement", "totals", "-d", observed_db).stdout)[0]
     assert comparison["entries"] == 2 and comparison["reconciled"] is None, comparison
 
-    # Both import orders preserve Kraken identities across JSON and Lua.
+    # Both import orders preserve Kraken identities across CSV and records.
     kraken = root / "kraken.csv"
     kraken.write_text("""txid,refid,time,type,subtype,aclass,asset,amount,fee,balance
 ,F1,2020-01-02 10:00:00,deposit,,currency,ZEUR,100.00,0.00,
@@ -238,37 +238,18 @@ L2,T1,2020-01-03 09:00:00,trade,,currency,ZEUR,-50.00,1.00,49.00
 L3,T1,2020-01-03 09:00:00,trade,,currency,XXBT,0.01,0,0.01
 L4,T1,2020-01-03 09:00:00,trade,,currency,KFEE,-2,0,8
 """)
-    old_kraken = root / "kraken-old.jsonl"
-    old_definition = pathlib.Path(__file__).parent / "fixtures/kraken-converter.json"
-    run("convert", "--definition", old_definition, kraken, "-o", old_kraken)
-    lua_output = root / "kraken-lua.jsonl"
-    converted = run("convert", "kraken", kraken, "-o", lua_output)
-    assert "left out 1 row" in converted.stderr, converted.stderr
-    assert old_kraken.read_text() == lua_output.read_text()
-    newer_kraken = root / "kraken-new.csv"
-    newer_kraken.write_text("""txid,refid,time,type,subtype,aclass,subclass,asset,wallet,amount,fee,balance,amountusd,feeusd,balanceusd,feecurrency
-L5,W1,2025-06-01 09:00:00,withdrawal,,currency,,EUR,spot,-10.00,0.00,39.00,-11,0,40,EUR
-""")
-    old_newer = root / "kraken-new-old.jsonl"
-    run("convert", "--definition", old_definition, newer_kraken, "-o", old_newer)
-    new_newer = root / "kraken-new-lua.jsonl"
-    run("convert", "kraken", newer_kraken, "-o", new_newer)
-    assert old_newer.read_text() == new_newer.read_text()
-    for variant, source, old_records, count in (
-            ("first-header", kraken, old_kraken, 4),
-            ("second-header", newer_kraken, old_newer, 1)):
-        for order, first, second in (("old-first", old_records, source),
-                                     ("lua-first", source, old_records)):
-            name = f"{variant}-{order}"
-            kraken_db, kraken_journal = root / f"{name}.sqlite3", root / f"{name}.journal"
-            run("init", "-d", kraken_db)
-            run("import", "kraken", first, "-d", kraken_db, "--journal", kraken_journal)
-            journal_before = kraken_journal.read_text()
-            replay = run("import", "kraken", second, "-d", kraken_db, "--journal", kraken_journal)
-            assert f"inserted=0 existing={count}" in replay.stdout, replay.stdout
-            assert kraken_journal.read_text() == journal_before
+    kraken_records = root / "kraken.jsonl"
+    run("convert", "kraken", kraken, "-o", kraken_records)
+    for order, first, second in (("records-first", kraken_records, kraken),
+                                 ("csv-first", kraken, kraken_records)):
+        database = root / f"kraken-{order}.sqlite3"
+        journal = root / f"kraken-{order}.journal"
+        run("init", "-d", database)
+        run("import", "kraken", first, "-d", database, "--journal", journal)
+        replay = run("import", "kraken", second, "-d", database, "--journal", journal)
+        assert "inserted=0 existing=4" in replay.stdout, replay.stdout
 
-    # Existing Revolut records produced by the old definition reimport under Lua.
+    # Revolut records and CSV reimport in either order.
     rev = root / "revolut.csv"
     rev.write_text("""Type,Product,Started Date,Completed Date,Description,Amount,Fee,Currency,State,Balance
 Deposit,Current,2026-01-01 09:00:00,2026-01-01 09:00:01,In,150.00,0.00,EUR,COMPLETED,150.00
@@ -276,7 +257,7 @@ Card Payment,Current,2026-01-02 09:00:00,2026-01-03 23:00:00,Shop,-10.00,1.00,EU
 Card Payment,Current,2026-01-04 09:00:00,,Undone,-5.00,0.00,EUR,REVERTED,
 """)
     old_rev = root / "old-revolut.jsonl"
-    run("convert", "--definition", LEGACY_REVOLUT, rev, "-o", old_rev)
+    run("convert", "revolut", rev, "-o", old_rev)
     rev_db, rev_journal = root / "revolut.sqlite3", root / "revolut.journal"
     run("init", "-d", rev_db)
     run("import", "revolut", old_rev, "-d", rev_db, "--journal", rev_journal)
@@ -337,7 +318,7 @@ Card Payment,Current,2026-01-04 09:00:00,,Undone,-5.00,0.00,EUR,REVERTED,
     completed = root / "revolut-completed.csv"
     completed.write_text("\n".join(rev.read_text().splitlines()[:-1]) + "\n")
     old_completed = root / "old-revolut-completed.jsonl"
-    run("convert", "--definition", LEGACY_REVOLUT, completed, "-o", old_completed)
+    run("convert", "revolut", completed, "-o", old_completed)
     completed_db, completed_journal = root / "revolut-completed.sqlite3", root / "revolut-completed.journal"
     run("init", "-d", completed_db)
     run("import", "revolut", old_completed, "-d", completed_db, "--journal", completed_journal)

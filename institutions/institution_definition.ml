@@ -27,7 +27,6 @@ type t =
   { institution : string
   ; aliases : string list
   ; statement : statement option
-  ; csv : Csv_converter.t list (* Each export layout the institution has. *)
   ; lua_csv : Lua_csv_converter.t list
   ; own_symbols : Adapter.own_symbol list (* Units the institution defines for itself. *)
   ; stored_formats : string list
@@ -95,23 +94,6 @@ let own_symbol_codec =
   |> Jsont.Object.finish
 ;;
 
-(* One layout, or a list of them, such as an explorer's transactions and token transfers. *)
-let layouts_codec =
-  let ok = function
-    | Ok value -> value
-    | Error error -> raise (Jsont.Error error)
-  in
-  Jsont.map
-    Jsont.json
-    ~dec:(fun json ->
-      match json with
-      | Jsont.Array _ -> ok (Jsont.Json.decode' (Jsont.list Csv_converter.codec) json)
-      | _ -> [ ok (Jsont.Json.decode' Csv_converter.codec json) ])
-    ~enc:(function
-      | [ one ] -> ok (Jsont.Json.encode' Csv_converter.codec one)
-      | many -> ok (Jsont.Json.encode' (Jsont.list Csv_converter.codec) many))
-;;
-
 let records_codec =
   Jsont.Object.map
     (fun
@@ -121,7 +103,6 @@ let records_codec =
          camt_script
          mt940
          ofx
-         csv
          lua_csv
          chain_id
          network
@@ -141,15 +122,12 @@ let records_codec =
        in
        if Option.is_some camt_script && Option.is_none camt
        then failwith "a CAMT script requires a CAMT profile";
-       let csv = Option.value csv ~default:[] in
        let lua_csv =
          List.map lua_csv ~f:(fun source ->
            Lua_csv_converter.create ~institution source |> Json.or_error)
        in
-       if (not (List.is_empty csv)) && not (List.is_empty lua_csv)
-       then failwith "an institution cannot mix JSON and Lua CSV converters yet";
-       if Option.is_none statement && List.is_empty csv && List.is_empty lua_csv
-       then failwith "a definition needs a statement format or a CSV layout";
+       if Option.is_none statement && List.is_empty lua_csv
+       then failwith "a definition needs a statement format or a Lua CSV script";
        let typ =
          match chain_id, network with
          | Some id, None -> Institution_type.Wallet (Evm { chain_id = id })
@@ -161,7 +139,6 @@ let records_codec =
        ({ institution
         ; aliases
         ; statement
-        ; csv
         ; lua_csv
         ; own_symbols
         ; stored_formats
@@ -191,8 +168,6 @@ let records_codec =
     match r.statement with
     | Some Ofx -> Some true
     | _ -> None)
-  |> Jsont.Object.opt_mem "csv" layouts_codec ~enc:(fun (r : t) ->
-    Option.some_if (not (List.is_empty r.csv)) r.csv)
   |> Jsont.Object.mem
        "lua_csv"
        (Jsont.list Jsont.string)
@@ -292,26 +267,19 @@ let sources (r : t) =
           ~convert:(Ofx_converter.convert ~institution:r.institution))
   in
   (* The first layout keeps the name [csv], which stored rows may already carry. *)
-  let layouts =
-    List.mapi r.csv ~f:(fun i definition ->
-      let format = if i = 0 then "csv" else Printf.sprintf "csv-%d" (i + 1) in
-      Records_adapter.of_definition format definition)
-  in
   let scripts =
     List.mapi r.lua_csv ~f:(fun i definition ->
-      let index = List.length r.csv + i in
-      let format = if index = 0 then "csv" else Printf.sprintf "csv-%d" (index + 1) in
+      let format = if i = 0 then "csv" else Printf.sprintf "csv-%d" (i + 1) in
       Records_adapter.of_lua format definition)
   in
-  Option.to_list statement @ layouts @ scripts
+  Option.to_list statement @ scripts
 ;;
 
 let overlap (r : t) : Adapter.overlap =
-  match r.statement, r.csv with
-  | Some (Camt _ | Ofx), _ -> Source_ids
-  | Some (Mt940 _), _ -> Day_inventory
-  | None, csv :: _ -> Csv_converter.overlap csv
-  | None, [] ->
+  match r.statement with
+  | Some (Camt _ | Ofx) -> Source_ids
+  | Some (Mt940 _) -> Day_inventory
+  | None ->
     Option.value_map
       (List.hd r.lua_csv)
       ~default:Adapter.Source_ids
@@ -343,21 +311,9 @@ let same_sources a b =
     | Institution_type.Wallet ((Evm _ | Other _) as network) -> Wallet network
     | Bank | Crypto_exchange | Wallet Unspecified -> Bank
   in
-  (* CSV layouts retain the parsed JSON and its source locations. Locations
-     depend on surrounding definition text and do not change interpretation. *)
-  let same_csv =
-    List.equal
-      (fun x y ->
-         String.equal
-           (Json.encode Csv_converter.codec x)
-           (Json.encode Csv_converter.codec y))
-      a.csv
-      b.csv
-  in
-  same_csv
-  && Poly.equal
-       { a with typ = source_type a.typ; rules = []; csv = [] }
-       { b with typ = source_type b.typ; rules = []; csv = [] }
+  Poly.equal
+    { a with typ = source_type a.typ; rules = [] }
+    { b with typ = source_type b.typ; rules = [] }
 ;;
 
 let names t = institution t :: aliases t
@@ -438,14 +394,11 @@ let describe t =
     | Some Ofx -> [ "statement", "OFX" ]
     | None -> []
   in
-  let roles = List.concat_map r.csv ~f:Csv_converter.roles in
   base
     "Records"
-    (statement
-     @ List.map roles ~f:(fun (role, columns) -> role, String.concat ~sep:", " columns)
-     @ List.map r.lua_csv ~f:(fun _ -> "CSV", "Lua converter"))
-    (List.concat_map r.csv ~f:Csv_converter.header)
-    (List.concat_map roles ~f:snd)
+    (statement @ List.map r.lua_csv ~f:(fun _ -> "CSV", "Lua converter"))
+    []
+    []
     [ "the description (type rules)"
     ; "any field of the row, named as the source names it, with --field (type rules)"
     ]

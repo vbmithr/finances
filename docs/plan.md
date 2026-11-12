@@ -5,7 +5,7 @@ its status: tick off finished work, add discovered work, and refresh the "Where 
 are" figures when they move. History belongs in `CHANGES.md`; designs stay in the
 other documents, which this one links to rather than repeats.
 
-Last updated: 2026-11-11.
+Last updated: 2026-11-12.
 
 ## Direction
 
@@ -229,8 +229,8 @@ configurable yet.
   diagnostics, asset mappings, fee groups and cross-version reimports.
 - [x] Port Ethereum and Polygon CSV layouts to Lua; their former JSON layouts
   remain as test fixtures.
-- [ ] Remove the JSON CSV configuration language after validating real exports
-  and saved definitions.
+- [x] Remove the JSON CSV configuration language; CSV definitions use Lua scripts.
+  Saved JSON CSV definitions must be replaced before further imports.
 - [x] Delete one or more accounts as an atomic batch with a single preview and
   confirmation; retain the existing shared-evidence safeguards.
 - [x] Support signed FDM exports and account deletion with linked statement totals;
@@ -640,7 +640,7 @@ position observations, derive positions from fills, or calculate funding.
   `CARD_ORDER_CHECKOUT-` prefix the CAMT lacks.
   Audited against every institution's real files (2026-11-04, see Coverage in
   [records-format.md](records-format.md#coverage)). The format now holds what it found.
-  `Csv_converter` reads any CSV a definition file describes; the bundled definitions cover
+  Lua scripts read the bundled CSV files; the bundled definitions cover
   all CSV files seen, and reproduce fin's CDC interpretation and the Wise rows. OFX and MT940
   have converters, so every file seen so far converts.
   `Records_adapter` imports records through the usual pipeline, for every bundled institution, pairing
